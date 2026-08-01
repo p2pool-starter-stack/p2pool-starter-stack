@@ -3384,6 +3384,39 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "invalid tari.mode rejected" "$?" "1"
 assert_contains "invalid tari.mode message" "$out" "tari.mode must be"
 
+echo "== black-box: profile deactivation removes the old container (#795) =="
+# `compose up --remove-orphans` does not remove a profile-deactivated service's container — the
+# service is still in the compose file, so compose does not count it as an orphan — and a tari
+# local→remote switch left the old node running (offline, re-syncing) against a remote-mode
+# config. Apply must issue an explicit `compose rm -sf` for every profile-gated service whose
+# profile is off, BEFORE the recreate up. Asserted through the docker-stub call log.
+# (1) Baseline, both nodes local: the reconcile list is exactly the (off) payout-confirm wallets —
+# neither node container is touched.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+SWLOG="$V/docker-switch.log"
+: >"$SWLOG"
+out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "baseline local-nodes apply exits 0" "$?" "0"
+assert_contains "local nodes: only the off payout wallets reconcile" "$(cat "$SWLOG")" "compose rm -sf wallet-rpc tari-wallet"
+# (2) tari local→remote (the #795 reproduction): the tari container joins the removal list. No
+# re-seed — the committed local-mode .env from (1) makes this a real transition.
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+: >"$SWLOG"
+out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari local-to-remote switch applies cleanly" "$?" "0"
+assert_contains "switch removes the deactivated tari container" "$(cat "$SWLOG")" "compose rm -sf tari wallet-rpc tari-wallet"
+# The removal must precede the recreate up — the point is the old node never runs beside the
+# remote-mode p2pool, not that it eventually disappears.
+assert_contains "tari removal happens before the recreate up" "$(sed '/compose up --pull never -d --remove-orphans/q' "$SWLOG")" "compose rm -sf tari wallet-rpc tari-wallet"
+# (3) monerod rides the same guard on a monero local→remote switch.
+seed_env
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+: >"$SWLOG"
+out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "monero local-to-remote switch applies cleanly" "$?" "0"
+assert_contains "switch removes the deactivated monerod container" "$(cat "$SWLOG")" "compose rm -sf monerod wallet-rpc tari-wallet"
+
 echo "== black-box: monero.rpc_lan_access + prep_blocks_threads reflect into .env (#523) =="
 # The rendered .env must match the config input. rpc_lan_access gates the monerod RPC bind: default
 # (unset) keeps it localhost-only; true opens it to the LAN. prep_blocks_threads overrides the

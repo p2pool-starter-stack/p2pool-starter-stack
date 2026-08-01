@@ -45,6 +45,8 @@ from mining_dashboard.service.control_service import WORKER_WRITABLE_KEYS
 from mining_dashboard.service.earnings import (
     ATOMIC_PER_XMR,
     MICRO_PER_XTM,
+    SECONDS_PER_DAY,
+    confirmed_payouts_summary,
     tari_seconds_to_block_per_hs,
     xmr_per_hs_day,
     xtm_per_hs_day,
@@ -1482,39 +1484,6 @@ _EARNINGS_DISCLAIMER = (
 )
 
 
-def _confirmed_payouts_summary(payouts, now=None, divisor=ATOMIC_PER_XMR, unit="xmr"):
-    """Roll confirmed on-chain payouts into 24h / 7d / all-time totals + a count (#381/#462).
-
-    ``payouts`` is the stored-payout list (``storage.get_payouts(chain)``): each carries ``ts``
-    (unix seconds) and ``amount_atomic``. Sums are converted atomic→whole-unit at this edge only,
-    via ``divisor`` (piconero 1e12 for Monero, microTari 1e6 for Tari) with the amount keys prefixed
-    by ``unit`` (``xmr_*`` / ``xtm_*``). ``enabled`` is False when the feature is off
-    (``payouts is None``) — the UI then shows only the estimate; an empty list means "on, nothing
-    confirmed yet" (shows 0.000000)."""
-    if payouts is None:
-        return {"enabled": False}
-    now = now if now is not None else time.time()
-    day, week = now - 86_400, now - 7 * 86_400
-    atomic_24h = atomic_7d = atomic_all = 0
-    for p in payouts:
-        amt = p.get("amount_atomic", 0) or 0
-        ts = p.get("ts", 0) or 0
-        atomic_all += amt
-        if ts >= week:
-            atomic_7d += amt
-        if ts >= day:
-            atomic_24h += amt
-    last_ts = max((p.get("ts", 0) or 0 for p in payouts), default=0)
-    return {
-        "enabled": True,
-        "count": len(payouts),
-        f"{unit}_24h": atomic_24h / divisor,
-        f"{unit}_7d": atomic_7d / divisor,
-        f"{unit}_all": atomic_all / divisor,
-        "last_ts": last_ts,
-    }
-
-
 def xvb_current_tier_reward_day(metrics, state_mgr):
     """XvB's published expected reward for the tier the fleet is CURRENTLY holding, as XMR/day (#712).
 
@@ -1555,10 +1524,10 @@ def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None)
     """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
 
     ``payouts`` (#381), when the view-only wallet feature is on, is the stored confirmed-payout
-    list; it's rolled into a ``confirmed`` block (24h / 7d / all-time XMR) shown beside this
-    estimate — the estimate is a model, the confirmed figure is ground truth from the wallet.
-    ``tari_payouts`` (#462) is the same for the Tari side, rolled into ``tari_confirmed`` (XTM)
-    beside the Tari time-to-block estimate.
+    list; it's rolled into a ``confirmed`` block (yesterday / 24h / 7d / 30d / all-time XMR, #787)
+    shown beside this estimate — the estimate is a model, the confirmed figure is ground truth from
+    the wallet. ``tari_payouts`` (#462) is the same for the Tari side, rolled into
+    ``tari_confirmed`` (XTM) beside the Tari time-to-block estimate.
 
     This is a **P2Pool** mining calculator: it estimates the XMR earned by the hashrate that is
     actually mining on your P2Pool node — *not* the rig's total output. The what-if default is
@@ -1611,13 +1580,77 @@ def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None)
         "disclaimer": _EARNINGS_DISCLAIMER,
         # Confirmed on-chain payouts (#381), beside the estimate above. {"enabled": False} when the
         # view-only wallet feature is off — the UI then shows only the estimate.
-        "confirmed": _confirmed_payouts_summary(payouts),
+        "confirmed": confirmed_payouts_summary(payouts),
         # Confirmed Tari payouts (#462), beside the Tari time-to-block estimate. XTM (microTari),
         # {"enabled": False} when the Tari view-only wallet feature is off.
-        "tari_confirmed": _confirmed_payouts_summary(
+        "tari_confirmed": confirmed_payouts_summary(
             tari_payouts, divisor=MICRO_PER_XTM, unit="xtm"
         ),
     }
+
+
+def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
+    """Expected-vs-actual summary — one row per income stream, for both views (#808).
+
+    The comparison the operator otherwise assembles by hand across the Earnings tabs: the linear
+    expectation over a trailing window beside what the view-only wallets confirmed over the SAME
+    window (#381/#462). Expected uses the time-weighted routed P2Pool average over the window
+    itself (``metrics.p2pool_7d``/``p2pool_30d``), not the current 1h figure — a fleet that grew
+    or shrank mid-window would otherwise be judged against the wrong baseline.
+
+    Per-stream windows match each stream's cadence. **Monero** compares XMR over 7d — P2Pool pays
+    whenever the pool finds blocks, so a week is long enough to mean something and short enough to
+    act on; ``pct`` is the actual as a percent of expected, and ``partial`` carries the confirmed
+    window's may-be-incomplete flag so a short history is never presented as a full week.
+    **Tari** compares BLOCK COUNTS over 30d: solo merge-mining pays whole blocks, so the honest
+    unit is blocks (expected = hashrate × window ÷ aux difficulty; actual = confirmed payout
+    count, each payout being a found block), with the XTM sum alongside — no percent, a count that
+    small is luck either way. **XvB** shows wins in the trailing 30d beside XvB's published
+    per-day estimate for the current tier — deliberately NO ratio: a win pays out through ordinary
+    small payouts the payout table cannot attribute, so actual XvB XMR is not separable from
+    P2Pool XMR, and the published figure is XvB's own raffle-wide expectation, not a promise.
+
+    Raw numbers out; the client formats. ``actual``/``blocks``/``xtm`` are None while the matching
+    payout-confirmation feature is off — the card then hints at the view key instead of showing a
+    zero that would read as "earned nothing"."""
+    now = now if now is not None else time.time()
+    conf = earnings["confirmed"]
+    tari_conf = earnings["tari_confirmed"]
+    expected_xmr = earnings["coeff_day"] * metrics.p2pool_7d * 7
+    xmr = {
+        "available": expected_xmr > 0,
+        "expected_7d": expected_xmr,
+        "enabled": bool(conf.get("enabled")),
+        "actual_7d": conf.get("xmr_7d") if conf.get("enabled") else None,
+        "partial": bool((conf.get("partial") or {}).get("7d")),
+        "pct": None,
+    }
+    if xmr["available"] and xmr["enabled"]:
+        xmr["pct"] = round((xmr["actual_7d"] or 0.0) / expected_xmr * 100)
+    # Expected Tari blocks over the window: hashrate × seconds ÷ difficulty (hashes-per-block).
+    # Gated on tari_mining like the calculator, so a dead merge-mine channel shows "—", not 0.
+    expected_blocks = (
+        metrics.p2pool_30d * 30 * SECONDS_PER_DAY / metrics.tari_difficulty
+        if metrics.tari_mining and metrics.tari_difficulty > 0
+        else 0.0
+    )
+    tari = {
+        "available": expected_blocks > 0,
+        "expected_blocks_30d": expected_blocks,
+        "enabled": bool(tari_conf.get("enabled")),
+        "blocks_30d": tari_conf.get("n_30d") if tari_conf.get("enabled") else None,
+        "xtm_30d": tari_conf.get("xtm_30d") if tari_conf.get("enabled") else None,
+        "partial": bool((tari_conf.get("partial") or {}).get("30d")),
+    }
+    stamps = [w.get("ts", 0) or 0 for w in (raffle_wins or [])]
+    xvb = {
+        "enabled": metrics.xvb_enabled,
+        "wins_30d": sum(1 for t in stamps if t >= now - 30 * SECONDS_PER_DAY),
+        "last_win_ts": max(stamps, default=0),
+        # XvB's published per-day estimate for the current tier — None unless fresh (#712).
+        "published_day": earnings["xvb_day"],
+    }
+    return {"xmr": xmr, "tari": tari, "xvb": xvb}
 
 
 # XvB tier calculator copy (#118). A tier is RAFFLE status, never an XMR payout, and the winner is
@@ -1812,6 +1845,18 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     mode_tok, p2p_tok, xvb_tok = _mode_palette(metrics.mode)
     pool_net = build_pool_network(data, metrics)
 
+    # Built once, consumed twice: the Earnings card reads the full payload, the expected-vs-actual
+    # summary (#808) rolls the same figures up — one build, so the two can't disagree.
+    earnings = build_earnings(
+        data,
+        metrics,
+        payouts=monero_payouts,
+        tari_payouts=(
+            state_mgr.get_payouts("tari") if config.TARI_PAYOUT_CONFIRM_ENABLED else None
+        ),
+        xvb_day=xvb_current_tier_reward_day(metrics, state_mgr),
+    )
+
     egress = egress_posture_from_config()  # per-component egress route + privacy roll-up (#170)
     topology = (
         topology_from_config()
@@ -1859,17 +1904,11 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         "raffle_eligible": build_raffle_eligibility(metrics),
         "raffle_wins": build_raffle_log(raffle_wins),
         "proxy_workers": metrics.workers_online,
-        # Confirmed payouts (#381): pass the stored list when the feature is on, else None (feature
-        # off → earnings shows only the estimate). config read at call time so tests can flip it.
-        "earnings": build_earnings(
-            data,
-            metrics,
-            payouts=monero_payouts,
-            tari_payouts=(
-                state_mgr.get_payouts("tari") if config.TARI_PAYOUT_CONFIRM_ENABLED else None
-            ),
-            xvb_day=xvb_current_tier_reward_day(metrics, state_mgr),
-        ),
+        # Confirmed payouts (#381): the stored list rides in when the feature is on, else None
+        # (feature off → earnings shows only the estimate). Built above, before the payload.
+        "earnings": earnings,
+        # Expected vs actual, one row per stream (#808) — the Simple view's earnings figure.
+        "earnings_summary": build_earnings_vs_actual(metrics, earnings, raffle_wins),
         "xvb_calc": build_xvb_calc(metrics, state_mgr),
         # On a backup stack, the XvB controller state last pulled from the primary (#249) — held as
         # standby, adopted only at failover. None on a single stack (nothing pulls). Inspectable so

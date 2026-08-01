@@ -24,7 +24,6 @@ from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
 from mining_dashboard.web.views import (
     _MAX_CHART_POINTS,
     _chart_tension,
-    _confirmed_payouts_summary,
     _mode_palette,
     _reject_flag,
     _rigforge_display,
@@ -36,6 +35,7 @@ from mining_dashboard.web.views import (
     build_chart,
     build_disk_growth,
     build_earnings,
+    build_earnings_vs_actual,
     build_energy,
     build_hashrate,
     build_pool_network,
@@ -1270,61 +1270,6 @@ class TestRigForgeDisplay:
         assert not any("°C" in t for t in texts)  # the hold chip replaces the temp chip
 
 
-# --- Confirmed payouts summary (#381) -------------------------------------------------
-
-
-class TestConfirmedPayoutsSummary:
-    # A fixed "now" so the 24h/7d window boundaries are deterministic.
-    NOW = 1_000_000_000
-
-    def test_disabled_when_payouts_none(self):
-        # Feature off (storage returns None) -> only the enabled flag, no totals.
-        assert _confirmed_payouts_summary(None) == {"enabled": False}
-
-    def test_empty_list_is_on_with_zeros(self):
-        # On, nothing confirmed yet: enabled, count 0, all windows 0.0, no last payout.
-        s = _confirmed_payouts_summary([], now=self.NOW)
-        assert s == {
-            "enabled": True,
-            "count": 0,
-            "xmr_24h": 0.0,
-            "xmr_7d": 0.0,
-            "xmr_all": 0.0,
-            "last_ts": 0,
-        }
-
-    def test_windows_bucket_by_age(self):
-        # One payout in each band; 1 XMR = 1e12 piconero. 24h ⊆ 7d ⊆ all-time.
-        one_xmr = 1_000_000_000_000
-        payouts = [
-            {"ts": self.NOW - 3_600, "amount_atomic": one_xmr},  # 1h ago -> in 24h, 7d, all
-            {"ts": self.NOW - 3 * 86_400, "amount_atomic": 2 * one_xmr},  # 3d -> 7d, all
-            {"ts": self.NOW - 10 * 86_400, "amount_atomic": 4 * one_xmr},  # 10d -> all only
-        ]
-        s = _confirmed_payouts_summary(payouts, now=self.NOW)
-        assert s["count"] == 3
-        assert s["xmr_24h"] == 1.0
-        assert s["xmr_7d"] == 3.0
-        assert s["xmr_all"] == 7.0
-        assert s["last_ts"] == self.NOW - 3_600
-
-    def test_all_older_than_windows(self):
-        # Every payout predates both windows: 24h and 7d are 0, all-time still sums.
-        one_xmr = 1_000_000_000_000
-        payouts = [{"ts": self.NOW - 30 * 86_400, "amount_atomic": 5 * one_xmr}]
-        s = _confirmed_payouts_summary(payouts, now=self.NOW)
-        assert s["xmr_24h"] == 0.0
-        assert s["xmr_7d"] == 0.0
-        assert s["xmr_all"] == 5.0
-
-    def test_tari_unit_and_divisor(self):
-        # Tari reuses the helper with the microTari divisor (1e6) and xtm_* keys.
-        payouts = [{"ts": self.NOW, "amount_atomic": 2_500_000}]
-        s = _confirmed_payouts_summary(payouts, now=self.NOW, divisor=1_000_000, unit="xtm")
-        assert s["xtm_all"] == 2.5
-        assert "xtm_24h" in s and "xmr_all" not in s
-
-
 # --- Tari -----------------------------------------------------------------------------
 
 
@@ -1771,6 +1716,123 @@ class TestCadence:
         assert c["last_block"] == "Never"
 
 
+# --- Expected vs actual earnings summary (#808) ---------------------------------------
+
+
+def _summary_earnings(**over):
+    """A minimal build_earnings-shaped dict — only the keys build_earnings_vs_actual reads."""
+    e = {
+        "coeff_day": 0.0,
+        "confirmed": {"enabled": False},
+        "tari_confirmed": {"enabled": False},
+        "xvb_day": None,
+    }
+    e.update(over)
+    return e
+
+
+class TestEarningsVsActual:
+    NOW = 1_760_000_000
+
+    def test_xmr_expected_uses_the_window_average_and_pct_rounds(self):
+        # Expected = coeff_day × 7d-average hashrate × 7 — the WINDOW's average (p2pool_7d), not
+        # the current 1h figure, so a fleet that changed mid-window is judged against what ran.
+        e = _summary_earnings(
+            coeff_day=1e-8,
+            confirmed={"enabled": True, "xmr_7d": 0.28, "partial": {"7d": False}},
+        )
+        s = build_earnings_vs_actual(_metrics(p2pool_7d=8000.0), e, [], now=self.NOW)
+        assert s["xmr"]["available"] is True
+        assert s["xmr"]["expected_7d"] == pytest.approx(1e-8 * 8000.0 * 7)  # 0.00056·1000=0.56e-3
+        assert s["xmr"]["actual_7d"] == 0.28
+        assert s["xmr"]["pct"] == round(0.28 / (1e-8 * 8000.0 * 7) * 100)
+        assert s["xmr"]["partial"] is False
+
+    def test_xmr_row_degrades_honestly(self):
+        # Estimate unavailable (no network figures) -> not available, and no pct even with
+        # confirmed payouts on; confirmation off -> actual/pct None, never a zero that would
+        # read as "earned nothing".
+        on = _summary_earnings(confirmed={"enabled": True, "xmr_7d": 0.5, "partial": {}})
+        s = build_earnings_vs_actual(_metrics(p2pool_7d=8000.0), on, [], now=self.NOW)
+        assert s["xmr"]["available"] is False and s["xmr"]["pct"] is None
+        off = _summary_earnings(coeff_day=1e-8)
+        s = build_earnings_vs_actual(_metrics(p2pool_7d=8000.0), off, [], now=self.NOW)
+        assert s["xmr"]["enabled"] is False
+        assert s["xmr"]["actual_7d"] is None and s["xmr"]["pct"] is None
+
+    def test_xmr_partial_flag_rides_the_confirmed_window(self):
+        e = _summary_earnings(
+            coeff_day=1e-8,
+            confirmed={"enabled": True, "xmr_7d": 0.1, "partial": {"7d": True}},
+        )
+        s = build_earnings_vs_actual(_metrics(p2pool_7d=8000.0), e, [], now=self.NOW)
+        assert s["xmr"]["partial"] is True
+
+    def test_tari_compares_block_counts_over_30d(self):
+        # Expected blocks = 30d-average hashrate × 30 days ÷ aux difficulty; actual = the
+        # confirmed payout count (solo merge-mining: a payout IS a found block), XTM alongside.
+        e = _summary_earnings(
+            tari_confirmed={
+                "enabled": True,
+                "n_30d": 1,
+                "xtm_30d": 12_345.0,
+                "partial": {"30d": True},
+            }
+        )
+        m = _metrics(p2pool_30d=10_000.0, tari_difficulty=4.0e12, tari_mining=True)
+        s = build_earnings_vs_actual(m, e, [], now=self.NOW)
+        assert s["tari"]["available"] is True
+        assert s["tari"]["expected_blocks_30d"] == pytest.approx(10_000.0 * 30 * 86_400 / 4.0e12)
+        assert s["tari"]["blocks_30d"] == 1
+        assert s["tari"]["xtm_30d"] == 12_345.0
+        assert s["tari"]["partial"] is True
+
+    def test_tari_gates_on_mining_and_difficulty(self):
+        # A dead merge-mine channel (tari_mining False) or missing difficulty -> unavailable,
+        # mirroring the calculator's gate, so no phantom expectation is shown.
+        e = _summary_earnings()
+        off = _metrics(p2pool_30d=10_000.0, tari_difficulty=4.0e12, tari_mining=False)
+        assert build_earnings_vs_actual(off, e, [], now=self.NOW)["tari"]["available"] is False
+        nodiff = _metrics(p2pool_30d=10_000.0, tari_difficulty=0.0, tari_mining=True)
+        assert build_earnings_vs_actual(nodiff, e, [], now=self.NOW)["tari"]["available"] is False
+        # Confirmation off -> counts None, not 0.
+        s = build_earnings_vs_actual(
+            _metrics(p2pool_30d=10_000.0, tari_difficulty=4.0e12, tari_mining=True),
+            e,
+            [],
+            now=self.NOW,
+        )
+        assert s["tari"]["blocks_30d"] is None and s["tari"]["xtm_30d"] is None
+
+    def test_xvb_counts_wins_in_the_trailing_30d_only(self):
+        wins = [
+            {"ts": self.NOW - 40 * 86_400},  # outside the window
+            {"ts": self.NOW - 10 * 86_400},
+            {"ts": self.NOW - 86_400},
+        ]
+        s = build_earnings_vs_actual(
+            _metrics(), _summary_earnings(xvb_day=0.004), wins, now=self.NOW
+        )
+        assert s["xvb"]["enabled"] is True
+        assert s["xvb"]["wins_30d"] == 2
+        assert s["xvb"]["last_win_ts"] == self.NOW - 86_400
+        # XvB's published figure passes through untouched — and stays None when not fresh (#712).
+        assert s["xvb"]["published_day"] == 0.004
+        s = build_earnings_vs_actual(
+            _metrics(xvb_enabled=False), _summary_earnings(), [], now=self.NOW
+        )
+        assert s["xvb"]["enabled"] is False and s["xvb"]["wins_30d"] == 0
+
+    def test_rides_build_state_end_to_end(self, monkeypatch):
+        # The summary must reach the top-level payload the client polls, built from the SAME
+        # earnings dict the Earnings card receives — one build, so the two cannot disagree.
+        monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", False)
+        monkeypatch.setattr(views.config, "TARI_PAYOUT_CONFIRM_ENABLED", False)
+        st = build_state(_data(), _state_mgr(), "all")
+        assert set(st["earnings_summary"]) == {"xmr", "tari", "xvb"}
+        assert st["earnings_summary"]["xmr"]["enabled"] is False
+
+
 # --- Host address beside the hostname (Issue #119) ------------------------------------
 
 
@@ -1891,19 +1953,29 @@ class TestEarnings:
         e = build_earnings(self._NET, _metrics())
         assert e["confirmed"] == {"enabled": False}
 
-    # ponytail: the 24h/7d/all windowing math is proven once, in TestConfirmedPayoutsSummary —
-    # this class only asserts build_earnings passes payouts through (enabled/empty/disabled).
+    # ponytail: the yesterday/24h/7d/30d/all windowing math is proven once, in
+    # tests/service/test_earnings.py::TestConfirmedPayoutsSummary — this class only asserts
+    # build_earnings passes payouts through (enabled/empty/disabled).
 
     def test_confirmed_enabled_but_empty(self):
         # Feature on, nothing confirmed yet → enabled with zeroed totals (shows 0.000000, not "—").
+        # No history on record, so every running window is flagged partial (#787).
         e = build_earnings(self._NET, _metrics(), payouts=[])
         assert e["confirmed"] == {
             "enabled": True,
             "count": 0,
             "xmr_24h": 0.0,
+            "xmr_yesterday": 0.0,
             "xmr_7d": 0.0,
+            "xmr_30d": 0.0,
             "xmr_all": 0.0,
+            "n_24h": 0,
+            "n_yesterday": 0,
+            "n_7d": 0,
+            "n_30d": 0,
             "last_ts": 0,
+            "since_ts": 0,
+            "partial": {"yesterday": True, "7d": True, "30d": True},
         }
 
     def test_tari_confirmed_disabled_by_default(self):
@@ -1917,9 +1989,17 @@ class TestEarnings:
             "enabled": True,
             "count": 0,
             "xtm_24h": 0.0,
+            "xtm_yesterday": 0.0,
             "xtm_7d": 0.0,
+            "xtm_30d": 0.0,
             "xtm_all": 0.0,
+            "n_24h": 0,
+            "n_yesterday": 0,
+            "n_7d": 0,
+            "n_30d": 0,
             "last_ts": 0,
+            "since_ts": 0,
+            "partial": {"yesterday": True, "7d": True, "30d": True},
         }
 
 

@@ -22,7 +22,14 @@ Tari difficulty and block reward p2pool's merge-mine stats already report (``col
 The XvB tier estimate is still deferred (per the Issue #12 discussion), and hashrate currently
 donated to XvB isn't subtracted here — the estimate assumes the supplied hashrate mines via
 P2Pool, which the dashboard states in its disclaimer.
+
+Alongside the model sits ``confirmed_payouts_summary`` (#787): the same domain layer, but over
+what the view-only wallets actually recorded (#381/#462) rather than what the model predicts.
+It lives here so the dashboard card and the Telegram bot roll the running windows up exactly
+once, from one implementation — the #61 principle again.
 """
+
+import time
 
 # Monero amounts are reported in atomic units (piconero); 1 XMR = 1e12 atomic.
 ATOMIC_PER_XMR = 1_000_000_000_000
@@ -75,3 +82,95 @@ def tari_seconds_to_block_per_hs(network_difficulty):
     if network_difficulty <= 0:
         return 0.0
     return float(network_difficulty)
+
+
+# Running-earnings windows (#787). The estimate above answers "what should this hashrate earn?";
+# these answer "what did it actually earn?" from the confirmed on-chain payouts the view-only
+# wallets record (#381/#462). Both the dashboard card and the Telegram bot read this one roll-up,
+# so the two surfaces cannot drift apart (#61/#387).
+RUNNING_WINDOWS = ("yesterday", "7d", "30d")
+
+
+def previous_local_day(now):
+    """``(start, end)`` unix seconds of the previous full **local** calendar day.
+
+    "Yesterday" means the calendar day, not a trailing 24 hours — that is the figure an operator
+    means by "what did I make yesterday". Local is the dashboard container's timezone
+    (``dashboard.timezone``), the same clock the daily summary fires on and the chart's payout
+    dates are stamped in, so all three agree on where a day ends.
+
+    Steps back through noon rather than subtracting 86 400 from today's midnight: a DST transition
+    makes a day 23 or 25 hours long, and the naive subtraction lands on the wrong date on exactly
+    those two days a year."""
+    lt = time.localtime(now)
+    today = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    prev = time.localtime(today - 43_200)
+    start = time.mktime((prev.tm_year, prev.tm_mon, prev.tm_mday, 0, 0, 0, 0, 0, -1))
+    return start, today
+
+
+def confirmed_payouts_summary(payouts, now=None, divisor=ATOMIC_PER_XMR, unit="xmr"):
+    """Roll confirmed on-chain payouts into running totals + a count (#381/#462/#787).
+
+    ``payouts`` is the stored-payout list (``storage.get_payouts(chain)``): each carries ``ts``
+    (unix seconds) and ``amount_atomic``. Sums are converted atomic→whole-unit at this edge only,
+    via ``divisor`` (piconero 1e12 for Monero, microTari 1e6 for Tari) with the amount keys prefixed
+    by ``unit`` (``xmr_*`` / ``xtm_*``). ``enabled`` is False when the feature is off
+    (``payouts is None``) — the UI then shows only the estimate; an empty list means "on, nothing
+    confirmed yet" (shows 0.000000).
+
+    Windows: ``24h``/``7d``/``30d`` are trailing spans from ``now``, ``yesterday`` is the previous
+    full local day (:func:`previous_local_day`), ``all`` is everything stored. Each window also
+    carries its payout **count** (``n_24h`` … ``n_30d``, #808): for solo-merge-mined Tari a payout
+    IS a found block, so the count is the honest actual to hold against the expected block count —
+    the all-time count stays ``count``.
+
+    ``partial`` marks each running window whose span begins before the oldest payout on record
+    (``since_ts``) — the sum then covers only part of the window it is labelled with, so the UI
+    says so rather than presenting it as a full one. It is deliberately a *may be incomplete*
+    signal, not a *is incomplete* one: a wallet that genuinely earned nothing for six weeks reads
+    as partial too, because the payouts table alone cannot tell "no payout arrived" apart from
+    "we weren't watching yet". Over-warning is the safe direction — the figure is never claimed to
+    be complete when it might not be."""
+    if payouts is None:
+        return {"enabled": False}
+    now = now if now is not None else time.time()
+    day, week, month = now - 86_400, now - 7 * 86_400, now - 30 * 86_400
+    y_start, y_end = previous_local_day(now)
+    atomic = dict.fromkeys(("24h", "yesterday", "7d", "30d", "all"), 0)
+    counts = dict.fromkeys(("24h", "yesterday", "7d", "30d"), 0)
+    for p in payouts:
+        amt = p.get("amount_atomic", 0) or 0
+        ts = p.get("ts", 0) or 0
+        atomic["all"] += amt
+        if ts >= month:
+            atomic["30d"] += amt
+            counts["30d"] += 1
+        if ts >= week:
+            atomic["7d"] += amt
+            counts["7d"] += 1
+        if ts >= day:
+            atomic["24h"] += amt
+            counts["24h"] += 1
+        # Half-open [start, end) so a payout landing exactly at midnight belongs to the day it
+        # starts, never to both days.
+        if y_start <= ts < y_end:
+            atomic["yesterday"] += amt
+            counts["yesterday"] += 1
+    # Only positive stamps: a row with a missing/zero ts can't date the history, and letting it
+    # win the min would mark every window complete on the strength of a broken row.
+    stamps = [t for t in (p.get("ts", 0) or 0 for p in payouts) if t > 0]
+    since_ts = min(stamps, default=0)
+    starts = {"yesterday": y_start, "7d": week, "30d": month}
+    summary = {
+        "enabled": True,
+        "count": len(payouts),
+        "last_ts": max(stamps, default=0),
+        # Oldest payout on record — where the history these windows are drawn from begins. 0 when
+        # nothing is confirmed yet, which marks every running window partial.
+        "since_ts": since_ts,
+        "partial": {w: since_ts <= 0 or since_ts > starts[w] for w in RUNNING_WINDOWS},
+    }
+    summary.update({f"{unit}_{w}": v / divisor for w, v in atomic.items()})
+    summary.update({f"n_{w}": v for w, v in counts.items()})
+    return summary

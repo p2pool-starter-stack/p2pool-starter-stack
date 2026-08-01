@@ -283,6 +283,11 @@ jq_assert "exactly 4 service_healthy depends_on edges total (#565)" \
     '[.services[] | (.depends_on // {}) | to_entries[] | select(.value.condition == "service_healthy")] | length == 4'
 jq_assert "exactly 5 depends_on edges total (#565)" \
     '[.services[] | (.depends_on // {}) | to_entries[]] | length == 5'
+# The wallet probe must fit ps's 15-char CMD column — procps truncates CMD there, so the full
+# binary name never matches and the container would report unhealthy forever while the wallet
+# runs fine (#777). Asserted here because tari-wallet only renders under tari_payout_confirm.
+jq_assert "tari-wallet healthcheck pattern survives ps CMD truncation (#777)" \
+    '(.services["tari-wallet"].healthcheck.test | tostring) | contains("[m]inotari_consol") and (contains("[m]inotari_console_wallet") | not)'
 # Restore $JSON to the default-profile render for every check below this point.
 JSON="$(docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
 

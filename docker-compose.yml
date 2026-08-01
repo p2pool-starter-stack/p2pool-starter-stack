@@ -355,8 +355,10 @@ services:
     healthcheck:
       # Process-liveness (like the Tari node) rather than a gRPC probe: the wallet's own gRPC is a
       # long stream, and a liveness ps is enough to catch a crashed daemon. '[m]' stops grep matching
-      # its own argv. The long start_period tolerates the first-run blockchain scan.
-      test: ["CMD-SHELL", "ps | grep '[m]inotari_console_wallet' || exit 1"]
+      # its own argv. The long start_period tolerates the first-run blockchain scan. The pattern is
+      # capped at 15 chars — procps' ps truncates the CMD column there, so the full binary name
+      # 'minotari_console_wallet' can never match (#777).
+      test: ["CMD-SHELL", "ps | grep '[m]inotari_consol' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

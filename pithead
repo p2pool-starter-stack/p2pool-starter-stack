@@ -178,10 +178,33 @@ resolve_pull_policy() {
     else printf 'missing'; fi
 }
 
+# #795: `compose up --remove-orphans` never removes the container of a service whose profile just
+# went inactive — the service is still in the compose file, so compose does not count it as an
+# orphan and leaves it running (a tari local→remote switch left the old minotari_node up, offline
+# and re-syncing, against a remote-mode config). Reconcile from the committed .env instead: every
+# profile-gated service whose profile token is absent gets its container stopped and removed.
+# `compose rm` resolves an explicitly named service whatever the active profiles, and exits 0 when
+# no container exists, so running this before every up is a cheap no-op in the steady state and
+# also heals a box already stuck with a stale node container.
+remove_deactivated_profile_containers() {
+    local profiles gone=()
+    profiles=",$(env_get COMPOSE_PROFILES),"
+    [[ "$profiles" == *,local_node,* ]] || gone+=(monerod)
+    [[ "$profiles" == *,local_tari,* ]] || gone+=(tari)
+    [[ "$profiles" == *,payout_confirm,* ]] || gone+=(wallet-rpc)
+    [[ "$profiles" == *,tari_payout_confirm,* ]] || gone+=(tari-wallet)
+    [ "${#gone[@]}" -eq 0 ] && return 0
+    docker compose rm -sf "${gone[@]}" >/dev/null 2>&1 ||
+        warn "Could not remove the deactivated container(s): ${gone[*]} — remove them manually with 'docker rm -f ${gone[*]}'."
+}
+
 # Run `docker compose up` with live output; on failure, explain a bridge-subnet collision (#180) if
 # that's what Docker rejected. Returns compose's own exit code.
 compose_up_checked() {
     local tmp out rc
+    # Deactivated-profile containers go BEFORE the up (#795): the old local node must stop before
+    # p2pool (re)starts against the remote one, not linger beside it.
+    remove_deactivated_profile_containers
     tmp="$(mktemp)"
     docker compose up --pull "$(resolve_pull_policy)" "$@" 2>&1 | tee "$tmp"
     rc=${PIPESTATUS[0]}
@@ -6715,8 +6738,9 @@ apply() {
     # commit above (never before the operator said yes) and under the marker, so a failed move is
     # retried; the recreate below then mounts the migrated directory.
     migrate_dashboard_data
-    # Compose recreates only the services whose resolved config changed; --remove-orphans
-    # drops monerod when a local→remote switch deactivates the local_node profile.
+    # Compose recreates only the services whose resolved config changed. --remove-orphans covers
+    # services that left the compose file entirely; a profile-deactivated service is NOT an orphan
+    # to compose, so compose_up_checked removes those containers itself before the up (#795).
     if ! compose_up_checked -d --remove-orphans; then
         warn "Config files were updated but containers were NOT recreated ('docker compose up' failed)."
         warn "Fix the cause shown above, then re-run '$0 apply' (it will retry the recreate) — or '$0 up'."

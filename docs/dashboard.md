@@ -260,6 +260,29 @@ The summary panel pulls the key numbers together:
 | **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
 | **Wallet XMR / Wallet TARI** | Your configured Monero and Tari payout addresses, one card each. |
 
+### Earnings — Expected vs Actual
+
+One compact table, shown in **both** views, that answers "am I earning what this hashrate should?"
+— the comparison you'd otherwise assemble by hand from the Earnings tabs. One row per income
+stream, each over the window that suits how that stream pays:
+
+| Row | Expected | Actual |
+|---|---|---|
+| **Monero (7d)** | The linear estimate over the trailing 7 days, at your **7-day average** routed P2Pool hashrate — the hashrate that actually ran the window, so a fleet that grew or shrank mid-week is judged against what really ran. | Confirmed on-chain payouts over the same 7 days ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
+| **Tari (30d)** | Expected **blocks** over the trailing 30 days (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
+| **XvB wins (30d)** | XvB's published per-day estimate for your current tier — XvB's own raffle-wide expectation, not a promise. | Raffle wins recorded in the window, and how long ago the last one landed. |
+
+Rows degrade honestly rather than guess: a stream with [payout confirmation](#payout-confirmation)
+off shows the config key to set instead of a zero that would read as "earned nothing"; the XvB row
+disappears when XvB is off; a `*` marks a window that reaches back past the oldest recorded payout.
+The XvB row deliberately shows **no XMR figure and no percent**: a win pays out through ordinary
+small payouts that can't be told apart from P2Pool payouts, so any "XvB XMR earned" number would be
+an invention.
+
+Short windows swing with mining luck — P2Pool pays when the pool finds blocks, and solo Tari blocks
+are rarer still. A sustained gap between expected and actual is the signal worth checking (workers
+offline, a misconfigured payout address); a single quiet week is not.
+
 ### Workers Alive
 
 A live table of every connected rig: worker name, IP, uptime, and per-worker hashrate over the 1m
@@ -375,14 +398,15 @@ sync gaps, or other noise the average doesn't separate out.
 ### Simple vs. Advanced view
 
 A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) shows the chart, the
-Overview summary, and the worker table. **Advanced** swaps the Overview for cards that break out the
-same data in more detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**,
-**XMR Network**, **Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
-choice is remembered across reloads.
+Overview summary, the [Earnings — Expected vs Actual](#earnings--expected-vs-actual) table, and the
+worker table. **Advanced** swaps the Overview for cards that break out the same data in more
+detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**,
+**Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
+expected-vs-actual table stays in both views. The choice is remembered across reloads.
 
-The earnings estimates and the XvB tier calculator live only in Advanced view. Simple view shows a
-one-time banner pointing there; it goes away once you dismiss it or open Advanced view, and stays
-away across reloads.
+The what-if earnings calculator and the XvB tier calculator live only in Advanced view. Simple view
+shows a one-time banner pointing there; it goes away once you dismiss it or open Advanced view, and
+stays away across reloads.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/launch/advanced.png">
@@ -505,10 +529,26 @@ when you give the stack a way to check the chain. Set `monero.view_key` (the pri
 for your payout address) and the stack runs a **view-only** `monero-wallet-rpc` against your local
 node, scanning for confirmed incoming payouts. P2Pool pays each miner's share directly in a Monero
 block's coinbase, so the wallet is the only ground truth that a payout arrived. The Monero tab of
-the earnings card then shows a **Confirmed on-chain** block under the estimate — 24-hour, 7-day, and
-all-time XMR totals plus the time since the **last payout** — and a `payout_confirmed` alert fires
-once per payout (Telegram and the other sinks). The Tari tab carries the same **Confirmed on-chain**
-block in XTM once Tari payout confirmation is on (see the Tari note below).
+the earnings card then shows a **Confirmed on-chain** block under the estimate — and a
+`payout_confirmed` alert fires once per payout (Telegram and the other sinks). The Tari tab carries
+the same **Confirmed on-chain** block in XTM once Tari payout confirmation is on (see the Tari note
+below).
+
+| Figure | What it sums |
+|---|---|
+| **Yesterday** | The previous full calendar day, midnight to midnight in the dashboard's timezone (`dashboard.timezone`) — the same clock the daily summary fires on. Not a trailing 24 hours. |
+| **Confirmed 24h** | The trailing 24 hours from now. Deliberately a different span from **Yesterday**, so the two disagree during the day. |
+| **Running 7d** | The trailing 7 days from now. |
+| **Running 30d** | The trailing 30 days from now. |
+| **Confirmed all-time** | Every payout recorded, however far back. |
+| **Last payout** | Time since the most recent confirmed payout, hover for the payout count. |
+
+A running window is marked with a `*` when it reaches back further than the oldest payout on
+record — the total then covers only the history the wallet gave the dashboard, not the full span its
+label names, and a footnote says where that history starts. Read the marker as *may be incomplete*:
+a wallet that genuinely earned nothing for six weeks is marked too, because the recorded payouts
+alone can't tell "no payout arrived" apart from "we weren't watching yet". A fresh install marks
+every running window until history builds up behind it.
 
 Each confirmed Monero payout also drops a **Payouts** marker — a green coin at the block time it
 landed — onto the hashrate chart, on the same marker row as the event diamonds and raffle stars.
