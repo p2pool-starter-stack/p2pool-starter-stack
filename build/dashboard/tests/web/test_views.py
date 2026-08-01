@@ -1744,6 +1744,20 @@ class TestEarningsVsActual:
         )
         assert s["xmr"]["includes_xvb"] is False  # disabled XvB never folds its estimate in
 
+    def test_negative_published_estimate_never_folds(self):
+        # xvb_day is upstream-published — a hostile/corrupt negative must not drag the combined
+        # expectation toward (or past) zero while available stays True: it folds as 0, the label
+        # stays P2Pool-only, and pct keeps a positive denominator.
+        e = _summary_earnings(
+            coeff_day=1e-8,
+            xvb_day=-5.0,
+            confirmed={"enabled": True, "xmr_30d": 0.1, "partial": {}},
+        )
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), e, [], now=self.NOW)
+        assert s["xmr"]["includes_xvb"] is False
+        assert s["xmr"]["expected_30d"] == pytest.approx(1e-8 * 8000.0 * 30)
+        assert s["xmr"]["pct"] is not None and s["xmr"]["pct"] > 0
+
     def test_xmr_row_degrades_honestly(self):
         # Estimate unavailable (no network figures) -> not available, and no pct even with
         # confirmed payouts on; confirmation off -> actual/pct None, never a zero that would

@@ -1019,8 +1019,10 @@ test('ExpectedVsActualCard compares combined Monero+XvB with a percent and parti
     assert.match(out, /0\.012300 XMR/);            // expected, formatXmr precision
     assert.match(out, /0\.010100 XMR \(82%\) \*/); // actual + pct + the partial asterisk
     assert.match(out, /covers only the payout history on record/); // the footnote appears
-    // The card never pans (#817): wrapping table, no scroll wrapper around it.
+    // The card never pans (#817): wrapping table, and the scroll wrapper must stay gone —
+    // scoped to this card's own markup, since other cards legitimately keep est-scroll.
     assert.match(out, /eva-table/);
+    assert.doesNotMatch(cardSlice(out, 'card-expected-vs-actual'), /est-scroll/);
     // Without a fresh published estimate the label honestly drops the "+ XvB".
     s.earnings_summary.xmr.includes_xvb = false;
     assert.match(renderApp({ state: s }), /Monero \(30d\)/);

@@ -1601,7 +1601,10 @@ def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
     conf = earnings["confirmed"]
     tari_conf = earnings["tari_confirmed"]
     expected_p2pool = earnings["coeff_day"] * metrics.p2pool_30d * 30
-    expected_xvb = (earnings["xvb_day"] or 0.0) * 30 if metrics.xvb_enabled else 0.0
+    # Clamped: xvb_day is upstream-published (XvB's API); a hostile/corrupt negative would drag
+    # the combined expectation to <= 0 while `available` stays True — an inverted pct at best, a
+    # zero denominator at worst. A negative estimate is meaningless, so it folds as 0.
+    expected_xvb = max(0.0, earnings["xvb_day"] or 0.0) * 30 if metrics.xvb_enabled else 0.0
     xmr = {
         "available": expected_p2pool > 0,
         "expected_30d": expected_p2pool + expected_xvb,
