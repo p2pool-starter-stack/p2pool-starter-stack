@@ -139,6 +139,13 @@ with what is on it:
 - **Wipe everything** — chains included. The new install re-downloads them from scratch, and
   the full set of questions is asked.
 
+On either fresh start, the page opens with the previous install's answers already filled in —
+wallet addresses, node locations, pool tier — read from the disk you are about to wipe, so you
+only change what you came to change. Its secrets never make the trip: the dashboard login,
+node passwords, view keys, worker tokens and alert credentials are left out, and anything the
+machine generates for itself is generated anew. If the old configuration cannot be read, the
+page opens blank.
+
 Type the disk's name to confirm.
 
 ### The questions

@@ -383,6 +383,49 @@ async def test_keep_everything_submits_no_config_and_gets_no_handoff_machinery(c
     assert not (installer / "last-attempt.json").exists()
 
 
+async def test_installer_state_serves_a_published_prefill(client, seeded, installer):
+    # A reinstall's pre-fill: the HOST mounts the target's previous /data read-only, strips
+    # the secrets and publishes the remainder as last-attempt.json — the state API is the only
+    # channel to the page, and it must merge that pre-fill over the defaults exactly as the
+    # pre-seed path's does.
+    installer.joinpath("last-attempt.json").write_text(
+        json.dumps({"monero": {"wallet_address": "4PREV"}, "tari": {"mode": "remote"}})
+    )
+    await _auth(client)
+    s = await (await client.get("/api/wizard-state")).json()
+    assert s["stage"] == "installer"
+    assert s["config"]["monero"]["wallet_address"] == "4PREV"
+    assert s["config"]["tari"]["mode"] == "remote"
+    assert s["config"]["monero"]["prune"] is True  # the defaults still fill the gaps
+
+
+async def test_a_broken_prefill_degrades_to_defaults_not_an_error(client, seeded, installer):
+    # The pre-fill is pure convenience: an unparseable file means the form opens on the
+    # documented defaults, with no error shown and nothing blocked.
+    installer.joinpath("last-attempt.json").write_text("{not json")
+    await _auth(client)
+    r = await client.get("/api/wizard-state")
+    assert r.status == 200
+    s = await r.json()
+    assert s["config"]["monero"]["wallet_address"] == ""
+    assert s["error"] is None
+
+
+async def test_keep_submit_leaves_a_published_prefill_alone(client, installer):
+    # keep collapses the form and no config crosses. The pre-fill exists for the fresh/data
+    # paths where the operator re-answers; an untouched keep must neither consume it nor
+    # write anything beside the install request.
+    installer.joinpath("last-attempt.json").write_text('{"monero": {"wallet_address": "4PREV"}}')
+    await _auth(client)
+    r = await client.post("/submit", data={"disk": "sda", "confirm": "sda", "wipe": "keep"})
+    assert r.status == 200
+    assert (installer / "install-request").read_text() == "sda\tkeep"
+    assert not (installer / "config.json").exists()
+    assert json.loads((installer / "last-attempt.json").read_text()) == {
+        "monero": {"wallet_address": "4PREV"}
+    }
+
+
 async def test_keep_with_a_crafted_config_still_takes_the_keep_branch(client, installer):
     await _auth(client)
     r = await client.post(
