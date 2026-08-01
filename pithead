@@ -1994,6 +1994,77 @@ provision_local_miner() {
     fi
 }
 
+# --- OS update (appliance A/B slots) ---
+# The build variant stamp: debug images bake an SSH key (often the box's only management
+# channel), release images are shell-less by design. The running system carries the stamp at
+# /etc/pithead-variant; an update bundle carries it in its manifest's [meta.pithead] section.
+# os-update compares the two, because the failure this guards is silent and one-way: a debug
+# box that installs a release bundle drops SSH — the very channel driving the install — and
+# recovery needs a console.
+
+os_running_variant() { # echoes debug|release|unknown
+    local v
+    v=$(tr -d ' \t\r\n' 2>/dev/null <"${PITHEAD_VARIANT_FILE:-/etc/pithead-variant}" || true)
+    case "$v" in debug | release) echo "$v" ;; *) echo unknown ;; esac
+}
+
+os_bundle_variant() { # $1: bundle path — echoes debug|release|unknown, never fails
+    # The stamp lives under [meta.pithead] in the bundle manifest; `rauc info` exposes manifest
+    # meta in its JSON output. Parsed defensively (any object carrying a `variant` key), so a
+    # RAUC that nests the manifest differently still yields the stamp rather than a false
+    # "unknown" — and anything unparseable degrades to unknown, which the gate treats as
+    # shell-less.
+    local v
+    v=$(rauc info --output-format=json "$1" 2>/dev/null |
+        jq -r '[.. | objects | .variant? // empty] | map(select(. == "debug" or . == "release")) | first // empty' 2>/dev/null)
+    case "$v" in debug | release) echo "$v" ;; *) echo unknown ;; esac
+}
+
+os_update_needs_confirmation() { # $1: running variant, $2: bundle variant — rc 0 = confirm first
+    # Only the debug->non-debug transition loses the management channel. An unstamped bundle is
+    # treated as release: assuming "debug" here is how a box gets stranded.
+    [ "$1" = "debug" ] && [ "$2" != "debug" ]
+}
+
+os_update() {
+    local bundle="" assume_yes=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+        -y | --yes) assume_yes=1 ;;
+        -*) error "Unknown option for os-update: $arg. Run '$0 help'." ;;
+        *)
+            [ -z "$bundle" ] || error "os-update takes exactly one bundle path. Run '$0 help'."
+            bundle="$arg"
+            ;;
+        esac
+    done
+    [ -n "$bundle" ] || error "os-update needs the path to an update bundle (.raucb). Run '$0 help'."
+    command -v rauc >/dev/null 2>&1 ||
+        error "rauc is not available here — OS updates apply to the appliance image, not a checkout install."
+    [ -f "$bundle" ] || error "No such bundle: $bundle"
+
+    local running target
+    running=$(os_running_variant)
+    target=$(os_bundle_variant "$bundle")
+    if os_update_needs_confirmation "$running" "$target"; then
+        warn "This system is a debug build: SSH is baked in, and it is probably the channel driving this update."
+        if [ "$target" = "release" ]; then
+            warn "The bundle is a release build — shell-less by design. Installing it removes SSH; recovery then needs a console on the box."
+        else
+            warn "The bundle carries no variant stamp — treat it as a shell-less release build. Installing it can remove SSH; recovery then needs a console on the box."
+        fi
+        if [ "$assume_yes" -eq 0 ]; then
+            read -r -p "Install it anyway? (y/N): " CONFIRM || true
+            if [[ ! "$CONFIRM" =~ ^[Yy] ]]; then
+                log "OS update cancelled."
+                return 1
+            fi
+        fi
+    fi
+    log "Installing OS update bundle: $bundle (running: $running, bundle: $target)"
+    rauc install "$bundle"
+}
+
 reset_dashboard() {
     local assume_yes=0 arg
     for arg in "$@"; do
@@ -2452,6 +2523,13 @@ Maintenance:
                             when it is on (the miner points at this machine's own stratum),
                             stop the miner when it is off. The boot path runs this after the
                             stack is up; a no-op outside the appliance.
+
+  os-update BUNDLE [-y|--yes]
+                            Install an OS update bundle into the spare A/B slot (appliance
+                            only — runs 'rauc install'). When this system is a debug build
+                            (SSH baked in) and the bundle is not, it warns and asks first:
+                            that install removes the SSH channel driving it.
+                              -y, --yes        skip the confirmation prompt.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion —
                             the client PRIVATE key, kept out of 'status'. Add it to your Tor
@@ -6885,7 +6963,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard load-images local-miner control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
+readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard load-images local-miner os-update control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -8352,6 +8430,7 @@ main() {
         require_env
         provision_local_miner
         ;;
+    os-update) os_update "$@" ;;
     control-run-pending)
         _reject_options control-run-pending "$@"
         require_deployed

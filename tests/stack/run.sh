@@ -8292,6 +8292,91 @@ unset -f okrun
 rm -rf "$OKSB"
 unset OKSB
 
+echo "== unit: os-update variant gate — a debug box never silently loses its SSH =="
+# The trap this guards: a debug image's SSH key is often the only management channel, and a
+# release bundle removes it BY DESIGN. The gate must fire on debug->release, on debug->unstamped
+# (an old bundle without the stamp is shell-less too), and nowhere else.
+run_sourced "$SANDBOX" os_update_needs_confirmation debug release
+assert_rc "debug system + release bundle -> confirmation required" "$?" "0"
+run_sourced "$SANDBOX" os_update_needs_confirmation debug unknown
+assert_rc "debug system + unstamped bundle -> confirmation required" "$?" "0"
+run_sourced "$SANDBOX" os_update_needs_confirmation debug debug
+assert_rc "debug -> debug passes without ceremony" "$?" "1"
+run_sourced "$SANDBOX" os_update_needs_confirmation release release
+assert_rc "release -> release passes (the fleet's normal update)" "$?" "1"
+run_sourced "$SANDBOX" os_update_needs_confirmation unknown release
+assert_rc "unstamped running system passes — only a KNOWN debug box has a channel to lose" "$?" "1"
+
+OUSB=$(mktemp -d)
+mkdir -p "$OUSB/bin"
+# A fake rauc: logs every call, answers `info` with a canned JSON body.
+cat >"$OUSB/bin/rauc" <<'EOF'
+#!/usr/bin/env bash
+echo "[rauc] $*" >>"${RAUC_LOG:?}"
+case "$1" in
+info) [ -s "${RAUC_INFO_JSON:-}" ] && cat "$RAUC_INFO_JSON" ;;
+install) exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$OUSB/bin/rauc"
+touch "$OUSB/bundle.raucb"
+export RAUC_LOG="$OUSB/calls"
+
+printf 'debug\n' >"$OUSB/variant-debug"
+printf 'release\n' >"$OUSB/variant-release"
+printf 'mystery\n' >"$OUSB/variant-garbage"
+assert_eq "running variant read from the stamp file" \
+    "$(PITHEAD_VARIANT_FILE=$OUSB/variant-debug run_sourced "$SANDBOX" os_running_variant)" "debug"
+assert_eq "a garbage stamp degrades to unknown, never to a variant" \
+    "$(PITHEAD_VARIANT_FILE=$OUSB/variant-garbage run_sourced "$SANDBOX" os_running_variant)" "unknown"
+assert_eq "a missing stamp file is unknown (pre-stamp images)" \
+    "$(PITHEAD_VARIANT_FILE=$OUSB/nope run_sourced "$SANDBOX" os_running_variant)" "unknown"
+
+ourun() { # <variant-file> <info-json-file or empty> [os-update args...] — stdin closed (no tty)
+    local vf="$1" ij="$2"
+    shift 2
+    (
+        cd "$OUSB" || exit
+        PATH="$OUSB/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        RAUC_INFO_JSON="$ij" PITHEAD_VARIANT_FILE="$vf" os_update "$@" </dev/null
+    )
+}
+printf '{"manifest":{"meta":{"pithead":{"variant":"release"}}}}\n' >"$OUSB/info-release.json"
+printf '{"meta":{"pithead":{"variant":"debug"}}}\n' >"$OUSB/info-debug.json"
+assert_eq "bundle variant parsed from rauc info JSON (nested manifest)" \
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="$OUSB/info-release.json" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "release"
+assert_eq "bundle variant parse tolerates a different nesting" \
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="$OUSB/info-debug.json" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "debug"
+assert_eq "an unstamped bundle is unknown" \
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "unknown"
+
+# The command end to end, with the daemon stubbed. Non-interactive stdin means the prompt reads
+# EOF -> cancelled: precisely the automation case where a silent install would strand the box.
+: >"$RAUC_LOG"
+out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.json" bundle.raucb 2>&1)
+rc=$?
+assert_rc "debug box + release bundle, no --yes -> refused" "$rc" "1"
+assert_contains "the refusal names the SSH loss" "$out" "removes SSH"
+assert_not_contains "rauc install was NOT reached" "$(cat "$RAUC_LOG")" "install"
+: >"$RAUC_LOG"
+ourun "$OUSB/variant-debug" "$OUSB/info-release.json" bundle.raucb --yes >/dev/null 2>&1
+assert_rc "--yes acknowledges the warning and proceeds" "$?" "0"
+assert_contains "rauc install ran with the bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
+: >"$RAUC_LOG"
+ourun "$OUSB/variant-release" "$OUSB/info-release.json" bundle.raucb >/dev/null 2>&1
+assert_rc "release -> release installs with no prompt" "$?" "0"
+assert_contains "rauc install ran unprompted" "$(cat "$RAUC_LOG")" "install bundle.raucb"
+out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.json" 2>&1)
+assert_rc "a missing bundle path is an error, not an install" "$?" "1"
+unset RAUC_LOG
+unset -f ourun
+rm -rf "$OUSB"
+unset OUSB
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
