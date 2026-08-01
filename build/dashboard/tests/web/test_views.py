@@ -9,6 +9,7 @@ presentation tokens), the chart series (Issue #65), and the full ``build_state``
 import json
 import time
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1832,6 +1833,21 @@ class TestEarningsVsActual:
         assert set(st["earnings_summary"]) == {"xmr", "tari", "xvb"}
         assert st["earnings_summary"]["xmr"]["enabled"] is False
 
+    def test_frontend_fixture_carries_every_payload_key(self):
+        # Drift guard (#808 post-mortem): the frontend render tests run against
+        # tests/frontend/fixtures/state.json, "a real build_state() payload". When a new top-level
+        # key ships without regenerating the fixture, every component gated on that key silently
+        # renders nothing in the whole frontend suite — exactly how the #808 card briefly had zero
+        # render coverage. This pins the fixture's key set to the live contract.
+        fixture = Path(__file__).parent.parent / "frontend" / "fixtures" / "state.json"
+        fixture_keys = set(json.loads(fixture.read_text()))
+        live_keys = set(build_state(_data(), _state_mgr(), "all"))
+        missing = live_keys - fixture_keys
+        assert not missing, (
+            f"frontend fixture is stale — regenerate with tests/frontend/fixtures/_gen_state.py "
+            f"(missing keys: {sorted(missing)})"
+        )
+
 
 # --- Host address beside the hostname (Issue #119) ------------------------------------
 
@@ -1969,9 +1985,6 @@ class TestEarnings:
             "xmr_7d": 0.0,
             "xmr_30d": 0.0,
             "xmr_all": 0.0,
-            "n_24h": 0,
-            "n_yesterday": 0,
-            "n_7d": 0,
             "n_30d": 0,
             "last_ts": 0,
             "since_ts": 0,
@@ -1993,9 +2006,6 @@ class TestEarnings:
             "xtm_7d": 0.0,
             "xtm_30d": 0.0,
             "xtm_all": 0.0,
-            "n_24h": 0,
-            "n_yesterday": 0,
-            "n_7d": 0,
             "n_30d": 0,
             "last_ts": 0,
             "since_ts": 0,

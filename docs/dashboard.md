@@ -270,7 +270,7 @@ stream, each over the window that suits how that stream pays:
 |---|---|---|
 | **Monero (7d)** | The linear estimate over the trailing 7 days, at your **7-day average** routed P2Pool hashrate — the hashrate that actually ran the window, so a fleet that grew or shrank mid-week is judged against what really ran. | Confirmed on-chain payouts over the same 7 days ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
 | **Tari (30d)** | Expected **blocks** over the trailing 30 days (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
-| **XvB wins (30d)** | XvB's published per-day estimate for your current tier — XvB's own raffle-wide expectation, not a promise. | Raffle wins recorded in the window, and how long ago the last one landed. |
+| **XvB wins (30d)** | XvB's published per-day estimate for your current tier — XvB's own raffle-wide expectation, not a promise. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
 
 Rows degrade honestly rather than guess: a stream with [payout confirmation](#payout-confirmation)
 off shows the config key to set instead of a zero that would read as "earned nothing"; the XvB row
