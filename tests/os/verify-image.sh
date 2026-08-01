@@ -54,6 +54,11 @@ for _ in {1..25}; do
     [ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] && break
     sleep 0.2
 done
+# Hard-fail like mkimage.sh does: a mount error two screens later names the wrong culprit.
+[ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] || {
+    echo "partition nodes never appeared on $LOOP — udev timing or a broken image" >&2
+    exit 1
+}
 
 echo "==> partition table"
 # Ships ONLY the ESP and slot A — systemd-repart builds the rest on the target's real disk. A
