@@ -109,17 +109,17 @@
       "xtm_30d": null
     },
     "xmr": {
-      "actual_7d": null,
+      "actual_30d": null,
       "available": false,
       "enabled": false,
-      "expected_7d": 0.0,
+      "expected_30d": 0.0,
+      "includes_xvb": false,
       "partial": false,
       "pct": null
     },
     "xvb": {
       "enabled": true,
       "last_win_ts": 1735689000,
-      "published_day": null,
       "wins_30d": 1
     }
   },

@@ -262,25 +262,28 @@ The summary panel pulls the key numbers together:
 ### Earnings — Expected vs Actual
 
 One compact table, shown in **both** views, that answers "am I earning what this hashrate should?"
-— the comparison you'd otherwise assemble by hand from the Earnings tabs. One row per income
-stream, each over the window that suits how that stream pays:
+— the comparison you'd otherwise assemble by hand from the Earnings tabs. Every row shares one
+trailing **30-day** window:
 
 | Row | Expected | Actual |
 |---|---|---|
-| **Monero (7d)** | The linear estimate over the trailing 7 days, at your **7-day average** routed P2Pool hashrate — the hashrate that actually ran the window, so a fleet that grew or shrank mid-week is judged against what really ran. | Confirmed on-chain payouts over the same 7 days ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
-| **Tari (30d)** | Expected **blocks** over the trailing 30 days (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
-| **XvB wins (30d)** | XvB's published per-day estimate for your current tier — XvB's own raffle-wide expectation, not a promise. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
+| **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** XvB's published per-day estimate for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
+| **Tari (30d)** | Expected **blocks** (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
+| **XvB wins (30d)** | — | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
+
+Monero and XvB share one row **on both sides** deliberately: an XvB win pays out through ordinary
+small payouts that can't be told apart from P2Pool payouts, so the confirmed actual always
+contains the wins' XMR — a P2Pool-only expectation would overshoot on every winning box. Folding
+XvB's published estimate into the expected side keeps the percent comparing like with like; the
+wins row tracks only that wins keep landing.
 
 Rows degrade honestly rather than guess: a stream with [payout confirmation](#payout-confirmation)
 off shows the config key to set instead of a zero that would read as "earned nothing"; the XvB row
 disappears when XvB is off; a `*` marks a window that reaches back past the oldest recorded payout.
-The XvB row deliberately shows **no XMR figure and no percent**: a win pays out through ordinary
-small payouts that can't be told apart from P2Pool payouts, so any "XvB XMR earned" number would be
-an invention.
 
-Short windows swing with mining luck — P2Pool pays when the pool finds blocks, and solo Tari blocks
-are rarer still. A sustained gap between expected and actual is the signal worth checking (workers
-offline, a misconfigured payout address); a single quiet week is not.
+Payouts swing with mining luck — P2Pool pays when the pool finds blocks, and solo Tari blocks are
+rarer still. A sustained gap between expected and actual is the signal worth checking (workers
+offline, a misconfigured payout address); a single quiet stretch is not.
 
 ### Workers Alive
 
