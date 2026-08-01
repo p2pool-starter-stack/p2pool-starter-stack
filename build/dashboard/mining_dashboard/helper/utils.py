@@ -114,6 +114,24 @@ def format_xmr(amount):
     return f"{val:.{dp}f} XMR"
 
 
+def format_xtm(amount):
+    """Format an XTM amount, the Tari sibling of :func:`format_xmr` — same magnitude-adaptive
+    precision, same "0 XTM" / em-dash edge cases.
+
+    Mirrors ``formatXtm`` in ``web/static/logic.mjs`` so a confirmed Tari total reads identically
+    in the bot and on the dashboard card (#387)."""
+    try:
+        val = float(amount)
+    except (ValueError, TypeError):
+        return "—"
+    if not math.isfinite(val):
+        return "—"
+    if val == 0:
+        return "0 XTM"
+    dp = 4 if val >= 1 else 6 if val >= 0.001 else 8
+    return f"{val:.{dp}f} XTM"
+
+
 def format_duration(seconds):
     """
     Formats a duration in seconds into a concise human-readable string.

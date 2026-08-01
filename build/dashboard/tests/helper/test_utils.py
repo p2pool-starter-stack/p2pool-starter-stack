@@ -11,6 +11,7 @@ from mining_dashboard.helper.utils import (
     format_hashrate,
     format_time_abs,
     format_xmr,
+    format_xtm,
     get_tier_info,
     is_ip_address,
     parse_hashrate,
@@ -151,6 +152,22 @@ class TestFormatXmr:
         assert format_xmr(None) == "—"
         assert format_xmr("invalid") == "—"
         assert format_xmr(float("inf")) == "—"
+
+
+class TestFormatXtm:
+    """#387: the Tari sibling — mirrors formatXtm in web/static/logic.mjs, so a confirmed Tari
+    total (#787) reads identically in the bot and on the dashboard card."""
+
+    def test_precision_scales_with_magnitude(self):
+        assert format_xtm(4552.15) == "4552.1500 XTM"  # >= 1 -> 4 dp
+        assert format_xtm(0.1234567) == "0.123457 XTM"  # >= 0.001 -> 6 dp
+        assert format_xtm(0.00000123) == "0.00000123 XTM"  # tiny -> 8 dp, not rounded to 0
+
+    def test_zero_and_bad_data(self):
+        assert format_xtm(0) == "0 XTM"
+        assert format_xtm(None) == "—"
+        assert format_xtm("invalid") == "—"
+        assert format_xtm(float("inf")) == "—"
 
 
 class TestFormatDuration:
