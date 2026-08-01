@@ -86,13 +86,13 @@ test("done without a handoff yet: names the dark period and where the dashboard 
 test("handoff card: credentials shown once, provisioning gated on the ack", () => {
   const handoff = {
     username: "admin",
-    password: "rX6d2A4sGBHFEcQT4TVQQJRQg7xtbDMg",
+    password: "fixture-password-render-test-only",
     dashboard: "https://pithead.local",
     stratum: "stratum+tcp://pithead.local:3333",
   };
   const card = renderToString(html`<${Done} status="" handoff=${handoff} onAck=${() => {}} />`);
   assert.match(card, /Save this before anything else/);
-  assert.match(card, /rX6d2A4sGBHFEcQT4TVQQJRQg7xtbDMg/);
+  assert.match(card, /fixture-password-render-test-only/);
   assert.match(card, /stratum\+tcp:\/\/pithead\.local:3333/);
   assert.match(card, /I saved these/);
   // Once the SERVER drops out of the handoff stage it stops sending the card, and the view
