@@ -1,0 +1,4 @@
+# Accepted historical findings, by fingerprint (commit:file:rule:line). The commit content is
+# immutable — the live file has since been fixed; verify any new entry is NOT a real credential
+# before adding it (this one was checked against the machines it could have come from).
+7c6d4ec49e3347d51f255f7339f05ba5f1248732:build/dashboard/tests/frontend/wizard.test.mjs:generic-api-key:75

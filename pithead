@@ -1369,6 +1369,60 @@ publish_disk_inventory() { # <spool-dir>
     mv -f "$tmp" "$1/disks.tsv"
 }
 
+# The strip a previous install's config passes through before any of it may be SHOWN (#794):
+# every leaf CONTROL_SECRET_PATHS names, plus the whole objects whose value IS access — the
+# dashboard login, the worker inventory (its per-entry tokens live in a variable-length array
+# the fixed paths cannot reach), alert credentials, the ssh key. Wallet addresses, node modes
+# and hosts, the pool tier stay: those are the answers the operator came back for, and none of
+# them is a secret. Errs toward stripping more — a lost convenience beats a leaked credential.
+# rc non-zero when the file is not a usable config object; callers treat that as "no pre-fill".
+strip_config_secrets() { # <config-file> -> stripped JSON on stdout
+    jq -e --argjson paths "$CONTROL_SECRET_PATHS" '
+        delpaths($paths)
+        | del(.dashboard.auth, .dashboard.workers, .workers, .telegram,
+              .healthchecks, .notifications, .ssh, .tari.spend_public_key)' "$1" 2>/dev/null
+}
+
+# Reinstall pre-fill (#794). When the offered targets include exactly one disk that already
+# carries an install, mount its data partition READ-ONLY, read the previous config, strip the
+# secrets and publish the remainder as the page's starting point — the same last-attempt.json
+# channel the pre-seed path fills. The operator sees the answers the machine already knew and
+# changes what they came to change; a bench box once had its remote-Tari setting silently
+# defaulted back to a local chain by this gap. Host-side only (the container never mounts
+# anything) and pure convenience: every failure path returns 1 and the page simply opens
+# blank — nothing here may block an install. rc 0 = a pre-fill was published.
+prefill_from_previous_install() { # <spool-dir>
+    local spool="$1" disk part mnt cfg tmp rc=1
+    disk=$(awk -F'\t' '$5 == "pithead-with-data" {print $1}' "$spool/disks.tsv" 2>/dev/null)
+    # Two candidates would make the pre-fill a guess about WHICH machine's answers; offer none.
+    [ -n "$disk" ] && [ "$(printf '%s\n' "$disk" | wc -l)" -eq 1 ] || return 1
+    part=$(lsblk -lnpo NAME,PARTLABEL "/dev/$disk" 2>/dev/null | awk '$2 == "data" {print $1; exit}')
+    [ -n "$part" ] || return 1
+    mnt=$(mktemp -d) || return 1
+    # -t ext4 pinned: the appliance only ever formats data partitions as ext4, and an
+    # auto-probed type would let an arbitrary disk pick which filesystem parser the kernel
+    # runs against its content.
+    if mount -t ext4 -o ro,nosuid,nodev,noexec "$part" "$mnt" 2>/dev/null; then
+        cfg="$mnt/pithead/config.json"
+        tmp="$spool/.last-attempt.json.$$"
+        # The -L guards close a symlink escape: a crafted disk could point pithead/ or
+        # config.json at a file on the RUNNING host, and jq follows symlinks — the read-only
+        # mount keeps both components stable under the checks. The size cap bounds what an
+        # arbitrary disk can make this boot path chew on; jq's parse (and the object shape
+        # it needs) rejects everything else.
+        if [ ! -L "$mnt/pithead" ] && [ ! -L "$cfg" ] &&
+            [ -f "$cfg" ] && [ "$(wc -c <"$cfg" 2>/dev/null || echo 0)" -le 1048576 ] &&
+            [ -s "$cfg" ] && strip_config_secrets "$cfg" >"$tmp"; then
+            chown 1000:1000 "$tmp" 2>/dev/null || true
+            mv -f "$tmp" "$spool/last-attempt.json" && rc=0
+        fi
+        rm -f "$tmp"
+        umount "$mnt" 2>/dev/null || umount -l "$mnt" 2>/dev/null || true
+    fi
+    rmdir "$mnt" 2>/dev/null || true
+    return "$rc"
+}
+
 # Dial every remote node the candidate names, BEFORE the wizard closes and provisioning churns.
 # A wrong host or a firewalled port otherwise surfaces minutes later as a failed setup — a bench
 # session read exactly that as a crash. TCP connect only (bash /dev/tcp): proves reachability,
@@ -1531,9 +1585,15 @@ firstboot_wizard() {
         installer=1
         publish_disk_inventory "$spool"
         log "Running from the installation medium — install and configure on one page."
+        # The pre-fill is derived fresh every boot, never inherited: the stick's spool
+        # survives between machines, and machine 2 must not open on machine 1's answers —
+        # the same staleness rule the per-session flow-marker clear below enforces.
+        rm -f "$spool/last-attempt.json"
         if [ "$operator_preseed" -eq 1 ] && jq -c . "$PRESEED_DIR/pithead-config.json" >"$spool/last-attempt.json" 2>/dev/null; then
             chown 1000:1000 "$spool/last-attempt.json" 2>/dev/null || true
             log "Pre-seeded configuration found — the page opens with it filled in."
+        elif prefill_from_previous_install "$spool"; then
+            log "Found the previous installation's settings on the target disk — the page opens with them filled in (secrets left out)."
         fi
     elif boot_is_removable; then
         # Setup will proceed, but the operator should know what they are standing on: a USB stick

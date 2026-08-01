@@ -758,6 +758,39 @@ phase_install() {
     else
         bad "inventory does not flag the installed disk as carrying data"
     fi
+    # ---- reinstall pre-fill: the previous machine's answers, never its secrets ----------
+    # The host mounted the target's data partition read-only at wizard start and published
+    # the stripped previous config as the page's pre-fill. Two assertions, both through the
+    # page's own state API: the first leg's wallet came back, and no password crossed. Runs
+    # BEFORE the wipe legs on purpose — they destroy the config the pre-fill was read from.
+    token=""
+    tries2=0
+    while [ -z "$token" ] && [ "$tries2" -lt 40 ]; do
+        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$token" ] || sleep 3
+        tries2=$((tries2 + 1))
+    done
+    if [ -n "$token" ] && _wizard_up; then
+        jar=$(mktemp)
+        local pf_state=""
+        curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
+            pf_state=$(curl -fsSk -b "$jar" "https://$ip/api/wizard-state" 2>/dev/null)
+        rm -f "$jar"
+        if printf '%s' "$pf_state" | grep -q '"wallet_address": "4AAAA'; then
+            ok "pre-fill carries the previous install's wallet"
+        else
+            bad "the previous install's answers did not pre-fill the reinstall page"
+        fi
+        # The provisioned config held a generated dashboard password; the merged state may
+        # only ever show the reference's empty default for any "password" key.
+        if printf '%s' "$pf_state" | grep -Eq '"password": "[^"]'; then
+            bad "a password crossed into the reinstall page's state"
+        else
+            ok "no password reaches the reinstall page"
+        fi
+    else
+        bad "no wizard session for the pre-fill check (token: ${token:-none})"
+    fi
     # ---- wipe legs: the three-way reinstall data choice, asserted on the raw partition ----
     # Mounted from the installer VM (the target's data partition is vda4) rather than booting
     # between legs — the assertion is about what is ON the disk, and this keeps three slot

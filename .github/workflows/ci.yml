@@ -39,9 +39,12 @@ jobs:
           echo "$UV_INSTALL_DIR" >> "$GITHUB_PATH"
       - name: Dashboard tests + coverage gate (emits coverage.xml)
         run: make test-dashboard
-      - name: "Patch-coverage gate — changed lines >=90% (diff-cover vs origin/develop, #286)"
+      - name: "Patch-coverage gate — changed lines >=90% (diff-cover vs the PR's own base, #286)"
+        # GITHUB_BASE_REF is set on pull_request runs; push runs fall back to develop. Grading a PR
+        # against develop instead of its base branch charges it the base branch's whole coverage
+        # debt (a bash-only PR into the appliance branch failed on wizard.py lines it never touched).
         run: |
-          git fetch --no-tags origin develop
+          git fetch --no-tags origin develop "${GITHUB_BASE_REF:-develop}"
           make test-patch-coverage
       - name: Fake-daemon contract test (real clients vs controllable fakes)
         # Points the real Monero/Tari clients at the integration fakes and asserts they parse

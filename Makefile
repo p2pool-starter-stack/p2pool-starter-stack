@@ -12,7 +12,7 @@ test-frontend: ## Frontend logic tests with Node's built-in runner (#632; same i
 
 test-patch-coverage: ## diff-cover (#286): new/changed lines must be >=90% covered (run after test-dashboard)
 	cd build/dashboard && uv run --locked --extra test \
-		diff-cover coverage.xml --compare-branch=origin/develop --fail-under=90
+		diff-cover coverage.xml --compare-branch=origin/$${GITHUB_BASE_REF:-develop} --fail-under=90
 
 test-stack: ## pithead shell test suite
 	bash tests/stack/run.sh

@@ -7915,6 +7915,131 @@ assert_rc "installer failure -> rc 1" "$?" "1"
 
 unset PITHEAD_INSTALL_BIN FAKE_LOG FAKE_RC INSTSB
 
+echo "== unit: strip_config_secrets — no secret class survives the reinstall pre-fill =="
+# The strip runs before a previous install's config may be SHOWN on the setup page. Every
+# secret carries the same marker value, so one grep proves the whole list at once; the
+# non-secret answers (the point of the pre-fill) must all survive.
+SCS=$(mktemp -d)
+cat >"$SCS/prev.json" <<'PREV'
+{
+  "monero": {"wallet_address": "4KEEP-WALLET", "mode": "remote",
+             "remote": {"host": "node.lan", "rpc_port": 18081, "zmq_port": 18083},
+             "node_username": "LEAK-user", "node_password": "LEAK-nodepw", "view_key": "LEAK-mvk"},
+  "tari": {"wallet_address": "KEEP-TARI", "mode": "remote",
+           "remote": {"host": "tari.lan", "grpc_port": 18142},
+           "view_key": "LEAK-tvk", "spend_public_key": "LEAK-tspk"},
+  "p2pool": {"pool": "main", "stratum_password": "LEAK-stratum"},
+  "dashboard": {"timezone": "Europe/Berlin",
+                "auth": {"username": "LEAK-dashuser", "password": "LEAK-dashpw"},
+                "workers": [{"name": "w0", "host": "h", "token": "LEAK-oldworker"}]},
+  "workers": {"api_auth": true, "api_token": "LEAK-apitoken",
+              "list": [{"name": "rig1", "host": "rig1.lan", "token": "LEAK-workertoken"}]},
+  "telegram": {"enabled": true, "bot_token": "LEAK-bot", "chat_id": "LEAK-chat"},
+  "healthchecks": {"ping_url": "https://hc.example/LEAK-ping"},
+  "notifications": {"ntfy": {"url": "https://ntfy.example/LEAK-url", "token": "LEAK-ntfy"}},
+  "ssh": {"enabled": true, "authorized_key": "ssh-ed25519 LEAK-sshkey"},
+  "xvb": {"enabled": true, "standby": {"source": "LEAK-standby"}}
+}
+PREV
+stripped=$(run_sourced "$SANDBOX" strip_config_secrets "$SCS/prev.json")
+assert_rc "a real config strips cleanly (rc 0)" "$?" "0"
+assert_eq "no secret of ANY class survives" "$(printf '%s' "$stripped" | grep -c 'LEAK-')" "0"
+assert_eq "wallet address survives" "$(printf '%s' "$stripped" | jq -r '.monero.wallet_address')" "4KEEP-WALLET"
+assert_eq "remote node mode survives" "$(printf '%s' "$stripped" | jq -r '.tari.mode')" "remote"
+assert_eq "remote node host survives" "$(printf '%s' "$stripped" | jq -r '.tari.remote.host')" "tari.lan"
+assert_eq "pool tier survives" "$(printf '%s' "$stripped" | jq -r '.p2pool.pool')" "main"
+assert_eq "timezone survives" "$(printf '%s' "$stripped" | jq -r '.dashboard.timezone')" "Europe/Berlin"
+# Not-a-config shapes are refused, not partially stripped: rc != 0 means "no pre-fill".
+printf 'not json at all' >"$SCS/garbage.json"
+if run_sourced "$SANDBOX" strip_config_secrets "$SCS/garbage.json" >/dev/null 2>&1; then
+    bad "garbage file -> refused" "rc 0"
+else
+    ok "garbage file -> refused"
+fi
+printf '[1,2,3]' >"$SCS/array.json"
+if run_sourced "$SANDBOX" strip_config_secrets "$SCS/array.json" >/dev/null 2>&1; then
+    bad "non-object JSON -> refused" "rc 0"
+else
+    ok "non-object JSON -> refused"
+fi
+rm -rf "$SCS"
+unset SCS stripped
+
+echo "== unit: prefill_from_previous_install — fail open, publish only the stripped remainder =="
+# The orchestration around the strip: exactly one disk with an install, a read-only mount, and
+# every failure degrading to "no pre-fill" — never to a blocked install. mount/umount/lsblk are
+# PATH stubs; the fake mount copies a fixture tree under the mountpoint.
+PFSB=$(mktemp -d)
+mkdir -p "$PFSB/bin" "$PFSB/spool" "$PFSB/prev/pithead"
+printf '#!/bin/bash\necho "/dev/fake2 data"\n' >"$PFSB/bin/lsblk"
+cat >"$PFSB/bin/mount" <<'MNT'
+#!/bin/bash
+[ "${PF_MOUNT_RC:-0}" -eq 0 ] || exit "$PF_MOUNT_RC"
+# The mountpoint is the last argument; -P keeps fixture symlinks AS symlinks.
+cp -RP "${PF_TREE:?}/." "${!#}/"
+MNT
+printf '#!/bin/bash\nexit 0\n' >"$PFSB/bin/umount"
+chmod +x "$PFSB/bin/lsblk" "$PFSB/bin/mount" "$PFSB/bin/umount"
+export PF_TREE="$PFSB/prev"
+printf 'sda\t4T\tPrev Disk\tSN9\tpithead-with-data\n' >"$PFSB/spool/disks.tsv"
+printf '{"monero":{"wallet_address":"4PREV"},"dashboard":{"auth":{"username":"op","password":"LEAK-pw"}}}' \
+    >"$PFSB/prev/pithead/config.json"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "previous install found -> pre-fill published (rc 0)" "$?" "0"
+assert_eq "pre-fill keeps the wallet" "$(jq -r '.monero.wallet_address' "$PFSB/spool/last-attempt.json")" "4PREV"
+assert_eq "pre-fill carries NO login" "$(grep -c 'LEAK-' "$PFSB/spool/last-attempt.json")" "0"
+assert_eq "no temp file left beside the atomic target" "$(find "$PFSB/spool" -name '.last-attempt*' | wc -l | tr -d ' ')" "0"
+
+# Broken previous config -> no pre-fill, no error surfaced to the page.
+rm -f "$PFSB/spool/last-attempt.json"
+printf '{broken' >"$PFSB/prev/pithead/config.json"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "broken previous config -> rc 1" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "broken config publishes nothing" "file exists" || ok "broken config publishes nothing"
+[ -f "$PFSB/spool/error.txt" ] && bad "broken config surfaces no page error" "error.txt written" || ok "broken config surfaces no page error"
+
+# Absent previous config -> no pre-fill.
+rm -f "$PFSB/prev/pithead/config.json"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "no previous config -> rc 1" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "no config publishes nothing" "file exists" || ok "no config publishes nothing"
+
+# A mount failure (corrupt filesystem, busy partition) fails open too.
+printf '{"monero":{"wallet_address":"4PREV"}}' >"$PFSB/prev/pithead/config.json"
+PF_MOUNT_RC=32 PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "mount failure -> rc 1, nothing blocked" "$?" "1"
+
+# Symlink escape: a crafted disk pointing config.json — or the pithead dir itself — at a file
+# on the RUNNING host must publish nothing, even when the target parses as a valid config.
+printf '{"monero":{"wallet_address":"4HOST-FILE"}}' >"$PFSB/outside.json"
+rm -f "$PFSB/prev/pithead/config.json"
+ln -s "$PFSB/outside.json" "$PFSB/prev/pithead/config.json"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "symlinked config.json -> rc 1, refused" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "symlinked config publishes nothing" "file exists" || ok "symlinked config publishes nothing"
+mkdir -p "$PFSB/outside-dir"
+printf '{"monero":{"wallet_address":"4HOST-FILE"}}' >"$PFSB/outside-dir/config.json"
+rm -rf "$PFSB/prev/pithead"
+ln -s "$PFSB/outside-dir" "$PFSB/prev/pithead"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "symlinked pithead dir -> rc 1, refused" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "symlinked dir publishes nothing" "file exists" || ok "symlinked dir publishes nothing"
+rm -rf "$PFSB/prev/pithead"
+mkdir -p "$PFSB/prev/pithead"
+
+# Two disks carrying installs: WHICH machine's answers is a guess — publish none.
+printf 'sda\t4T\tPrev A\tSN9\tpithead-with-data\nsdb\t4T\tPrev B\tSN8\tpithead-with-data\n' >"$PFSB/spool/disks.tsv"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "two candidate disks -> rc 1, no guessing" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "ambiguous target publishes nothing" "file exists" || ok "ambiguous target publishes nothing"
+
+# No disk with data at all (the everyday fresh-install stick) -> rc 1, quietly.
+printf 'vda\t40G\tBlank\tSN1\tempty\n' >"$PFSB/spool/disks.tsv"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "no install on any disk -> rc 1" "$?" "1"
+rm -rf "$PFSB"
+unset PFSB PF_TREE
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
