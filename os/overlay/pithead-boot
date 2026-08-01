@@ -18,16 +18,10 @@ cd /data/pithead || exit 1
 
 # Containers are DERIVED too (#798): the baked archives ship in the slot, but podman's store
 # lives on /data and the image tag is constant across releases — a keep-reinstall or A/B
-# update ran RC-old containers under an RC-new OS until this loaded them. Sha-keyed, so a
-# normal boot pays one sha256 per archive; 'up' below recreates on the image-id change.
-for f in /opt/pithead/images/*.tar.gz; do
-    [ -f "$f" ] || continue
-    sha=$(sha256sum "$f" | cut -d" " -f1)
-    rec="/data/pithead/data/.loaded-$(basename "$f").sha"
-    [ "$(cat "$rec" 2>/dev/null)" = "$sha" ] && continue
-    echo "pithead-boot: loading baked $(basename "$f") (new archive)"
-    podman load -qi "$f" >/dev/null && printf '%s' "$sha" >"$rec"
-done
+# update ran RC-old containers under an RC-new OS until this loaded them. ONE loader, shared
+# with the first-boot wizard (load_baked_images): sha-keyed, so a normal boot pays one sha256
+# per archive, and 'up' below recreates on the image-id change.
+./pithead load-images
 
 ./pithead render || exit 1
 ./pithead up || exit 1

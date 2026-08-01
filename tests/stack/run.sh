@@ -7740,24 +7740,62 @@ assert_eq "other tor keys survive" "$(jq -r '.tor.data_dir' "$ADSB/config.json")
 rm -rf "$ADSB"
 unset ADSB
 
-echo "== unit: the baked wizard image reloads when the ARCHIVE changes =="
-# Every build tags the wizard image identically and podman's storage lives on /data, which
-# survives reinstalls — so "does the tag exist" pins a machine to the first wizard it ever
-# loaded. A bench box served a weeks-old setup page for exactly this reason.
+echo "== unit: load_baked_images — the archive digest, not the tag, decides a load (#798) =="
+# Every build tags its images identically and the engine's storage lives on /data, which
+# survives reinstalls and A/B updates — so "does the tag exist" pins a machine to the first
+# image it ever loaded. Both boot owners (pithead-boot and the first-boot wizard) run this ONE
+# loader; the digest record beside the store is what makes a keep-reinstall or A/B update
+# converge on the shipped containers.
 WSB=$(mktemp -d)
-mkdir -p "$WSB/images"
+mkdir -p "$WSB/images" "$WSB/bin"
 printf 'v1-archive' >"$WSB/images/dashboard.tar.gz"
+cat >"$WSB/bin/podman" <<'EOF'
+#!/usr/bin/env bash
+echo "[podman] $*" >>"${PODMAN_LOG:-/dev/null}"
+case "$1" in
+  image) [ -e "${PODMAN_IMAGE_PRESENT:-/nonexistent}" ] ;;   # `image exists <ref>`
+  load) exit "${PODMAN_LOAD_RC:-0}" ;;
+esac
+EOF
+chmod +x "$WSB/bin/podman"
+export PODMAN_LOG="$WSB/podman.log" PITHEAD_IMAGES_DIR="$WSB/images"
+lbl() { PITHEAD_ENGINE=podman PATH="$WSB/bin:$PATH" run_sourced "$WSB" load_baked_images "$@"; }
+WREC="$WSB/data/.loaded-dashboard.tar.gz.sha"
 sha_of() { sha256sum "$1" | cut -d' ' -f1; }
-assert_eq "digest of an unchanged archive is stable" \
-    "$(sha_of "$WSB/images/dashboard.tar.gz")" "$(sha_of "$WSB/images/dashboard.tar.gz")"
-printf '%s' "$(sha_of "$WSB/images/dashboard.tar.gz")" >"$WSB/.wizard-image-sha"
-[ "$(sha_of "$WSB/images/dashboard.tar.gz")" = "$(cat "$WSB/.wizard-image-sha")" ] &&
-    ok "recorded digest matches -> no reload" || bad "recorded digest matches" "mismatch"
+
+lbl >/dev/null 2>&1
+grep -q "load -i" "$PODMAN_LOG" && ok "first boot loads the archive" ||
+    bad "first boot loads the archive" "no load call"
+assert_eq "the digest is recorded beside the store" \
+    "$(cat "$WREC" 2>/dev/null)" "$(sha_of "$WSB/images/dashboard.tar.gz")"
+: >"$PODMAN_LOG"
+lbl >/dev/null 2>&1
+grep -q "load -i" "$PODMAN_LOG" && bad "an unchanged archive is not reloaded" "loaded again" ||
+    ok "an unchanged archive is not reloaded"
 printf 'v2-archive-different' >"$WSB/images/dashboard.tar.gz"
-[ "$(sha_of "$WSB/images/dashboard.tar.gz")" != "$(cat "$WSB/.wizard-image-sha")" ] &&
-    ok "a rebuilt archive differs -> reload" || bad "a rebuilt archive differs" "same digest"
+: >"$PODMAN_LOG"
+lbl >/dev/null 2>&1
+grep -q "load -i" "$PODMAN_LOG" &&
+    ok "a changed archive reloads — the keep-reinstall and A/B update path" ||
+    bad "a changed archive reloads" "no load call"
+# The wizard names the image it needs: a matching record must not count when the image is gone
+# (the record can outlive the storage it describes).
+: >"$PODMAN_LOG"
+lbl ghcr.io/x/pithead-dashboard:v0 >/dev/null 2>&1
+grep -q "load -i" "$PODMAN_LOG" &&
+    ok "a missing required image forces a load despite a matching record" ||
+    bad "a missing required image forces a load" "no load call"
+# A failed load leaves the old record: the next boot must retry, not skip.
+WV2SHA=$(cat "$WREC")
+printf 'v3-archive' >"$WSB/images/dashboard.tar.gz"
+export PODMAN_LOAD_RC=1
+lbl >/dev/null 2>&1
+unset PODMAN_LOAD_RC
+assert_eq "a failed load records nothing — the next boot retries" "$(cat "$WREC")" "$WV2SHA"
+unset PODMAN_LOG PITHEAD_IMAGES_DIR
+unset -f lbl sha_of
 rm -rf "$WSB"
-unset WSB
+unset WSB WREC WV2SHA
 
 echo "== unit: pre-seeding from the installation medium =="
 # The ESP is FAT and anyone can write it, so both readers treat its contents as input, not truth.
