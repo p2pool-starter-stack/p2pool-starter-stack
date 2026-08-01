@@ -585,18 +585,20 @@ function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
     </div>`;
 }
 
-// Expected vs actual (#808): the comparison the operator otherwise assembles by hand across the
-// Earnings tabs, compact enough to be the Simple view's one earnings card. Deliberately carries
-// NEITHER view class — card-simple and card-advanced are disjoint (each hides in the other's
-// mode), and this is the one earnings surface both views share.
-// The server rolls the rows up (build_earnings_vs_actual — window-matched
-// hashrate, same confirmed roll-up as the Earnings card); this renders them. Per-stream windows
-// match cadence: Monero XMR over 7d with a percent-of-expected, Tari BLOCKS over 30d (solo
-// merge-mining pays whole blocks — a count, not a percent), XvB wins over 30d beside XvB's
-// published estimate with deliberately NO ratio (a win pays out through ordinary small payouts
-// the payout table cannot attribute). A stream with payout confirmation off shows the config key
-// to set instead of a zero that would read as "earned nothing"; the card yields to nothing when
-// no stream has anything to compare.
+// Expected vs actual (#808, reshaped by #817): the comparison the operator otherwise assembles
+// by hand across the Earnings tabs, compact enough to be the Simple view's one earnings card.
+// Deliberately carries NEITHER view class — card-simple and card-advanced are disjoint (each
+// hides in the other's mode), and this is the one earnings surface both views share.
+// The server rolls the rows up (build_earnings_vs_actual — window-matched hashrate, same
+// confirmed roll-up as the Earnings card); this renders them. ONE shared 30d window for every
+// stream (#817). Monero and XvB are ONE combined row: a win pays out through ordinary small
+// payouts the payout table cannot attribute, so the confirmed actual already contains XvB XMR —
+// the expectation folds XvB's published estimate in so pct compares like with like. Tari stays
+// BLOCKS (solo merge-mining pays whole blocks — a count, not a percent); the XvB row keeps only
+// its win count, its XMR lives in the combined row by construction. A stream with payout
+// confirmation off shows the config key to set instead of a zero that would read as "earned
+// nothing"; the card yields to nothing when no stream has anything to compare. The table wraps
+// (eva-table) instead of panning — this card never scrolls in either view (#817).
 function ExpectedVsActualCard({ summary }) {
   if (!summary) return null;
   const { xmr, tari, xvb } = summary;
@@ -605,16 +607,22 @@ function ExpectedVsActualCard({ summary }) {
   const anyPartial = (xmr.enabled && xmr.partial) || (tari.enabled && tari.partial);
   const rows = [];
   rows.push({
-    label: "Monero (7d)",
-    expected: xmr.available ? formatXmr(xmr.expected_7d) : "—",
+    label: xmr.includes_xvb ? "Monero + XvB (30d)" : "Monero (30d)",
+    expected: xmr.available ? formatXmr(xmr.expected_30d) : "—",
     actual: !xmr.enabled
       ? "set monero.view_key"
-      : partialMark(xmr, formatXmr(xmr.actual_7d) + (xmr.pct !== null ? ` (${xmr.pct}%)` : "")),
+      : partialMark(xmr, formatXmr(xmr.actual_30d) + (xmr.pct !== null ? ` (${xmr.pct}%)` : "")),
     dim: !xmr.enabled,
-    title:
-      "Confirmed on-chain payouts over the trailing 7 days vs the linear expectation at your " +
-      "7-day average P2Pool hashrate. P2Pool pays when the pool finds blocks, so a single week " +
-      "swings with luck — a sustained gap is the signal worth checking, not one short window.",
+    title: xmr.includes_xvb
+      ? "Confirmed on-chain payouts over the trailing 30 days vs the P2Pool linear expectation " +
+        "at your 30-day average hashrate PLUS XvB's published estimate for your tier — combined " +
+        "on both sides, because an XvB win pays out through ordinary payouts that cannot be " +
+        "told apart from P2Pool payouts. Payouts swing with luck; a sustained gap is the " +
+        "signal worth checking, not one window."
+      : "Confirmed on-chain payouts over the trailing 30 days vs the linear expectation at " +
+        "your 30-day average P2Pool hashrate. Any XvB win payouts land in the actual too — " +
+        "they cannot be told apart from P2Pool payouts. Payouts swing with luck; a sustained " +
+        "gap is the signal worth checking, not one window.",
   });
   rows.push({
     label: "Tari (30d)",
@@ -637,23 +645,21 @@ function ExpectedVsActualCard({ summary }) {
   if (xvb.enabled) {
     rows.push({
       label: "XvB wins (30d)",
-      expected: xvb.published_day !== null ? formatXmr(xvb.published_day) + "/day (XvB est.)" : "—",
+      expected: "—",
       actual:
         `${xvb.wins_30d} win${xvb.wins_30d === 1 ? "" : "s"}` +
         (xvb.last_win_ts ? ` · last ${formatAgo(xvb.last_win_ts)}` : ""),
       dim: false,
       title:
-        "Raffle wins recorded in the last 30 days. A win pays out through ordinary small " +
-        "payouts that cannot be told apart from P2Pool payouts, so no XvB XMR figure is shown. " +
-        "The published estimate is XvB's own raffle-wide expectation for your current tier — " +
-        "not a promise.",
+        "Raffle wins recorded in the last 30 days (last-win recency can predate the window). " +
+        "A win's XMR arrives through ordinary payouts, so its value is counted in the " +
+        "Monero + XvB row above — this row tracks only that wins keep landing.",
     });
   }
   return html`
     <div class="card" id="card-expected-vs-actual">
         <h3>Earnings — Expected vs Actual</h3>
-        <div class="est-scroll">
-        <table class="est-table">
+        <table class="est-table eva-table">
             <thead><tr>
                 <th></th>
                 <th scope="col">Expected</th>
@@ -670,7 +676,6 @@ function ExpectedVsActualCard({ summary }) {
                 )}
             </tbody>
         </table>
-        </div>
         ${
           anyPartial
             ? html`<p class="text-muted text-xs">* covers only the payout history on record, not the window's full span.</p>`

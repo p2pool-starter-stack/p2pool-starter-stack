@@ -109,12 +109,11 @@ class Metrics:
     # Defaulted so direct Metrics(...) constructors needn't set them.
     tari_difficulty: float = 0.0  # Tari AUX-chain difficulty (not P2Pool sidechain, not Monero)
     tari_reward: float = 0.0  # Tari block reward, XTM (collector converts p2pool's µT figure)
-    # Window-matched routed averages for the expected-vs-actual card (#808): the expectation over
-    # a trailing 7d/30d window must use the hashrate that actually ran THAT window, not the
-    # current 1h figure — a fleet that grew or shrank mid-window would otherwise be judged
-    # against the wrong baseline. History retention (30 days) covers both windows. Defaulted so
-    # direct Metrics(...) constructors needn't set them.
-    p2pool_7d: float = 0.0
+    # Window-matched routed average for the expected-vs-actual card (#808, one shared 30d window
+    # since #817): the expectation over the trailing 30d must use the hashrate that actually ran
+    # THAT window, not the current 1h figure — a fleet that grew or shrank mid-window would
+    # otherwise be judged against the wrong baseline. History retention (30 days) covers it
+    # exactly. Defaulted so direct Metrics(...) constructors needn't set it.
     p2pool_30d: float = 0.0
 
 
@@ -150,7 +149,6 @@ def build_metrics(latest_data, state_mgr, history=None):
     # stratum estimate or a total-minus-XvB subtraction (Issue #27).
     p2pool_1h = _avg_p2pool_over_window(history, 3600)
     p2pool_24h = _avg_p2pool_over_window(history, 86400)
-    p2pool_7d = _avg_p2pool_over_window(history, 7 * 86400)
     p2pool_30d = _avg_p2pool_over_window(history, 30 * 86400)
 
     # The XvB raffle qualifies a tier on BOTH the 1h and 24h credited average, and terminates a win
@@ -209,7 +207,6 @@ def build_metrics(latest_data, state_mgr, history=None):
         total_h15=total_h15,
         p2pool_1h=p2pool_1h,
         p2pool_24h=p2pool_24h,
-        p2pool_7d=p2pool_7d,
         p2pool_30d=p2pool_30d,
         xvb_1h=xvb_1h,
         xvb_24h=xvb_24h,
