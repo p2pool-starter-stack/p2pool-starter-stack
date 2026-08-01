@@ -62,10 +62,10 @@ case "$*" in
   # Fake per-service container state (#795): a flag file per service under $FAKE_CONTAINERS.
   # `compose --profile X ps -aq svc` answers a cid while the file exists; `rm -sf svc` deletes it.
   "compose --profile "*" ps -aq "*)
-    _all="$*"; _svc="${_all##* }"
+    _svc="$*"; _svc="${_svc##* }"
     if [ -n "${FAKE_CONTAINERS:-}" ] && [ -e "$FAKE_CONTAINERS/$_svc" ]; then echo "cid-$_svc"; fi ;;
   "compose --profile "*" rm -sf "*)
-    _all="$*"; _svc="${_all##* }"
+    _svc="$*"; _svc="${_svc##* }"
     [ -z "${FAKE_CONTAINERS:-}" ] || rm -f "$FAKE_CONTAINERS/$_svc" ;;
   *hash-password*)
     # Fake `caddy hash-password` (#8): a per-password digest so enable/change paths differ, and it
