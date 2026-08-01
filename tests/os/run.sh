@@ -847,11 +847,19 @@ phase_install() {
     # boot loader makes the image change; a tag-exists check keeps the old containers forever.
     info "keep leg prep — plant this build's dashboard image + digest record (a machine that ran it)"
     local old_dash_id=""
+    # The plant must leave a store a REAL machine could have written. `podman --root` also
+    # creates a libpod database (db.sql + libpod/) that records the mount path as the graph
+    # root — and podman refuses a store whose recorded paths differ from its own, so the
+    # reinstalled machine's every podman command died with "database configuration mismatch"
+    # (invisible: _ssh drops stderr). A machine that ran the product wrote its db against
+    # /data/containers/storage; dropping the plant's db models that machine — the first real
+    # boot recreates it against the right paths, images intact.
     old_dash_id=$(_ssh "T=\$(mktemp -d) && mount /dev/vda4 \"\$T\" &&
           mkdir -p \"\$T/pithead/data\" \"\$T/containers/storage\" &&
           podman --root \"\$T/containers/storage\" load -qi /opt/pithead/images/dashboard.tar.gz >/dev/null &&
           sha256sum /opt/pithead/images/dashboard.tar.gz | cut -d' ' -f1 | tr -d '\n' >\"\$T/pithead/data/.loaded-dashboard.tar.gz.sha\" &&
           podman --root \"\$T/containers/storage\" images --format '{{.Repository}} {{.ID}}' | awk '/pithead-dashboard/{print \$2; exit}' &&
+          rm -rf \"\$T/containers/storage/db.sql\" \"\$T/containers/storage/libpod\" &&
           umount \"\$T\"")
     [ -n "$old_dash_id" ] || {
         bad "could not plant the old dashboard image for the keep leg"
