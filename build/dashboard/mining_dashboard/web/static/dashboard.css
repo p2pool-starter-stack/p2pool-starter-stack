@@ -904,6 +904,11 @@ button.upgrade-btn {
 .items-center {
   align-items: center;
 }
+/* #817: the Worker Inspect header always used this class, but it was never defined — the flex
+ * row packed left and the ✕ close button sat beside the title instead of the top-right corner. */
+.justify-between {
+  justify-content: space-between;
+}
 .text-center {
   text-align: center;
 }
