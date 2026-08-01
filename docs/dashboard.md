@@ -504,10 +504,26 @@ when you give the stack a way to check the chain. Set `monero.view_key` (the pri
 for your payout address) and the stack runs a **view-only** `monero-wallet-rpc` against your local
 node, scanning for confirmed incoming payouts. P2Pool pays each miner's share directly in a Monero
 block's coinbase, so the wallet is the only ground truth that a payout arrived. The Monero tab of
-the earnings card then shows a **Confirmed on-chain** block under the estimate — 24-hour, 7-day, and
-all-time XMR totals plus the time since the **last payout** — and a `payout_confirmed` alert fires
-once per payout (Telegram and the other sinks). The Tari tab carries the same **Confirmed on-chain**
-block in XTM once Tari payout confirmation is on (see the Tari note below).
+the earnings card then shows a **Confirmed on-chain** block under the estimate — and a
+`payout_confirmed` alert fires once per payout (Telegram and the other sinks). The Tari tab carries
+the same **Confirmed on-chain** block in XTM once Tari payout confirmation is on (see the Tari note
+below).
+
+| Figure | What it sums |
+|---|---|
+| **Yesterday** | The previous full calendar day, midnight to midnight in the dashboard's timezone (`dashboard.timezone`) — the same clock the daily summary fires on. Not a trailing 24 hours. |
+| **Confirmed 24h** | The trailing 24 hours from now. Deliberately a different span from **Yesterday**, so the two disagree during the day. |
+| **Running 7d** | The trailing 7 days from now. |
+| **Running 30d** | The trailing 30 days from now. |
+| **Confirmed all-time** | Every payout recorded, however far back. |
+| **Last payout** | Time since the most recent confirmed payout, hover for the payout count. |
+
+A running window is marked with a `*` when it reaches back further than the oldest payout on
+record — the total then covers only the history the wallet gave the dashboard, not the full span its
+label names, and a footnote says where that history starts. Read the marker as *may be incomplete*:
+a wallet that genuinely earned nothing for six weeks is marked too, because the recorded payouts
+alone can't tell "no payout arrived" apart from "we weren't watching yet". A fresh install marks
+every running window until history builds up behind it.
 
 Each confirmed Monero payout also drops a **Payouts** marker — a green coin at the block time it
 landed — onto the hashrate chart, on the same marker row as the event diamonds and raffle stars.
