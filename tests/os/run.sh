@@ -79,6 +79,13 @@ have() { command -v "$1" >/dev/null 2>&1; }
 KEY="$HOME/.ssh/pithead-os-test"
 ip=""
 
+# The wallet every phase submits. It must be checksum-VALID: p2pool refuses a well-formed but
+# checksum-invalid address at startup with a SIGABRT and crash-loops (#829), which killed the
+# provision phase's whole miner chain when the harness used `4` + 94×`A`. Host-side validation
+# only checks the shape, so the crash is the first honest verdict. XMRig's public donation
+# address: obviously not ours, plainly labelled, and any share it ever earned would be a donation.
+HARNESS_WALLET="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
+
 _ssh() {
     ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
@@ -595,7 +602,7 @@ phase_install() {
         return
     }
     local body
-    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini&disk=vda&confirm=vda&wipe=keep"
+    body="monero_wallet=$HARNESS_WALLET&tari_wallet=harness-dummy-tari-address&pool=mini&disk=vda&confirm=vda&wipe=keep"
     scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
         bad "combined submit (config + disk) did not return 200 (got ${scode:-none})"
@@ -776,7 +783,7 @@ phase_install() {
         curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
             pf_state=$(curl -fsSk -b "$jar" "https://$ip/api/wizard-state" 2>/dev/null)
         rm -f "$jar"
-        if printf '%s' "$pf_state" | grep -q '"wallet_address": "4AAAA'; then
+        if printf '%s' "$pf_state" | grep -q "\"wallet_address\": \"${HARNESS_WALLET:0:8}"; then
             ok "pre-fill carries the previous install's wallet"
         else
             bad "the previous install's answers did not pre-fill the reinstall page"
@@ -847,11 +854,19 @@ phase_install() {
     # boot loader makes the image change; a tag-exists check keeps the old containers forever.
     info "keep leg prep — plant this build's dashboard image + digest record (a machine that ran it)"
     local old_dash_id=""
+    # The plant must leave a store a REAL machine could have written. `podman --root` also
+    # creates a libpod database (db.sql + libpod/) that records the mount path as the graph
+    # root — and podman refuses a store whose recorded paths differ from its own, so the
+    # reinstalled machine's every podman command died with "database configuration mismatch"
+    # (invisible: _ssh drops stderr). A machine that ran the product wrote its db against
+    # /data/containers/storage; dropping the plant's db models that machine — the first real
+    # boot recreates it against the right paths, images intact.
     old_dash_id=$(_ssh "T=\$(mktemp -d) && mount /dev/vda4 \"\$T\" &&
           mkdir -p \"\$T/pithead/data\" \"\$T/containers/storage\" &&
           podman --root \"\$T/containers/storage\" load -qi /opt/pithead/images/dashboard.tar.gz >/dev/null &&
           sha256sum /opt/pithead/images/dashboard.tar.gz | cut -d' ' -f1 | tr -d '\n' >\"\$T/pithead/data/.loaded-dashboard.tar.gz.sha\" &&
           podman --root \"\$T/containers/storage\" images --format '{{.Repository}} {{.ID}}' | awk '/pithead-dashboard/{print \$2; exit}' &&
+          rm -rf \"\$T/containers/storage/db.sql\" \"\$T/containers/storage/libpod\" &&
           umount \"\$T\"")
     [ -n "$old_dash_id" ] || {
         bad "could not plant the old dashboard image for the keep leg"
@@ -1062,13 +1077,13 @@ phase_provision() {
         rm -f "$jar"
         return
     }
-    # Minimal honest config: a well-formed (dummy) primary Monero address, Monero-only mining.
+    # Minimal honest config: a checksum-valid primary Monero address (see HARNESS_WALLET — the
+    # old dummy crash-looped p2pool, #829). Tari's gate is deliberately format-free host-side
+    # and p2pool tolerates a bad merge-mine address, so a labelled dummy stays obviously fake.
     # Everything else keeps its default — which is itself part of what this proves.
-    # Both addresses are required — Monero's has a format gate (95 chars, leading 4), Tari's is
-    # deliberately format-free host-side, so a labelled dummy passes and stays obviously fake.
     # local_miner=true: the Both role (#796) — the same submit must also light the built-in
     # RigForge worker, asserted in the local-miner leg below.
-    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini&local_miner=true"
+    body="monero_wallet=$HARNESS_WALLET&tari_wallet=harness-dummy-tari-address&pool=mini&local_miner=true"
     scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
         bad "config submit did not return 200 (got ${scode:-none} — a 30x means the session was not accepted)"
@@ -1158,11 +1173,21 @@ phase_provision() {
         return
     fi
 
-    # ---- local-miner leg (#796): enable -> xmrig up -> shares reach p2pool ---------------
+    # ---- local-miner leg (#796): enable -> xmrig up -> wired to the machine's own stratum ---
     # The submit above asked to mine on the box itself, so the built-in RigForge worker must
     # come up without any hands: setup renders its config, runs its appliance-mode setup, and
-    # the miner dials the machine's own stratum. The share assertion is the honest end of the
-    # chain: xmrig-proxy logs "accepted" only for shares the upstream — p2pool — took.
+    # the miner dials the machine's own stratum.
+    #
+    # The leg used to demand an accepted share, and that end of the chain cannot exist here:
+    # on a fresh machine the product itself HOLDS p2pool and xmrig-proxy until the local
+    # chains sync (#35 — the dashboard logs the hold and stops both), and a KVM guest
+    # syncing Monero over Tor onto a 40 GiB scratch disk never clears that gate. No budget
+    # fixes a state the product enforces on purpose. The share assertion lives where a synced
+    # node exists — the release e2e on the bench, which accepted in under two minutes the day
+    # this leg was rewritten. What the harness CAN prove, it now does, link by link: the
+    # miner runs, the hold is the deliberate one (p2pool stopped CLEAN — a crash-looping
+    # p2pool, the #829 failure this leg first caught, dies non-zero under the same gate), and
+    # the rendered worker config points at this machine's own stratum.
     local mtries=0 miner_up=0
     while [ "$mtries" -lt 36 ]; do
         if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
@@ -1178,19 +1203,41 @@ phase_provision() {
         bad "the built-in miner never came up (unit: $(_ssh 'systemctl is-active xmrig' 2>/dev/null || echo unknown))"
         info "  local-miner journal tail: $(_ssh "journalctl -u pithead-firstboot -n 5 --no-pager -o cat" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
     fi
-    # A KVM guest hashes slowly; give the first share a generous window.
-    local mdeadline=$(($(date +%s) + 900)) miner_share=0
-    while [ "$(date +%s)" -lt "$mdeadline" ]; do
-        if _ssh "podman logs \$(podman ps -q --filter name=xmrig-proxy | head -1) 2>&1 | grep -qi accepted"; then
-            miner_share=1
+    # The deliberate pre-sync state: the dashboard's sync gate (#35) holds mining until the
+    # chains catch up, and says so. Its absence would mean mining died some OTHER way.
+    local gtries=0 gate_seen=0
+    while [ "$gtries" -lt 30 ]; do
+        if _ssh "podman logs dashboard 2>&1 | grep -q 'holding p2pool, xmrig-proxy until synced'"; then
+            gate_seen=1
             break
         fi
-        sleep 15
+        sleep 10
+        gtries=$((gtries + 1))
     done
-    if [ "$miner_share" -eq 1 ]; then
-        ok "a share from the built-in miner was accepted upstream (reached p2pool)"
+    if [ "$gate_seen" -eq 1 ]; then
+        ok "fresh chains hold mining behind the sync gate — the deliberate pre-sync state (#35)"
     else
-        bad "no accepted share within 15m — the miner runs but its work never reached p2pool"
+        bad "no sync-gate hold in the dashboard log — mining is down for some other reason"
+    fi
+    # Held, not crashed: the gate stops a healthy p2pool cleanly (exit 0). A p2pool that
+    # cannot run — the checksum-invalid wallet of #829 was exactly this — dies by signal and
+    # shows a non-zero exit under the very same hold line.
+    local pstate
+    pstate=$(_ssh "podman inspect p2pool --format '{{.State.Running}} {{.State.ExitCode}}'" | tr -d '\r')
+    case "$pstate" in
+    "true 0" | "false 0")
+        ok "p2pool stopped clean under the gate, not by a crash ($pstate)"
+        ;;
+    *)
+        bad "p2pool did not survive its own start — crashed rather than held (state: ${pstate:-unreadable})"
+        info "  p2pool log tail: $(_ssh "podman logs --tail 3 p2pool 2>&1" | tr '\n' ' ' | cut -c1-200)"
+        ;;
+    esac
+    # The wiring itself (#796): the worker's rendered config dials THIS machine's stratum.
+    if _ssh "jq -e '.pools[0].url == \"127.0.0.1:3333\"' /data/rigforge/config.json >/dev/null"; then
+        ok "built-in miner is wired to the machine's own stratum (127.0.0.1:3333)"
+    else
+        bad "the built-in miner's config does not dial the machine's own stratum (pools: $(_ssh "jq -c '.pools' /data/rigforge/config.json 2>/dev/null" | cut -c1-100))"
     fi
 
     # ---- reboot leg: the provisioned stack must return UNAIDED ---------------------------
