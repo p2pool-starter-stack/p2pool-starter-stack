@@ -114,6 +114,17 @@ chk "rauc keyring baked" '[ -s "$ROOT/etc/rauc/keyring.pem" ]'
 chk "firstboot + sync units enabled" 'ls "$ROOT"/etc/systemd/system/multi-user.target.wants/pithead-firstboot.service "$ROOT"/etc/systemd/system/multi-user.target.wants/pithead-sync.service'
 chk "program tree at /opt/pithead" '[ -x "$ROOT/opt/pithead/pithead" ] && [ -s "$ROOT/opt/pithead/VERSION" ]'
 
+echo "==> the built-in miner (local_miner on the appliance)"
+# The whole point of baking: nothing here can be installed after the image ships. A missing
+# piece surfaces as a miner that silently never starts — on a machine with no shell.
+chk "rigforge tree baked" '[ -x "$ROOT/opt/rigforge/rigforge.sh" ]'
+chk "rigforge ref recorded" 'grep -q "^ref=" "$ROOT/opt/rigforge/RIGFORGE_REF"'
+chk "prebuilt xmrig baked (Tor-only box cannot clone)" '[ -x "$ROOT/opt/rigforge/prebuilt/xmrig/build/xmrig" ]'
+chk "prebuilt commit marker matches rigforge's pin" '[ "$(cat "$ROOT/opt/rigforge/prebuilt/xmrig/.rigforge-commit")" = "$(sed -n "s/^XMRIG_COMMIT=\"\${XMRIG_COMMIT:-\(.*\)}\"$/\1/p" "$ROOT/opt/rigforge/rigforge.sh")" ]'
+chk "prebuilt sha record present (integrity check input)" '[ -s "$ROOT/opt/rigforge/prebuilt/xmrig/.rigforge-sha256" ]'
+chk "miner toolchain baked (compiler chain)" '[ -e "$ROOT/usr/bin/gcc" ] && [ -e "$ROOT/usr/bin/cmake" ] && [ -e "$ROOT/usr/bin/make" ] && [ -e "$ROOT/usr/bin/git" ]'
+chk "miner runtime tools baked (envsubst/cpupower/rdmsr)" '[ -e "$ROOT/usr/bin/envsubst" ] && [ -e "$ROOT/usr/bin/cpupower" ] && [ -e "$ROOT/usr/sbin/rdmsr" ]'
+
 echo "==> provenance"
 BUILT=$(cat "$ROOT/opt/pithead/BUILD_COMMIT" 2>/dev/null || echo missing)
 echo "  image built from: $BUILT"

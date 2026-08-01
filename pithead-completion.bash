@@ -13,7 +13,7 @@
 
 # Keep in sync with PITHEAD_COMMANDS in the pithead script — tests/stack/run.sh fails if the
 # two lists drift.
-_pithead_commands="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard load-images control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
+_pithead_commands="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard load-images local-miner control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 
 # Service names = the top-level keys under `services:` in the docker-compose.yml next to the
 # pithead being completed. $1 = path to that compose file.

@@ -65,6 +65,51 @@ RUN curl -fsSL -o /usr/local/bin/docker-compose \
     && chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
     && touch /etc/containers/nodocker
 
+# The built-in miner (#796): a pinned RigForge tree plus everything it needs, baked at image
+# build because nothing can be installed later — apt cannot run on the read-only root, and even
+# a rw-remount install leaves its /etc state (alternatives, ld.so.cache) on the volatile overlay
+# where the first reboot breaks the compiler. RIGFORGE_REF pins a commit on rigforge's develop
+# (the first ref with appliance mode); move it to the next tagged rigforge release when one
+# ships. pithead-sync copies the tree to /data/rigforge every boot; `pithead local-miner` runs
+# its setup with RIGFORGE_APPLIANCE=1 when local_miner.enabled.
+#
+# The toolchain is RigForge's Debian dependency list, with one naming fix: trixie ships the
+# cpupower CLI as linux-cpupower (linux-tools-common is Ubuntu's name and does not exist here).
+# msr-tools gives doctor its rdmsr probe; gettext-base is envsubst, which renders the unit on
+# every boot and is the ONLY tool a prebuilt tree strictly needs.
+RUN apt-get install -y --no-install-recommends \
+        git build-essential cmake libuv1-dev libssl-dev libhwloc-dev gettext-base python3 \
+        linux-cpupower msr-tools
+ARG RIGFORGE_REF=32be3a433b261110dde371f0ed5dab88acafd6f4
+RUN curl -fsSL -o /tmp/rigforge.tar.gz \
+        "https://github.com/p2pool-starter-stack/rigforge/archive/${RIGFORGE_REF}.tar.gz" \
+    && mkdir -p /opt/rigforge \
+    && tar -xzf /tmp/rigforge.tar.gz -C /opt/rigforge --strip-components=1 \
+    && rm /tmp/rigforge.tar.gz \
+    && chmod +x /opt/rigforge/rigforge.sh \
+    && printf 'ref=%s version=%s\n' "$RIGFORGE_REF" "$(tr -d ' \t\r\n' </opt/rigforge/VERSION)" \
+        >/opt/rigforge/RIGFORGE_REF
+# Prebuild XMRig at RigForge's own pin, read from the baked tree so the two cannot drift. The
+# appliance may be Tor-only, and RigForge's build step clones github over clearnet — so the
+# clone happens HERE, on the build host, and pithead-sync seeds the result into the workspace
+# where RigForge's "already built" check accepts it (binary + commit marker + sha record, the
+# exact format rigforge.sh writes). The donate-level source patch is skipped on purpose: the
+# default (1%) equals XMRig's own default, and the runtime config carries the value regardless.
+RUN set -e \
+    && XMRIG_VERSION=$(sed -n 's/^XMRIG_VERSION="${XMRIG_VERSION:-\(.*\)}"$/\1/p' /opt/rigforge/rigforge.sh) \
+    && XMRIG_COMMIT=$(sed -n 's/^XMRIG_COMMIT="${XMRIG_COMMIT:-\(.*\)}"$/\1/p' /opt/rigforge/rigforge.sh) \
+    && test -n "$XMRIG_VERSION" && test -n "$XMRIG_COMMIT" \
+    && git clone --quiet --branch "$XMRIG_VERSION" --depth 1 https://github.com/xmrig/xmrig.git /tmp/xmrig \
+    && test "$(git -C /tmp/xmrig rev-parse HEAD)" = "$XMRIG_COMMIT" \
+    && cmake -S /tmp/xmrig -B /tmp/xmrig/build -DWITH_HWLOC=ON >/dev/null \
+    && make -C /tmp/xmrig/build -j"$(nproc)" >/dev/null \
+    && mkdir -p /opt/rigforge/prebuilt/xmrig/build \
+    && install -m 755 /tmp/xmrig/build/xmrig /opt/rigforge/prebuilt/xmrig/build/xmrig \
+    && printf '%s\n' "$XMRIG_COMMIT" >/opt/rigforge/prebuilt/xmrig/.rigforge-commit \
+    && sha256sum /opt/rigforge/prebuilt/xmrig/build/xmrig | awk '{print $1}' \
+        >/opt/rigforge/prebuilt/xmrig/.rigforge-sha256 \
+    && rm -rf /tmp/xmrig
+
 # Appliance identity: the engine pin doctor and the wizard read, hugepages (load-bearing for the
 # memory caps — the RandomX dataset must land in hugetlbfs, not the cgroup), persistent journald
 # (a headless box that loses its logs on reboot is undebuggable).

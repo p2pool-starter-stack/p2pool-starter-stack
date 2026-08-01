@@ -3909,6 +3909,11 @@ assert_contains "LAN bind targets the bound address:port" "$lm_out" "192.168.1.9
 # No stratum password set: say so rather than printing a blank pass.
 printf 'STRATUM_BIND=0.0.0.0\nSTRATUM_PORT=3333\nPROXY_STRATUM_PASSWORD=\n' >"$LM/.env"
 assert_contains "no-password case is stated explicitly" "$(run_sourced "$LM" announce_local_miner 2>&1)" "none set"
+# On the appliance the miner is BUILT IN: the announcement must promise the machine handles it,
+# never instruct an install on a box with no shell — the exact gap that was filed as a defect.
+lm_out="$(PITHEAD_APPLIANCE=1 run_sourced "$LM" announce_local_miner 2>&1)"
+assert_contains "appliance: announces the built-in worker" "$lm_out" "built-in RigForge worker"
+assert_not_contains "appliance: no install-it-yourself instruction" "$lm_out" "point a RigForge install"
 
 # Re-apply: an "auto" password must be STABLE (reused, not rotated) — like the proxy token.
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
@@ -8072,6 +8077,208 @@ PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PF
 assert_rc "no install on any disk -> rc 1" "$?" "1"
 rm -rf "$PFSB"
 unset PFSB PF_TREE
+
+echo "== unit: render_local_miner_config — the built-in miner's config is DERIVED (#796) =="
+# On the appliance, RigForge's config.json is a pure function of pithead's config.json + .env,
+# rebuilt on every render like the Caddyfile: the stack's own stratum over loopback, the stratum
+# password when one is set, and the stack's HugePages budget declared as headroom — the hand-off
+# that makes RigForge the pool's single (grow-only) writer.
+LMR=$(mktemp -d)
+mkdir -p "$LMR/rigforge"
+printf '{"local_miner":{"enabled":true}}' >"$LMR/config.json"
+printf 'STRATUM_PORT=3333\n' >"$LMR/.env"
+export PITHEAD_RIGFORGE_DIR="$LMR/rigforge"
+PITHEAD_APPLIANCE=0 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+[ -f "$LMR/rigforge/config.json" ] && bad "DIY host -> nothing written" "file exists" ||
+    ok "DIY host -> nothing written"
+PITHEAD_APPLIANCE=1 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+assert_eq "pool url is the stack's own stratum over loopback" \
+    "$(jq -r '.pools[0].url' "$LMR/rigforge/config.json")" "127.0.0.1:3333"
+assert_eq "no stratum password -> no pass key at all" \
+    "$(jq -r '.pools[0] | has("pass")' "$LMR/rigforge/config.json")" "false"
+assert_eq "the stack's HugePages budget is declared as headroom (3072 pages -> 6144 MB)" \
+    "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "6144"
+printf 'STRATUM_PORT=13333\nPROXY_STRATUM_PASSWORD=s3cret\n' >"$LMR/.env"
+PITHEAD_APPLIANCE=1 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+assert_eq "custom stratum port lands in the pool url" \
+    "$(jq -r '.pools[0].url' "$LMR/rigforge/config.json")" "127.0.0.1:13333"
+assert_eq "stratum password lands as the pool pass" \
+    "$(jq -r '.pools[0].pass' "$LMR/rigforge/config.json")" "s3cret"
+# Derived means derived: switched off, the config goes away with the toggle.
+printf '{"local_miner":{"enabled":false}}' >"$LMR/config.json"
+PITHEAD_APPLIANCE=1 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+[ -f "$LMR/rigforge/config.json" ] && bad "disabled -> the derived config is removed" "still there" ||
+    ok "disabled -> the derived config is removed"
+# Enabled on an image that never baked the tree: warn and carry on — render must not fail.
+printf '{"local_miner":{"enabled":true}}' >"$LMR/config.json"
+rm -rf "$LMR/rigforge"
+lmr_out=$(PITHEAD_APPLIANCE=1 run_sourced "$LMR" render_local_miner_config 2>&1)
+assert_rc "missing tree -> rc 0 (render survives)" "$?" "0"
+assert_contains "missing tree is named" "$lmr_out" "no RigForge tree"
+unset PITHEAD_RIGFORGE_DIR
+rm -rf "$LMR"
+unset LMR lmr_out
+
+echo "== unit: provision_local_miner — the boot leg converges the miner (#796) =="
+# Driven against a fake rigforge.sh: the real one compiles miners and tunes kernels. What this
+# owns: the invocation contract (appliance flag set, run from the tree on /data, config rendered
+# first) and both convergence directions (enabled -> setup, disabled -> stop).
+LMP=$(mktemp -d)
+mkdir -p "$LMP/rigforge" "$LMP/bin"
+cat >"$LMP/rigforge/rigforge.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "rigforge:$1 appliance=${RIGFORGE_APPLIANCE:-unset} cwd=$PWD" >>"${RF_LOG:?}"
+exit "${RF_RC:-0}"
+EOF
+chmod +x "$LMP/rigforge/rigforge.sh"
+printf '#!/usr/bin/env bash\necho "systemctl:$*" >>"${RF_LOG:?}"\n' >"$LMP/bin/systemctl"
+chmod +x "$LMP/bin/systemctl"
+export RF_LOG="$LMP/calls" PITHEAD_RIGFORGE_DIR="$LMP/rigforge"
+printf '{"local_miner":{"enabled":true}}' >"$LMP/config.json"
+printf 'STRATUM_PORT=3333\n' >"$LMP/.env"
+: >"$RF_LOG"
+PITHEAD_APPLIANCE=1 PATH="$LMP/bin:$PATH" run_sourced "$LMP" provision_local_miner >/dev/null 2>&1
+assert_rc "enabled -> rc 0" "$?" "0"
+assert_contains "runs rigforge setup in appliance mode" "$(cat "$RF_LOG")" "rigforge:setup appliance=1"
+assert_contains "runs it from the synced tree" "$(cat "$RF_LOG")" "cwd=$LMP/rigforge"
+[ -s "$LMP/rigforge/config.json" ] && ok "a missing miner config is rendered before setup" ||
+    bad "a missing miner config is rendered before setup" "not written"
+# Disabled: stop the service, never run setup — a dashboard toggle must not wait for a reboot.
+printf '{"local_miner":{"enabled":false}}' >"$LMP/config.json"
+: >"$RF_LOG"
+PITHEAD_APPLIANCE=1 PATH="$LMP/bin:$PATH" run_sourced "$LMP" provision_local_miner >/dev/null 2>&1
+assert_rc "disabled -> rc 0" "$?" "0"
+assert_contains "disabled -> the miner service is stopped" "$(cat "$RF_LOG")" "systemctl:stop xmrig.service"
+assert_not_contains "disabled -> rigforge never runs" "$(cat "$RF_LOG")" "rigforge:"
+# DIY host: a no-op in both directions — RigForge there is the operator's own install.
+printf '{"local_miner":{"enabled":true}}' >"$LMP/config.json"
+: >"$RF_LOG"
+PITHEAD_APPLIANCE=0 PATH="$LMP/bin:$PATH" run_sourced "$LMP" provision_local_miner >/dev/null 2>&1
+assert_rc "DIY host -> rc 0" "$?" "0"
+assert_eq "DIY host -> touches nothing" "$(cat "$RF_LOG")" ""
+# A failing setup is contained: warned, rc 1, and the caller treats the stack as unaffected.
+: >"$RF_LOG"
+lmp_out=$(PITHEAD_APPLIANCE=1 RF_RC=1 PATH="$LMP/bin:$PATH" run_sourced "$LMP" provision_local_miner 2>&1)
+assert_rc "failed setup -> rc 1" "$?" "1"
+assert_contains "failed setup names the containment" "$lmp_out" "stack itself is unaffected"
+# An image that never baked the tree: enabled is a promise the image cannot keep — warn, rc 1.
+rm -rf "$LMP/rigforge"
+lmp_out=$(PITHEAD_APPLIANCE=1 PATH="$LMP/bin:$PATH" run_sourced "$LMP" provision_local_miner 2>&1)
+assert_rc "missing tree -> rc 1" "$?" "1"
+assert_contains "missing tree is named" "$lmp_out" "no RigForge tree"
+unset RF_LOG PITHEAD_RIGFORGE_DIR
+rm -rf "$LMP"
+unset LMP lmp_out
+
+echo "== unit: pithead-boot wiring — the miner leg rides AFTER the slot commit =="
+# Ordering is the contract: the stack serving is the product's health and gates the A/B commit;
+# the miner is a passenger that needs the stratum listening and must never delay the commit.
+BOOTSCRIPT="$ROOT/os/overlay/pithead-boot"
+mg_line=$(grep -n "mark-good" "$BOOTSCRIPT" | head -1 | cut -d: -f1)
+lm_line=$(grep -n "pithead local-miner" "$BOOTSCRIPT" | head -1 | cut -d: -f1)
+if [ -n "$mg_line" ] && [ -n "$lm_line" ] && [ "$lm_line" -gt "$mg_line" ]; then
+    ok "pithead-boot runs 'pithead local-miner' after the health-gated commit"
+else
+    bad "pithead-boot runs 'pithead local-miner' after the health-gated commit" \
+        "mark-good@${mg_line:-none} local-miner@${lm_line:-none}"
+fi
+unset BOOTSCRIPT mg_line lm_line
+
+echo "== unit: pithead-sync's rigforge leg — program replaced, state preserved, prebuilt seeded =="
+# The baked tree is program; config.json (pithead-rendered) and the data/ workspace (the XMRig
+# build cache) are state. The prebuilt binary seeds the workspace so the appliance never needs
+# RigForge's clone path — github over clearnet, unreachable from a Tor-only box.
+SYNCSCRIPT="$ROOT/os/overlay/pithead-sync"
+SSB=$(mktemp -d)
+mkdir -p "$SSB/opt-pithead" "$SSB/opt-rigforge/util" "$SSB/opt-rigforge/prebuilt/xmrig/build"
+for f in pithead pithead-completion.bash VERSION docker-compose.yml \
+    config.reference.json config.core-keys.json config.minimal.json cosign.pub; do
+    printf 'pithead-program' >"$SSB/opt-pithead/$f"
+done
+printf 'program-v2' >"$SSB/opt-rigforge/rigforge.sh"
+chmod +x "$SSB/opt-rigforge/rigforge.sh"
+printf 'helper' >"$SSB/opt-rigforge/util/proposed-grub.sh"
+printf 'bin-v2' >"$SSB/opt-rigforge/prebuilt/xmrig/build/xmrig"
+printf 'commit-B\n' >"$SSB/opt-rigforge/prebuilt/xmrig/.rigforge-commit"
+printf 'sha-B\n' >"$SSB/opt-rigforge/prebuilt/xmrig/.rigforge-sha256"
+run_sync() {
+    PITHEAD_SYNC_SRC="$SSB/opt-pithead" PITHEAD_SYNC_DST="$SSB/data/pithead" \
+        PITHEAD_SYNC_RIGFORGE_SRC="$SSB/opt-rigforge" PITHEAD_SYNC_RIGFORGE_DST="$SSB/data/rigforge" \
+        bash "$SYNCSCRIPT"
+}
+run_sync >/dev/null 2>&1
+assert_rc "sync runs clean" "$?" "0"
+[ -x "$SSB/data/rigforge/rigforge.sh" ] && ok "rigforge program delivered beside pithead's" ||
+    bad "rigforge program delivered beside pithead's" "missing"
+assert_eq "prebuilt seeded into the workspace where 'already built' finds it" \
+    "$(cat "$SSB/data/rigforge/data/worker/xmrig/build/xmrig" 2>/dev/null)" "bin-v2"
+assert_eq "the commit marker rides with the seed" \
+    "$(cat "$SSB/data/rigforge/data/worker/xmrig/.rigforge-commit" 2>/dev/null)" "commit-B"
+[ -e "$SSB/data/rigforge/prebuilt" ] && bad "prebuilt/ is a seed, never a synced tree" "synced" ||
+    ok "prebuilt/ is a seed, never a synced tree"
+# State survives a re-run: the rendered config and a native rebuild of the SAME pin stay put.
+printf '{"pools":[{"url":"127.0.0.1:3333"}]}' >"$SSB/data/rigforge/config.json"
+printf 'native-rebuild' >"$SSB/data/rigforge/data/worker/xmrig/build/xmrig"
+run_sync >/dev/null 2>&1
+assert_eq "config.json (state) survives the resync" \
+    "$(cat "$SSB/data/rigforge/config.json")" '{"pools":[{"url":"127.0.0.1:3333"}]}'
+assert_eq "a same-pin native rebuild is left alone" \
+    "$(cat "$SSB/data/rigforge/data/worker/xmrig/build/xmrig")" "native-rebuild"
+# A new pin arrives with a new image AND its new prebuilt: the cached build is replaced, so the
+# on-box clone path never needs to run.
+printf 'commit-C\n' >"$SSB/opt-rigforge/prebuilt/xmrig/.rigforge-commit"
+printf 'bin-v3' >"$SSB/opt-rigforge/prebuilt/xmrig/build/xmrig"
+printf 'program-v3' >"$SSB/opt-rigforge/rigforge.sh"
+run_sync >/dev/null 2>&1
+assert_eq "a new pin replaces the cached build with the new prebuilt" \
+    "$(cat "$SSB/data/rigforge/data/worker/xmrig/build/xmrig")" "bin-v3"
+assert_eq "program files are replaced wholesale" "$(cat "$SSB/data/rigforge/rigforge.sh")" "program-v3"
+# An image without the bake (downgrade, older layout): the leg skips cleanly.
+rm -rf "$SSB/opt-rigforge"
+run_sync >/dev/null 2>&1
+assert_rc "no baked tree -> the leg is skipped, sync still clean" "$?" "0"
+unset -f run_sync
+rm -rf "$SSB"
+unset SSB SYNCSCRIPT
+
+echo "== unit: optimize_kernel's HugePages write is grow-only =="
+# With a co-located miner the pool is shared and RigForge (grow-only by design) sizes it as the
+# single writer — pithead writing its absolute 3072 on top would shrink a grown pool to the
+# in-use floor and starve whichever side restarts next.
+OKSB=$(mktemp -d)
+mkdir -p "$OKSB/bin"
+printf '#!/usr/bin/env bash\necho "sudo:$*" >>"${OKLOG:?}"\n' >"$OKSB/bin/sudo"
+# OS_TYPE is readonly once sourced, so the Linux arm is selected the way pcr791 does it: a
+# stubbed uname on PATH before the source.
+printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec /usr/bin/uname "$@"\n' >"$OKSB/bin/uname"
+chmod +x "$OKSB/bin/sudo" "$OKSB/bin/uname"
+export OKLOG="$OKSB/calls"
+okrun() { # <pages currently in the pool>
+    printf '%s\n' "$1" >"$OKSB/nr"
+    (
+        cd "$OKSB" || exit
+        PATH="$OKSB/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        log() { :; }
+        warn() { :; }
+        PITHEAD_NR_HUGEPAGES_FILE="$OKSB/nr" optimize_kernel </dev/null
+    )
+}
+: >"$OKLOG"
+okrun 100 >/dev/null 2>&1
+assert_contains "a small pool is grown to the stack's budget" "$(cat "$OKLOG")" "sudo:sysctl -w vm.nr_hugepages=3072"
+: >"$OKLOG"
+okrun 4000 >/dev/null 2>&1
+assert_not_contains "a larger pool (the miner's merged budget) is never shrunk" "$(cat "$OKLOG")" "vm.nr_hugepages"
+: >"$OKLOG"
+okrun 3072 >/dev/null 2>&1
+assert_not_contains "an exact pool is left alone" "$(cat "$OKLOG")" "vm.nr_hugepages"
+unset OKLOG
+unset -f okrun
+rm -rf "$OKSB"
+unset OKSB
 
 # ---------------------------------------------------------------------------
 echo ""

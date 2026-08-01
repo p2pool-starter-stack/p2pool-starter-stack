@@ -34,6 +34,12 @@ for _ in $(seq 90); do
     if [ "${code:-000}" != "000" ]; then
         command -v rauc >/dev/null 2>&1 && rauc status mark-good
         echo "pithead-boot: stack is serving (HTTP $code) — booted slot committed"
+        # The on-box miner comes LAST, after the slot commit: it needs the stack's stratum
+        # listening, and a miner that cannot start must never delay or block the commit — the
+        # stack serving is the product's health, the miner is a passenger. Idempotent every
+        # boot: RigForge's appliance mode re-renders its /run unit and re-tunes from the tree
+        # pithead-sync keeps on /data. No-op unless local_miner.enabled.
+        ./pithead local-miner || true
         exit 0
     fi
     sleep 10
