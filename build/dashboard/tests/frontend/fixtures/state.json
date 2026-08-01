@@ -99,6 +99,30 @@
     "tari_reward": 0,
     "xvb_day": null
   },
+  "earnings_summary": {
+    "tari": {
+      "available": false,
+      "blocks_30d": null,
+      "enabled": false,
+      "expected_blocks_30d": 0.0,
+      "partial": false,
+      "xtm_30d": null
+    },
+    "xmr": {
+      "actual_7d": null,
+      "available": false,
+      "enabled": false,
+      "expected_7d": 0.0,
+      "partial": false,
+      "pct": null
+    },
+    "xvb": {
+      "enabled": true,
+      "last_win_ts": 1735689000,
+      "published_day": null,
+      "wins_30d": 1
+    }
+  },
   "egress": {
     "components": [
       {

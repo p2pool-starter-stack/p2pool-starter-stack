@@ -168,6 +168,7 @@ class TestConfirmedPayoutsSummary:
             "xmr_7d": 0.0,
             "xmr_30d": 0.0,
             "xmr_all": 0.0,
+            "n_30d": 0,
             "last_ts": 0,
             "since_ts": 0,
             "partial": {"yesterday": True, "7d": True, "30d": True},
@@ -187,6 +188,9 @@ class TestConfirmedPayoutsSummary:
         assert s["xmr_7d"] == 3.0
         assert s["xmr_30d"] == 7.0
         assert s["xmr_all"] == 15.0
+        # The 30d count rides along (#808) — for Tari a payout IS a found block, so this is the
+        # actual the expected-vs-actual card holds against the expected block count.
+        assert s["n_30d"] == 3
         assert s["last_ts"] == self.NOW - 3_600
         assert s["since_ts"] == self.NOW - 40 * 86_400
 
