@@ -2,8 +2,11 @@
 # Copy the program tree from the system slot onto the data partition, leaving state untouched.
 # Runs every boot, so an A/B update delivers its new program the first time the new slot boots.
 set -euo pipefail
-SRC=/opt/pithead
-DST=/data/pithead
+# Env-overridable so the stack tests can run this script against a sandbox.
+SRC="${PITHEAD_SYNC_SRC:-/opt/pithead}"
+DST="${PITHEAD_SYNC_DST:-/data/pithead}"
+RF_SRC="${PITHEAD_SYNC_RIGFORGE_SRC:-/opt/rigforge}"
+RF_DST="${PITHEAD_SYNC_RIGFORGE_DST:-/data/rigforge}"
 
 mkdir -p "$DST"
 for f in pithead pithead-completion.bash VERSION docker-compose.yml \
@@ -23,6 +26,38 @@ if [ -d "$SRC/build" ]; then
 fi
 # An images/ copy from an older layout is dead weight on the data partition — reclaim it.
 rm -rf "${DST:?}/images"
+
+# The RigForge leg: the image bakes a pinned RigForge tree, and the miner must run from /data —
+# RigForge roots its workspace under its own script dir (DYNAMIC_HOME), so tree placement alone
+# puts the XMRig build on writable storage. Program files are replaced wholesale like pithead's;
+# state the baked tree never carries (config.json — pithead-rendered — and the data/ workspace)
+# is untouched by construction, because only names present in the source are replaced.
+if [ -d "$RF_SRC" ]; then
+    mkdir -p "$RF_DST"
+    for f in "$RF_SRC"/* "$RF_SRC"/.[!.]*; do
+        [ -e "$f" ] || continue
+        base=$(basename "$f")
+        # prebuilt/ is a seed, not a program file — handled below, never synced as a tree.
+        [ "$base" = "prebuilt" ] && continue
+        rm -rf "${RF_DST:?}/$base"
+        cp -a "$f" "$RF_DST/$base"
+    done
+    # Seed the image's prebuilt XMRig into the workspace when the pinned commit changed (or
+    # nothing is built yet). Same-commit builds are LEFT ALONE: a native recompile of the same
+    # pin is the operator's better binary, and RigForge's own integrity record covers it. A new
+    # pin arrives with a new image and its new prebuilt, so the on-box clone path (github over
+    # clearnet — unreachable from a Tor-only appliance) never needs to run.
+    if [ -d "$RF_SRC/prebuilt/xmrig" ]; then
+        baked_commit=$(cat "$RF_SRC/prebuilt/xmrig/.rigforge-commit" 2>/dev/null || true)
+        have_commit=$(cat "$RF_DST/data/worker/xmrig/.rigforge-commit" 2>/dev/null || true)
+        if [ -n "$baked_commit" ] && [ "$baked_commit" != "$have_commit" ]; then
+            mkdir -p "$RF_DST/data/worker"
+            rm -rf "$RF_DST/data/worker/xmrig"
+            cp -a "$RF_SRC/prebuilt/xmrig" "$RF_DST/data/worker/xmrig"
+        fi
+    fi
+    echo "pithead-sync: rigforge tree synced to $RF_DST (state preserved)"
+fi
 # repart formats /data with ext4's default 5% root reserve — ~50 GB lost on a 1 TB disk that
 # exists to hold chain data. 0.5% keeps a real safety margin (the pre-repart layout used the
 # same figure). tune2fs is idempotent and instant, so every boot is the simplest correct hook.

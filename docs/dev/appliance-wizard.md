@@ -110,7 +110,7 @@ certificate beats no dashboard.
 
 ## The boot contract (provisioned machines)
 
-After provisioning, every boot runs one unit — `pithead-boot` — whose four steps each answer
+After provisioning, every boot runs one unit — `pithead-boot` — whose five steps each answer
 a hardware-validated failure:
 
 1. **`pithead load-images`** — load the baked container-image archives when their content
@@ -136,6 +136,17 @@ a hardware-validated failure:
    site and proves nothing). A slot that boots but cannot serve stays uncommitted on purpose:
    that is the state A/B fallback exists for. Unprovisioned machines never commit — GRUB's
    clear-and-retry keeps them booting, and a bad update before provisioning reverts.
+5. **`pithead local-miner`** — converge the built-in RigForge worker to `local_miner.enabled`,
+   deliberately LAST: the miner needs the stack's stratum listening, and it must never delay
+   or block the slot commit — the stack serving is the product's health, the miner is a
+   passenger (`|| true`). When enabled, this runs RigForge's setup in appliance mode from the
+   tree `pithead-sync` keeps on `/data/rigforge`: its unit renders into `/run` with
+   `--runtime` enablement (gone every boot, recreated here, like the control-runner units),
+   and the cached XMRig build on `/data` makes the run a re-render rather than a recompile.
+   The miner's config is derived by `render` (step 2's family): the stack's own stratum over
+   loopback, the stratum password, and the stack's HugePages budget declared as
+   `hugepages_reserve_extra_mb` — RigForge's grow-only sysctl then sizes the shared pool as
+   the single writer, and pithead's own HugePages write never shrinks a grown pool back.
 
 **Rule for changes:** anything generated from `config.json` or the program is derived and must
 be rebuilt by `render` — adding one anywhere else recreates the staleness bug. The container
@@ -157,8 +168,8 @@ had a gap between it and the next one.
 | pure logic | `tests/frontend/configsync.test.mjs` | path access, typed coercion, address/pair guidance |
 | view rendering | `tests/frontend/wizard.test.mjs` (probes) | each view given its props |
 | **app orchestration** | `tests/frontend/wizard.test.mjs` (stubbed server) | **stage mapping, the handoff arriving through the poll, refresh-mid-provision, rejection round-trip, request bodies** |
-| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, the digest-keyed image loader, reinstall pre-fill (secret strip + fail-open) |
-| the real thing | `tests/os/run.sh --phase provision` | token from the console → submit → handoff → ack → running stack → reboot through a corrupted Caddyfile → no failed units → slot self-commit |
+| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, the digest-keyed image loader, reinstall pre-fill (secret strip + fail-open), the local-miner legs (derived config, sync seeding, boot-leg wiring) |
+| the real thing | `tests/os/run.sh --phase provision` | token from the console → submit → handoff → ack → running stack → built-in miner up and its shares accepted → reboot through a corrupted Caddyfile → no failed units → slot self-commit → miner back |
 
 The orchestration row is the one that was missing. pytest proved the endpoint published the
 credentials; a render probe proved the card renders given them; nothing proved the app *asked*.

@@ -1066,7 +1066,9 @@ phase_provision() {
     # Everything else keeps its default — which is itself part of what this proves.
     # Both addresses are required — Monero's has a format gate (95 chars, leading 4), Tari's is
     # deliberately format-free host-side, so a labelled dummy passes and stays obviously fake.
-    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini"
+    # local_miner=true: the Both role (#796) — the same submit must also light the built-in
+    # RigForge worker, asserted in the local-miner leg below.
+    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini&local_miner=true"
     scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
         bad "config submit did not return 200 (got ${scode:-none} — a 30x means the session was not accepted)"
@@ -1154,6 +1156,41 @@ phase_provision() {
     if [ "$served" -ne 1 ]; then
         bad "no HTTP answer behind caddy on :443 within 5m (last: $code)"
         return
+    fi
+
+    # ---- local-miner leg (#796): enable -> xmrig up -> shares reach p2pool ---------------
+    # The submit above asked to mine on the box itself, so the built-in RigForge worker must
+    # come up without any hands: setup renders its config, runs its appliance-mode setup, and
+    # the miner dials the machine's own stratum. The share assertion is the honest end of the
+    # chain: xmrig-proxy logs "accepted" only for shares the upstream — p2pool — took.
+    local mtries=0 miner_up=0
+    while [ "$mtries" -lt 36 ]; do
+        if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
+            miner_up=1
+            break
+        fi
+        sleep 10
+        mtries=$((mtries + 1))
+    done
+    if [ "$miner_up" -eq 1 ]; then
+        ok "built-in miner is up (xmrig unit active, process running)"
+    else
+        bad "the built-in miner never came up (unit: $(_ssh 'systemctl is-active xmrig' 2>/dev/null || echo unknown))"
+        info "  local-miner journal tail: $(_ssh "journalctl -u pithead-firstboot -n 5 --no-pager -o cat" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+    fi
+    # A KVM guest hashes slowly; give the first share a generous window.
+    local mdeadline=$(($(date +%s) + 900)) miner_share=0
+    while [ "$(date +%s)" -lt "$mdeadline" ]; do
+        if _ssh "podman logs \$(podman ps -q --filter name=xmrig-proxy | head -1) 2>&1 | grep -qi accepted"; then
+            miner_share=1
+            break
+        fi
+        sleep 15
+    done
+    if [ "$miner_share" -eq 1 ]; then
+        ok "a share from the built-in miner was accepted upstream (reached p2pool)"
+    else
+        bad "no accepted share within 15m — the miner runs but its work never reached p2pool"
     fi
 
     # ---- reboot leg: the provisioned stack must return UNAIDED ---------------------------
@@ -1252,6 +1289,23 @@ phase_provision() {
         bad "slot never self-committed — grubenv: ${genv:-unreadable}"
         ;;
     esac
+    # The miner must return too (#796): its unit lives in /run and died with the reboot, so
+    # only pithead-boot's local-miner leg — which runs after the slot commit above — can have
+    # brought it back. The cached build makes this a re-render, not a recompile.
+    local mtries2=0 miner_back=0
+    while [ "$mtries2" -lt 24 ]; do
+        if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
+            miner_back=1
+            break
+        fi
+        sleep 10
+        mtries2=$((mtries2 + 1))
+    done
+    if [ "$miner_back" -eq 1 ]; then
+        ok "built-in miner returned after the reboot (boot path re-ran its setup)"
+    else
+        bad "the miner did not return after the reboot — its runtime unit was never re-rendered"
+    fi
 }
 
 phase_fault() {
