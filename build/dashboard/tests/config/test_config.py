@@ -398,3 +398,61 @@ class TestEnergyConfig:
         from mining_dashboard.config.config import load_energy_config
 
         assert load_energy_config(str(tmp_path / "absent.json")) == self.DEFAULTS
+
+
+class TestLowRamFloorLocalMiner:
+    """The mode-aware floor counts the built-in miner's share when local_miner.enabled — read
+    live off the same read-only masked-config mount as the worker descriptors, so a dashboard
+    toggle moves the floor without a restart. The increment is the miner's OWN ~3 GB dataset
+    reservation, never the 6 GB headroom its rendered config declares (that is the stack's own
+    hugepage budget, which the per-container floors already count)."""
+
+    def _write(self, tmp_path, payload):
+        p = tmp_path / "config.json"
+        p.write_text(payload if isinstance(payload, str) else json.dumps(payload))
+        return str(p)
+
+    def test_enabled_reads_true(self, tmp_path):
+        from mining_dashboard.config.config import local_miner_enabled
+
+        assert local_miner_enabled(self._write(tmp_path, {"local_miner": {"enabled": True}}))
+
+    def test_anything_else_reads_false(self, tmp_path):
+        # Only the literal boolean true counts; every degraded shape (off, absent, hand-edited
+        # junk, a non-object document) reads False — the floor must never inflate on a typo.
+        from mining_dashboard.config.config import local_miner_enabled
+
+        for payload in (
+            {"local_miner": {"enabled": False}},
+            {"local_miner": {}},
+            {},
+            {"local_miner": "yes"},
+            {"local_miner": {"enabled": "true"}},
+            [],
+            "{not json",
+        ):
+            assert local_miner_enabled(self._write(tmp_path, payload)) is False, payload
+        assert local_miner_enabled(str(tmp_path / "absent.json")) is False
+
+    def test_floor_adds_miner_share_only_when_enabled(self, tmp_path, monkeypatch):
+        import mining_dashboard.config.config as cfg
+
+        monkeypatch.setattr(
+            cfg, "HOST_CONFIG_PATH", self._write(tmp_path, {"local_miner": {"enabled": True}})
+        )
+        # The Both role with both nodes local: 3 + 5 + 6 + 3 — a 16 GB box now warns, which is
+        # exactly the OOM edge the adversarial pass flagged.
+        assert cfg.low_ram_floor_gb(True, True) == 17
+        assert cfg.low_ram_floor_gb(False, False) == 6
+        # No mount (a DIY stack) or the miner off: the floors are what they always were.
+        monkeypatch.setattr(cfg, "HOST_CONFIG_PATH", str(tmp_path / "absent.json"))
+        assert cfg.low_ram_floor_gb(True, True) == 14
+
+    def test_low_ram_gb_env_pin_still_wins(self, tmp_path, monkeypatch):
+        import mining_dashboard.config.config as cfg
+
+        monkeypatch.setattr(
+            cfg, "HOST_CONFIG_PATH", self._write(tmp_path, {"local_miner": {"enabled": True}})
+        )
+        monkeypatch.setattr(cfg, "_LOW_RAM_ENV", "9")
+        assert cfg.low_ram_floor_gb(True, True) == 9.0

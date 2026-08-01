@@ -32,6 +32,26 @@ _LOW_RAM_ENV = os.environ.get("LOW_RAM_GB")
 LOW_RAM_BASE_GB = 3  # p2pool + proxy + tor + caddy + dashboard
 LOW_RAM_LOCAL_MONERO_GB = 5
 LOW_RAM_LOCAL_TARI_GB = 6
+# The built-in miner's own footprint, counted only when local_miner.enabled: its RandomX
+# dataset is 3 GB outright as 3×1 GB pages (the unfragmented-pool case), or ~2.4 GB as 2 MB
+# pages plus per-thread scratchpads and process overhead — bench-measured via smaps while both
+# sides mined. 3 GB covers the reservation either way. Deliberately NOT the 6 GB headroom the
+# miner's rendered config declares (hugepages_reserve_extra_mb): that is the stack's OWN
+# hugepage budget, which the container floors above already count — adding it here would count
+# p2pool's dataset twice.
+LOW_RAM_LOCAL_MINER_GB = 3
+
+
+def local_miner_enabled(path=None):
+    """Whether this box runs the built-in RigForge miner (config.json: local_miner.enabled),
+    read live off the same read-only masked-config mount as the worker descriptors below — no
+    env plumb, and a dashboard toggle moves the floor without a container restart. A missing or
+    unreadable file reads False (DIY stacks without the mount never run the built-in miner)."""
+    try:
+        with open(path or HOST_CONFIG_PATH) as f:
+            return json.load(f).get("local_miner", {}).get("enabled") is True
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def low_ram_floor_gb(monero_local: bool, tari_local: bool) -> float:
@@ -42,6 +62,7 @@ def low_ram_floor_gb(monero_local: bool, tari_local: bool) -> float:
         LOW_RAM_BASE_GB
         + (LOW_RAM_LOCAL_MONERO_GB if monero_local else 0)
         + (LOW_RAM_LOCAL_TARI_GB if tari_local else 0)
+        + (LOW_RAM_LOCAL_MINER_GB if local_miner_enabled() else 0)
     )
 
 

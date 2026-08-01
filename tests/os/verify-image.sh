@@ -47,6 +47,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Same race as mkimage.sh: losetup -P returns before the partition nodes exist. Wait once here
+# so the checks below read the image, not the timing of udev on a busy box.
+udevadm settle 2>/dev/null || true
+for _ in {1..25}; do
+    [ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] && break
+    sleep 0.2
+done
+# Hard-fail like mkimage.sh does: a mount error two screens later names the wrong culprit.
+[ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] || {
+    echo "partition nodes never appeared on $LOOP — udev timing or a broken image" >&2
+    exit 1
+}
+
 echo "==> partition table"
 # Ships ONLY the ESP and slot A — systemd-repart builds the rest on the target's real disk. A
 # third partition here means the build regressed to image-sized /data, the bug that was #784.
@@ -169,14 +182,18 @@ if [ -f ./pithead ] && [ -f build/dashboard/mining_dashboard/wizard.py ]; then
 fi
 
 echo "==> test material"
+# The variant stamp must MATCH the material, not just exist: a debug image stamped "release"
+# defeats the os-update guard that keeps a debug box from silently dropping its own SSH.
 if [ "$MODE" = "--test" ]; then
     chk "test SSH key present (harness build)" '[ -s "$ROOT/root/.ssh/authorized_keys" ]'
+    chk "variant stamp says debug" '[ "$(cat "$ROOT/etc/pithead-variant")" = "debug" ]'
 else
     # The reason this script exists in versioned form: a leaked test key on a release image is a
     # backdoor, and ad-hoc eyeballing is how one ships.
     chk "NO test marker" '[ ! -e "$ROOT/etc/pithead-test-marker" ]'
     chk "NO SSH authorized_keys" '[ ! -s "$ROOT/root/.ssh/authorized_keys" ]'
     chk "ssh service disabled" '! ls "$ROOT"/etc/systemd/system/multi-user.target.wants/ssh.service'
+    chk "variant stamp says release" '[ "$(cat "$ROOT/etc/pithead-variant")" = "release" ]'
 fi
 
 echo ""

@@ -57,6 +57,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# losetup -P returns before the kernel/udev publish the partition nodes, and the gap widens
+# under loop-device churn (a KVM battery running beside a release build). Without this wait the
+# first mkfs fails with "unable to open ${LOOP}p1: No such device or address" — and a plain
+# retry succeeds, which is exactly how it stays invisible until release day. One guarded wait:
+# settle udev, then poll briefly for both nodes.
+udevadm settle 2>/dev/null || true
+for _ in {1..25}; do
+    [ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] && break
+    sleep 0.2
+done
+[ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] || {
+    echo "partition nodes for $LOOP never appeared after losetup -P" >&2
+    exit 1
+}
+
 echo "==> filesystems"
 mkfs.vfat -n ESP "${LOOP}p1" >/dev/null
 mkfs.ext4 -q -L system-a "${LOOP}p2"
