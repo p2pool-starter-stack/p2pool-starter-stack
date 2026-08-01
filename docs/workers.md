@@ -391,6 +391,15 @@ A box that runs the stack 24/7 has spare CPU between syncs. You can put that CPU
 co-locating a RigForge worker on the stack host, pointed at the stack's own stratum over loopback —
 no LAN exposure, no firewall rule, no Tor hop.
 
+**On the appliance, this is built in.** The image carries a pinned RigForge tree and a prebuilt
+XMRig, so answering yes to "Mine on this machine too?" in the setup wizard is the whole job:
+pithead renders the miner's configuration (pool, stratum password, and the stack's HugePages
+headroom), runs RigForge's setup in its appliance mode after the stack is up, and repeats that on
+every boot — the miner's service lives in `/run` and is re-created each time, like every other
+derived thing on the appliance. The worker appears in the dashboard's Workers Alive table; toggle
+`local_miner.enabled` from the dashboard's configuration view to turn it off or on again. The
+rest of this section is the DIY flow.
+
 Opt in during `./pithead setup` (the prompt "Also mine on this machine with its spare CPU?", off by
 default), or set it in `config.json`:
 
@@ -409,8 +418,9 @@ and the stratum password (the `PROXY_STRATUM_PASSWORD` already in `.env`, shown 
 on the same host and enter those two values when it asks; the worker self-registers and appears in
 the dashboard's Workers Alive table like any other rig.
 
-Pithead does not install, run, or tune the miner. RigForge owns all host-level tuning — HugePages,
-GRUB, MSR, the CPU governor, and the miner service. Two things to know before enabling it:
+On DIY, Pithead does not install, run, or tune the miner. RigForge owns all host-level tuning —
+HugePages, GRUB, MSR, the CPU governor, and the miner service. Two things to know before enabling
+it:
 
 - **RigForge's tuning is host-global.** It sets a `performance` CPU governor and may reserve
   HugePages box-wide, which affects every workload on the machine, not just the miner. That is fine

@@ -166,7 +166,7 @@ Then a handful of choices, all with sensible defaults:
 | Telegram bot | — | Optional. Alerts and status commands; needs both the token and the chat id. |
 | Monero node | run it here | Point at a node you already run. |
 | Tari node | run it here | Same, over a network you trust. |
-| Mine with this machine's CPU | off | On if this box should mine as well as coordinate. |
+| Mine with this machine's CPU | off | On if this box should mine as well as coordinate. Nothing to install: the image carries its own [RigForge](https://github.com/p2pool-starter-stack/rigforge) miner, pointed at this machine's own pool. It starts by itself once the stack is up, comes back on every boot, and appears in the dashboard's Workers view. Mining tunes the whole box for hashrate (CPU governor, memory reservations) — what a dedicated appliance is for. |
 | First sync | private over Tor | Faster over the open internet if days of syncing is too slow; it uses Tor afterwards either way. |
 | Time zone | UTC | For dashboard timestamps. |
 | Dashboard login | generate one for me | Or choose your own password. "No login" is offered but leaves the dashboard — payout addresses, hashrate — open to anyone on your network; never combine it with the Tor onion. |

@@ -391,6 +391,18 @@ test("the mine-on-this-box choice is a labeled select naming RigForge, default N
   restore();
 });
 
+test("saying yes promises the built-in miner, never a manual install", async () => {
+  // The appliance honours the choice itself now: an operator who answers Yes must not be
+  // told to install anything — that instruction pointed at a rig that could never exist
+  // on a machine with no shell.
+  const { inst, restore } = await appOn([stateFor("setup")]);
+  inst.editJson({ target: { value: JSON.stringify({ local_miner: { enabled: true } }) } });
+  const out = renderToString(inst.render());
+  assert.match(out, /Nothing to install/);
+  assert.doesNotMatch(out, /install RigForge/i);
+  restore();
+});
+
 test("before a disk is chosen, the page asks ONLY that", async () => {
   const { inst, restore } = await appOn([
     stateFor("installer", {

@@ -1882,6 +1882,12 @@ announce_dashboard_url() {
 # local_miner.enabled is on.
 announce_local_miner() {
     [ "$(config_bool '.local_miner.enabled' false 2>/dev/null || echo false)" = "true" ] || return 0
+    # On the appliance the miner is built in: pithead renders RigForge's config and the boot path
+    # runs its setup, so there is nothing to install and no values to copy.
+    if is_appliance; then
+        log "Local mining is ON: this machine also mines with its own CPU. The built-in RigForge worker points at the stack's own stratum and appears in the dashboard's Workers view."
+        return 0
+    fi
     local bind port host secret
     bind=$(env_get STRATUM_BIND 2>/dev/null || true)
     [ -n "$bind" ] || bind="0.0.0.0"
@@ -1912,6 +1918,80 @@ announce_stratum_auth() {
     sp=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
     [ -n "$sp" ] || return 0
     log "Stratum authentication is ON: every rig must connect with pass \"$sp\" (set it as the xmrig/RigForge stratum password). See docs/workers.md#authentication."
+}
+
+# --- local miner on the appliance (#796) ----------------------------------------------------
+# The appliance honours "Mine on this machine too?" itself: the image bakes a pinned RigForge
+# tree (plus a prebuilt XMRig), pithead-sync delivers it to /data/rigforge, render below writes
+# its config, and the boot path runs its setup in appliance mode after the stack is up. On DIY,
+# none of this fires — the operator installs RigForge by hand (announce_local_miner's values).
+
+rigforge_dir() { printf '%s' "${PITHEAD_RIGFORGE_DIR:-/data/rigforge}"; }
+
+# RigForge's config.json is a DERIVED file on the appliance — a pure function of pithead's
+# config.json + .env, rebuilt on every render like the Caddyfile. It carries the three values
+# the miner needs: the stack's own stratum over loopback, the stratum password when one is set,
+# and the stack's HugePages budget as hugepages_reserve_extra_mb — the hand-off that makes
+# RigForge the pool's single writer. Its grow-only sysctl sizes the whole pool (miner need +
+# this headroom); pithead's own write never shrinks it back (optimize_kernel). Declaring the
+# budget beats maxing the two reservations: both sides hold pages at the same time, so only the
+# sum survives one side growing into its own reservation.
+render_local_miner_config() {
+    is_appliance || return 0
+    local dir
+    dir=$(rigforge_dir)
+    if [ "$(config_bool '.local_miner.enabled' false 2>/dev/null || echo false)" != "true" ]; then
+        # Derived means derived: switched off, the config goes away — the boot leg then has
+        # nothing to start, and a stale stratum password does not linger on /data.
+        rm -f "$dir/config.json"
+        return 0
+    fi
+    if [ ! -d "$dir" ]; then
+        warn "Local mining is on, but there is no RigForge tree at $dir — this image does not carry the built-in miner."
+        return 0
+    fi
+    local port secret
+    port=$(stratum_port_effective)
+    secret=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
+    jq -n --arg url "127.0.0.1:$port" --arg pass "$secret" --argjson reserve "$((PITHEAD_HUGEPAGES * 2))" \
+        '{pools: [({url: $url} + (if $pass != "" then {pass: $pass} else {} end))], hugepages_reserve_extra_mb: $reserve}' \
+        >"$dir/config.json"
+    log "Local miner config rendered to $dir/config.json (pool 127.0.0.1:$port)."
+}
+
+# The run leg: converge the on-box miner to what config.json says. Runs after the stack is up
+# (the miner needs the stratum listening; RigForge's setup restarts the service it installs),
+# from pithead-boot on every boot and from setup on first provisioning. RigForge's appliance
+# mode makes the whole run idempotent on the read-only root: units in /run with --runtime
+# enablement, no package installs, GRUB untouched, grow-only HugePages.
+provision_local_miner() {
+    is_appliance || return 0
+    local dir
+    dir=$(rigforge_dir)
+    if [ "$(config_bool '.local_miner.enabled' false 2>/dev/null || echo false)" != "true" ]; then
+        # Switched off: stop a still-running miner now rather than waiting for the reboot that
+        # would drop its runtime unit anyway. Best-effort — absent unit, absent systemctl (tests)
+        # and DIY hosts all land in the same quiet no-op.
+        systemctl stop xmrig.service >/dev/null 2>&1 || true
+        return 0
+    fi
+    if [ ! -x "$dir/rigforge.sh" ]; then
+        warn "Local mining is on, but there is no RigForge tree at $dir — this image does not carry the built-in miner."
+        return 1
+    fi
+    [ -f "$dir/config.json" ] || render_local_miner_config
+    # The prebuilt XMRig baked into the image normally makes this instant; a compile only
+    # happens when the cached build is missing or fails its integrity check. That is minutes of
+    # silence on the console, so say what the machine is doing.
+    if [ ! -x "$dir/data/worker/xmrig/build/xmrig" ]; then
+        _console "Preparing the on-box miner — building it once. This can take several minutes."
+    fi
+    if (cd "$dir" && RIGFORGE_APPLIANCE=1 ./rigforge.sh setup); then
+        log "Local miner is up — it appears in the dashboard's Workers view."
+    else
+        warn "Local miner setup failed — the stack itself is unaffected. Details are in the log above."
+        return 1
+    fi
 }
 
 reset_dashboard() {
@@ -2366,6 +2446,12 @@ Maintenance:
                             into the engine when their content changed since the last load.
                             The boot path runs this on every boot — a reinstall or update
                             that ships new images converges without any wizard involvement.
+
+  local-miner               Converge the appliance's built-in RigForge worker to what
+                            local_miner.enabled says: run RigForge's setup in appliance mode
+                            when it is on (the miner points at this machine's own stratum),
+                            stop the miner when it is off. The boot path runs this after the
+                            stack is up; a no-op outside the appliance.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion —
                             the client PRIVATE key, kept out of 'status'. Add it to your Tor
@@ -5824,13 +5910,19 @@ EOF
     log "Rendered Quadlet units to $outdir ($(find "$outdir" -maxdepth 1 \( -name '*.container' -o -name '*.network' \) | wc -l | tr -d ' ') files)."
 }
 
+# The stack's own HugePages budget: 3072 pages of 2 MiB (~6 GiB) for RandomX — p2pool's dataset
+# plus monerod's verify cache. ONE definition: the sysctl write, the GRUB params and the local
+# miner's declared headroom (hugepages_reserve_extra_mb in RigForge's config) all derive from it,
+# so the reservation and the declaration cannot drift apart.
+readonly PITHEAD_HUGEPAGES=3072
+
 # Kernel boot params pithead appends to GRUB_CMDLINE_LINUX_DEFAULT for RandomX: reserve 6 GiB of
 # 2 MiB HugePages and disable Transparent HugePages. NOTE the THP param is SINGULAR
 # (transparent_hugepage) — the plural form is an unrecognized param the kernel silently ignores,
 # so THP would never actually be disabled (#176). Kept as a function so it has one definition and
 # can be unit-tested for valid kernel param names.
 randomx_boot_params() {
-    echo "hugepagesz=2M hugepages=3072 transparent_hugepage=never"
+    echo "hugepagesz=2M hugepages=$PITHEAD_HUGEPAGES transparent_hugepage=never"
 }
 
 # Re-generate the bootloader config after a /etc/default/grub edit and flag that a reboot is needed.
@@ -5875,7 +5967,18 @@ optimize_kernel() {
     fi
     log "Applying RandomX optimizations (HugePages)..."
     if [ "$OS_TYPE" == "Linux" ]; then
-        sudo sysctl -w vm.nr_hugepages=3072
+        # Grow-only, never shrink: with a co-located RigForge miner the HugePages pool is shared,
+        # and whoever writes an absolute value last steals the other side's pages — the kernel
+        # shrinks the pool to the in-use floor and leaves zero headroom for a restart on either
+        # side. RigForge's own write is grow-only for the same reason, so write ordering between
+        # the two products stays safe regardless of who runs first.
+        local current_hugepages
+        current_hugepages=$(cat "${PITHEAD_NR_HUGEPAGES_FILE:-/proc/sys/vm/nr_hugepages}" 2>/dev/null || echo 0)
+        if [ "${current_hugepages:-0}" -ge "$PITHEAD_HUGEPAGES" ] 2>/dev/null; then
+            log "HugePages pool already holds $current_hugepages pages (>= $PITHEAD_HUGEPAGES) — leaving it as is."
+        else
+            sudo sysctl -w vm.nr_hugepages="$PITHEAD_HUGEPAGES"
+        fi
 
         if [ -f "/etc/default/grub" ]; then
             # Heal an earlier release's invalid plural THP param if present (#176). Runs regardless of
@@ -5889,7 +5992,7 @@ optimize_kernel() {
                 warn "Persistent HugePages requires editing /etc/default/grub and a reboot."
                 read -r -p "Modify GRUB for persistent HugePages now? (y/N): " GRUB_OK || true
                 if [[ ! "$GRUB_OK" =~ ^[Yy] ]]; then
-                    log "Skipped GRUB edit. HugePages set for this boot only (vm.nr_hugepages=3072)."
+                    log "Skipped GRUB edit. HugePages set for this boot only (vm.nr_hugepages=$PITHEAD_HUGEPAGES)."
                     return 0
                 fi
                 log "Updating GRUB configuration for persistent HugePages..."
@@ -6092,8 +6195,9 @@ setup() {
     inject_service_configs
     optimize_kernel
     generate_caddyfile
-    provision_control_runner # #33: install/remove the dashboard-control systemd trigger
-    update_current_symlink   # #455: versioned deploy dir -> maintain the `current ->` pointer
+    provision_control_runner  # #33: install/remove the dashboard-control systemd trigger
+    render_local_miner_config # #796: the appliance's built-in RigForge worker reads a derived config
+    update_current_symlink    # #455: versioned deploy dir -> maintain the `current ->` pointer
 
     log "Deployment preparation complete!"
     if [ "$REBOOT_REQUIRED" = true ]; then
@@ -6102,6 +6206,10 @@ setup() {
         echo "After reboot, start the stack with: '$0 up'"
     else
         prompt_start_stack
+        # The miner leg comes AFTER the stack: it points at the stack's own stratum, and
+        # RigForge starts the service it installs. Appliance-only inside; best-effort — a
+        # miner that cannot start must not fail provisioning of the stack that just did.
+        provision_local_miner || true
     fi
 }
 
@@ -6591,6 +6699,7 @@ render_derived() {
     provision_control_runner
     provision_ssh_access
     provision_console_login
+    render_local_miner_config
     log "Derived configuration regenerated from config.json."
 }
 
@@ -6720,7 +6829,8 @@ apply() {
     provision_onion_client_auth
     provision_control_runner
     provision_ssh_access
-    provision_console_login # #33: converge the control-runner units on the (new) toggle
+    provision_console_login   # #33: converge the control-runner units on the (new) toggle
+    render_local_miner_config # #796: the built-in miner's config is derived — keep it current
 
     log "Updating containers..."
     migrate_compose_project
@@ -6762,6 +6872,10 @@ apply() {
         fi
     fi
     rm -f "$apply_marker"
+    # Converge the built-in miner on a toggle without waiting for a reboot (#796): start it when
+    # local_miner just turned on, stop it when it turned off. After the recreate above so the
+    # stratum the miner dials is the freshly-applied one. Best-effort, same posture as setup.
+    provision_local_miner || true
     log "Configuration applied."
     announce_dashboard_url
 }
@@ -6771,7 +6885,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard load-images control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
+readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard load-images local-miner control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -8232,6 +8346,11 @@ main() {
     load-images)
         _reject_options load-images "$@"
         load_baked_images
+        ;;
+    local-miner)
+        _reject_options local-miner "$@"
+        require_env
+        provision_local_miner
         ;;
     control-run-pending)
         _reject_options control-run-pending "$@"

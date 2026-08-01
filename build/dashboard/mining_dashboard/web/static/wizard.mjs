@@ -477,14 +477,16 @@ export class WizardApp extends Component {
             <${Field} label="Mine on this machine too?">
                 <select value=${String(v("localMiner") ?? false)} onChange=${on("localMiner")}>
                     <option value="false">No — this box only coordinates the miners (default)</option>
-                    <option value="true">Yes — I will install RigForge on it to mine with its CPU</option>
+                    <option value="true">Yes — this machine also mines with its own CPU (built-in RigForge)</option>
                 </select>
             <//>
             ${
               v("localMiner") === true &&
-              html`<${Note}>Pithead serves the pool; RigForge does the mining. After setup,
-                install RigForge on this machine and point it at the stratum address the final
-                page shows — it owns all CPU tuning.<//>`
+              html`<${Note}>Nothing to install: the machine carries its own RigForge miner,
+                pointed at its own pool. It starts by itself once the stack is up and appears
+                in the dashboard's Workers view. Mining tunes the whole box for hashrate —
+                CPU governor, memory reservations — which is exactly what a dedicated
+                appliance is for.<//>`
             }
 
             <h3>First sync</h3>
