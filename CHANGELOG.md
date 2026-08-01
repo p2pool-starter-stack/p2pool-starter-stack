@@ -9,6 +9,20 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.16.1] - 2026-08-01
+
+### Fixed
+
+- **The expected-vs-actual card no longer scrolls, and compares honestly (#817).** Every row now
+  shares one trailing 30-day window, and Monero and XvB are one combined row on both sides: an
+  XvB win pays out through ordinary payouts the payout table cannot attribute, so the confirmed
+  actual always contains win XMR — the expectation now folds XvB's published tier estimate in
+  (only when fresh, and never a negative one), so the percent compares like with like. The card's
+  values wrap instead of panning, and every short dashboard card now hugs its content instead of
+  stretching into a mostly-empty box beside a taller neighbour.
+- **The Worker Inspect close button sits in the top-right corner (#817).** The panel header's
+  layout class was never defined in the stylesheet, so the ✕ rendered beside the title instead.
+
 ## [1.16.0] - 2026-08-01
 
 ### Added
