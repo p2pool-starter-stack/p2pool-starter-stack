@@ -3416,6 +3416,28 @@ printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_ad
 out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "monero local-to-remote switch applies cleanly" "$?" "0"
 assert_contains "switch removes the deactivated monerod container" "$(cat "$SWLOG")" "compose rm -sf monerod wallet-rpc tari-wallet"
+# (4) Reverse switch, tari remote→local (#822): the freshly-reactivated profile's service must be
+# left alone by the reconcile — only the still-off profiles (monerod stays remote, both payout
+# wallets off) reconcile — and the recreate up must run with local_tari back in the committed
+# profile list, which is what brings the tari container up again. First commit a tari-remote .env
+# so the switch back is a real transition.
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari remote baseline applies cleanly" "$?" "0"
+assert_not_contains "tari remote baseline commits a profile list without local_tari" "$(grep '^COMPOSE_PROFILES=' "$V/.env")" "local_tari"
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"local"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+: >"$SWLOG"
+out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari remote-to-local switch applies cleanly" "$?" "0"
+# The reconcile list is exactly the still-deactivated profiles — no tari between monerod and
+# wallet-rpc (the list renders in fixed map order), so the reactivated service's container is
+# never touched by the removal.
+assert_contains "reverse switch reconciles only the still-off profiles" "$(cat "$SWLOG")" "compose rm -sf monerod wallet-rpc tari-wallet"
+assert_not_contains "reverse switch leaves the reactivated tari alone" "$(cat "$SWLOG")" "rm -sf tari "
+# And the recreate up runs AFTER that reconcile with local_tari committed back into the profile
+# list — that up is what (re)creates the tari container.
+assert_contains "recreate up follows the reconcile" "$(sed -n '/compose rm -sf monerod wallet-rpc tari-wallet/,$p' "$SWLOG")" "compose up --pull never -d --remove-orphans"
+assert_contains "reactivated profile is live for the recreate up" "$(grep '^COMPOSE_PROFILES=' "$V/.env")" "local_tari"
 
 echo "== black-box: monero.rpc_lan_access + prep_blocks_threads reflect into .env (#523) =="
 # The rendered .env must match the config input. rpc_lan_access gates the monerod RPC bind: default
