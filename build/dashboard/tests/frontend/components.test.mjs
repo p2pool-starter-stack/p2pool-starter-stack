@@ -477,12 +477,18 @@ test('EarningsCard shows Confirmed on-chain under the estimates on both tabs whe
     s.earnings.tari_available = true;
     s.earnings.tari_coeff_day = 2e-3;
     s.earnings.confirmed = {
-        enabled: true, count: 3, xmr_24h: 0.25, xmr_7d: 0.75, xmr_all: 1.75,
+        enabled: true, count: 3, xmr_24h: 0.25, xmr_yesterday: 0.5, xmr_7d: 0.75,
+        xmr_30d: 1.25, xmr_all: 1.75,
         last_ts: Math.floor(Date.now() / 1000) - 3600,
+        since_ts: Math.floor(Date.now() / 1000) - 90 * 86400,
+        partial: { yesterday: false, '7d': false, '30d': false },
     };
     s.earnings.tari_confirmed = {
-        enabled: true, count: 1, xtm_24h: 0, xtm_7d: 4552.15, xtm_all: 4552.15,
+        enabled: true, count: 1, xtm_24h: 0, xtm_yesterday: 0, xtm_7d: 4552.15,
+        xtm_30d: 4552.15, xtm_all: 4552.15,
         last_ts: Math.floor(Date.now() / 1000) - 7200,
+        since_ts: Math.floor(Date.now() / 1000) - 90 * 86400,
+        partial: { yesterday: false, '7d': false, '30d': false },
     };
     let html = renderApp({ state: s });
     // One confirmed block per tab, populated from the summary keys through the coin formatters.
@@ -491,6 +497,14 @@ test('EarningsCard shows Confirmed on-chain under the estimates on both tabs whe
     assert.match(html, /1\.7500 XMR/);     // xmr_all
     assert.match(html, /4552\.1500 XTM/);  // xtm_all
     assert.match(html, /Last payout/);
+    // Running windows (#787): yesterday / 7d / 30d beside the existing 24h and all-time figures.
+    assert.match(html, /Yesterday/);
+    assert.match(html, /Running 7d/);
+    assert.match(html, /Running 30d/);
+    assert.match(html, /0\.500000 XMR/);   // xmr_yesterday
+    assert.match(html, /1\.2500 XMR/);     // xmr_30d
+    // History predates every window here, so nothing is marked partial and no footnote appears.
+    assert.doesNotMatch(html, /Partial/);
     // Estimates first, confirmed reality after — on the Tari tab the block follows the
     // Long-run Average table, mirroring the Monero tab's order.
     const tari = html.slice(html.indexOf('id="epanel-tari"'), html.indexOf('id="epanel-xvb"'));
@@ -500,6 +514,38 @@ test('EarningsCard shows Confirmed on-chain under the estimates on both tabs whe
     s.earnings.tari_confirmed = { enabled: false };
     html = renderApp({ state: s });
     assert.doesNotMatch(html, /Confirmed on-chain/);
+});
+
+test('EarningsCard marks running windows the payout history does not fully cover (#787)', () => {
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.tari_confirmed = { enabled: false };
+    // History starts 3 days ago: yesterday is covered, 7d and 30d reach behind it.
+    s.earnings.confirmed = {
+        enabled: true, count: 1, xmr_24h: 0, xmr_yesterday: 0.5, xmr_7d: 0.5,
+        xmr_30d: 0.5, xmr_all: 0.5,
+        last_ts: Math.floor(Date.now() / 1000) - 3 * 86400,
+        since_ts: Math.floor(Date.now() / 1000) - 3 * 86400,
+        partial: { yesterday: false, '7d': true, '30d': true },
+    };
+    let html = renderApp({ state: s });
+    // Only the flagged windows carry the marker — a covered window must not be hedged.
+    assert.match(html, /Running 7d \*/);
+    assert.match(html, /Running 30d \*/);
+    assert.doesNotMatch(html, /Yesterday \*/);
+    // One footnote states where the recorded history starts, so a short window never reads as full.
+    assert.match(html, /payout history starts/);
+    assert.match(html, /covers only the history on record/);
+    // Nothing confirmed at all: every running window is flagged and the footnote says so instead
+    // of naming a date it doesn't have.
+    s.earnings.confirmed = {
+        enabled: true, count: 0, xmr_24h: 0, xmr_yesterday: 0, xmr_7d: 0, xmr_30d: 0, xmr_all: 0,
+        last_ts: 0, since_ts: 0,
+        partial: { yesterday: true, '7d': true, '30d': true },
+    };
+    html = renderApp({ state: s });
+    assert.match(html, /Yesterday \*/);
+    assert.match(html, /no payouts on record yet/);
 });
 
 test('EarningsCard XvB tab shows the published current-tier reward as a day/month/year table', () => {

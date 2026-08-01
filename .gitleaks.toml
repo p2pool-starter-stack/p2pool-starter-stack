@@ -11,4 +11,8 @@ regexTarget = "line"
 # is still caught.
 regexes = [
   '''-u "\$\{[A-Z_]+:-[^}]*\}:\$\{[A-Z_]+:-[^}]*\}"''',
+  # Fixture password in the wizard handoff-card frontend test — a made-up literal the test
+  # asserts is RENDERED, so it can't be replaced with an env var. CI scans every pushed ref,
+  # so this must be allowlisted even while the branch that carries it is still in flight.
+  '''rX6d2A4sGBHFEcQT4TVQQJRQg7xtbDMg''',
 ]

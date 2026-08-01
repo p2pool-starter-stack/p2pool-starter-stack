@@ -9,6 +9,26 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.15.0] - 2026-08-01
+
+### Added
+
+- **Running confirmed earnings (#787).** The dashboard's Confirmed on-chain block and the Telegram
+  `/earnings` reply now answer "what did I actually earn yesterday / this week / this month?" —
+  running yesterday / 7d / 30d totals from the confirmed payouts the view-only wallets record
+  (#381/#462), beside the existing estimate. Yesterday is the previous full calendar day in the
+  dashboard's timezone, not a trailing 24 hours, so it matches the daily summary's clock — even
+  across a DST change. A window that reaches back past the oldest recorded payout is marked
+  partial, with a footnote naming where the recorded history starts, so a total summed over less
+  than its labelled span never reads as a complete one. Both surfaces read one shared roll-up, so
+  they cannot drift apart.
+
+### Dependencies
+
+- Dashboard Python group (#788): `aiohttp` 3.14.3, `grpcio` 1.83.0 (floors still satisfy the
+  checked-in Tari gRPC stubs), plus test/dev tooling — `diff-cover` ≥ 10.4.1, `hypothesis`
+  ≥ 6.163.0, `ruff` 0.16.0, `pre-commit` ≥ 4.6.1.
+
 ## [1.14.1] - 2026-07-24
 
 ### Fixed

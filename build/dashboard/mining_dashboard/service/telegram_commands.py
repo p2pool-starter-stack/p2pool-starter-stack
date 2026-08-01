@@ -5,6 +5,7 @@ import uuid
 
 import requests
 
+from mining_dashboard.config import config
 from mining_dashboard.config.config import (
     DASHBOARD_CONTROL_ENABLED,
     HOST_IP,
@@ -24,9 +25,15 @@ from mining_dashboard.helper.utils import (
     format_duration,
     format_hashrate,
     format_xmr,
+    format_xtm,
 )
 from mining_dashboard.service import control_service
-from mining_dashboard.service.earnings import xmr_per_hs_day, xtm_per_hs_day
+from mining_dashboard.service.earnings import (
+    MICRO_PER_XTM,
+    confirmed_payouts_summary,
+    xmr_per_hs_day,
+    xtm_per_hs_day,
+)
 from mining_dashboard.service.egress import egress_posture_from_config
 from mining_dashboard.service.metrics import build_metrics
 from mining_dashboard.service.telegram_notifier import TELEGRAM_API_BASE
@@ -72,7 +79,7 @@ HELP_TEXT = (
     "/system — host disk, RAM, CPU, HugePages\n"
     "/pool — P2Pool sidechain + Monero network\n"
     "/xvb — XvB mode, tier, and raffle eligibility\n"
-    "/earnings — estimated P2Pool XMR per day\n"
+    "/earnings — estimated P2Pool XMR per day + confirmed yesterday/7d/30d\n"
     "/luck — pool cadence: time-to-share, luck, PPLNS weight\n"
     "/help — this message"
 )
@@ -406,15 +413,56 @@ def format_xvb(metrics, host_label=""):
     return "\n".join(lines)
 
 
-def format_earnings(metrics, network, host_label=""):
+def _running_lines(summary, unit_key, coin, fmt):
+    """Confirmed running-earnings lines for '/earnings' (#787) — what the wallet actually received
+    over yesterday / 7d / 30d, against the estimate above them.
+
+    ``summary`` is ``service.earnings.confirmed_payouts_summary``'s roll-up (the exact object the
+    dashboard's Confirmed on-chain block renders), so the bot re-derives nothing and the two
+    surfaces cannot disagree (#61/#387). Returns no lines when that chain's view-only wallet is off
+    — the estimate then stands alone, as it did before payout confirmation existed.
+
+    A window the server flagged partial gets a ``*`` and one footnote naming where the recorded
+    history starts, so a total summed over less than its labelled span never reads as a full one."""
+    if not summary or not summary.get("enabled"):
+        return []
+    partial = summary.get("partial") or {}
+    parts = [
+        f"{label} {fmt(summary.get(f'{unit_key}_{win}', 0) or 0)}"
+        + ("*" if partial.get(win) else "")
+        for win, label in (("yesterday", "yesterday"), ("7d", "7d"), ("30d", "30d"))
+    ]
+    lines = [f"\U0001f4e5 Confirmed {coin}: " + " · ".join(parts)]
+    if any(partial.get(w) for w in ("yesterday", "7d", "30d")):
+        since = summary.get("since_ts") or 0
+        where = (
+            f"starts {time.strftime('%Y-%m-%d', time.localtime(since))}"
+            if since
+            else "is empty — no payouts confirmed yet"
+        )
+        lines.append(f"* partial — recorded payout history {where}.")
+    return lines
+
+
+def format_earnings(metrics, network, host_label="", confirmed=None, tari_confirmed=None):
     """Estimated P2Pool XMR earnings — the answer to '/earnings'. Reuses the same rates the
     dashboard calculator uses (``xmr_per_hs_day``/``xtm_per_hs_day``) applied to the displayed
     P2Pool 1h-average hashrate. The Tari line appears only while merge-mining figures are live —
-    the same hashrate earns the XTM alongside the XMR, in addition, not instead (#12, #117)."""
+    the same hashrate earns the XTM alongside the XMR, in addition, not instead (#12, #117).
+
+    ``confirmed`` / ``tari_confirmed`` (#787) are the confirmed-payout roll-ups from the view-only
+    wallets (#381/#462), appended as running yesterday / 7d / 30d totals — the estimate is a model,
+    these are what arrived. ``None`` (that chain's wallet feature off) omits them entirely."""
     reward_atomic = (network or {}).get("reward", 0) or 0
     coeff_day = xmr_per_hs_day(reward_atomic, metrics.network_difficulty)
+    # Confirmed totals come off the wallet, not the network figures, so they survive the estimate
+    # being uncomputable — a stack waiting on network data can still say what it was paid.
+    running = _running_lines(confirmed, "xmr", "XMR", format_xmr) + _running_lines(
+        tari_confirmed, "xtm", "XTM", format_xtm
+    )
     if coeff_day <= 0:
-        return f"{_prefix(host_label)}\U0001f4b0 Earnings estimate unavailable (waiting on network data)."
+        head = f"{_prefix(host_label)}\U0001f4b0 Earnings estimate unavailable (waiting on network data)."
+        return "\n".join([head, *running])
     daily_1h = coeff_day * metrics.p2pool_1h
     lines = [
         f"{_prefix(host_label)}\U0001f4b0 Estimated P2Pool earnings",
@@ -437,6 +485,8 @@ def format_earnings(metrics, network, host_label=""):
     if tari_daily > 0:
         lines.append(f"Tari (merge-mined alongside): ~{tari_daily:.2f} XTM/day")
     lines.append("Estimate only — excludes XvB-donated hashrate.")
+    # Estimate first, then what actually landed — the same order the dashboard card uses.
+    lines.extend(running)
     return "\n".join(lines)
 
 
@@ -653,6 +703,28 @@ class TelegramCommandBot:
         self.control_enabled = bool(self.enabled and control_enabled and self.allowed_ids)
         self._gate = ControlGate(confirm_timeout)
 
+    def _payout_summary(self, chain):
+        """Confirmed-payout roll-up for ``chain`` (#787), or ``None`` when that chain's view-only
+        wallet is off — the same ``None`` the dashboard passes to mean "feature off, show only the
+        estimate".
+
+        Reads the stored payouts and rolls them up through the shared
+        :func:`~mining_dashboard.service.earnings.confirmed_payouts_summary`, so the bot's running
+        totals are the identical numbers the dashboard card renders (#61/#387). The config flags are
+        read at call time (module attribute, not a from-import) so a flipped setting takes effect
+        without a re-import — matching ``build_state``'s handling of the same two flags."""
+        enabled = (
+            config.PAYOUT_CONFIRM_ENABLED
+            if chain == "monero"
+            else config.TARI_PAYOUT_CONFIRM_ENABLED
+        )
+        if not enabled:
+            return None
+        payouts = self.data_service.state_manager.get_payouts(chain)
+        if chain == "tari":
+            return confirmed_payouts_summary(payouts, divisor=MICRO_PER_XTM, unit="xtm")
+        return confirmed_payouts_summary(payouts)
+
     def reply_for(self, text):
         """Map an incoming message to a reply string, or ``None`` to stay silent.
 
@@ -708,7 +780,13 @@ class TelegramCommandBot:
         if cmd == "xvb":
             return format_xvb(metrics, self.host_label)
         if cmd == "earnings":
-            return format_earnings(metrics, data.get("network", {}), self.host_label)
+            return format_earnings(
+                metrics,
+                data.get("network", {}),
+                self.host_label,
+                confirmed=self._payout_summary("monero"),
+                tari_confirmed=self._payout_summary("tari"),
+            )
         if cmd == "luck":
             return format_luck(metrics, self.host_label)
         return None
