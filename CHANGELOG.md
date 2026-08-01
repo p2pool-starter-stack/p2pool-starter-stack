@@ -9,6 +9,37 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.16.0] - 2026-08-01
+
+### Added
+
+- **Expected vs actual earnings, at a glance and in both views (#808).** A new dashboard card
+  puts each income stream's estimate beside what the view-only wallets actually confirmed, over
+  the same window: Monero XMR over the trailing 7 days — expected from the 7-day average routed
+  P2Pool hashrate, the hashrate that actually ran the window — with a percent-of-expected; Tari
+  in blocks over 30 days (solo merge-mining pays whole blocks, and a fraction of a block per
+  month is the normal expectation, shown as such); and XvB raffle wins in the window beside XvB's
+  published estimate for the current tier. The card appears in the Simple view too — its first
+  earnings figure. Streams without payout confirmation show the config key to set rather than a
+  zero, and windows that outrun the recorded payout history keep their partial marking. No XvB
+  XMR figure is shown anywhere: a win pays out through ordinary small payouts the payout table
+  cannot attribute, so any such number would be an invention.
+
+### Fixed
+
+- **A local→remote node switch now retires the old node container (#795).** Switching
+  `monero.mode` or `tari.mode` to `remote` dropped the node's compose profile as promised, but
+  compose never removes the running container of a profile-disabled service — it is not an
+  orphan — so the old node kept running, offline and re-syncing, against a remote-mode config.
+  Every `up` now removes the containers of profile-disabled services before recreating anything,
+  which also heals a box already stuck in that state on its next `apply` or `up`. On-disk chain
+  data is untouched, exactly as the apply preview says.
+- **The tari-wallet container can now actually report healthy (#777).** Its liveness probe
+  grepped for the full `minotari_console_wallet` process name, but `ps` truncates the command
+  column at 15 characters, so the check could never match and the container reported unhealthy
+  forever — a permanently-firing container alert for the first user of Tari payout confirmation.
+  The probe now matches the truncated form `ps` actually prints.
+
 ## [1.15.0] - 2026-08-01
 
 ### Added
