@@ -105,6 +105,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `/metrics` Prometheus exposition (#379), through Caddy + basic_auth | scrape | 1 ✅ (format) · 4 ▶ (`--check`) |
 | `share_stats` series populated on a mining box (#116) | polls land | 1 ✅ (shape) · 4 ▶ (`--check`) |
 | Confirmed running earnings (#787): yesterday as a **calendar** day vs the trailing 24h/7d/30d spans, the DST-length day boundary, partial marking when a window outruns the recorded payout history, and one roll-up feeding both the dashboard card and `/earnings` | stored payouts | 1 ✅ (`test_earnings.py`, `test_telegram_commands.py`, `components.test.mjs`) |
+| Expected-vs-actual earnings summary (#808): window-matched 7d/30d hashrate basis, per-stream gates and honest degradation, Tari block counts, XvB win windowing, and the card's render branches in both views | metrics + stored payouts | 1 ✅ (`test_views.py` `TestEarningsVsActual`, `test_metrics.py`, `components.test.mjs`) |
 | Dashboard reads correct live state on a real stack | real daemons | 4 ▶ |
 
 ### G. CLI lifecycle (`pithead`)
