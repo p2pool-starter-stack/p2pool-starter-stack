@@ -698,6 +698,21 @@ class TestBadges:
         out = build_badges({"system": {"memory": {"total_gb": 8}}}, _metrics(), "ok")
         assert not any("Low RAM" in b["text"] for b in out)
 
+    def test_low_ram_badge_counts_the_built_in_miner(self, monkeypatch):
+        # The Both role's risk case: both nodes local fits a 16 GB box (floor 14) — until the
+        # built-in miner's own dataset joins them, when the same box honestly warns (floor 17).
+        import mining_dashboard.config.config as cfg_mod
+        import mining_dashboard.web.views as views_mod
+
+        monkeypatch.setattr(views_mod, "monero_is_local", lambda: True)
+        monkeypatch.setattr(views_mod, "tari_is_local", lambda: True)
+        state = {"system": {"memory": {"total_gb": 15.6}}}
+        assert not any("Low RAM" in b["text"] for b in build_badges(state, _metrics(), "ok"))
+
+        monkeypatch.setattr(cfg_mod, "local_miner_enabled", lambda path=None: True)
+        out = build_badges(state, _metrics(), "ok")
+        assert any(b["variant"] == "warn" and "Low RAM (16 GB)" in b["text"] for b in out)
+
     def test_no_low_ram_badge_at_or_above_threshold_or_unknown(self):
         # 15.6 is what a NOMINAL 16 GB machine actually reports (reserved memory, GiB-vs-GB) —
         # the documented minimum spec must never wear a permanent warning. Bench-reported.
