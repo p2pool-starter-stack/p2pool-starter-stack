@@ -23,6 +23,18 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   than its labelled span never reads as a complete one. Both surfaces read one shared roll-up, so
   they cannot drift apart.
 
+### Fixed
+
+- **A local→remote node switch now actually retires the node container (#795).** Switching
+  `tari.mode` (or `monero.mode`) to `remote` and running `apply` dropped the node's compose
+  profile as promised — but compose never stops the running container of a profile-disabled
+  service, and while it survived, any other change in the same apply (the Tari memory cap
+  re-renders on every switch) recreated the very node the switch had just turned off, leaving it
+  running offline against a remote-mode config. `apply` and `upgrade` now stop and remove every
+  container whose profile the new configuration switched off — the bundled nodes and the two
+  payout-confirmation wallets — before recreating anything. On-disk chain data is untouched, as
+  the preview always said.
+
 ### Dependencies
 
 - Dashboard Python group (#788): `aiohttp` 3.14.3, `grpcio` 1.83.0 (floors still satisfy the

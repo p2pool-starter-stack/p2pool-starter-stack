@@ -189,6 +189,31 @@ compose_up_checked() {
     return "$rc"
 }
 
+# Stop and remove the containers of services whose compose profile is NOT active in the committed
+# .env (#795). Compose does not retire these on its own: a profile-disabled service is not an
+# orphan (`up --remove-orphans` ignores it), and a service whose container still exists is treated
+# as enabled again by newer compose — so after a local→remote node switch, the next resolved-config
+# diff (e.g. a memory-cap change riding in the SAME apply) recreated the very node the switch had
+# just turned off, leaving it running offline against a remote-mode config. Called after the .env
+# commit and before `compose up` on the paths that re-render .env (apply, upgrade); keyed off the
+# committed .env rather than this run's diff so an interrupted apply's retry (the #125 marker
+# path) still converges. Removing a container never touches its bind-mounted on-disk data.
+remove_deactivated_profile_containers() {
+    local profiles pair svc token
+    profiles=$(env_get COMPOSE_PROFILES)
+    # Every profile-gated service in docker-compose.yml, as service:profile.
+    for pair in monerod:local_node tari:local_tari wallet-rpc:payout_confirm tari-wallet:tari_payout_confirm; do
+        svc=${pair%%:*}
+        token=${pair##*:}
+        case ",$profiles," in *",$token,"*) continue ;; esac
+        # --profile makes the switched-off service visible to compose for these two commands.
+        [ -n "$(docker compose --profile "$token" ps -aq "$svc" 2>/dev/null)" ] || continue
+        log "Removing the $svc container — it is switched off in this configuration (its on-disk data is kept)."
+        docker compose --profile "$token" rm -sf "$svc" >/dev/null 2>&1 ||
+            warn "Could not remove the $svc container — remove it by hand with 'docker rm -f $svc', then re-run '$0 apply'."
+    done
+}
+
 stack_up() {
     log "Starting stack..."
     warn_missing_data_dirs
@@ -431,6 +456,9 @@ stack_upgrade() {
     # One-time move of the dashboard data out of the install dir (#455) — after the .env commit
     # (a failed move is retried on re-run) and before the recreate mounts the new location.
     migrate_dashboard_data
+    # upgrade re-renders .env from config.json (above), so a mode switch staged in config.json can
+    # land here instead of apply — retire any node the new profile set switched off (#795).
+    remove_deactivated_profile_containers
     # Source checkout: rebuild the images from build/. Release install: pull the new published images
     # instead — force a re-pull so a moved tag is refreshed (#44).
     if is_source_checkout; then
@@ -5224,8 +5252,12 @@ apply() {
     # commit above (never before the operator said yes) and under the marker, so a failed move is
     # retried; the recreate below then mounts the migrated directory.
     migrate_dashboard_data
-    # Compose recreates only the services whose resolved config changed; --remove-orphans
-    # drops monerod when a local→remote switch deactivates the local_node profile.
+    # A node (or payout-wallet) whose profile this config switched off must be retired HERE —
+    # compose won't do it (#795): it is not an orphan, and its surviving container would make the
+    # `up` below recreate it off an unrelated env change (a memory cap) in this same apply.
+    remove_deactivated_profile_containers
+    # Compose recreates only the services whose resolved config changed; --remove-orphans still
+    # covers services dropped from docker-compose.yml itself across releases.
     if ! compose_up_checked -d --remove-orphans; then
         warn "Config files were updated but containers were NOT recreated ('docker compose up' failed)."
         warn "Fix the cause shown above, then re-run '$0 apply' (it will retry the recreate) — or '$0 up'."

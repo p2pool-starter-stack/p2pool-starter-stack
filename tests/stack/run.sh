@@ -59,6 +59,14 @@ case "$*" in
   "exec tor cat /var/lib/tor/tari/hostname")   echo "taria.onion" ;;
   "exec tor cat /var/lib/tor/p2pool/hostname") echo "p2pa.onion" ;;
   "exec p2pool cat /proc/1/cmdline") printf '%s' "${P2POOL_PROC1:-}" ;;  # #273: tests set the running p2pool argv
+  # Fake per-service container state (#795): a flag file per service under $FAKE_CONTAINERS.
+  # `compose --profile X ps -aq svc` answers a cid while the file exists; `rm -sf svc` deletes it.
+  "compose --profile "*" ps -aq "*)
+    _all="$*"; _svc="${_all##* }"
+    if [ -n "${FAKE_CONTAINERS:-}" ] && [ -e "$FAKE_CONTAINERS/$_svc" ]; then echo "cid-$_svc"; fi ;;
+  "compose --profile "*" rm -sf "*)
+    _all="$*"; _svc="${_all##* }"
+    [ -z "${FAKE_CONTAINERS:-}" ] || rm -f "$FAKE_CONTAINERS/$_svc" ;;
   *hash-password*)
     # Fake `caddy hash-password` (#8): a per-password digest so enable/change paths differ, and it
     # never echoes the plaintext back (real bcrypt doesn't either) — keeps the leak checks honest.
@@ -3383,6 +3391,51 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "invalid tari.mode rejected" "$?" "1"
 assert_contains "invalid tari.mode message" "$out" "tari.mode must be"
+
+echo "== black-box: local→remote switch retires the deactivated node container (#795) =="
+# A mode switch drops the node's profile token from COMPOSE_PROFILES, but compose never stops the
+# running container of a profile-disabled service: it is not an orphan (`up --remove-orphans`
+# ignores it), and while the container survives, newer compose treats the service as enabled
+# again — live, the TARI_MEM_LIMIT diff that rides every tari switch (auto-calc → the remote-mode
+# placeholder) recreated the very node the switch had just removed, leaving a full minotari node
+# running offline against a remote-mode config. apply must end the run with the container ABSENT.
+# The docker stub models container state as flag files under $FAKE_CONTAINERS (see make_stubs).
+FAKECT="$V/containers-795"
+SWLOG="$V/switch-docker.log"
+
+# Baseline: both nodes local, both node containers "running".
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "both-local baseline applies cleanly" "$?" "0"
+mkdir -p "$FAKECT"
+touch "$FAKECT/monerod" "$FAKECT/tari"
+
+# (1) tari local→remote: the run must end with the tari container gone and monerod untouched.
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+: >"$SWLOG"
+out="$(cd "$V" && FAKE_CONTAINERS="$FAKECT" DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari local→remote switch applies cleanly" "$?" "0"
+[ ! -e "$FAKECT/tari" ] && ok "tari container is ABSENT after the switch" || bad "tari container is ABSENT after the switch" "container survived apply"
+[ -e "$FAKECT/monerod" ] && ok "monerod container untouched by the tari switch" || bad "monerod container untouched by the tari switch" "monerod was removed"
+assert_contains "operator is told the tari container is removed" "$out" "Removing the tari container"
+# Ordering: the removal must land BEFORE the recreate `up`, or compose resurrects the node off
+# the TARI_MEM_LIMIT diff riding this same apply.
+seq="$(grep -oE 'compose --profile local_tari rm -sf tari|compose up' "$SWLOG" | tr '\n' ',')"
+assert_eq "tari removal precedes the recreate up" "$seq" "compose --profile local_tari rm -sf tari,compose up,"
+
+# (2) monerod has the same hole on ITS local→remote switch — same guard, same end state.
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && FAKE_CONTAINERS="$FAKECT" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "monero local→remote switch applies cleanly" "$?" "0"
+[ ! -e "$FAKECT/monerod" ] && ok "monerod container is ABSENT after the switch" || bad "monerod container is ABSENT after the switch" "container survived apply"
+assert_contains "operator is told the monerod container is removed" "$out" "Removing the monerod container"
+
+# (3) Steady remote state: a later unrelated apply finds no deactivated container and stays quiet.
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && FAKE_CONTAINERS="$FAKECT" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "steady remote-mode apply stays clean" "$?" "0"
+assert_not_contains "no removal message when nothing is running" "$out" "Removing the "
 
 echo "== black-box: monero.rpc_lan_access + prep_blocks_threads reflect into .env (#523) =="
 # The rendered .env must match the config input. rpc_lan_access gates the monerod RPC bind: default
