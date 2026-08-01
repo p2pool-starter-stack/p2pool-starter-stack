@@ -491,8 +491,9 @@ test('EarningsCard shows Confirmed on-chain under the estimates on both tabs whe
         partial: { yesterday: false, '7d': false, '30d': false },
     };
     let html = renderApp({ state: s });
-    // One confirmed block per tab, populated from the summary keys through the coin formatters.
-    assert.equal(html.split('Confirmed on-chain').length - 1, 2);
+    // One confirmed block per tab (counted by the sub-panel's own class — the phrase also
+    // appears in the #808 card's tooltip prose), populated through the coin formatters.
+    assert.equal(html.split('confirmed-subhead').length - 1, 2);
     assert.match(html, /0\.250000 XMR/);   // xmr_24h
     assert.match(html, /1\.7500 XMR/);     // xmr_all
     assert.match(html, /4552\.1500 XTM/);  // xtm_all
@@ -513,7 +514,8 @@ test('EarningsCard shows Confirmed on-chain under the estimates on both tabs whe
     s.earnings.confirmed = { enabled: false };
     s.earnings.tari_confirmed = { enabled: false };
     html = renderApp({ state: s });
-    assert.doesNotMatch(html, /Confirmed on-chain/);
+    // Scoped to the sub-panel class — the #808 card's tooltip prose reuses the phrase.
+    assert.doesNotMatch(html, /confirmed-subhead/);
 });
 
 test('EarningsCard marks running windows the payout history does not fully cover (#787)', () => {
@@ -985,4 +987,66 @@ test('StatsTable renders the enriched feed as a label/value table, colouring war
 test('StatsTable renders nothing when a rig reports no metrics (#507)', () => {
     assert.equal(render(StatsTable, { stats: [] }), '');
     assert.equal(render(StatsTable, { stats: undefined }), '');
+});
+
+// --- ExpectedVsActualCard (#808) -------------------------------------------------------
+
+test('ExpectedVsActualCard renders in BOTH views and yields to nothing when empty (#808)', () => {
+    // The base fixture has XvB on (one recorded win) → the card renders, Simple and Advanced.
+    assert.match(renderApp({ ui: { ...UI, view: 'simple' } }), /card-expected-vs-actual/);
+    assert.match(renderApp({ ui: { ...UI, view: 'advanced' } }), /card-expected-vs-actual/);
+    // Nothing to compare on any stream → the card yields entirely (no empty shell).
+    const s = clone();
+    s.earnings_summary = {
+        xmr: { available: false, enabled: false },
+        tari: { available: false, enabled: false },
+        xvb: { enabled: false },
+    };
+    assert.doesNotMatch(renderApp({ state: s }), /card-expected-vs-actual/);
+    // A stale payload without the key (mid-upgrade poll) must not take the App down.
+    delete s.earnings_summary;
+    assert.match(renderApp({ state: s }), /Overview/);
+});
+
+test('ExpectedVsActualCard compares Monero with a percent and marks partial windows (#808)', () => {
+    const s = clone();
+    s.earnings_summary.xmr = {
+        available: true, expected_7d: 0.0123, enabled: true,
+        actual_7d: 0.0101, partial: true, pct: 82,
+    };
+    const out = renderApp({ state: s });
+    assert.match(out, /Monero \(7d\)/);
+    assert.match(out, /0\.012300 XMR/);            // expected, formatXmr precision
+    assert.match(out, /0\.010100 XMR \(82%\) \*/); // actual + pct + the partial asterisk
+    assert.match(out, /covers only the payout history on record/); // the footnote appears
+});
+
+test('ExpectedVsActualCard shows the config key when confirmation is off, never a zero (#808)', () => {
+    const s = clone();
+    s.earnings_summary.xmr = { available: true, expected_7d: 0.0123, enabled: false,
+        actual_7d: null, partial: false, pct: null };
+    s.earnings_summary.tari = { available: true, expected_blocks_30d: 0.0052, enabled: false,
+        blocks_30d: null, xtm_30d: null, partial: false };
+    const out = renderApp({ state: s });
+    assert.match(out, /set monero\.view_key/);
+    assert.match(out, /set tari\.view_key/);
+    assert.doesNotMatch(out, /0\.000000 XMR \(/); // no zero-actual masquerading as a figure
+    // Tari expectation keeps two significant digits — a fraction of a block must never read 0.0.
+    assert.match(out, /≈ 0\.0052 blocks/);
+});
+
+test('ExpectedVsActualCard counts Tari blocks and windows XvB wins (#808)', () => {
+    const s = clone();
+    s.earnings_summary.tari = { available: true, expected_blocks_30d: 0.41, enabled: true,
+        blocks_30d: 1, xtm_30d: 12345.0, partial: false };
+    s.earnings_summary.xvb = { enabled: true, wins_30d: 2, last_win_ts: 1735689000,
+        published_day: 0.06 };
+    const out = renderApp({ state: s });
+    assert.match(out, /≈ 0\.41 blocks/);
+    assert.match(out, /1 block · 12345\.0000 XTM/); // singular block, XTM alongside
+    assert.match(out, /2 wins · last /);
+    assert.match(out, /0\.060000 XMR\/day \(XvB est\.\)/);
+    // XvB off → the row disappears (no invented raffle framing on a non-XvB box).
+    s.earnings_summary.xvb = { enabled: false, wins_30d: 0, last_win_ts: 0, published_day: null };
+    assert.doesNotMatch(renderApp({ state: s }), /XvB wins \(30d\)/);
 });
