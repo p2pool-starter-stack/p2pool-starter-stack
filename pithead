@@ -1402,7 +1402,7 @@ prefill_from_previous_install() { # <spool-dir>
     # -t ext4 pinned: the appliance only ever formats data partitions as ext4, and an
     # auto-probed type would let an arbitrary disk pick which filesystem parser the kernel
     # runs against its content.
-    if mount -t ext4 -o ro,nosuid,nodev "$part" "$mnt" 2>/dev/null; then
+    if mount -t ext4 -o ro,nosuid,nodev,noexec "$part" "$mnt" 2>/dev/null; then
         cfg="$mnt/pithead/config.json"
         tmp="$spool/.last-attempt.json.$$"
         # The -L guards close a symlink escape: a crafted disk could point pithead/ or
