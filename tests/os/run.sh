@@ -93,6 +93,22 @@ _wait_ssh() { # $1 seconds — the definition of "not bricked"
 }
 _marker() { _ssh cat /etc/pithead-test-marker 2>/dev/null | tr -d "\r\n"; }
 
+# The marker baked INTO the dashboard image and served by whatever container actually answers
+# (/static/os-test-marker.txt, stamped by os/build-image.sh on harness builds). Distinct from
+# /etc/pithead-test-marker, which only names the OS slot: the image tag is identical across
+# builds, so this is the one signal that separates "new OS, new containers" from the #798
+# failure — new OS, stale containers, every other check green. $1 expected, $2 seconds.
+_dash_marker_served() {
+    local want="$1" deadline=$(($(date +%s) + ${2:-300})) got=""
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        got=$(curl -fsSk -m 5 "https://$ip/static/os-test-marker.txt" 2>/dev/null)
+        [ "$got" = "$want" ] && return 0
+        sleep 5
+    done
+    printf '%s' "${got:-nothing}"
+    return 1
+}
+
 # Build a bootable image carrying $1 as its slot marker, for the selected updater.
 _build_image() {
     [ -f "$KEY" ] || ssh-keygen -t ed25519 -N "" -f "$KEY" -q
@@ -341,6 +357,15 @@ phase_update() {
             bad "marker v1 missing on the initial slot"
             return
         }
+    # Baseline for the stale-container check below: the v1 image must serve its own marker
+    # BEFORE any update, or a later "v2 never served" says nothing about staleness.
+    local dm
+    if dm=$(_dash_marker_served v1 300); then
+        ok "the served page comes from the v1 dashboard image"
+    else
+        bad "the v1 dashboard image never served its marker (got: $dm)"
+        return
+    fi
 
     # #784: /data must fit the MACHINE, not the image. The image ships ~9 GiB with no data
     # partition at all; systemd-repart creates it on the target disk at first boot. The harness
@@ -442,6 +467,15 @@ phase_update() {
     marker=$(_ssh cat /etc/pithead-test-marker)
     [ "$marker" = "v2" ] && ok "COMMIT: a committed update persists across reboot" ||
         bad "expected v2 after commit, got '$marker'"
+    # THE stale-container assertion: the OS slot saying v2 is not enough — an A/B update that
+    # ships a new dashboard must end with the NEW image answering, without any wizard
+    # involvement. The tag never changes and podman's store survives on /data, so only the
+    # boot-path loader can make this true.
+    if dm=$(_dash_marker_served v2 360); then
+        ok "UPDATE REFRESHED THE CONTAINERS: the served page comes from the v2 dashboard image"
+    else
+        bad "the OS updated to v2 but the served page still comes from the old dashboard image (got: $dm)"
+    fi
 
     info "leg 3 — operator-initiated rollback off a committed update"
     _ssh "$(_rollback_cmd)" || true
@@ -807,6 +841,61 @@ phase_install() {
         return
     }
     _ssh "umount -A /dev/vda4 2>/dev/null || true"
+    # A keep-reinstall must refresh the CONTAINERS too (#798). Model the machine that hit this
+    # live: /data already carries a dashboard image under the release tag, with its digest
+    # recorded beside the store — then reinstall from a NEWER stick. Only the digest-keyed
+    # boot loader makes the image change; a tag-exists check keeps the old containers forever.
+    info "keep leg prep — plant this build's dashboard image + digest record (a machine that ran it)"
+    local old_dash_id=""
+    old_dash_id=$(_ssh "T=\$(mktemp -d) && mount /dev/vda4 \"\$T\" &&
+          mkdir -p \"\$T/pithead/data\" \"\$T/containers/storage\" &&
+          podman --root \"\$T/containers/storage\" load -qi /opt/pithead/images/dashboard.tar.gz >/dev/null &&
+          sha256sum /opt/pithead/images/dashboard.tar.gz | cut -d' ' -f1 | tr -d '\n' >\"\$T/pithead/data/.loaded-dashboard.tar.gz.sha\" &&
+          podman --root \"\$T/containers/storage\" images --format '{{.Repository}} {{.ID}}' | awk '/pithead-dashboard/{print \$2; exit}' &&
+          umount \"\$T\"")
+    [ -n "$old_dash_id" ] || {
+        bad "could not plant the old dashboard image for the keep leg"
+        return
+    }
+    ok "planted the old dashboard image ($old_dash_id) and its digest record on the target's /data"
+    _ssh "systemctl poweroff" 2>/dev/null || true
+    sleep 8
+    vm_destroy
+    info "building the NEWER stick (marker v2 — its dashboard archive differs)"
+    img=$(_build_image v2) || {
+        bad "v2 stick build failed (/tmp/os-fault-build.log)"
+        return
+    }
+    cp "$img" "$DISK"
+    qemu-img resize "$DISK" 16G >/dev/null 2>&1 || true
+    : >"$SERIAL"
+    virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
+        --osinfo debian12 \
+        --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
+        --import \
+        --disk "path=$DISK,format=raw,bus=usb,removable=on,boot.order=1" \
+        --disk "path=$target_disk,format=raw,bus=virtio,boot.order=2" \
+        --network network=default,model=virtio --graphics none \
+        --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 || {
+        bad "virt-install failed for the newer-stick keep-reinstall boot"
+        return
+    }
+    ip=""
+    tries=0
+    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
+        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+        [ -n "$ip" ] || sleep 3
+        tries=$((tries + 1))
+    done
+    _wait_ssh 240 || {
+        bad "newer stick never answered SSH for the keep leg"
+        return
+    }
+    ok "newer stick boots as removable media"
+    _ssh "for i in \$(seq 36); do [ -s /data/pithead/data/firstboot/disks.tsv ] && exit 0; sleep 5; done; exit 1" || {
+        bad "the newer stick never published a disk inventory"
+        return
+    }
     # The keep path goes through the PAGE, exactly as an operator would: a bare submit with the
     # disk and wipe=keep — no config, because the survivor config wins. No credentials card may
     # appear (the machine keeps its old login; a regenerated one here was a real bench bug).
@@ -821,6 +910,16 @@ phase_install() {
         bad "no token for the keep-reinstall leg"
         return
     }
+    # Fresh boot: the token prints before the wizard container finishes coming up.
+    tries2=0
+    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
+        sleep 5
+        tries2=$((tries2 + 1))
+        [ "$tries2" -lt 36 ] || {
+            bad "the newer stick's wizard never served its gate page"
+            return
+        }
+    done
     jar=$(mktemp)
     curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
         grep -q "wizard_session" "$jar" || {
@@ -891,6 +990,22 @@ phase_install() {
         ok "wizard serves after the reinstall"
     else
         bad "no wizard on :80 after the reinstall"
+    fi
+    # The keep-leg staleness assertions (#798): the dashboard image ID must have CHANGED — the
+    # boot-path loader keyed on the newer stick's archive digest, over a /data that already
+    # held the old image under the same tag — and the page actually served must come from the
+    # new image, not merely "some wizard answers".
+    local new_dash_id dm
+    new_dash_id=$(_ssh "podman images --format '{{.Repository}} {{.ID}}'" | awk '/pithead-dashboard/{print $2; exit}')
+    if [ -n "$new_dash_id" ] && [ "$new_dash_id" != "$old_dash_id" ]; then
+        ok "KEEP-REINSTALL REFRESHED THE DASHBOARD IMAGE ($old_dash_id -> $new_dash_id)"
+    else
+        bad "keep-reinstall left the old dashboard image in place (id: ${new_dash_id:-none}, was $old_dash_id)"
+    fi
+    if dm=$(_dash_marker_served v2 300); then
+        ok "the served page comes from the NEWER stick's dashboard image"
+    else
+        bad "the reinstalled machine still serves the old dashboard image (got: $dm)"
     fi
     rm -f "$target_disk"
 }
@@ -1051,6 +1166,11 @@ phase_provision() {
     info "reboot leg — the stack must come back on its own (pithead-boot)"
     _ssh "echo '# corrupted by the harness — a regenerated boot must not serve this' > /data/pithead/Caddyfile" 2>/dev/null ||
         bad "could not corrupt the Caddyfile before the reboot"
+    # And drop the baked-archive digest records: the wizard wrote them at first boot, so their
+    # mere presence afterwards proves nothing. Gone, they must come back — that is
+    # pithead-boot's own loader running on a provisioned machine (#798).
+    _ssh "rm -f /data/pithead/data/.loaded-*.sha" 2>/dev/null ||
+        bad "could not drop the digest records before the reboot"
     _ssh reboot 2>/dev/null || true
     sleep 10
     _wait_ssh 300 || {
@@ -1103,6 +1223,14 @@ phase_provision() {
         ok "no failed systemd units after the reboot"
     else
         bad "failed units after the reboot: $failed_units"
+    fi
+    # The records dropped before the reboot must be BACK: on a provisioned machine only
+    # pithead-boot can have rewritten them, so this is the boot path running the baked-image
+    # loader — the mechanism a keep-reinstall or A/B update depends on (#798).
+    if _ssh "test -s /data/pithead/data/.loaded-dashboard.tar.gz.sha"; then
+        ok "pithead-boot ran the baked-image loader (digest record rewritten)"
+    else
+        bad "the digest record never came back — pithead-boot did not run the loader"
     fi
     # The booted slot must commit ITSELF once healthy (#793) — no harness mark-good here. On a
     # real appliance nothing ever ran mark-good, so RAUC called both slots bad and every boot

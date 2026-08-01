@@ -17,7 +17,6 @@ echo "==> staging wizard image $WIZARD_IMAGE"
 if [ "${PITHEAD_WIZARD_FROM_REGISTRY:-0}" = "1" ]; then
     # Release path: the published image carries the wizard module.
     docker pull -q "$WIZARD_IMAGE" >/dev/null
-    docker save "$WIZARD_IMAGE" | gzip -1 >os/rootfs/images/dashboard.tar.gz
 else
     # No mtime cache, EVER. The old test compared the archive against build/dashboard — the
     # DIRECTORY, whose mtime only moves when a direct child is added or removed. Editing a file
@@ -28,8 +27,18 @@ else
     # only exists in this working tree, so a pulled image would start and immediately exit with
     # "No module named mining_dashboard.wizard". Build the image the appliance will actually run.
     docker build -q -t "$WIZARD_IMAGE" build/dashboard >/dev/null
-    docker save "$WIZARD_IMAGE" | gzip -1 >os/rootfs/images/dashboard.tar.gz
 fi
+# Harness builds only: stamp the marker INTO the dashboard image, at a path the wizard serves
+# (/static/os-test-marker.txt). The tag is identical across builds, so this is the only way a
+# battery can tell which dashboard actually answers after an update or reinstall — the #798
+# regression was precisely "new OS, old dashboard, every check green". Release builds set no
+# marker and get no extra layer.
+if [ -n "${PITHEAD_TEST_MARKER:-}" ]; then
+    # USER root/pithead mirrors build/dashboard/Dockerfile: the runtime user cannot write /app.
+    printf 'FROM %s\nUSER root\nRUN printf %%s "%s" >/app/mining_dashboard/web/static/os-test-marker.txt\nUSER pithead\n' \
+        "$WIZARD_IMAGE" "$PITHEAD_TEST_MARKER" | docker build -q -t "$WIZARD_IMAGE" - >/dev/null
+fi
+docker save "$WIZARD_IMAGE" | gzip -1 >os/rootfs/images/dashboard.tar.gz
 
 # Stamp the commit into the image. A release build once shipped a dashboard two commits stale
 # because it pulled from an intermediate clone, and nothing in the artifact could reveal it —

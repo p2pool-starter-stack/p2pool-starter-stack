@@ -110,28 +110,38 @@ certificate beats no dashboard.
 
 ## The boot contract (provisioned machines)
 
-After provisioning, every boot runs one unit — `pithead-boot` — whose three steps each answer
+After provisioning, every boot runs one unit — `pithead-boot` — whose four steps each answer
 a hardware-validated failure:
 
-1. **`pithead render`** — regenerate every *derived* file (`.env`, Caddyfile, service configs,
+1. **`pithead load-images`** — load the baked container-image archives when their content
+   changed. The archives ship in the read-only slot, the engine's storage lives on `/data`,
+   and every release tags its images identically — so without this step a keep-reinstall or
+   A/B update boots the new OS and keeps serving the old containers (a keep-reinstall did
+   exactly that on hardware: new slot, RC-old dashboard, every shipped fix absent). Keyed on
+   the archive's digest, recorded beside the store it describes; a normal boot pays one
+   sha256 per archive. The first-boot wizard runs the same loader before it serves, so both
+   boot owners converge the same way.
+2. **`pithead render`** — regenerate every *derived* file (`.env`, Caddyfile, service configs,
    host units) from `config.json` plus the program that is actually running. Derived files are
    never inspected or repaired, only rebuilt: an A/B update swaps the whole program, and a
    bench machine once served a days-old Caddyfile whose site list predated the code around it.
    On the read-only root, host units render into `/run/systemd/system` (`--runtime`
    enablement) and are recreated here each boot.
-2. **`pithead up`** — compose owns the containers' lifecycle. Its predecessor,
-   `podman-restart`, started the stack into its own oneshot cgroup, and systemd SIGKILLed the
-   containers it had just spawned.
-3. **Health-gated slot commit** — `rauc status mark-good` only once the dashboard answers
+3. **`pithead up`** — compose owns the containers' lifecycle, and recreates containers when
+   an image behind a constant tag changed identity. Its predecessor, `podman-restart`,
+   started the stack into its own oneshot cgroup, and systemd SIGKILLed the containers it
+   had just spawned.
+4. **Health-gated slot commit** — `rauc status mark-good` only once the dashboard answers
    through caddy on a *listed* vhost (`localhost`; bare `127.0.0.1` hits Caddy's empty default
    site and proves nothing). A slot that boots but cannot serve stays uncommitted on purpose:
    that is the state A/B fallback exists for. Unprovisioned machines never commit — GRUB's
    clear-and-retry keeps them booting, and a bad update before provisioning reverts.
 
 **Rule for changes:** anything generated from `config.json` or the program is derived and must
-be rebuilt by `render` — adding one anywhere else recreates the staleness bug. Genuine state
-(`config.json`, wallets, chain data, Tor keys, generated secrets) is never regenerated; it
-gets validation and a safe fallback instead.
+be rebuilt by `render` — adding one anywhere else recreates the staleness bug. The container
+images are derived in the same sense: functions of the running slot, converged every boot by
+`load-images`. Genuine state (`config.json`, wallets, chain data, Tor keys, generated secrets)
+is never regenerated; it gets validation and a safe fallback instead.
 
 The invariant, asserted by the provision phase: **corrupt any derived file, reboot, and the
 machine must serve again.**
@@ -147,7 +157,7 @@ had a gap between it and the next one.
 | pure logic | `tests/frontend/configsync.test.mjs` | path access, typed coercion, address/pair guidance |
 | view rendering | `tests/frontend/wizard.test.mjs` (probes) | each view given its props |
 | **app orchestration** | `tests/frontend/wizard.test.mjs` (stubbed server) | **stage mapping, the handoff arriving through the poll, refresh-mid-provision, rejection round-trip, request bodies** |
-| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, reinstall pre-fill (secret strip + fail-open) |
+| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, the digest-keyed image loader, reinstall pre-fill (secret strip + fail-open) |
 | the real thing | `tests/os/run.sh --phase provision` | token from the console → submit → handoff → ack → running stack → reboot through a corrupted Caddyfile → no failed units → slot self-commit |
 
 The orchestration row is the one that was missing. pytest proved the endpoint published the

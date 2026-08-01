@@ -1476,6 +1476,50 @@ consume_install_request() { # <spool-dir>
     return 1
 }
 
+# Baked container-image archives (/opt/pithead/images) are DERIVED, like every rendered file:
+# they ship in the read-only slot, the engine's storage lives on /data — which survives
+# reinstalls and A/B updates by design — and every release tags its images identically
+# (pithead-dashboard:vX.Y.Z). Keying on "does the tag exist" therefore pins a machine to the
+# first image it ever loaded: a keep-reinstall or an A/B update boots the new slot and keeps
+# serving the old containers (#798, and a bench box served a weeks-old setup page for the same
+# reason). The archive's digest is the honest key: load on change, record the digest beside
+# the storage it describes, and let 'up' recreate containers on the image-id change. Both boot
+# owners run this — pithead-boot on provisioned machines, the first-boot wizard before it
+# serves — so every path converges on the shipped images, and a normal boot pays one sha256
+# per archive.
+load_baked_images() { # $1 (optional): image ref whose absence forces a load despite a matching digest
+    local required="${1:-}" dir="${PITHEAD_IMAGES_DIR:-/opt/pithead/images}"
+    local engine archive sha rec recorded
+    engine=$(container_engine)
+    # The wizard-era record lived at a different path; retire it so an upgraded machine doesn't
+    # carry a stale file forever (its absence costs one reload on the first boot after upgrading).
+    rm -f "$PWD/.wizard-image-sha"
+    for archive in "$dir"/*.tar.gz "$dir"/*.tar; do
+        [ -f "$archive" ] || continue
+        sha=$(sha256sum "$archive" 2>/dev/null | cut -d' ' -f1)
+        rec="$PWD/data/.loaded-$(basename "$archive").sha"
+        # `|| true`: a missing record is the normal first-boot case, not an error to trap.
+        recorded=$(cat "$rec" 2>/dev/null || true)
+        if [ -n "$sha" ] && [ "$sha" = "$recorded" ]; then
+            # A digest record can outlive the storage it describes: when the caller names the
+            # image it needs, the record only counts if that image actually exists.
+            if [ -z "$required" ] || "$engine" image exists "$required" 2>/dev/null; then
+                continue
+            fi
+        fi
+        # The single slowest step of a first or post-update boot, and the one worth narrating.
+        _console "Loading this build's container images ($(basename "$archive")) — the slow part..."
+        mkdir -p "$PWD/data" 2>/dev/null || true
+        if "$engine" load -i "$archive" >/dev/null 2>&1; then
+            printf '%s' "$sha" >"$rec" 2>/dev/null || true # unrecorded -> reloads next boot
+        else
+            # No record on failure, on purpose: the next boot must retry, not skip.
+            warn "Could not load the baked image archive $(basename "$archive")."
+        fi
+    done
+    return 0
+}
+
 firstboot_wizard() {
     local arg
     for arg in "$@"; do
@@ -1559,25 +1603,9 @@ firstboot_wizard() {
     fi
     # Offline first boot: the appliance carries the wizard image as an archive (os/rootfs/images),
     # because at this point the operator may have no working network yet — that is what they are
-    # here to configure. Load it once if the engine does not already have it.
-    # Load the baked image when the ARCHIVE changes — never merely when the tag is missing.
-    # Every build tags the wizard image identically (pithead-dashboard:vX.Y.Z), and podman's
-    # storage lives on /data, which survives reinstalls and updates by design. Keying on
-    # "does the tag exist" therefore pins a machine to the first wizard it ever loaded: a
-    # bench box reinstalled with a newer image kept serving the old setup page, missing
-    # questions that had shipped weeks earlier. The archive's digest is the honest key.
-    local archive stamp="$PWD/.wizard-image-sha" baked=""
-    for archive in /opt/pithead/images/*.tar.gz /opt/pithead/images/*.tar; do
-        [ -f "$archive" ] || continue
-        baked=$(sha256sum "$archive" 2>/dev/null | cut -d' ' -f1)
-        if [ "$baked" != "$(cat "$stamp" 2>/dev/null)" ] || ! "$engine" image exists "$image" 2>/dev/null; then
-            # The single slowest step before the page exists, and the one worth narrating.
-            _console "Loading the setup page (this is the slow part)..."
-            if "$engine" load -i "$archive" >/dev/null 2>&1; then
-                printf '%s' "$baked" >"$stamp"
-            fi
-        fi
-    done
+    # here to configure. The loader is the boot path's own (see load_baked_images): naming the
+    # image forces a load when the tag is missing entirely, whatever the digest record says.
+    load_baked_images "$image"
     # Double quotes on purpose: $engine expands NOW, at trap definition. It is a local, and the
     # trap also fires after this function's locals are gone — where set -u would turn the trap
     # itself into the crash that masks whatever actually failed.
@@ -2310,6 +2338,11 @@ Maintenance:
                             A pre-seeded config.json skips the form; --cli runs the terminal
                             wizard instead. The one-time token prints here; five wrong tries
                             mint a fresh one. See docs/dev/dual-distribution-plan.md § phase 3.
+
+  load-images               Load the baked container-image archives (/opt/pithead/images)
+                            into the engine when their content changed since the last load.
+                            The boot path runs this on every boot — a reinstall or update
+                            that ships new images converges without any wizard involvement.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion —
                             the client PRIVATE key, kept out of 'status'. Add it to your Tor
@@ -6714,7 +6747,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
+readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard load-images control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -8172,6 +8205,10 @@ main() {
     restore) stack_restore "$@" ;;
     uninstall) stack_uninstall "$@" ;;
     firstboot-wizard) firstboot_wizard "$@" ;;
+    load-images)
+        _reject_options load-images "$@"
+        load_baked_images
+        ;;
     control-run-pending)
         _reject_options control-run-pending "$@"
         require_deployed
