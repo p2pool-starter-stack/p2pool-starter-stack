@@ -259,6 +259,29 @@ The summary panel pulls the key numbers together:
 | **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
 | **Wallet XMR / Wallet TARI** | Your configured Monero and Tari payout addresses, one card each. |
 
+### Earnings — Expected vs Actual
+
+One compact table, shown in **both** views, that answers "am I earning what this hashrate should?"
+— the comparison you'd otherwise assemble by hand from the Earnings tabs. One row per income
+stream, each over the window that suits how that stream pays:
+
+| Row | Expected | Actual |
+|---|---|---|
+| **Monero (7d)** | The linear estimate over the trailing 7 days, at your **7-day average** routed P2Pool hashrate — the hashrate that actually ran the window, so a fleet that grew or shrank mid-week is judged against what really ran. | Confirmed on-chain payouts over the same 7 days ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
+| **Tari (30d)** | Expected **blocks** over the trailing 30 days (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
+| **XvB wins (30d)** | XvB's published per-day estimate for your current tier — XvB's own raffle-wide expectation, not a promise. | Raffle wins recorded in the window, and how long ago the last one landed. |
+
+Rows degrade honestly rather than guess: a stream with [payout confirmation](#payout-confirmation)
+off shows the config key to set instead of a zero that would read as "earned nothing"; the XvB row
+disappears when XvB is off; a `*` marks a window that reaches back past the oldest recorded payout.
+The XvB row deliberately shows **no XMR figure and no percent**: a win pays out through ordinary
+small payouts that can't be told apart from P2Pool payouts, so any "XvB XMR earned" number would be
+an invention.
+
+Short windows swing with mining luck — P2Pool pays when the pool finds blocks, and solo Tari blocks
+are rarer still. A sustained gap between expected and actual is the signal worth checking (workers
+offline, a misconfigured payout address); a single quiet week is not.
+
 ### Workers Alive
 
 A live table of every connected rig: worker name, IP, uptime, and per-worker hashrate over the 1m
@@ -374,14 +397,15 @@ sync gaps, or other noise the average doesn't separate out.
 ### Simple vs. Advanced view
 
 A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) shows the chart, the
-Overview summary, and the worker table. **Advanced** swaps the Overview for cards that break out the
-same data in more detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**,
-**XMR Network**, **Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
-choice is remembered across reloads.
+Overview summary, the [Earnings — Expected vs Actual](#earnings--expected-vs-actual) table, and the
+worker table. **Advanced** swaps the Overview for cards that break out the same data in more
+detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**,
+**Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
+expected-vs-actual table stays in both views. The choice is remembered across reloads.
 
-The earnings estimates and the XvB tier calculator live only in Advanced view. Simple view shows a
-one-time banner pointing there; it goes away once you dismiss it or open Advanced view, and stays
-away across reloads.
+The what-if earnings calculator and the XvB tier calculator live only in Advanced view. Simple view
+shows a one-time banner pointing there; it goes away once you dismiss it or open Advanced view, and
+stays away across reloads.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/launch/advanced.png">
