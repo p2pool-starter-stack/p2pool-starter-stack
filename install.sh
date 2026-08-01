@@ -20,7 +20,11 @@ note() { echo "[install] $*"; }
 # prep needs AVX2) — fail here, not hours into a sync.
 [ "$(uname -s)" = "Linux" ] || fail "Pithead runs on Linux (found $(uname -s)). See docs/getting-started.md."
 [ "$(uname -m)" = "x86_64" ] || fail "Pithead is x86_64-only (found $(uname -m)) — xmrig-proxy has no arm64 build."
-grep -qw avx2 /proc/cpuinfo || fail "This CPU lacks AVX2, which RandomX block verification requires."
+# AVX2 is performance, not a requirement — RandomX runs without it, just slower, and `doctor`
+# treats it the same way. A hard gate here would turn away exactly the repurposed hardware this
+# stack is often deployed on (the project's own release box is a pre-AVX Westmere Xeon).
+grep -qw avx2 /proc/cpuinfo ||
+    note "This CPU lacks AVX2 — RandomX will run, but slower. Proceeding; 'pithead doctor' repeats this."
 if [ "${PITHEAD_ALLOW_ANY_DISTRO:-0}" != "1" ]; then
     # shellcheck disable=SC1091
     . /etc/os-release 2>/dev/null || fail "Cannot read /etc/os-release. Set PITHEAD_ALLOW_ANY_DISTRO=1 to proceed anyway."

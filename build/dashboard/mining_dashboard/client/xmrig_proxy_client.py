@@ -22,6 +22,12 @@ class XMRigProxyClient:
         self.session = requests.Session()
         retry_strategy = Retry(
             total=3,
+            # Never retry CONNECT failures: while the miner is held for first sync the proxy is
+            # legitimately down, and the state loop calls this twice per cycle — with connect
+            # retries each call burned ~7s of backoff, so every dashboard update (and the first
+            # page paint) crawled for the whole sync, hours to days. Refused/no-route answers in
+            # milliseconds; the retries stay for a RUNNING proxy's transient 5xx/429 hiccups.
+            connect=0,
             backoff_factor=1,  # Wait 1s, 2s, 4s between retries
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "PUT", "OPTIONS"],

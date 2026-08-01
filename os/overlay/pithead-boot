@@ -1,0 +1,42 @@
+#!/bin/bash
+# Boot path for a PROVISIONED appliance: regenerate the derived layer, bring the stack up the
+# compose-owned way, and commit the booted A/B slot once the stack actually answers.
+#
+# - render first (#790): .env, the Caddyfile, service configs and host units are DERIVED — pure
+#   functions of config.json plus the program. An A/B update swaps the whole program, so the
+#   derived layer is rebuilt every boot by construction; staleness and corruption become
+#   structurally impossible instead of detected.
+# - pithead up, not podman-restart (#792): the stack is compose-managed, so compose owns the
+#   containers' lifecycle. podman-restart started them into its own oneshot cgroup and systemd
+#   SIGKILLed the lot when the unit stopped.
+# - mark-good only on health (#793): the dashboard answering through caddy is the end of the
+#   whole chain (derived config -> caddy -> dashboard). Any HTTP status is life — 401 is a
+#   healthy, locked dashboard. A slot that boots but cannot serve is left UNCOMMITTED on
+#   purpose: that is precisely the state A/B fallback exists for.
+set -uo pipefail
+cd /data/pithead || exit 1
+
+# Containers are DERIVED too (#798): the baked archives ship in the slot, but podman's store
+# lives on /data and the image tag is constant across releases — a keep-reinstall or A/B
+# update ran RC-old containers under an RC-new OS until this loaded them. ONE loader, shared
+# with the first-boot wizard (load_baked_images): sha-keyed, so a normal boot pays one sha256
+# per archive, and 'up' below recreates on the image-id change.
+./pithead load-images
+
+./pithead render || exit 1
+./pithead up || exit 1
+
+for _ in $(seq 90); do
+    # localhost, not 127.0.0.1: the bare IP is not in the Caddyfile's site list, so it hits
+    # Caddy's empty default vhost — an empty 200 that proves only that Caddy runs. localhost IS
+    # a listed site, so this answer traverses the real dashboard vhost (TLS + auth + proxy).
+    code=$(curl -kso /dev/null -w '%{http_code}' --max-time 5 https://localhost/ 2>/dev/null) || code=000
+    if [ "${code:-000}" != "000" ]; then
+        command -v rauc >/dev/null 2>&1 && rauc status mark-good
+        echo "pithead-boot: stack is serving (HTTP $code) — booted slot committed"
+        exit 0
+    fi
+    sleep 10
+done
+echo "pithead-boot: stack never answered — slot left uncommitted so A/B fallback stays armed" >&2
+exit 1

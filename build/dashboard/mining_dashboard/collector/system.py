@@ -67,8 +67,10 @@ def get_memory_usage():
 
         if mem_total > 0:
             used = mem_total - mem_available
+            available_gb = mem_available / BYTES_IN_GB
             percent = (used / mem_total) * 100
             return {
+                "available_gb": available_gb,
                 "total_gb": mem_total / BYTES_IN_GB,
                 "used_gb": used / BYTES_IN_GB,
                 "percent": percent,

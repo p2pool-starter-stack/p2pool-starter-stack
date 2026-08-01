@@ -389,7 +389,10 @@ image per cut on the #54 matrix, same mandate as the targeted e2e.
 - Appliance base: Debian 13 through its LTS window (mid-2030); rebase to Debian 14
   planned, not emergency.
 - Minimum hardware spec, stated in `docs/appliance.md` and enforced by the installer:
-  amd64 with AVX2 (hard-fail, not warn), RAM sized to the compose memory caps
+  amd64 (hard-fail — no arm64 xmrig-proxy build); AVX2 **warned, never required** —
+  RandomX runs without it and `doctor` says so, and a hard gate would turn away the
+  repurposed hardware this stack is often deployed on (the project's own release box
+  is a pre-AVX Westmere Xeon that mines fine). RAM sized to the compose memory caps
   (monerod 6g + Tari 7.5g + the rest — publish the sum per mode), internal SSD/NVMe
   with headroom over current chain size. `pithead doctor` already checks AVX2,
   hugepages, and free disk; the installer runs the same checks before writing
@@ -430,12 +433,521 @@ pithead/
     └── os/                     # boot/update/rollback harness on the #54 matrix
 ```
 
+## Base distribution — evaluated 2026-07-24, Debian 13 confirmed
+
+Re-opened deliberately (the earlier choice arrived by peer-group convergence, which is
+weak evidence on its own). One correction first: the v2 review rejected **CentOS
+Stream** for being a rolling upstream whose mirrors are deleted at EOL. That does not
+transfer to Rocky/AlmaLinux, which are stable point-release rebuilds — they deserved
+their own look.
+
+**The finding that decides it, measured rather than argued:** `rockylinux:10` refuses
+to start on this project's own release box —
+`Fatal glibc error: CPU does not support x86-64-v3`. RHEL 10 raised the
+microarchitecture baseline to v3 (Haswell, 2013+). Gouda is a Xeon X5690 with no AVX
+at all, and it mines today. A stack routinely deployed on repurposed hardware cannot
+adopt a base that excludes that hardware at the libc level.
+
+| Base | Active support | Security tail | CPU floor | Verdict |
+|---|---|---|---|---|
+| **Debian 13** | Aug 2028 | LTS Jun 2030 (+ELTS) | baseline amd64 | **chosen** |
+| Rocky 10 | May 2030 | May 2035 | x86-64-v3 | disqualified — excludes target hardware |
+| Rocky 9 | May 2027 | May 2032 | x86-64-v2 | viable fallback, *shorter active support than Debian 13* |
+| Ubuntu 26.04 LTS | 2031 | 2036 (Pro) | baseline | no advantage over Debian; adds a vendor dependency |
+| Alpine | — | — | — | out: no systemd, so Quadlet cannot exist |
+| Buildroot | n/a | n/a | baseline | HAOS's path; we would own the whole userland with a two-person team |
+
+Rocky's headline ten-year window exists only on Rocky 10, which we cannot use; Rocky 9
+avoids the CPU floor but expires sooner than Debian 13. Recorded in Rocky's favour, so
+the fallback is honest: Rocky 9 ships podman 5.8.2 against Debian 13's 5.4.2, Quadlet
+is Red Hat's own technology tested there first, and SELinux + Podman is the
+reference-grade hardening pairing. If Quadlet ever misbehaves in a way Debian's
+packaging causes, Rocky 9 is the escape hatch.
+
+**openSUSE MicroOS** is deliberately *not* in this table: it replaces the update
+architecture (btrfs snapshots + `transactional-update` instead of A/B slots), so it
+belongs in the bake-off below as a candidate, not in the base-distro comparison.
+
+## Installing to disk — designed 2026-07-25
+
+The plan has always said the appliance runs from an internal SSD/NVMe and that a USB
+installer copies it there. This section fixes the design, because neither updater
+provides one and the difference is not a tiebreaker between them.
+
+**Neither candidate installs to a disk, and this does not separate them.** RAUC's
+documentation is explicit that partitioning is "not in the scope" of RAUC
+(`docs/integration.rst`). Rugix does bootstrap a layout on first boot, but
+`find_system_device()` resolves the block device backing `/`, so it always targets the
+medium it booted from — the target is not selectable. Disk selection is our tooling
+either way, exactly as this plan already assumed.
+
+The one asymmetry is what we build it on top of. Rugix exposes a declarative layout
+config and `bootstrap/prepare` hooks, so an installer written against it drives
+machinery that already exists. Against RAUC there is no partitioning layer at all, and
+hand-written partitioning is where this project's bugs have actually come from — see
+the bake-off's defect record.
+
+### Decided 2026-07-25: install first, configure on the installed system
+
+Two orderings were considered:
+
+1. **Configure, then install.** The USB boots, serves the wizard on `:80`, and the
+   answers are written into the target's `/data` as it is flashed.
+2. **Install, then configure.** The USB boots an installer, writes the image to the
+   chosen disk, reboots, and the wizard runs on the installed system's first boot.
+
+**We take option 2.** Neither updater favours either ordering — the installer is our
+tooling in both cases — so the decision rests on our own code and on the operator.
+
+- It reuses what exists. `pithead-firstboot.service` already fires when
+  `/data/pithead/config.json` is absent, and that path is covered by the boot battery.
+  Option 1 needs a second wizard mode plus config transplant, which is new code in the
+  path that handles wallet addresses.
+- Configuration is produced on the machine that will run it. Option 1 decides
+  hardware-dependent settings inside the USB environment and moves them to a different
+  machine.
+- Install and configuration stay independently resumable. Under option 1 a failed
+  install discards the operator's configuration work, and the install is the destructive
+  step.
+- It matches the products this appliance is positioned against. TrueNAS and Proxmox
+  both install first. Talos configures first because it is API-driven, has no console,
+  and is provisioned as a fleet with `talosctl` — that is a datacenter posture, not a
+  single-box one.
+
+The argument for option 1 is a headless install, and it is weaker than it appears: the
+wizard prints its one-time token to the console, so a console is assumed either way.
+Requiring a display for one destructive install is reasonable; requiring one afterwards
+is not, and avahi is in the image, so the post-install wizard answers on
+`pithead.local`.
+
+**Wifi is not supported today in either ordering.** The rootfs carries `systemd-networkd`
+with no supplicant — no `wpasupplicant`, no NetworkManager — so wireless is an
+independent decision, not a reason to prefer an ordering. Ethernet stays the default for
+a machine that runs continuously and syncs 250+ GB.
+
+### The design: one image, two modes
+
+The USB carries a compressed copy of the pristine system image on its data partition.
+When the appliance boots from removable media and finds an internal disk, the wizard's
+first screen becomes a disk picker instead of the setup form. Installing is:
+
+```bash
+zstd -dc /data/install/system.img.zst | dd of=/dev/<target> bs=4M
+```
+
+then reboot. The target bootstraps itself on first boot through the same code path the
+USB would have used. There is no second install mechanism to write, test, or sign — the
+installer's whole job is choosing a disk and copying bytes.
+
+Cost: roughly doubles the USB artifact (~1.8 GiB compressed today). The alternative, a
+separate slim installer image, is smaller but adds an artifact to build, sign, release
+and test, and the destructive path would then be exercised by different code than the
+one users boot. Sized deliberately.
+
+Non-negotiable guards, because this step destroys data:
+
+- The picker never preselects a disk, and never offers the disk it booted from.
+- It shows model, size, and serial — a bare `/dev/sda` is not enough to choose safely.
+- A labeled `data` partition on the target means reinstall, not overwrite: the installer
+  preserves it and re-mounts it. A 250+ GB synced chain is not re-downloadable in an
+  afternoon.
+- Confirmation is typing the target's name, not pressing Enter on a highlighted row.
+
+### systemd-repart, and what it replaces
+
+Debian 13 ships `systemd-repart` (257.13). It creates and grows GPT partitions from
+declarative drop-ins in `/usr/lib/repart.d/`, with control over partition type, label
+and sizing. That is the same job Rugix's bootstrap does for us and that RAUC leaves
+entirely to us, available as an upstream-maintained mechanism on the base we already
+chose.
+
+This matters to the bake-off. The RAUC candidate's weakest point is the volume of
+hand-written image plumbing it requires, and `systemd-repart` removes the partitioning
+share of it. It does not touch bootloader slot selection, which is where most of the
+candidate's defects actually landed, so it narrows the gap rather than closing it.
+Adopting it is a follow-up either way: it is orthogonal to the updater choice.
+
+**live-build was evaluated and rejected for the appliance image.** It is Debian's
+official live-media builder (1:20250505 in Debian 13) and it builds live ISOs —
+squashfs plus live-boot. It does not produce A/B partitioned disk images, so choosing it
+would replace a working container-to-tarball step while leaving the partitioning and
+bootloader layers, which are the layers that have actually broken, untouched.
+live-build is a reasonable fit for a standalone installer ISO if we ever decide the
+dual-purpose image is too large; it is not a fit for the appliance itself.
+
+## How an update actually works, per option — and what the operator sees
+
+The mechanics differ far less than the arguments about them suggest: every A/B option
+gives the operator the same shape — one click, a download, a reboot, and an automatic
+return to the working system if the new one misbehaves. What genuinely differs is
+**download size**, **who owns the boot-path code**, and **who patches the userland**.
+
+One correction that keeps recurring: **"Yocto + Debian" is not an option.** Yocto
+compiles its own distribution from source recipes; it replaces Debian rather than
+building it. The real third option is Yocto + `meta-rauc` *instead of* Debian.
+
+### The options
+
+**A. Rugix + Debian** *(built, boots, wizard serves 3/3)*
+`rugix-ctrl update install` writes the spare slot, reboots into it provisionally, and
+`pithead doctor --json` gates `rugix-ctrl system commit`. No commit, or a failed boot,
+and the box returns to the old slot by itself. Delta updates ride plain HTTP range
+requests — no update server, GitHub Releases is enough.
+
+**B. RAUC + Debian** *(built, boots; the current recommendation)*
+`rauc install` writes the whole slot image and arms a GRUB try-counter; the new system
+boots, and `rauc status mark-good` commits. If it never marks itself good, GRUB's
+counter expires and the previous slot boots. Bundles must be X.509-signed — RAUC
+refuses unsigned ones, which suits our mandatory-signing posture.
+
+**C. Yocto + meta-rauc** *(not built)*
+Runtime behaviour is identical to B, because it *is* RAUC. Everything that differs is
+on our side of the fence: `meta-rauc` maintains the bootloader integration we would
+otherwise own, at the price of owning the entire userland instead.
+
+**D. systemd-sysupdate + Debian** *(not built)*
+`systemd-sysupdate` fetches a versioned partition image from a plain HTTP directory
+and writes the spare partition; `systemd-boot` counts boot attempts and
+`systemd-bless-boot` commits. Best bus factor of any option — it is systemd itself —
+but it means dropping GRUB, and full-root A/B is less field-proven here than RAUC.
+
+**E. openSUSE MicroOS / `transactional-update`** *(not built)*
+Snapshots rather than slots: update inside a new btrfs snapshot, reboot into it, roll
+back by booting the previous one. Downloads are small because it updates *packages*.
+That is also its disqualifier for an appliance: the box assembles its own state from a
+package archive, so we no longer ship exactly what we tested.
+
+**F. The DIY channel today** *(shipping)*
+`pithead upgrade` pulls new container images and restarts them. No reboot, no OS
+rollback — the operator owns the host. This stays as-is; the appliance exists precisely
+because not everyone wants that job.
+
+### What the operator actually experiences
+
+| | Download | Downtime | On failure | Bandwidth over Tor |
+|---|---|---|---|---|
+| A. Rugix | delta, tens of MB | one reboot (~1–2 min) + sidechain resync | automatic fallback, old version keeps running | minutes |
+| B. RAUC | **full slot image, ~700 MB–1 GB** unless adaptive updates are implemented | same | same (GRUB try-counter) | **tens of minutes** |
+| C. Yocto + RAUC | full image, but a minimal userland — a few hundred MB | same | same | shorter than B |
+| D. sysupdate | full partition image | same | same (boot counting) | as B |
+| E. MicroOS | package deltas, small | same | boot previous snapshot | minutes |
+| F. DIY | container layers | no reboot; containers restart | none for the OS | minutes |
+
+**The one user-visible difference between the live candidates is download size, and it
+is smaller than it first appears.** Updates are fetched over Tor by default. A naive
+RAUC bundle ships the whole slot image (most of a gigabyte), against Rugix's block-level
+deltas of tens of MB — the difference between minutes and most of an hour. But RAUC's
+**adaptive updates** (`block-hash-index` + HTTP streaming) close most of that gap, and
+upstream publishes real numbers: the index costs 0.8% of image size, and *"with small
+changes (such as updating a single package) in an ext4 image, around 10% of the bundle
+size needs to be downloaded"*, with install time similar or slightly faster. For us
+that is roughly 70–100 MB per release rather than ~1 GB — the same order as Rugix,
+not the same order as a full image.
+
+**So this is a build-time requirement, not a UX dealbreaker: if RAUC is adopted,
+adaptive updates ship with it from the first release**, because the naive path is the
+one that makes updates hurt over Tor. Two constraints come with it — the mode needs
+block devices (our ext4 slot images qualify; `.tar` payloads do not), and squashfs
+block size affects overhead (`--mksquashfs-args="-b 64k"` is upstream's suggestion).
+
+Everything else the operator sees is the same across A–D: the dashboard offers the
+update, the box reboots once, mining resumes, and a bad release un-installs itself
+without anyone driving to the machine.
+
+## Runbook: we shipped a bad release
+
+The question this design has to answer is not "will we ship a bad release" — we will —
+but "how much damage can one do, and how fast can we undo it". A/B updates bound the
+blast radius; the cases below differ in whether the box recovers by itself.
+
+### Case 1 — the new version does not boot
+
+Nothing to do. The updater never commits, the boot counter expires, and the box returns
+to the previous version on its own. The operator sees mining resume on the old version;
+the dashboard still reports the update as available. **No support contact, no data loss,
+no site visit.** This is the case A/B updates exist for, and it is the one we
+fault-inject on the bench before every release.
+
+### Case 2 — it boots but fails its health check
+
+Also self-healing. The commit gate is `pithead doctor --json`: if the stack does not
+come up healthy, the update is never committed and the next reboot falls back. The
+important design rule is what the gate checks — services up and progressing, never
+"chain synced", because a fresh box legitimately takes days to sync and a gate that
+waits for it would never commit anything.
+
+### Case 3 — it boots, passes the health check, and is still wrong
+
+This is the dangerous one, because nothing automatic saves us: a release can be healthy
+by every mechanical check and still mine to the wrong pool, leak an address, or lose
+5% hashrate. Recovery is deliberate, and needs three things we must build:
+
+1. **An operator rollback that works on demand** — a "go back to the previous version"
+   action in the dashboard, not just a CLI incantation. The updaters support it
+   (`rugix-ctrl system reboot --spare`; `rauc status mark-bad booted` + reboot) and the
+   fault battery now tests it as a first-class case.
+2. **A way to stop offering the bad version.** Update checks read the GitHub release
+   feed, so un-marking a release as latest (or deleting it) stops new boxes taking it
+   within one check interval. That is our fastest lever and it needs to be in the
+   release runbook, not discovered during an incident.
+3. **A way to tell people.** The stack already ships release notifications
+   (`TELEGRAM_EVENT_NEW_RELEASE`) and the dashboard shows update state; a bad release
+   should be announced through the same path that announced it.
+
+Then we cut the fix as a normal release. Boxes that rolled back are on the previous
+version and take the new one when it appears; boxes still running the bad version take
+it the same way. **No box needs to be reflashed, and no operator needs a terminal.**
+
+### What bounds the damage
+
+- Only one version is ever "live"; the previous one stays intact in the other slot, so
+  rollback is a reboot rather than a restore.
+- Operator state lives on the data partition, so neither an update nor a rollback
+  touches wallets, chains, Tor keys or configuration.
+- The appliance's root is immutable, so a bad release cannot leave debris behind that
+  survives into the fixed one — replacing the slot replaces the whole system.
+
+### What this demands of the release process
+
+Every appliance release runs the boot battery and the fault battery on the bench before
+it ships (`tests/os/run.sh --phase boot` and `--phase fault`), because cases 1 and 2 are
+only self-healing if the rollback path actually works on that build. Case 3 is why the
+dashboard rollback action is a requirement of shipping the appliance, not a later
+convenience.
+
+## The updater bake-off — decision procedure
+
+The A/B updater is the one component whose failures land in the field, unattended, on
+someone's income. It is therefore chosen by **measurement against a shared rootfs**,
+not by argument. Rugix booting first is an accident of order, not a decision: it earns
+no default status, and no further updater-specific work lands until this runs.
+
+**Why a bake-off is affordable at all:** the rootfs is updater-agnostic by design
+(`os/rootfs/Containerfile` contains zero updater knowledge), so each candidate consumes
+the *same* exported tarball. The candidate-specific surface is small — Rugix is ~150
+lines of TOML in `os/bakery/` plus ~30 lines of harness commands.
+
+**Candidates** (each builds a bootable image from the shared tarball):
+
+| | Updater | Image assembly | Notes |
+|---|---|---|---|
+| A | Rugix Ctrl | Rugix Bakery | integrated state/persist, factory reset, delta-over-HTTP |
+| B | RAUC | ours (script: GPT + mkfs + populate + GRUB boot-counting env) | mature, but updater only — we own assembly, persist, reset |
+| C | systemd-sysupdate | ours + `systemd-boot` boot counting | no third-party updater; needs moving off GRUB |
+| D | openSUSE MicroOS `transactional-update` | the distro's own | snapshots instead of A/B slots — changes the base too, so it competes on both axes |
+
+**Packaging couples the updater to the base, and the bake-off must price that:** Rugix
+ships `rugix-ctrl` as `.deb` and `.apk` only (our build installs
+`rugix-ctrl-gnu_1.0.0_amd64.deb`), so candidate A is Debian/Alpine-shaped and would
+need a hand-rolled binary install on an RPM base. RAUC is packaged for Debian but
+built from source on RHEL-family. Only sysupdate is base-neutral. A candidate that
+wins on reliability but forces a base we rejected has not actually won — score it
+with that cost included.
+
+**The battery — identical for every candidate**, run by `tests/os/run.sh`:
+
+1. Cold boot to multi-user on the #54 bench VM.
+2. Install a v2 bundle → boots the spare slot.
+3. Reboot **without** commit → must fall back to v1.
+4. Install + commit → must persist across reboot.
+5. **Fault injection:** `virsh destroy` mid-write and mid-commit, ×3 each → must land
+   on a bootable slot every time, never a brick. This is the field-critical case and
+   the one the maturity argument is really about.
+6. Factory reset and config-only reset behave as specified.
+7. Recorded numbers: update bundle size, delta size on a one-file change, apply
+   duration, image build duration.
+
+**Scoring — weights fixed here, before any results, so the outcome cannot be
+rationalised afterwards:**
+
+| Criterion | Weight | How it is judged |
+|---|---|---|
+| Field reliability | 40% | battery items 3–5; any brick in fault injection is disqualifying, not deducted |
+| Longevity / bus factor | 25% | maintainers, release cadence, independent production users, doc + community depth |
+| Integration surface we own | 20% | lines and concepts we maintain ourselves; every line we own is a line we must debug at 3am |
+| Operational ergonomics | 15% | delta size, apply time, clarity of failure messages, factory-reset support |
+
+**Exit:** a written verdict in this document naming the winner, its score against each
+criterion, and what would reverse it. Ties go to the candidate with the smaller surface
+we own. Only then does updater-specific work resume.
+
+**What is already known, entered as evidence rather than conclusion:** Rugix completed
+bootstrapping and booted to multi-user on generic x86 EFI (2026-07-24). Of the 13 build
+iterations that took, ~7 were our own bugs, ~3 generic image-building reality, and ~3
+Rugix documentation gaps that required reading umbrelOS's source — the last group is
+the honest maturity signal. RAUC and sysupdate have not yet been built once, so they
+carry an unknown integration cost that only the bake-off can price.
+
+### Verdict (2026-07-25): RAUC, on stability grounds — conditional on fault injection
+
+Both candidates were built against the same rootfs tarball and booted on the bench.
+The operator's stated goal is platform stability above all else, and that is what the
+evidence below is weighed against.
+
+**Why RAUC wins the criterion that matters most.** Its test suite targets precisely the
+failure that bricks an unattended miner — `bootchooser.c`, `boot_switch.c`,
+`boot_raw_fallback.c`, plus AddressSanitizer suppressions — and ten years of field
+exposure means the ugly cases (power cut mid-write, corrupted bootloader env) have
+already been hit by other people's fleets. Bus factor is the decisive structural fact:
+**396 of Rugix's 400 recent commits come from one person** (two addresses, same human),
+against 102 contributors for RAUC whose top two are employed to maintain it. RAUC is
+also packaged in Debian, so it inherits distro security updates rather than our
+vendoring. Finally, Rugix repartitions *at first boot on the customer's device* — which
+panicked on this bench when the disk was too small — while the RAUC image is
+partitioned at build time, where failures land at our desk instead.
+
+**What this costs us, recorded so it is not forgotten.** Rugix is 62 lines of config;
+the RAUC candidate is 154 lines we own, and it still lacks factory reset and
+grow-to-disk. Worse for stability specifically: **the rollback logic moves into our own
+46-line GRUB script** (`_OK`/`_TRY` counters), where Rugix kept it inside a tested
+binary. Switching therefore *raises* our risk in exactly the place that matters, which
+is why the decision is conditional: **RAUC is adopted only once it passes the
+fault-injection battery** (destroy mid-write and mid-commit, ×3 each). The Rugix
+candidate stays in-tree until then — it costs 62 lines, and both candidates now reach
+a working appliance, so keeping the alternative is cheap insurance rather than dead
+weight.
+
+### Verdict confirmed 2026-07-25 — RAUC, fault injection complete
+
+The conditional above is discharged. Both candidates were driven through the same three
+batteries on the same harness, with properly signed bundles and real signature
+verification on both sides.
+
+| Battery | RAUC | Rugix |
+|---|---|---|
+| boot (userspace, wizard, `:80`) | 3/3 | 3/3 |
+| update (install, spare boot, auto-rollback, commit, operator rollback) | 9/9 | 9/9 |
+| fault injection | **11/11** | 10/11 |
+
+Neither candidate bricked a machine in any run — the disqualifying criterion is clean
+for both. Mid-write power cuts (×3) and a cut inside the commit window were survived by
+both, and both roll back on demand.
+
+**The one behavioural difference: Rugix panics on a corrupt bundle.** Handed a
+deliberately damaged bundle, `rugix-ctrl` aborts with `unwrap()` on an `Err` at
+`rugix-bundle/src/reader.rs:522`; RAUC refuses the same input cleanly and says why. It
+reproduced identically on two runs. Both fail *safe* — the box keeps booting the old
+version — so this is not a bricking risk. It is a durability gap in the component whose
+entire job is to be conservative about untrusted input, and a corrupt bundle is an
+ordinary field event: a truncated download, a failing USB stick, a partial write.
+
+**Two findings that go the other way, recorded because they cut against the decision.**
+Rugix enforces stricter X.509 than RAUC: it rejects a CA certificate used as the
+end-entity signer (`CaUsedAsEndEntity`), while RAUC accepts the same self-signed
+certificate as both root and signer. Rugix is right, and the shape it forces — a root
+that devices trust, a separate leaf that signs day to day — is what production should
+use regardless of which updater ships. Rugix also correctly refuses to install onto a
+system that has not yet committed its own boot; the battery initially scored that safety
+feature as a failure, which is a harness bug, not a Rugix one.
+
+**The cost of choosing RAUC was real and it materialized — five times.** Every defect
+found in this bake-off was in integration code we hand-wrote for the RAUC candidate, and
+none was in RAUC itself:
+
+1. `rauc-service` not installed — Debian splits the D-Bus daemon into a package that is
+   not even a Recommends, so `rauc install` could never work.
+2. The GRUB slot-selection sentinel — renumbering the menu entries made "chose slot A"
+   and "found nothing" the same value, breaking fallback.
+3. The grubenv written outside GRUB's prefix directory — `load_env` was a silent no-op,
+   so RAUC's boot-state writes were never read.
+4. `mkbundle.sh` never wrote `/etc/fstab` — two hand-maintained copies of "populate a
+   slot" drifted, and the updated slot came up with a read-only root and no writable
+   `/var`.
+5. Slots addressed by filesystem label — one bundle installs into whichever slot is
+   spare, so its label cannot encode the slot.
+
+Not one of these was caught by a green boot test, by review, or by reasoning. Three of
+them survived multiple passing runs. This is the "surface we own" risk this document
+warned about, and it is now measured rather than argued: the hand-written layer produced
+five bricking-class defects while both updaters produced zero.
+
+**The decision stands anyway, on the weights already fixed.** Field reliability (40%)
+favours RAUC — 11/11 against 10/11, and the gap is a panic on realistic input. Longevity
+(25%) favours RAUC decisively and was already the operator's stated priority. Surface we
+own (20%) favours Rugix clearly and is the reason this was close. Ergonomics (15%)
+splits: Rugix's bakery is the better builder, RAUC's documentation and error messages
+are better, and Rugix's signing path is absent from its shipped `docs/` and had to be
+read out of the source.
+
+**What adoption is now conditional on** — the risk did not disappear, it got managed:
+
+- `tests/os/run.sh` is a release gate, not a spike artifact. It caught all five defects
+  and it is the only thing standing between the hand-written boot path and a fleet.
+- Adopt `systemd-repart` for partitioning (see the installer section). It removes the
+  partitioning share of the surface that produced defects 4 and 5. It does not touch
+  GRUB slot selection, where defects 2 and 3 landed, so it narrows the gap rather than
+  closing it.
+- The Rugix candidate stays in-tree. It is 62 lines, it passes every battery bar one,
+  and it is the fallback if the hand-written boot path keeps producing defects.
+
+**Bench status 2026-07-25 — both candidates pass the same boot battery 3/3**
+(`tests/os/run.sh --phase boot`): boots to userspace on generic x86 EFI, opens the
+first-boot wizard with a console token, serves the token gate on :80. Rugix took 18
+build iterations to get there and RAUC took 3, but that gap measures transferred
+knowledge, not quality — the docker-export fixes, the shell-out toolset, the disk
+sizing and the console-order debugging rule were all already paid for. The deciding
+criterion, field reliability (40%), remains unmeasured for both.
+
+**On RAUC's own advice to use Yocto, Buildroot or PTXdist — we decline, deliberately.**
+That guidance targets classic embedded: fixed hardware, a minimal from-source userland,
+no package manager. Our context is generic x86-64 PCs running containers, maintained by
+two people. Two facts decide it: **Buildroot has no `podman` package** (it ships
+`docker`, `conmon`, `crun`), so the appliance's chosen runtime would become ours to
+package and maintain; and a from-source userland makes **us** the security team for
+every CVE in systemd, openssl and podman, where Debian gives us one for free. For an
+appliance meant to run unattended for years, outsourcing CVE maintenance is a stability
+feature, not a convenience. If the hand-rolled assembly later proves fiddly, the
+Debian-native path is **mkosi** (systemd project, builds Debian disk images via
+systemd-repart) — a maintained builder rather than a whole embedded build system.
+
+Corrections this research forced on earlier claims in this document: RAUC *does* have
+delta-style updates ("adaptive updates"), it *does* document persistence patterns
+(shared/redundant data partitions), and an earlier "246 vs 2 test files" reading was
+wrong — Rugix is Rust with inline tests (183 `#[test]` functions), on core sizes that
+are near-identical (33.6k C vs 34.8k Rust).
+
+### OTA findings so far (candidate A, and mostly base-independent)
+
+Facts the first working image produced. The first four apply to *any* A/B updater on a
+docker-exported rootfs, so they are prerequisites for every candidate, not Rugix quirks:
+
+1. **First boot repartitions, so the disk must be big enough for the whole layout** —
+   256M EFI + 2×512M boot + 2×8 GiB system + data ≈ 18 GiB minimum. Below it,
+   bootstrapping aborts (`insufficient space, cannot add partition 5`) and the box
+   panics rather than degrading. This is the appliance's real minimum-disk figure and
+   belongs in `docs/appliance.md`; the installer should check it before writing.
+2. **The rootfs must carry the partitioning userland it shells out to** — `e2fsprogs`,
+   `dosfstools`, `fdisk`, `parted`. `debian-slim` ships none of them, and the updater
+   runs as init before any of our services exist, so a missing `mkfs.ext4` is a panic,
+   not an error message.
+3. **`/.dockerenv` must be removed** or systemd refuses to run as PID 1 (it believes it
+   is in a container). Every docker-export base hits this.
+4. **The pseudo-filesystem mount points must be recreated** after extracting the
+   exported tarball — `docker export` omits `/dev`, `/proc`, `/sys`, `/run`, `/tmp`.
+5. **Debugging rule, worth more than any single fix:** `/dev/console` is whichever
+   `console=` came **last** on the kernel cmdline, and `loglevel=3` suppresses the
+   kernel banner from it entirely. Kernel messages reaching a serial capture prove
+   nothing about whether userspace output does. Eleven rebuilds looked identical and
+   silent for this reason alone; swapping the order made the updater state its exact
+   error on the first try. Any candidate that appears to fail silently gets this check
+   before anything else.
+
+Consequences already applied: the wizard announces its URL and token on *every* console
+device rather than `/dev/console` alone, and the tier-4 harness resizes the scratch
+disk before first boot with the reason recorded beside it.
+
 ## Risk register
 
 1. **netavark egress-firewall port** (appliance only) — the technical unknown that
    gates the runtime decision; phase 0 item 1.
-2. **Rugix bus factor** — accepted with mitigations (updater-agnostic recipe, RAUC
-   escape hatch, talk to Silitics/Umbrel); re-evaluate at phase 0/2 boundary.
+2. **Rugix bus factor / long-term support** — one maintainer at one small company
+   (1112 commits vs 4 for the next contributor), 1.0 five months old, and umbrelOS —
+   its flagship user — still pins Bakery v0.9.1. RAUC is the mature alternative
+   (2015, two Pengutronix maintainers, Home Assistant OS's x86-64 fleet), but it is
+   *only* an updater: no image builder, no state/persist model, no factory reset, no
+   delta-over-HTTP. Choosing it means hand-building the image assembly Bakery does
+   for us. **Neither is chosen yet** — the updater bake-off above settles it by
+   measurement, and no further updater-specific work lands until it has run.
 3. **Dual-render drift** — two runtime definitions (compose reference + generated
    Quadlet). Locks: units are generated, never hand-edited; the parity test derives
    from the compose file and fails on any compose key it does not recognize, so new

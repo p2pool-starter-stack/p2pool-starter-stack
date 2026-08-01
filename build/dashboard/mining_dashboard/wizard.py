@@ -1,25 +1,31 @@
-"""First-boot setup wizard (#77 phase 3).
+"""First-boot setup wizard (#77 phase 3) — the server half.
 
 A deliberately tiny aiohttp app the host runs pre-provisioning via
-``pithead firstboot-wizard``: token gate -> a form mirroring the CLI wizard's
-questions -> an atomically written candidate config in the spool. The HOST does
-everything privileged (validation, ``pithead setup``) — this container only asks,
-the same trust shape as the #33 control channel. Serves plain HTTP on a trusted
-LAN with secret minimization: wallet addresses and shape choices only; the
-dashboard password is generated host-side and never crosses this window.
+``pithead firstboot-wizard``: token gate -> the wizard SPA -> an atomically written candidate
+config in the spool. The HOST does everything privileged (validation, ``pithead setup``,
+disk installs) — this server only asks, the same trust shape as the #33 control channel.
+
+The frontend is the dashboard's stack (``web/templates/wizard.html`` +
+``web/static/wizard.mjs`` — preact/htm, shared CSS, shared pure logic), so the first page
+anyone sees matches the dashboard they live in afterwards. This module serves the shell, the
+static assets, and a small state API; it renders no HTML of its own.
 
 Env contract (set by ``pithead firstboot-wizard``):
-  WIZARD_TOKEN   one-time human-typable token printed on the console
-  WIZARD_SPOOL   rw spool dir (default /wizard-spool)
-  WIZARD_BIND    bind host:port (default 0.0.0.0:8000)
+  WIZARD_TOKEN     one-time token printed on the console (case/prefix-insensitive to enter)
+  WIZARD_SPOOL     rw spool dir (default /wizard-spool)
+  WIZARD_BIND      plain bind host:port (default 0.0.0.0:8000)
+  WIZARD_BIND_TLS  TLS bind (default 0.0.0.0:8443), used when WIZARD_TLS_CERT/KEY exist
 
-After ``MAX_FAILURES`` bad tokens the process exits 3; the host re-mints a fresh
-token and restarts the container — the re-mint loop lives host-side on purpose.
+After ``MAX_FAILURES`` bad tokens the process exits 3; the host re-mints a fresh token and
+restarts the container — the re-mint loop lives host-side on purpose.
 """
 
+import asyncio
 import hmac
 import json
+import mimetypes
 import os
+import ssl
 import sys
 import tempfile
 
@@ -30,70 +36,28 @@ EXIT_TOKEN_LOCKOUT = 3
 
 COOKIE = "wizard_session"
 
-PAGE = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pithead setup</title>
-<style>
-body {{ font-family: system-ui, sans-serif; max-width: 34rem; margin: 3rem auto; padding: 0 1rem; }}
-label {{ display: block; margin: 1rem 0 0.25rem; font-weight: 600; }}
-input, select {{ width: 100%; padding: 0.5rem; box-sizing: border-box; }}
-button {{ margin-top: 1.5rem; padding: 0.6rem 1.4rem; }}
-.err {{ color: #b00020; }} .note {{ color: #555; font-size: 0.9rem; }}
-</style></head><body>
-<h1>Pithead setup</h1>
-{body}
-</body></html>"""
+_WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
 
-GATE_FORM = """<p>Enter the one-time token shown on this machine's console or terminal.</p>
-{error}
-<form method="post" action="/auth">
-<label for="token">Token</label>
-<input id="token" name="token" autofocus autocomplete="off" placeholder="pit-XXXXXX">
-<button type="submit">Continue</button>
-</form>"""
 
-SETUP_FORM = """<p>Answers apply once; everything else keeps its documented default and is
-editable later from the dashboard.</p>
-{error}
-<form method="post" action="/submit">
-<label for="mw">Monero payout address (primary, starts with 4)</label>
-<input id="mw" name="monero_wallet" required minlength="95" maxlength="95">
-<label for="tw">Tari payout address</label>
-<input id="tw" name="tari_wallet" required>
-<label for="mode">Monero node</label>
-<select id="mode" name="monero_mode" onchange="r.style.display=this.value=='remote'?'block':'none'">
-<option value="local">Run the bundled node (default)</option>
-<option value="remote">Use a remote node I control</option>
-</select>
-<div id="r" style="display:none">
-<label for="rh">Remote node host</label>
-<input id="rh" name="remote_host" placeholder="192.168.1.10">
-</div>
-<label for="pool">P2Pool sidechain</label>
-<select id="pool" name="pool">
-<option value="mini">mini (default — best for most miners)</option>
-<option value="main">main (for large hashrate)</option>
-</select>
-<label for="ibd">First sync</label>
-<select id="ibd" name="clearnet_sync">
-<option value="false">Fully private over Tor (days)</option>
-<option value="true">Faster over clearnet, then Tor (hours)</option>
-</select>
-<button type="submit">Apply</button>
-<p class="note">On Apply, this machine validates and provisions itself; the dashboard
-login is generated and shown on the console.</p>
-</form>"""
+def _shell_html() -> str:
+    """The static shell, read per request through a sync helper (ruff's async rules, and the
+    file can change under a live container only in development)."""
+    with open(os.path.join(_WEB_DIR, "templates", "wizard.html")) as f:
+        return f.read()
 
-DONE = """<p><strong>Configuration received.</strong> This machine is validating and
-provisioning itself — watch the console for the dashboard address and the generated
-login. This setup page closes when provisioning completes.</p>
-<p class="note" id="s">Waiting…</p>
-<script>
-setInterval(async () => {
-  const t = await (await fetch('/status')).text();
-  document.getElementById('s').textContent = t;
-}, 2000);
-</script>"""
+
+def _spool_clear_error() -> None:
+    err_file = os.path.join(spool_dir(), "error.txt")
+    if os.path.exists(err_file):
+        os.unlink(err_file)
+
+
+def _canon_token(t: str) -> str:
+    """The operator is transcribing from a console, often on a phone that autocapitalizes.
+    Case and the pit- prefix carry no entropy — the six-character suffix does — so neither
+    should be able to fail a correct transcription."""
+    t = t.strip().upper()
+    return t.removeprefix("PIT-")
 
 
 def spool_dir() -> str:
@@ -109,74 +73,232 @@ def _spool_read(name: str) -> str | None:
         return f.read().strip()
 
 
+def _reference() -> dict:
+    """Every key with its documented default, published into the spool by the host."""
+    raw = _spool_read("config.reference.json")
+    try:
+        ref = json.loads(raw) if raw else {}
+    except ValueError:
+        ref = {}
+    return {k: v for k, v in ref.items() if not k.startswith("_")}
+
+
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in (over or {}).items():
+        out[k] = (
+            _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+        )
+    return out
+
+
+def strip_defaults(cfg: dict, ref: dict) -> dict:
+    """Drop every key whose value already equals the documented default.
+
+    The page shows the FULL effective config, because hiding what a machine will run is how
+    people get surprised. What gets written is only what actually differs — a config that
+    pins all several hundred defaults at install time would freeze them forever, and an
+    appliance receives improved defaults through OS updates. Same effective configuration,
+    minus the freeze."""
+    out: dict = {}
+    for k, v in (cfg or {}).items():
+        if k.startswith("_"):
+            continue
+        if isinstance(v, dict) and isinstance(ref.get(k), dict):
+            sub = strip_defaults(v, ref[k])
+            if sub:
+                out[k] = sub
+        elif k not in ref or v != ref[k]:
+            out[k] = v
+    return out
+
+
+def _last_attempt() -> dict:
+    raw = _spool_read("last-attempt.json")
+    try:
+        return json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+
+
+def wizard_stage() -> str:
+    """Which step this machine is actually on, decided by the SPOOL — never by the client.
+
+    A page refresh must not walk backwards into an editable form after a config was accepted,
+    and the client cannot know the difference on its own: a bench session refreshed during
+    provisioning and was handed the setup form again, as if nothing had been submitted.
+
+    handoff    credentials published, waiting for the operator to save them
+    done       provisioning under way (or finished) — nothing left to edit
+    installer  running from the installation medium
+    setup      no config accepted yet
+    """
+    if _spool_read("handoff.json") is not None and _spool_read("handoff-ack") is None:
+        return "handoff"
+    if _spool_read("installed") is not None or _spool_read("installing") is not None:
+        return "installing"
+    if _spool_read("applied") is not None or _spool_read("handoff-ack") is not None:
+        # Same ack, two meanings: on the installation medium it releases the INSTALL (the page
+        # then shows the switch-off steps), on an installed machine it releases provisioning.
+        return "installing" if installer_mode() else "done"
+    if installer_mode():
+        return "installer"
+    return "setup"
+
+
+def installer_mode() -> bool:
+    """The host sets this when it booted from removable media and a target disk exists.
+    The container never probes hardware — it renders what the host put in the spool."""
+    return _spool_read("disks.tsv") is not None
+
+
+def _disks() -> list[dict]:
+    """The host's inventory, as data. Parsing stays server-side so the client renders objects,
+    never splits strings — and a model containing markup is just a JSON string to it."""
+    out = []
+    for line in (_spool_read("disks.tsv") or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 5:
+            continue
+        name, size, model, serial, state = parts[:5]
+        out.append({"name": name, "size": size, "model": model, "serial": serial, "state": state})
+    return out
+
+
 def _authed(request: web.Request) -> bool:
     tok = os.environ.get("WIZARD_TOKEN", "")
     return bool(tok) and hmac.compare_digest(request.cookies.get(COOKIE, ""), tok)
 
 
 async def index(request: web.Request) -> web.Response:
-    if _authed(request):
-        raise web.HTTPFound("/setup")
-    return web.Response(text=PAGE.format(body=GATE_FORM.format(error="")), content_type="text/html")
+    """The shell. It carries no data — the client fetches /api/wizard-state after the gate.
+    Also answers /setup and /install so a bookmarked step keeps working."""
+    return web.Response(text=_shell_html(), content_type="text/html")
 
 
 async def auth(request: web.Request) -> web.Response:
     form = await request.post()
     tok = os.environ.get("WIZARD_TOKEN", "")
     supplied = str(form.get("token", "")).strip()
-    if tok and hmac.compare_digest(supplied, tok):
-        resp = web.HTTPFound("/setup")
-        resp.set_cookie(COOKIE, tok, httponly=True)
+    if tok and hmac.compare_digest(_canon_token(supplied), _canon_token(tok)):
+        resp = web.HTTPFound("/")
+        resp.set_cookie(COOKIE, tok, httponly=True, samesite="Strict")
         raise resp
     request.app["failures"] += 1
     if request.app["failures"] >= MAX_FAILURES:
         # The host restarts the container with a fresh token; nothing to serve beyond this.
         print("wizard: token failure limit reached — exiting for a re-mint", flush=True)
         request.app["exit"](EXIT_TOKEN_LOCKOUT)
-    return web.Response(
-        text=PAGE.format(body=GATE_FORM.format(error='<p class="err">Wrong token.</p>')),
-        content_type="text/html",
-        status=403,
-    )
+    return web.json_response({"error": "wrong token"}, status=403)
 
 
-async def setup_form(request: web.Request) -> web.Response:
+async def wizard_state(request: web.Request) -> web.Response:
+    """Everything the SPA needs to render: which flow, the effective config (defaults with the
+    last attempt merged over them — a rejected config comes back for editing rather than making
+    someone retype a 95-character address), the reference for type coercion, the host's error,
+    and the disk inventory in installer mode."""
     if not _authed(request):
-        raise web.HTTPFound("/")
-    prev = _spool_read("error.txt")
-    err = f'<p class="err">{prev}</p>' if prev else ""
-    return web.Response(
-        text=PAGE.format(body=SETUP_FORM.format(error=err)), content_type="text/html"
+        return web.json_response({"error": "unauthenticated"}, status=401)
+    ref = _reference()
+    stage = wizard_stage()
+    raw_handoff = _spool_read("handoff.json") if stage == "handoff" else None
+    return web.json_response(
+        {
+            "stage": stage,
+            # Kept for the field's original meaning; `stage` is what the client renders from.
+            "mode": "installer" if installer_mode() else "setup",
+            "config": _deep_merge(ref, _last_attempt()),
+            "reference": ref,
+            "error": _spool_read("error.txt"),
+            "disks": _disks(),
+            "handoff": json.loads(raw_handoff) if raw_handoff else None,
+        }
     )
 
 
 def build_config(form: dict) -> dict:
-    """The submitted answers as a pithead config.json — mirrors the CLI wizard's
-    question set; the host's parse_and_validate_config is the validator."""
-    cfg = {
-        "monero": {"wallet_address": str(form.get("monero_wallet", "")).strip()},
-        "tari": {"wallet_address": str(form.get("tari_wallet", "")).strip()},
-        "p2pool": {
-            "pool": str(form.get("pool", "mini")),
-            "stratum_password": "auto",
-        },
+    """Form fields as a pithead config — the fallback for a client that never populated the
+    JSON pane (no JavaScript: the harness's curl, a text browser). Mirrors the CLI wizard's
+    question set; the host's parse_and_validate_config is the validator.
+
+    Keys are omitted rather than written empty: an absent key inherits the documented default,
+    while an empty string is a value and would override it."""
+
+    def s_(name: str) -> str:
+        return str(form.get(name, "")).strip()
+
+    def port(name: str, fallback: int) -> int:
+        raw = s_(name)
+        return int(raw) if raw.isdigit() else fallback
+
+    cfg: dict = {
+        "monero": {"wallet_address": s_("monero_wallet")},
+        "tari": {"wallet_address": s_("tari_wallet")},
+        "p2pool": {"pool": s_("pool") or "mini", "stratum_password": "auto"},
     }
+
     if form.get("monero_mode") == "remote":
         cfg["monero"]["mode"] = "remote"
-        cfg["monero"]["remote"] = {"host": str(form.get("remote_host", "")).strip()}
+        cfg["monero"]["remote"] = {
+            "host": s_("monero_remote_host"),
+            "rpc_port": port("monero_remote_rpc", 18081),
+            "zmq_port": port("monero_remote_zmq", 18083),
+        }
+        if form.get("monero_remote_auth"):
+            cfg["monero"]["node_username"] = s_("monero_remote_user")
+            cfg["monero"]["node_password"] = s_("monero_remote_pass")
+
+    if form.get("tari_mode") == "remote":
+        cfg["tari"]["mode"] = "remote"
+        cfg["tari"]["remote"] = {
+            "host": s_("tari_remote_host"),
+            "grpc_port": port("tari_remote_grpc", 18142),
+        }
+
+    # prune only means anything for a node we run. On remote, the key is noise at best and a
+    # lie at worst — the chain lives on someone else's machine and its shape is not ours.
+    if form.get("monero_mode") != "remote" and form.get("prune") == "false":
+        cfg["monero"]["prune"] = False
+
+    # Optional services: written ONLY when actually filled in. An empty ping_url silently
+    # disables the dead-man's switch the operator thinks they have; a half-configured
+    # Telegram fails validation on a blank they never meant to set.
+    hc = s_("healthchecks_url")
+    if hc:
+        cfg["healthchecks"] = {"ping_url": hc}
+    tg_token, tg_chat = s_("telegram_token"), s_("telegram_chat")
+    if tg_token and tg_chat:
+        cfg["telegram"] = {"enabled": True, "bot_token": tg_token, "chat_id": tg_chat}
+
+    if form.get("local_miner"):
+        cfg["local_miner"] = {"enabled": True}
+
     if form.get("clearnet_sync") == "true":
         cfg["monero"]["clearnet_initial_sync"] = True
         cfg["tari"]["clearnet_initial_sync"] = True
+
+    tz = s_("timezone")
+    if tz and tz != "auto":  # auto IS the documented default — writing it would only pin it
+        cfg.setdefault("dashboard", {})["timezone"] = tz
+
     return cfg
+
+
+def _spool_write_text(name: str, text: str) -> None:
+    """Atomic like the config write: the host's loop must never see a partial file."""
+    sd = spool_dir()
+    os.makedirs(sd, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=sd, prefix=f".{name}.")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.replace(tmp, os.path.join(sd, name))
 
 
 def _spool_write_config(cfg: dict) -> None:
     """Atomic write: the host's consume loop only ever sees a complete file."""
     sd = spool_dir()
     os.makedirs(sd, exist_ok=True)
-    err_file = os.path.join(sd, "error.txt")
-    if os.path.exists(err_file):
-        os.unlink(err_file)
+    _spool_clear_error()
     fd, tmp = tempfile.mkstemp(dir=sd, prefix=".config.")
     with os.fdopen(fd, "w") as f:
         json.dump(cfg, f, indent=2)
@@ -187,11 +309,106 @@ async def submit(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
     form = await request.post()
-    _spool_write_config(build_config(dict(form)))
-    return web.Response(text=PAGE.format(body=DONE), content_type="text/html")
+    raw = str(form.get("config", "")).strip()
+    ref = _reference()
+    # Keep-everything reinstall: the preserved config wins, so the submission carries NO config
+    # and nothing here may write one — a config candidate would provision over the survivor,
+    # and a handoff card would show credentials the machine will never serve. Disk gates only.
+    if (
+        installer_mode()
+        and str(form.get("wipe", "")).strip() == "keep"
+        and str(form.get("disk", "")).strip()
+    ):
+        disk = str(form.get("disk", "")).strip()
+        confirm = str(form.get("confirm", "")).strip()
+        by_name = {d["name"]: d for d in _disks()}
+        if disk not in by_name:
+            return web.json_response({"error": "choose a disk from the list"}, status=400)
+        if by_name[disk]["state"] == "pithead-with-data":
+            # The disk really holds an install: keep means KEEP — no config crosses, no
+            # password is generated, no card appears, whatever a crafted submit carried.
+            if confirm != disk:
+                return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
+            _spool_clear_error()
+            _spool_write_text("install-request", f"{disk}\tkeep")
+            return web.json_response({"status": "accepted"})
+        # A blank disk with wipe=keep (the client's default) is just a fresh install — fall
+        # through unconditionally. The no-JS path submits individual form FIELDS, not a config
+        # blob, so "no config present" cannot distinguish a bare keep from a form submit; the
+        # host's validation names what is missing either way.
+    # The JSON pane IS the configuration — what the operator can see is exactly what gets
+    # applied. build_config remains the fallback for a client with no JavaScript.
+    try:
+        cfg = json.loads(raw) if raw else build_config(dict(form))
+        if not isinstance(cfg, dict):
+            raise ValueError("the top level must be a JSON object")
+    except (ValueError, TypeError) as exc:
+        return web.json_response({"error": f"Not valid JSON: {exc}"}, status=400)
+    # The dashboard-login choice travels BESIDE the config: "no login" is an empty password,
+    # which is also what "not chosen yet" looks like, so the config alone cannot express intent.
+    # The host reads this to decide whether to generate one.
+    mode = str(form.get("auth_mode", "")).strip()
+    if mode in ("auto", "set", "none"):
+        _spool_write_text("auth-mode", mode)
+    # On the installation medium, config and disk arrive TOGETHER — one page, one submission.
+    # Three independent gates before anything is written, because this leads to erasing a disk:
+    # the target must be one the HOST offered (never a name the browser invented), the operator
+    # must retype it exactly, and the wipe mode must be from the fixed set — with anything
+    # other than "keep" allowed only on a disk that actually carries data to wipe.
+    if installer_mode():
+        disk = str(form.get("disk", "")).strip()
+        confirm = str(form.get("confirm", "")).strip()
+        wipe = str(form.get("wipe", "keep")).strip() or "keep"
+        by_name = {d["name"]: d for d in _disks()}
+        if disk not in by_name:
+            return web.json_response({"error": "choose a disk from the list"}, status=400)
+        if confirm != disk:
+            return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
+        if wipe not in ("keep", "data", "all"):
+            return web.json_response({"error": "unknown wipe mode"}, status=400)
+        if wipe != "keep" and by_name[disk]["state"] != "pithead-with-data":
+            wipe = "keep"  # nothing on the disk to keep or wipe — normalize silently
+        _spool_write_text("install-request", f"{disk}\t{wipe}")
+    # Keep the full attempt for a retry, write only what differs from the defaults.
+    _spool_write_text("last-attempt.json", json.dumps(cfg))
+    _spool_write_config(strip_defaults(cfg, ref) if ref else cfg)
+    return web.json_response({"status": "accepted"})
+
+
+async def handoff(request: web.Request) -> web.Response:
+    """The credentials card, once the host publishes it: dashboard login, dashboard URL, and the
+    stratum address. Authed, over the same TLS the operator typed secrets into — a 32-character
+    random password transcribed from a console was never realistic."""
+    if not _authed(request):
+        return web.json_response({"error": "unauthenticated"}, status=401)
+    raw = _spool_read("handoff.json")
+    if not raw:
+        return web.json_response({"error": "not ready"}, status=404)
+    return web.json_response(json.loads(raw))
+
+
+async def handoff_ack(request: web.Request) -> web.Response:
+    """The operator confirms the credentials are saved; provisioning proceeds. The page goes
+    dark from here — the host removes this container and starts the stack."""
+    if not _authed(request):
+        raise web.HTTPFound("/")
+    if _spool_read("handoff.json") is None:
+        return web.json_response({"error": "nothing to acknowledge"}, status=400)
+    _spool_write_text("handoff-ack", "1")
+    return web.json_response({"status": "provisioning"})
 
 
 async def status(request: web.Request) -> web.Response:
+    if installer_mode():
+        if _spool_read("installed") is not None:
+            return web.Response(
+                text="Installed — the machine is switching itself off. "
+                "Wait for it to go dark, then remove the USB stick and power it back on."
+            )
+        err = _spool_read("error.txt")
+        if err is not None:
+            return web.Response(text=f"Install failed: {err}")
+        return web.Response(text="Copying the system to the disk…")
     if _spool_read("applied") is not None:
         return web.Response(text="Provisioned — the dashboard is coming up now.")
     err = _spool_read("error.txt")
@@ -201,19 +418,60 @@ async def status(request: web.Request) -> web.Response:
 
 
 def make_app(exit_fn=sys.exit) -> web.Application:
+    # Some minimal hosts lack /etc/mime.types, so ES modules would be served as
+    # application/octet-stream, which browsers refuse to execute. Same fix as the dashboard's
+    # server.py — the wizard serves the same static tree.
+    mimetypes.add_type("text/javascript", ".mjs")
+    mimetypes.add_type("text/javascript", ".js")
     app = web.Application()
     app["failures"] = 0
     app["exit"] = exit_fn
     app.add_routes(
         [
             web.get("/", index),
+            web.get("/setup", index),
+            web.get("/install", index),
             web.post("/auth", auth),
-            web.get("/setup", setup_form),
+            web.get("/api/wizard-state", wizard_state),
             web.post("/submit", submit),
+            web.get("/api/handoff", handoff),
+            web.post("/handoff-ack", handoff_ack),
             web.get("/status", status),
         ]
     )
+    app.router.add_static("/static", os.path.join(_WEB_DIR, "static"))
     return app
+
+
+async def _redirect_to_tls(request: web.Request) -> web.Response:
+    """Everything on the plain port becomes a redirect to the TLS one.
+
+    An operator who types the address without a scheme lands on :80, and a setup page that
+    simply failed there would read as a broken machine — so :80 stays open and points at :443
+    rather than being closed. The host header carries the name or IP they actually used, so the
+    redirect keeps working for pithead.local and for a bare address alike.
+    """
+    host = request.host.split(":")[0]
+    raise web.HTTPMovedPermanently(f"https://{host}{request.rel_url}")
+
+
+async def _serve(app: web.Application, bind: str, tls: ssl.SSLContext | None) -> web.AppRunner:
+    host, _, port = bind.rpartition(":")
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, host or "0.0.0.0", int(port), ssl_context=tls).start()
+    return runner
+
+
+async def _run_both(bind: str, tls_bind: str, cert: str, key: str) -> None:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(cert, key)
+    redirect = web.Application()
+    redirect.router.add_route("*", "/{tail:.*}", _redirect_to_tls)
+    await _serve(make_app(), tls_bind, ctx)
+    await _serve(redirect, bind, None)
+    # Both sites serve until the host stops the container; nothing ever sets this event.
+    await asyncio.Event().wait()
 
 
 def main() -> None:
@@ -221,6 +479,16 @@ def main() -> None:
         print("wizard: WIZARD_TOKEN is required", file=sys.stderr)
         sys.exit(2)
     bind = os.environ.get("WIZARD_BIND", "0.0.0.0:8000")
+    cert = os.environ.get("WIZARD_TLS_CERT", "")
+    key = os.environ.get("WIZARD_TLS_KEY", "")
+    # TLS because this page carries real secrets — node passwords, a Telegram bot token, a
+    # view key if one is pasted into the config. A self-signed certificate warns the browser,
+    # which is the honest tradeoff: the alternative is those secrets in clear on the LAN. The
+    # console prints the fingerprint so the warning can actually be checked.
+    if cert and key and os.path.exists(cert) and os.path.exists(key):
+        tls_bind = os.environ.get("WIZARD_BIND_TLS", "0.0.0.0:8443")
+        asyncio.run(_run_both(bind, tls_bind, cert, key))
+        return
     host, _, port = bind.rpartition(":")
     web.run_app(make_app(), host=host or "0.0.0.0", port=int(port))
 

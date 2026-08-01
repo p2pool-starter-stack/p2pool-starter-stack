@@ -1,0 +1,33 @@
+/* First-boot wizard styles. Everything visual comes from dashboard.css — palette variables,
+ * .card, .config-field, buttons — so the first page anyone sees matches the dashboard they
+ * live in afterwards. Only layout the dashboard has no equivalent for lives here. */
+
+.wizard-shell {
+  max-width: 40rem;
+  margin: 3rem auto;
+  padding: 0 1rem;
+}
+
+/* Monospace for material that gets pasted and compared: addresses, the JSON pane. */
+.wizard-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+}
+
+.wizard-json {
+  width: 100%;
+  min-height: 22rem;
+  box-sizing: border-box;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem;
+}
+
+/* Conditional blocks (remote-node details, chain size): indented like a sub-answer. */
+.wizard-when {
+  margin-left: 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+}

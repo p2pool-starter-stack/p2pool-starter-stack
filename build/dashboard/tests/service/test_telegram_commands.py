@@ -6,12 +6,14 @@ enabled/disabled gating. No network — the transport is stubbed throughout.
 """
 
 import asyncio
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from mining_dashboard.service import telegram_commands as tc
+from mining_dashboard.service.earnings import confirmed_payouts_summary, previous_local_day
 from mining_dashboard.service.metrics import Metrics, SyncMetric
 
 _SYNCED = SyncMetric(
@@ -382,6 +384,88 @@ def test_earnings_omits_tari_line_without_tari_figures():
     assert "XMR/day" in out  # the XMR estimate is unaffected
 
 
+# --- Confirmed running earnings on /earnings (#787) ---------------------------------------
+#
+# The window math itself is proven once, in tests/service/test_earnings.py — these build the
+# summaries through the real confirmed_payouts_summary so the bot is exercised against the exact
+# object the dashboard card renders (#61/#387), and assert only what the bot does with it.
+
+_NET = {"reward": 600_000_000_000}
+_ONE_XMR = 1_000_000_000_000
+
+
+def test_earnings_appends_confirmed_running_totals():
+    # A year of history with a payout in each window → yesterday / 7d / 30d land as actuals under
+    # the estimate, all complete (history predates every window), so no marker and no footnote.
+    now = time.time()
+    day_start, _ = previous_local_day(now)
+    payouts = [
+        {"ts": now - 365 * 86_400, "amount_atomic": _ONE_XMR},  # old — dates the history
+        {"ts": day_start + 3_600, "amount_atomic": 2 * _ONE_XMR},  # yesterday
+        {"ts": now - 3 * 86_400, "amount_atomic": 4 * _ONE_XMR},  # inside 7d
+        {"ts": now - 20 * 86_400, "amount_atomic": 8 * _ONE_XMR},  # inside 30d only
+    ]
+    out = tc.format_earnings(
+        _metrics(p2pool_1h=8000.0), _NET, confirmed=confirmed_payouts_summary(payouts, now=now)
+    )
+    assert "Confirmed XMR: yesterday 2.0000 XMR · 7d 6.0000 XMR · 30d 14.0000 XMR" in out
+    assert "*" not in out.split("Confirmed XMR:")[1]  # nothing partial → no marker, no footnote
+    assert out.index("1h avg") < out.index("Confirmed XMR:")  # estimate leads, actuals follow
+
+
+def test_earnings_marks_partial_windows_with_history_start():
+    # History starts 3 days ago: yesterday is covered, 7d and 30d reach behind it and must say so
+    # rather than reading as full windows.
+    now = time.time()
+    payouts = [{"ts": now - 3 * 86_400, "amount_atomic": _ONE_XMR}]
+    out = tc.format_earnings(
+        _metrics(p2pool_1h=8000.0), _NET, confirmed=confirmed_payouts_summary(payouts, now=now)
+    )
+    yesterday, seven, thirty = out.split("Confirmed XMR: ")[1].splitlines()[0].split(" · ")
+    assert not yesterday.endswith("*") and seven.endswith("*") and thirty.endswith("*")
+    assert "* partial — recorded payout history starts " in out
+
+
+def test_earnings_partial_footnote_names_an_empty_history():
+    # Wallet on, nothing confirmed yet: the zeros are honest, but every window is partial and the
+    # footnote says the history is empty rather than naming a date it doesn't have.
+    out = tc.format_earnings(
+        _metrics(p2pool_1h=8000.0), _NET, confirmed=confirmed_payouts_summary([], now=time.time())
+    )
+    assert "Confirmed XMR: yesterday 0 XMR* · 7d 0 XMR* · 30d 0 XMR*" in out
+    assert "* partial — recorded payout history is empty — no payouts confirmed yet." in out
+
+
+def test_earnings_includes_confirmed_tari_totals():
+    # #462 side: the same roll-up over microTari, rendered with the XTM precision the card uses.
+    now = time.time()
+    payouts = [{"ts": now - 2 * 86_400, "amount_atomic": 4_552_150_000}]  # 4552.15 XTM
+    out = tc.format_earnings(
+        _metrics(p2pool_1h=8000.0),
+        _NET,
+        tari_confirmed=confirmed_payouts_summary(payouts, now=now, divisor=1_000_000, unit="xtm"),
+    )
+    # History starts two days back, so yesterday is covered (no marker) while 7d/30d are not.
+    assert "Confirmed XTM: yesterday 0 XTM · 7d 4552.1500 XTM* · 30d 4552.1500 XTM*" in out
+
+
+def test_earnings_confirmed_survives_missing_network_data():
+    # The estimate needs live network figures; the confirmed totals come off the wallet and don't.
+    # A stack waiting on network data can still report what it was actually paid.
+    now = time.time()
+    payouts = [{"ts": now - 40 * 86_400, "amount_atomic": _ONE_XMR}]
+    out = tc.format_earnings(_metrics(), {}, confirmed=confirmed_payouts_summary(payouts, now=now))
+    assert "unavailable" in out
+    assert "Confirmed XMR: yesterday 0 XMR · 7d 0 XMR · 30d 0 XMR" in out
+
+
+def test_earnings_omits_confirmed_when_wallet_feature_is_off():
+    # None (the default — no view-only wallet configured) → the estimate stands alone, exactly as
+    # it read before payout confirmation existed.
+    out = tc.format_earnings(_metrics(p2pool_1h=8000.0), _NET, confirmed=None, tari_confirmed=None)
+    assert "Confirmed" not in out
+
+
 def test_luck_reads_the_cadence_metrics():
     # #84: the four figures come straight off Metrics — the same fields the dashboard card shows.
     out = tc.format_luck(
@@ -540,7 +624,47 @@ def test_reply_for_pool_and_xvb(monkeypatch):
 
 def test_reply_for_earnings(monkeypatch):
     bot = _bot(monkeypatch, latest_data={"network": {"reward": 600_000_000_000}}, p2pool_1h=8000.0)
-    assert "XMR/day" in bot.reply_for("/earnings")
+    reply = bot.reply_for("/earnings")
+    assert "XMR/day" in reply
+    # Payout confirmation is off by default, so the estimate stands alone and storage is never read
+    # (the stub state_manager has no get_payouts — reaching for it would raise).
+    assert "Confirmed" not in reply
+
+
+def test_reply_for_earnings_rolls_up_stored_payouts(monkeypatch):
+    # Feature on: /earnings reads the stored payouts per chain and appends the running totals.
+    # The flags are read off the config MODULE at call time, so flipping them here takes effect
+    # without a re-import — the same handling build_state uses.
+    monkeypatch.setattr(tc.config, "PAYOUT_CONFIRM_ENABLED", True)
+    monkeypatch.setattr(tc.config, "TARI_PAYOUT_CONFIRM_ENABLED", True)
+    now = time.time()
+    yday = previous_local_day(now)[0] + 3_600
+    stored = {
+        "monero": [{"ts": yday, "amount_atomic": _ONE_XMR}],
+        "tari": [{"ts": yday, "amount_atomic": 2_000_000}],  # 2 XTM
+    }
+    bot = _bot(monkeypatch, latest_data={"network": {"reward": 600_000_000_000}}, p2pool_1h=8000.0)
+    bot.data_service.state_manager.get_payouts = stored.get
+    reply = bot.reply_for("/earnings")
+    assert "Confirmed XMR: yesterday 1.0000 XMR" in reply  # piconero divisor
+    assert "Confirmed XTM: yesterday 2.0000 XTM" in reply  # microTari divisor
+
+
+def test_reply_for_earnings_skips_the_chain_whose_wallet_is_off(monkeypatch):
+    # Monero confirmation on, Tari off → only the XMR totals appear, and Tari payouts are not read.
+    monkeypatch.setattr(tc.config, "PAYOUT_CONFIRM_ENABLED", True)
+    monkeypatch.setattr(tc.config, "TARI_PAYOUT_CONFIRM_ENABLED", False)
+    asked = []
+
+    def _payouts(chain):
+        asked.append(chain)
+        return []
+
+    bot = _bot(monkeypatch, latest_data={"network": {"reward": 600_000_000_000}}, p2pool_1h=8000.0)
+    bot.data_service.state_manager.get_payouts = _payouts
+    reply = bot.reply_for("/earnings")
+    assert asked == ["monero"]
+    assert "Confirmed XMR" in reply and "Confirmed XTM" not in reply
 
 
 def test_reply_for_hashrate_and_sync(monkeypatch):
@@ -747,8 +871,13 @@ class TestStatusWarnings:
     """/status surfaces the same warning/error badges as the dashboard top bar (#104), reusing
     build_badges so the two never drift; informational states ('Syncing…') are excluded."""
 
-    def test_bad_and_flagged_warn_badges_included_stripped(self):
+    def test_bad_and_flagged_warn_badges_included_stripped(self, monkeypatch):
         # Low RAM (⚠ warn) + DB failing (bad) both surface; the leading ⚠ is stripped for the list.
+        # Modes pinned full-local so the mode-aware floor (14) makes 8 GB a real warning.
+        import mining_dashboard.web.views as views_mod
+
+        monkeypatch.setattr(views_mod, "monero_is_local", lambda: True)
+        monkeypatch.setattr(views_mod, "tari_is_local", lambda: True)
         warnings = tc.status_warnings(
             {"system": {"memory": {"total_gb": 8}}}, _metrics(), db_healthy=False
         )

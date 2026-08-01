@@ -50,7 +50,6 @@ from mining_dashboard.config.config import (
     HASHRATE_DROP_MINUTES,
     HASHRATE_DROP_THRESHOLD_PCT,
     HOST_IP,
-    LOW_RAM_GB,
     MONERO_CLEARNET_SYNC,
     MONERO_WALLET_ADDRESS,
     PAYOUT_CONFIRM_ENABLED,
@@ -64,6 +63,9 @@ from mining_dashboard.config.config import (
     UPDATE_INTERVAL,
     WORKER_FALLOFF_SEC,
     XVB_REGISTER_INTERVAL_S,
+    low_ram_floor_gb,
+    monero_is_local,
+    tari_is_local,
 )
 from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
@@ -501,6 +503,8 @@ class DataService:
     Core service responsible for aggregating mining statistics from various sources
     (Local collectors, XMRig Proxy, Tari Node, etc.) and maintaining the application state.
     """
+
+    _last_monero_sync = None  # last real {percent,current,target} — held across RPC blips
 
     def __init__(self, state_manager, proxy_client, xvb_client):
         self.state_manager = state_manager
@@ -1416,10 +1420,21 @@ class DataService:
 
                     # Apply Sync Logic Overrides
                     # 1. Monero Sync Check
+                    if all(k in monero_sync for k in ("percent", "current", "target")):
+                        # A real reading — remember it, so a later blip has something to hold.
+                        self._last_monero_sync = {
+                            k: monero_sync[k] for k in ("percent", "current", "target")
+                        }
                     if network_stats.get("height", 0) == 0:
                         monero_sync["is_syncing"] = True
                         if "percent" not in monero_sync:
-                            monero_sync.update({"percent": 0, "current": 0, "target": 1})
+                            # An RPC blip mid-sync must not reset the card: monerod grinding
+                            # at 99% flashed "Synced 0 / 1" whenever a poll came back empty
+                            # (bench-reported). Hold the last real figures; the bare
+                            # placeholder is only for a machine that has never reported any.
+                            monero_sync.update(
+                                self._last_monero_sync or {"percent": 0, "current": 0, "target": 1}
+                            )
 
                     # 2. Global Sync Logic. monerod always drives the full-screen Sync Mode;
                     # Tari does so only when it's required (Issue #51). A non-blocking Tari
@@ -1532,7 +1547,11 @@ class DataService:
                         # reserved (recoverable via reboot); low_ram compares live total to the
                         # threshold. avx2 is badge-only (no alert), so it isn't passed here.
                         hugepages_reserved=(hugepages[0] != "Disabled"),
-                        low_ram=(0 < (memory.get("total_gb") or 0) < LOW_RAM_GB),
+                        low_ram=(
+                            0
+                            < (memory.get("total_gb") or 0)
+                            < low_ram_floor_gb(monero_is_local(), tari_is_local())
+                        ),
                         # Trailing-1h reject rate from the delta series (#116); None while no
                         # shares were submitted in the window, which the edge treats as "no
                         # verdict" rather than healthy.

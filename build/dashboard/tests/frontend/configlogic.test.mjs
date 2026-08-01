@@ -9,7 +9,6 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
-  applyEdits,
   buildSections,
   classifyGroup,
   isSecretSentinel,
@@ -161,43 +160,14 @@ test("buildSections: high-consequence fields carry their inline warning", () => 
   assert.equal(fields["monero.prune"].warning, undefined);
 });
 
-test("applyEdits: edits land at their path with type coercion; the rest is untouched", () => {
-  const sections = buildSections(CFG);
-  const proposed = applyEdits(CFG, sections, {
-    "p2pool.pool": "main",
-    "monero.prune": "false",
-    "monero.remote.rpc_port": "18089",
-  });
-  assert.equal(proposed.p2pool.pool, "main");
-  assert.equal(proposed.monero.prune, false); // string → boolean
-  assert.equal(proposed.monero.remote.rpc_port, 18089); // string → number
-  assert.equal(proposed.monero.wallet_address, "4AAAA");
-  assert.equal(CFG.p2pool.pool, "mini"); // the source config is never mutated
-});
-
-test("array values are not form fields and survive an edit round-trip verbatim (#172)", () => {
+test("array values are not form fields (#172)", () => {
   // dashboard.workers is a list of per-rig descriptors — there is no form rendering for it, so
-  // buildSections must skip it (a text field would mangle it into a string) and applyEdits must
-  // carry it through untouched.
+  // buildSections must skip it (a text field would mangle it into a string). Survival through
+  // an edit is the candidate model's property now: untouched keys ride the candidate verbatim,
+  // asserted in configview.test.mjs.
   const sections = buildSections(CFG);
   const keys = sections.flatMap((s) => s.fields.map((f) => f.key));
   assert.ok(!keys.some((k) => k.startsWith("dashboard.workers")));
-  const proposed = applyEdits(CFG, sections, { "p2pool.pool": "main" });
-  assert.deepEqual(proposed.dashboard.workers, CFG.dashboard.workers);
-});
-
-test("applyEdits: a blank secret keeps the sentinel; a typed one replaces it", () => {
-  const sections = buildSections(CFG);
-  const kept = applyEdits(CFG, sections, { "dashboard.auth.password": "" });
-  assert.deepEqual(kept.dashboard.auth.password, { __secret__: true });
-  const changed = applyEdits(CFG, sections, { "dashboard.auth.password": "new pass phrase" });
-  assert.equal(changed.dashboard.auth.password, "new pass phrase");
-});
-
-test("applyEdits: garbage in a number field passes through for the host validator to reject", () => {
-  const sections = buildSections(CFG);
-  const proposed = applyEdits(CFG, sections, { "monero.remote.rpc_port": "lots" });
-  assert.equal(proposed.monero.remote.rpc_port, "lots");
 });
 
 // --- Core-vs-sections regroup (#529, RATIFIED Wave-0) ---------------------------------------
@@ -334,13 +304,6 @@ test("markEditable: editable wins over confirm — a key on both lists is freely
 });
 
 // --- JSON mode's whole-config parse (#529) ----------------------------------------------------
-
-test("parseConfigJson: valid JSON builds the same staged config shape applyEdits does", () => {
-  const sections = buildSections(CFG);
-  const viaForm = applyEdits(CFG, sections, { "p2pool.pool": "main" });
-  const viaJson = parseConfigJson(JSON.stringify(viaForm));
-  assert.deepEqual(viaJson, { config: viaForm });
-});
 
 test("parseConfigJson: a masked secret round-trips verbatim through the textarea (#508/#440)", () => {
   const out = parseConfigJson(JSON.stringify(CFG));

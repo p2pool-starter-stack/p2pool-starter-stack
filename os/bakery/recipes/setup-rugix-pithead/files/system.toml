@@ -1,3 +1,0 @@
-# Rugix system config. The data partition mounts by its default (label "data" from
-# bootstrapping.toml) — no custom mount-script, unlike Umbrel's RAID-aware variant.
-[data-partition]

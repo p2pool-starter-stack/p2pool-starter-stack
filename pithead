@@ -61,7 +61,9 @@ readonly CORE_KEYS_CONFIG="config.core-keys.json"
 # Marker (beside .env) that records the one-time "what happens next" epilogue has been shown (#384),
 # so the onboarding note appears on the first `up` after a fresh setup, not on every later restart.
 readonly FIRST_RUN_MARKER=".pithead-first-run-done"
-readonly REAL_USER="${SUDO_USER:-$USER}"
+# ${USER:-$(id -un)}: USER is a login-session convention, not a guarantee — systemd services and
+# containers may run without it, and set -u turns the reference into a fatal error at source time.
+readonly REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 
 # Non-root uid:gid the BUILT images run their main process as (#255). pithead owns the data dirs,
 # so it chowns each service's bind-mount to this id to match the in-image USER. Tor is the
@@ -176,10 +178,33 @@ resolve_pull_policy() {
     else printf 'missing'; fi
 }
 
+# #795: `compose up --remove-orphans` never removes the container of a service whose profile just
+# went inactive — the service is still in the compose file, so compose does not count it as an
+# orphan and leaves it running (a tari local→remote switch left the old minotari_node up, offline
+# and re-syncing, against a remote-mode config). Reconcile from the committed .env instead: every
+# profile-gated service whose profile token is absent gets its container stopped and removed.
+# `compose rm` resolves an explicitly named service whatever the active profiles, and exits 0 when
+# no container exists, so running this before every up is a cheap no-op in the steady state and
+# also heals a box already stuck with a stale node container.
+remove_deactivated_profile_containers() {
+    local profiles gone=()
+    profiles=",$(env_get COMPOSE_PROFILES),"
+    [[ "$profiles" == *,local_node,* ]] || gone+=(monerod)
+    [[ "$profiles" == *,local_tari,* ]] || gone+=(tari)
+    [[ "$profiles" == *,payout_confirm,* ]] || gone+=(wallet-rpc)
+    [[ "$profiles" == *,tari_payout_confirm,* ]] || gone+=(tari-wallet)
+    [ "${#gone[@]}" -eq 0 ] && return 0
+    docker compose rm -sf "${gone[@]}" >/dev/null 2>&1 ||
+        warn "Could not remove the deactivated container(s): ${gone[*]} — remove them manually with 'docker rm -f ${gone[*]}'."
+}
+
 # Run `docker compose up` with live output; on failure, explain a bridge-subnet collision (#180) if
 # that's what Docker rejected. Returns compose's own exit code.
 compose_up_checked() {
     local tmp out rc
+    # Deactivated-profile containers go BEFORE the up (#795): the old local node must stop before
+    # p2pool (re)starts against the remote one, not linger beside it.
+    remove_deactivated_profile_containers
     tmp="$(mktemp)"
     docker compose up --pull "$(resolve_pull_policy)" "$@" 2>&1 | tee "$tmp"
     rc=${PIPESTATUS[0]}
@@ -394,6 +419,9 @@ verify_release_images() {
 }
 
 stack_upgrade() {
+    if is_appliance; then
+        error "This is a Pithead OS appliance: the program tree is delivered by OS images and resynced from the system slot at every boot, so a tarball upgrade here would silently revert at the next reboot. Updates arrive as signed OS images — see the appliance guide."
+    fi
     log "Upgrading stack (rebuilding containers)..."
     # A release (git pull) may change config templates, add/rename .env vars, or restructure the
     # Caddyfile / Tari config — all GENERATED files mounted into containers. Re-render them before
@@ -419,6 +447,8 @@ stack_upgrade() {
     inject_service_configs
     generate_caddyfile
     provision_control_runner # #33: converge the control-runner units on the current toggle
+    provision_ssh_access
+    provision_console_login
     log "Re-rendered generated config for the current release."
     migrate_compose_project
     # (Re)assert the Tor-only egress firewall BEFORE compose — same ordering as stack_up (#276), for
@@ -1255,6 +1285,264 @@ firstboot_consume_spool() { # <spool-dir>
     return 1
 }
 
+# --- disk installer (appliance only) -------------------------------------------------------
+# The appliance can boot from the installation medium itself. When it does, the wizard leads with
+# a disk picker instead of the setup form: the operator installs first, reboots, and configures
+# the installed machine. Config is never transplanted between machines.
+
+# Overridable so the shell suite can point it at a fake — the real one partitions disks.
+install_bin() { printf '%s' "${PITHEAD_INSTALL_BIN:-/usr/local/sbin/pithead-install}"; }
+
+# --- pre-seeding from the installation medium ----------------------------------------------
+# The ESP is FAT, so an operator can drop files on the stick from any laptop right after
+# flashing — before the machine has ever booted. Two are honoured:
+#
+#   pithead-config.json   a complete configuration: first boot provisions with no browser
+#   pithead-token.txt     a chosen one-time token, so a box with no display can be reached
+#
+# This is what makes a headless or fleet install possible at all: without it the token exists
+# only on the console, so every machine needs a monitor walked to it once.
+PRESEED_DIR="${PITHEAD_PRESEED_DIR:-/boot/efi}"
+
+# A pre-seeded token, sanitised. Anything outside the token alphabet is dropped rather than
+# interpreted — this string is operator input arriving from a filesystem anyone can write.
+preseed_token() {
+    local f="$PRESEED_DIR/pithead-token.txt" t
+    [ -f "$f" ] || return 1
+    t=$(tr -dc 'A-Za-z0-9-' <"$f" 2>/dev/null | head -c 32)
+    [ "${#t}" -ge 4 ] || return 1
+    printf '%s' "$t"
+}
+
+# rc: 0 a valid pre-seeded config was installed, 1 one was present but rejected, 2 none.
+# Validated through a COPY: parse_and_validate_config fills in generated fields as it goes, and
+# writing those back would mutate the operator's stick — and on a fleet, every machine would
+# inherit the first one's generated credentials.
+consume_preseed_config() { # <dest-config-path>
+    local f="$PRESEED_DIR/pithead-config.json" dest="$1" tmp err
+    [ -f "$f" ] || return 2
+    tmp=$(mktemp) || return 1
+    cp "$f" "$tmp" || {
+        rm -f "$tmp"
+        return 1
+    }
+    if err=$(PITHEAD_CONFIG_FILE="$tmp" bash -c "source '${BASH_SOURCE[0]}' && parse_and_validate_config" 2>&1); then
+        mv "$tmp" "$dest"
+        log "Using the pre-seeded configuration from $f."
+        return 0
+    fi
+    rm -f "$tmp"
+    warn "The pre-seeded $f was rejected — falling back to the setup page."
+    warn "  $(printf '%s' "$err" | tail -n 1 | tr -d '[:cntrl:]' | tail -c 200)"
+    return 1
+}
+
+# Is this host a Pithead OS appliance? Decides which UPGRADE path is legal: the appliance's
+# program tree is delivered by OS images and resynced from the system slot at every boot, so a
+# DIY tarball upgrade would "succeed" and then silently revert at the next reboot. Probes two
+# files only the appliance image bakes; PITHEAD_APPLIANCE=0/1 overrides for tests.
+is_appliance() {
+    case "${PITHEAD_APPLIANCE:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+    esac
+    [ -f /etc/rauc/system.conf ] && [ -x /usr/local/sbin/pithead-install ]
+}
+
+# Did this system boot from removable media (a USB stick)?
+boot_is_removable() {
+    local root_src boot_dev
+    root_src=$(findmnt -no SOURCE / 2>/dev/null) || return 1
+    boot_dev=$(lsblk -no PKNAME "$root_src" 2>/dev/null | head -1)
+    [ -n "$boot_dev" ] || return 1
+    [ "$(cat "/sys/block/$boot_dev/removable" 2>/dev/null)" = "1" ]
+}
+
+# Booted from removable media AND some other disk is available to install onto. Both halves
+# matter: a box running from its internal disk must never offer to reinstall itself, and an
+# installer with nowhere to install is just a broken setup page.
+installer_mode_available() {
+    [ -x "$(install_bin)" ] || return 1
+    boot_is_removable || return 1
+    # The gate runs ~18s into boot and RACES udev's settling of a multi-partition internal
+    # disk: an empty first probe put a reinstall boot into SETUP mode while the same --list
+    # answered fine seconds later over SSH (KVM keep leg, deterministic after an unrelated
+    # boot-timing shift). Settle, then give the inventory a few honest tries — a stick with
+    # genuinely no target pays ~10 extra seconds once, against a wizard that otherwise opens
+    # in the wrong mode with no way back short of a power cycle.
+    udevadm settle --timeout=10 2>/dev/null || true
+    local tries=0
+    while [ "$tries" -lt 5 ]; do
+        [ -n "$("$(install_bin)" --list 2>/dev/null)" ] && return 0
+        sleep 2
+        tries=$((tries + 1))
+    done
+    return 1
+}
+
+# The HOST enumerates disks; the container only renders what it is given. A browser must never be
+# able to name a target the host did not offer — that is the same boundary the #33 control
+# channel draws, and here the action erases a disk.
+publish_disk_inventory() { # <spool-dir>
+    # Atomic: the wizard reads this file between our writes, and a truncate-then-write would
+    # hand it an empty inventory mid-write — rendering a disk picker with no disks.
+    local tmp="$1/.disks.tsv.$$"
+    "$(install_bin)" --list >"$tmp" 2>/dev/null || : >"$tmp"
+    chown 1000:1000 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$1/disks.tsv"
+}
+
+# The strip a previous install's config passes through before any of it may be SHOWN (#794):
+# every leaf CONTROL_SECRET_PATHS names, plus the whole objects whose value IS access — the
+# dashboard login, the worker inventory (its per-entry tokens live in a variable-length array
+# the fixed paths cannot reach), alert credentials, the ssh key. Wallet addresses, node modes
+# and hosts, the pool tier stay: those are the answers the operator came back for, and none of
+# them is a secret. Errs toward stripping more — a lost convenience beats a leaked credential.
+# rc non-zero when the file is not a usable config object; callers treat that as "no pre-fill".
+strip_config_secrets() { # <config-file> -> stripped JSON on stdout
+    jq -e --argjson paths "$CONTROL_SECRET_PATHS" '
+        delpaths($paths)
+        | del(.dashboard.auth, .dashboard.workers, .workers, .telegram,
+              .healthchecks, .notifications, .ssh, .tari.spend_public_key)' "$1" 2>/dev/null
+}
+
+# Reinstall pre-fill (#794). When the offered targets include exactly one disk that already
+# carries an install, mount its data partition READ-ONLY, read the previous config, strip the
+# secrets and publish the remainder as the page's starting point — the same last-attempt.json
+# channel the pre-seed path fills. The operator sees the answers the machine already knew and
+# changes what they came to change; a bench box once had its remote-Tari setting silently
+# defaulted back to a local chain by this gap. Host-side only (the container never mounts
+# anything) and pure convenience: every failure path returns 1 and the page simply opens
+# blank — nothing here may block an install. rc 0 = a pre-fill was published.
+prefill_from_previous_install() { # <spool-dir>
+    local spool="$1" disk part mnt cfg tmp rc=1
+    disk=$(awk -F'\t' '$5 == "pithead-with-data" {print $1}' "$spool/disks.tsv" 2>/dev/null)
+    # Two candidates would make the pre-fill a guess about WHICH machine's answers; offer none.
+    [ -n "$disk" ] && [ "$(printf '%s\n' "$disk" | wc -l)" -eq 1 ] || return 1
+    part=$(lsblk -lnpo NAME,PARTLABEL "/dev/$disk" 2>/dev/null | awk '$2 == "data" {print $1; exit}')
+    [ -n "$part" ] || return 1
+    mnt=$(mktemp -d) || return 1
+    # -t ext4 pinned: the appliance only ever formats data partitions as ext4, and an
+    # auto-probed type would let an arbitrary disk pick which filesystem parser the kernel
+    # runs against its content.
+    if mount -t ext4 -o ro,nosuid,nodev,noexec "$part" "$mnt" 2>/dev/null; then
+        cfg="$mnt/pithead/config.json"
+        tmp="$spool/.last-attempt.json.$$"
+        # The -L guards close a symlink escape: a crafted disk could point pithead/ or
+        # config.json at a file on the RUNNING host, and jq follows symlinks — the read-only
+        # mount keeps both components stable under the checks. The size cap bounds what an
+        # arbitrary disk can make this boot path chew on; jq's parse (and the object shape
+        # it needs) rejects everything else.
+        if [ ! -L "$mnt/pithead" ] && [ ! -L "$cfg" ] &&
+            [ -f "$cfg" ] && [ "$(wc -c <"$cfg" 2>/dev/null || echo 0)" -le 1048576 ] &&
+            [ -s "$cfg" ] && strip_config_secrets "$cfg" >"$tmp"; then
+            chown 1000:1000 "$tmp" 2>/dev/null || true
+            mv -f "$tmp" "$spool/last-attempt.json" && rc=0
+        fi
+        rm -f "$tmp"
+        umount "$mnt" 2>/dev/null || umount -l "$mnt" 2>/dev/null || true
+    fi
+    rmdir "$mnt" 2>/dev/null || true
+    return "$rc"
+}
+
+# Dial every remote node the candidate names, BEFORE the wizard closes and provisioning churns.
+# A wrong host or a firewalled port otherwise surfaces minutes later as a failed setup — a bench
+# session read exactly that as a crash. TCP connect only (bash /dev/tcp): proves reachability,
+# not protocol health, which the stack's own healthchecks own. rc 0 = all reachable or none
+# remote; rc 1 = a named failure on stdout.
+preflight_remote_nodes() { # <config-file>
+    local cfg="$1" host port
+    if [ "$(jq -r '.monero.mode // "local"' "$cfg")" = "remote" ]; then
+        host=$(jq -r '.monero.remote.host // ""' "$cfg")
+        for port in $(jq -r '.monero.remote.rpc_port // 18081' "$cfg") $(jq -r '.monero.remote.zmq_port // 18083' "$cfg"); do
+            if ! timeout 5 bash -c "</dev/tcp/$host/$port" 2>/dev/null; then
+                printf 'cannot reach the remote Monero node at %s:%s — check the host, the port, and that the node allows LAN access (monero.rpc_lan_access / zmq_lan_access on a Pithead host)' "$host" "$port"
+                return 1
+            fi
+        done
+    fi
+    if [ "$(jq -r '.tari.mode // "local"' "$cfg")" = "remote" ]; then
+        host=$(jq -r '.tari.remote.host // ""' "$cfg")
+        port=$(jq -r '.tari.remote.grpc_port // 18142' "$cfg")
+        if ! timeout 5 bash -c "</dev/tcp/$host/$port" 2>/dev/null; then
+            printf 'cannot reach the remote Tari node at %s:%s — check the host, the port, and that the node allows LAN access (tari.grpc_lan_access on a Pithead host)' "$host" "$port"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# rc: 0 installed, 1 failed, 2 nothing requested. The request is "disk<TAB>wipe" written by
+# the wizard's combined submit; both fields are re-validated HERE because they arrive through
+# a web form — the disk against the inventory this host published, the wipe mode against the
+# fixed set. The container asks, the host decides.
+consume_install_request() { # <spool-dir>
+    local spool="$1" req="$1/install-request" target wipe err
+    [ -f "$req" ] || return 2
+    target=$(cut -f1 <"$req" | tr -dc 'a-zA-Z0-9_-')
+    wipe=$(cut -f2 <"$req" | tr -dc 'a-z')
+    rm -f "$req"
+    case "$wipe" in keep | data | all) ;; *) wipe="keep" ;; esac
+    if ! "$(install_bin)" --list 2>/dev/null | cut -f1 | grep -qx "$target"; then
+        printf 'not an offered target: %s' "$target" >"$spool/error.txt"
+        return 1
+    fi
+    log "Installing to /dev/$target (data: $wipe) ..."
+    if err=$("$(install_bin)" --target "/dev/$target" --wipe "$wipe" --yes 2>&1); then
+        touch "$spool/installed"
+        log "Installed to /dev/$target."
+        return 0
+    fi
+    printf '%s' "$err" | tail -n 2 | tr -d '[:cntrl:]' | tail -c 240 >"$spool/error.txt"
+    warn "Install to /dev/$target failed."
+    return 1
+}
+
+# Baked container-image archives (/opt/pithead/images) are DERIVED, like every rendered file:
+# they ship in the read-only slot, the engine's storage lives on /data — which survives
+# reinstalls and A/B updates by design — and every release tags its images identically
+# (pithead-dashboard:vX.Y.Z). Keying on "does the tag exist" therefore pins a machine to the
+# first image it ever loaded: a keep-reinstall or an A/B update boots the new slot and keeps
+# serving the old containers (#798, and a bench box served a weeks-old setup page for the same
+# reason). The archive's digest is the honest key: load on change, record the digest beside
+# the storage it describes, and let 'up' recreate containers on the image-id change. Both boot
+# owners run this — pithead-boot on provisioned machines, the first-boot wizard before it
+# serves — so every path converges on the shipped images, and a normal boot pays one sha256
+# per archive.
+load_baked_images() { # $1 (optional): image ref whose absence forces a load despite a matching digest
+    local required="${1:-}" dir="${PITHEAD_IMAGES_DIR:-/opt/pithead/images}"
+    local engine archive sha rec recorded
+    engine=$(container_engine)
+    # The wizard-era record lived at a different path; retire it so an upgraded machine doesn't
+    # carry a stale file forever (its absence costs one reload on the first boot after upgrading).
+    rm -f "$PWD/.wizard-image-sha"
+    for archive in "$dir"/*.tar.gz "$dir"/*.tar; do
+        [ -f "$archive" ] || continue
+        sha=$(sha256sum "$archive" 2>/dev/null | cut -d' ' -f1)
+        rec="$PWD/data/.loaded-$(basename "$archive").sha"
+        # `|| true`: a missing record is the normal first-boot case, not an error to trap.
+        recorded=$(cat "$rec" 2>/dev/null || true)
+        if [ -n "$sha" ] && [ "$sha" = "$recorded" ]; then
+            # A digest record can outlive the storage it describes: when the caller names the
+            # image it needs, the record only counts if that image actually exists.
+            if [ -z "$required" ] || "$engine" image exists "$required" 2>/dev/null; then
+                continue
+            fi
+        fi
+        # The single slowest step of a first or post-update boot, and the one worth narrating.
+        _console "Loading this build's container images ($(basename "$archive")) — the slow part..."
+        mkdir -p "$PWD/data" 2>/dev/null || true
+        if "$engine" load -i "$archive" >/dev/null 2>&1; then
+            printf '%s' "$sha" >"$rec" 2>/dev/null || true # unrecorded -> reloads next boot
+        else
+            # No record on failure, on purpose: the next boot must retry, not skip.
+            warn "Could not load the baked image archive $(basename "$archive")."
+        fi
+    done
+    return 0
+}
+
 firstboot_wizard() {
     local arg
     for arg in "$@"; do
@@ -1266,40 +1554,302 @@ firstboot_wizard() {
         *) error "Unknown option for firstboot-wizard: $arg. Run '$0 help'." ;;
         esac
     done
-    if [ -f "$PWD/config.json" ]; then
-        log "config.json already present (pre-seeded) — skipping the wizard and running setup."
-        setup
-        return
+    # A configuration dropped on the medium beats opening a browser at all — but never on the
+    # INSTALLATION medium: pre-seeding covers configuration, not the erase decision (the docs'
+    # exact promise), and a fleet stick that provisioned ITSELF instead of offering the
+    # installer would burn out running a chain it can never hold. There, the pre-seed becomes
+    # the pre-filled combined page instead (below).
+    if ! installer_mode_available; then
+        if [ ! -f "$PWD/config.json" ] && consume_preseed_config "$PWD/config.json"; then
+            # Spent: config.json lives on /data now, and a plaintext wallet + password must not
+            # sit on this machine's unencrypted ESP forever. Only on an INSTALLED machine —
+            # running from removable media this is the operator's own stick, theirs to keep
+            # for the next machine in the fleet.
+            if ! boot_is_removable; then
+                mount -o remount,rw "$PRESEED_DIR" 2>/dev/null || true
+                rm -f "$PRESEED_DIR/pithead-config.json" 2>/dev/null ||
+                    warn "Could not remove the consumed pre-seed from $PRESEED_DIR — it holds credentials; delete it."
+            fi
+        fi
+        if [ -f "$PWD/config.json" ]; then
+            log "config.json already present (pre-seeded) — skipping the wizard and running setup."
+            # A pre-seeded config that names no password gets one too: skipping the wizard must
+            # not mean skipping the login.
+            ensure_appliance_dashboard_password || true
+            apply_appliance_defaults || true
+            setup
+            return
+        fi
     fi
-    local engine image spool token ver
+    _console "" "Pithead is starting up — preparing the setup page." \
+        "This takes a minute or two on first boot. Nothing to do yet."
+
+    local engine image spool token
     engine=$(container_engine)
-    ver=$(tr -d ' \t\r\n' <VERSION 2>/dev/null || true)
-    image="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${ver:-dev}"
+    # STACK_VERSION is the ONE place the registry tag is derived (a release is v<VERSION>, a
+    # source checkout is dev) — deriving it here instead cost a boot: the archive holds
+    # :vX.Y.Z while a hand-rolled ":$VERSION" looks for a tag that was never published.
+    export_build_provenance
+    image="${PITHEAD_REGISTRY}/pithead-dashboard:${STACK_VERSION}"
     spool="$PWD/data/firstboot"
     mkdir -p "$spool"
     # The wizard container runs as uid 1000 and must write the spool; transient dir, addresses
     # only by design, removed at handoff.
     chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
-    trap '"$engine" rm -f pithead-wizard >/dev/null 2>&1 || true' EXIT
+    # The wizard renders the EXACT config that will be written, defaults included, so it needs
+    # the reference. It is a read-only schema, not a secret.
+    cp /opt/pithead/config.reference.json "$spool/config.reference.json" 2>/dev/null ||
+        cp "$PWD/config.reference.json" "$spool/config.reference.json" 2>/dev/null || true
+    chown 1000:1000 "$spool/config.reference.json" 2>/dev/null || true
+
+    local installer=0 operator_preseed=0
+    [ -f "$PRESEED_DIR/pithead-config.json" ] && operator_preseed=1
+    if installer_mode_available; then
+        installer=1
+        publish_disk_inventory "$spool"
+        log "Running from the installation medium — install and configure on one page."
+        # The pre-fill is derived fresh every boot, never inherited: the stick's spool
+        # survives between machines, and machine 2 must not open on machine 1's answers —
+        # the same staleness rule the per-session flow-marker clear below enforces.
+        rm -f "$spool/last-attempt.json"
+        if [ "$operator_preseed" -eq 1 ] && jq -c . "$PRESEED_DIR/pithead-config.json" >"$spool/last-attempt.json" 2>/dev/null; then
+            chown 1000:1000 "$spool/last-attempt.json" 2>/dev/null || true
+            log "Pre-seeded configuration found — the page opens with it filled in."
+        elif prefill_from_previous_install "$spool"; then
+            log "Found the previous installation's settings on the target disk — the page opens with them filled in (secrets left out)."
+        fi
+    elif boot_is_removable; then
+        # Setup will proceed, but the operator should know what they are standing on: a USB stick
+        # cannot hold a 250+ GB chain and wears out under constant writes.
+        warn "Booted from removable media with no internal disk to install onto."
+        warn "Running the stack from a USB stick is unsupported — it is too slow for the chain and the stick will wear out."
+    fi
+    # Offline first boot: the appliance carries the wizard image as an archive (os/rootfs/images),
+    # because at this point the operator may have no working network yet — that is what they are
+    # here to configure. The loader is the boot path's own (see load_baked_images): naming the
+    # image forces a load when the tag is missing entirely, whatever the digest record says.
+    load_baked_images "$image"
+    # Double quotes on purpose: $engine expands NOW, at trap definition. It is a local, and the
+    # trap also fires after this function's locals are gone — where set -u would turn the trap
+    # itself into the crash that masks whatever actually failed.
+    local cert_fp=""
+    cert_fp=$(wizard_mint_cert "$spool") || warn "Could not generate a setup certificate — the setup page will be plain HTTP."
+
+    # shellcheck disable=SC2064  # expand-now is the point (see above)
+    trap "'$engine' rm -f pithead-wizard >/dev/null 2>&1 || true" EXIT
     while :; do
-        token=$(wizard_mint_token)
+        # Every wizard session starts with CLEAN flow state. The spool lives on this medium's
+        # /data, which survives reboots — so a fleet stick that installed machine 1 still
+        # carries its handoff.json, ack and installed markers, and machine 2's boot would open
+        # on the switch-off page with machine 1's stale credentials card still answering.
+        # error.txt and last-attempt.json survive on purpose: they are the retry context the
+        # failed-provisioning path just wrote for the reopened page.
+        rm -f "$spool/handoff.json" "$spool/handoff-ack" "$spool/installing" \
+            "$spool/installed" "$spool/applied" "$spool/install-request"
+        # A pre-seeded token is the operator's own choice and stays fixed across restarts of
+        # this loop; without one, mint a fresh secret every round.
+        token=$(preseed_token) || token=$(wizard_mint_token)
         "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
         "$engine" run -d --name pithead-wizard --entrypoint python3 \
-            -p 80:8000 -e WIZARD_TOKEN="$token" \
+            -p 80:8000 -p 443:8443 -e WIZARD_TOKEN="$token" \
+            -e WIZARD_TLS_CERT="${cert_fp:+/wizard-spool/wizard.crt}" \
+            -e WIZARD_TLS_KEY="${cert_fp:+/wizard-spool/wizard.key}" \
             -v "$spool":/wizard-spool \
             "$image" -m mining_dashboard.wizard >/dev/null ||
             error "Could not start the wizard container ($engine, $image). Pre-seed config.json or run '$0 firstboot-wizard --cli'."
+        local mdns_name scheme
+        mdns_name="$(hostname).local"
+        scheme="http"
+        [ -n "$cert_fp" ] && scheme="https"
         log "Setup wizard is up. From a browser on this network, open:"
-        for arg in $(hostname -I 2>/dev/null || echo 127.0.0.1); do log "    http://$arg"; done
+        log "    $scheme://$mdns_name"
+        for arg in $(hostname -I 2>/dev/null || echo 127.0.0.1); do log "    $scheme://$arg"; done
         log "One-time token: $token"
+        # Announce on every physical console, not just stdout. /dev/console is whichever the
+        # kernel cmdline named LAST, so an operator watching the other one (a monitor when the
+        # box also has a serial line, or vice versa) would otherwise never see the token.
+        # The mDNS name FIRST: it is what the documentation tells operators to use, it survives a
+        # DHCP lease change, and it is the only address that still works once the monitor is gone.
+        # The IP follows as the fallback for networks where mDNS is filtered.
+        for dev in /dev/tty1 /dev/ttyS0; do
+            [ -w "$dev" ] || continue
+            {
+                echo ""
+                echo "  Pithead setup wizard is ready. From a browser on this network, open:"
+                echo "      $scheme://$mdns_name"
+                echo "      $scheme://$(hostname -I 2>/dev/null | awk '{print $1}')   (if the name above does not resolve)"
+                echo ""
+                echo "  One-time token: $token"
+                echo "  (case does not matter, and the pit- prefix is optional)"
+                if [ -n "$cert_fp" ]; then
+                    echo ""
+                    echo "  Your browser will warn that the certificate is not trusted. That is expected:"
+                    echo "  this machine signed its own. Check it matches before continuing --"
+                    echo "  SHA-256: $cert_fp"
+                fi
+                echo ""
+            } >"$dev" 2>/dev/null || true
+        done
         while :; do
+            # A keep-everything reinstall arrives as a bare install-request with no config
+            # candidate: the preserved /data keeps config, login and chains, so there is
+            # nothing to validate and no credentials to hand off — install and switch off.
+            if [ "$installer" -eq 1 ] && [ -f "$spool/install-request" ] &&
+                [ "$(cut -f2 "$spool/install-request" 2>/dev/null)" = "keep" ] &&
+                [ ! -f "$spool/config.json" ]; then
+                touch "$spool/installing"
+                chown 1000:1000 "$spool/installing" 2>/dev/null || true
+                local irc=0
+                consume_install_request "$spool" || irc=$?
+                if [ "$irc" -ne 0 ]; then
+                    rm -f "$spool/installing"
+                    publish_disk_inventory "$spool"
+                    warn "Reinstall failed — the page shows the reason."
+                    sleep 2
+                    continue
+                fi
+                _console "" "Reinstall complete — switching off now." \
+                    "When the machine is dark, remove the USB stick and switch it back on." \
+                    "Everything it knew — settings, wallets, login, chains — is still there."
+                sleep 8
+                "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
+                _console "" "Shutting down. Remove the USB stick, then switch the machine on."
+                sleep 3
+                systemctl poweroff
+                return
+            fi
             if firstboot_consume_spool "$spool"; then
-                sleep 4 # let the page's status poll show "Provisioned"
+                # Reachability before commitment: a remote node that cannot be dialed fails HERE,
+                # on the page, with the attempt kept for editing — not minutes into provisioning.
+                local pf_err
+                if ! pf_err=$(preflight_remote_nodes "$PWD/config.json"); then
+                    printf '%s' "$pf_err" | tail -c 300 >"$spool/error.txt"
+                    jq -c . "$PWD/config.json" >"$spool/last-attempt.json" 2>/dev/null
+                    chown 1000:1000 "$spool/error.txt" "$spool/last-attempt.json" 2>/dev/null || true
+                    rm -f "$PWD/config.json"
+                    warn "Preflight failed: $pf_err"
+                    sleep 2
+                    continue
+                fi
+                log "Configuration accepted — provisioning now."
+                ensure_appliance_dashboard_password "$spool" || true
+                apply_appliance_defaults || true
+                local stratum_addr dash_user dash_pass
+                stratum_addr="stratum+tcp://$(hostname).local:$(jq -r '.p2pool.stratum_port // 3333' "$PWD/config.json" 2>/dev/null || echo 3333)"
+                dash_user=$(jq -r '.dashboard.auth.username // "admin"' "$PWD/config.json")
+                dash_pass=$(jq -r '.dashboard.auth.password // ""' "$PWD/config.json")
+                _console "" "Point your miners at this machine:" "    $stratum_addr"
+                # The handoff: credentials and addresses ON THE PAGE, over the same TLS the
+                # operator just typed secrets into — a 32-character random password transcribed
+                # from a console was never realistic. Provisioning holds until they confirm
+                # they saved it (or 10 minutes pass — an unattended pre-seeded run must not
+                # hang forever), because the page goes DARK during provisioning and the
+                # credentials must not vanish with it.
+                jq -n --arg u "$dash_user" --arg p "$dash_pass" \
+                    --arg d "https://$(hostname).local" --arg s "$stratum_addr" \
+                    '{username:$u,password:$p,dashboard:$d,stratum:$s}' >"$spool/handoff.json"
+                chown 1000:1000 "$spool/handoff.json" 2>/dev/null || true
+                local hwait=0
+                while [ ! -f "$spool/handoff-ack" ] && [ "$hwait" -lt 600 ]; do
+                    sleep 2
+                    hwait=$((hwait + 2))
+                done
+                if [ "$installer" -eq 1 ]; then
+                    # Combined install+configure (one page on the USB). The ack releases the
+                    # ERASE, so a missing human means no install: hand the form back intact
+                    # rather than destroy a disk on a timeout.
+                    if [ ! -f "$spool/handoff-ack" ]; then
+                        rm -f "$spool/handoff.json" "$spool/install-request"
+                        printf 'Credentials were never confirmed — nothing was installed. Submit again when you are ready.' >"$spool/error.txt"
+                        jq -c . "$PWD/config.json" >"$spool/last-attempt.json" 2>/dev/null
+                        chown 1000:1000 "$spool/error.txt" "$spool/last-attempt.json" 2>/dev/null || true
+                        rm -f "$PWD/config.json"
+                        continue
+                    fi
+                    touch "$spool/installing"
+                    chown 1000:1000 "$spool/installing" 2>/dev/null || true
+                    # Stage the ACCEPTED config (password already baked) onto the running ESP —
+                    # the installer carries pre-seed files to the target's ESP, and the first
+                    # boot from disk provisions itself headlessly from it. The credentials the
+                    # operator just saved are exactly the ones that machine will serve.
+                    # A fleet stick's own pre-seed is set aside first and restored after: the
+                    # accepted config carries THIS machine's generated password, and leaving it
+                    # on the stick would hand every later machine the first one's secrets.
+                    local preseed_orig=""
+                    if [ "$operator_preseed" -eq 1 ]; then
+                        preseed_orig=$(mktemp)
+                        cp /boot/efi/pithead-config.json "$preseed_orig" 2>/dev/null || preseed_orig=""
+                    fi
+                    mount -o remount,rw /boot/efi 2>/dev/null || true
+                    if ! install -m 600 "$PWD/config.json" /boot/efi/pithead-config.json; then
+                        rm -f "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack" "$spool/install-request"
+                        printf 'Could not stage the configuration for the installed system — nothing was installed.' >"$spool/error.txt"
+                        chown 1000:1000 "$spool/error.txt" 2>/dev/null || true
+                        rm -f "$PWD/config.json"
+                        continue
+                    fi
+                    local irc=0
+                    consume_install_request "$spool" || irc=$?
+                    # The stick must not keep the accepted config: a stick with config.json
+                    # boots as a PROVISIONING host next time instead of an installer.
+                    rm -f "$PWD/config.json"
+                    # The stick's ESP gets its ORIGINAL back (fleet stick) or comes up clean:
+                    # either way the staged copy — with this machine's password — never rides on.
+                    if [ -n "$preseed_orig" ] && [ -s "$preseed_orig" ]; then
+                        install -m 600 "$preseed_orig" /boot/efi/pithead-config.json 2>/dev/null || true
+                        rm -f "$preseed_orig"
+                    else
+                        rm -f /boot/efi/pithead-config.json
+                    fi
+                    if [ "$irc" -ne 0 ]; then
+                        rm -f /boot/efi/pithead-config.json "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack"
+                        jq -c . "$spool/last-attempt.json" >/dev/null 2>&1 || true
+                        publish_disk_inventory "$spool"
+                        warn "Install failed — the page shows the reason."
+                        sleep 2
+                        continue
+                    fi
+                    _console "" "Installation complete — switching off now." "When the machine is dark, remove the USB stick and switch it back on." "It will provision itself with the configuration you just confirmed."
+                    # No confirmation step. An operator who removes the stick BEFORE pressing
+                    # anything takes the running filesystem with it — powering off unprompted
+                    # removes the ordering mistake entirely: by the time anyone reaches the
+                    # machine it is already dark and the stick is safe to pull.
+                    sleep 8 # long enough for the page's poll to show the switch-off steps
+                    "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
+                    _console "" "Shutting down. Remove the USB stick, then switch the machine on."
+                    sleep 3
+                    systemctl poweroff
+                    return
+                fi
+                sleep 2
                 "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
                 rm -rf "$spool"
-                log "Configuration accepted — provisioning now."
-                setup
-                return
+                # Subshell on purpose: error() exits, and a provisioning failure must NOT
+                # dead-end the machine. Without this, config.json exists, the wizard's condition
+                # never re-arms, and a box with no shell has no recovery path at all. Output is
+                # teed: the console keeps its live narration, and the tail becomes the reopened
+                # page's error — a refusal that lives only in console scrollback cost a bench
+                # session an hour of believing the machine had crashed.
+                local setup_log
+                setup_log=$(mktemp)
+                if (setup) 2>&1 | tee "$setup_log"; then
+                    rm -f "$setup_log"
+                    return
+                fi
+                warn "Provisioning failed. The submitted configuration is kept aside as config.json.failed;"
+                warn "reopening the setup window so it can be corrected."
+                mv -f "$PWD/config.json" "$PWD/config.json.failed" 2>/dev/null || rm -f "$PWD/config.json"
+                mkdir -p "$spool"
+                chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
+                # The reopened page gets BOTH halves of a usable retry: the reason it failed, and
+                # the configuration that failed — nobody re-pastes a 95-character address the
+                # machine still holds. The accept path wiped the spool, so both are restored here.
+                grep -a "\[ERROR\]" "$setup_log" | tail -n 1 | tr -d '[:cntrl:]' | tail -c 300 >"$spool/error.txt"
+                [ -s "$spool/error.txt" ] || printf 'Provisioning failed — see the machine console for detail.' >"$spool/error.txt"
+                [ -f "$PWD/config.json.failed" ] && jq -c . "$PWD/config.json.failed" >"$spool/last-attempt.json" 2>/dev/null
+                chown 1000:1000 "$spool/error.txt" "$spool/last-attempt.json" 2>/dev/null || true
+                rm -f "$setup_log"
+                break # outer loop re-mints a token and restarts the wizard container
             fi
             if ! "$engine" inspect -f '{{.State.Running}}' pithead-wizard 2>/dev/null | grep -q true; then
                 warn "Wizard stopped (token lockout or crash) — minting a fresh token and restarting it."
@@ -1741,6 +2291,10 @@ Setup & configuration:
                                                dashboard control runner.
 
 Lifecycle:
+  render                    Regenerate every derived file (.env, Caddyfile, service
+                            configs, host units) from config.json without touching
+                            containers. The appliance runs this on every boot; run it by
+                            hand after replacing the program under an existing config.
   up                        Start the stack.
   down                      Stop the stack.
   restart [tor]             Restart the stack — or only the tor container, which picks
@@ -1807,6 +2361,11 @@ Maintenance:
                             A pre-seeded config.json skips the form; --cli runs the terminal
                             wizard instead. The one-time token prints here; five wrong tries
                             mint a fresh one. See docs/dev/dual-distribution-plan.md § phase 3.
+
+  load-images               Load the baked container-image archives (/opt/pithead/images)
+                            into the engine when their content changed since the last load.
+                            The boot path runs this on every boot — a reinstall or update
+                            that ships new images converges without any wizard involvement.
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion —
                             the client PRIVATE key, kept out of 'status'. Add it to your Tor
@@ -1976,7 +2535,7 @@ assert_safe_dir() {
     #    dirs people most often fat-finger a data_dir to. A dedicated SUBfolder of any of these
     #    (e.g. /srv/pithead, /mnt/disk/monero) is still allowed — only the bare root is refused (#91).
     case "$d" in
-    "" | / | // | /. | /root | /home | /etc | /usr | /var | /var/lib | /opt | /srv | /mnt | /media | /tmp | /bin | /sbin | /lib | /lib64 | /boot | /dev | /proc | /sys | /Users | /Applications | "$HOME" | "/home/$REAL_USER" | "/Users/$REAL_USER")
+    "" | / | // | /. | /root | /home | /etc | /usr | /var | /var/lib | /opt | /srv | /mnt | /media | /tmp | /bin | /sbin | /lib | /lib64 | /boot | /dev | /proc | /sys | /Users | /Applications | "${HOME:-/root}" | "/home/$REAL_USER" | "/Users/$REAL_USER")
         error "Refusing to use '$d' as a data directory — it's a system, home, or bare mount root. Choose a dedicated subfolder in $CONFIG_FILE (e.g. .../pithead-data)."
         ;;
     esac
@@ -2754,6 +3313,192 @@ ensure_onion_password() {
     log "Dashboard onion is on but no password was set — generated one and saved it to config.json (login: admin; see dashboard.auth.password)."
 }
 
+# Put words in front of a human standing at the machine. /dev/console is only ONE of the
+# consoles — whichever the cmdline named last — so a message sent there alone is invisible to an
+# operator watching the other. Between power-on and the setup page there is a minute or more of
+# image loading, and silence there reads as a broken machine.
+_console() { # $1... lines
+    local dev
+    log "$@"
+    for dev in /dev/tty1 /dev/ttyS0; do
+        [ -w "$dev" ] || continue
+        printf '  %s\n' "$@" >"$dev" 2>/dev/null || true
+    done
+}
+
+# A self-signed certificate for the setup page, valid for every address the operator might use.
+# Echoes the SHA-256 fingerprint so the console can print it beside the token: a browser warning
+# nobody can check is theatre, and this page now carries node passwords and bot tokens.
+# Regenerated each run — addresses change with the DHCP lease, and the key is disposable.
+# The machine's ONE certificate, minted once and kept on /data. The wizard serves it, and Caddy
+# serves the same file afterwards — because a second, different self-signed cert for the same
+# name is not a second warning, it is a hard refusal in Safari and a scary one everywhere else.
+# A bench session hit exactly that: the setup page "died" at the moment provisioning succeeded.
+appliance_tls_dir() { printf '%s' "${PITHEAD_TLS_DIR:-$PWD/data/tls}"; }
+
+# The console login mirrors the dashboard login (operator decision 2026-07-31): one secret per
+# machine. Anyone at the physical console with the dashboard password may log in as root —
+# consistent with the LAN/physical trust model (the console already shows the setup token, and
+# SSH stays key-only regardless: PasswordAuthentication never turns on). Re-asserted on every
+# render, so a changed dashboard password propagates and an empty one locks the console again.
+provision_console_login() {
+    is_appliance || return 0
+    command -v chpasswd >/dev/null 2>&1 || return 0
+    # /etc/shadow sits on the read-only root, so the password lives in a /run-backed overlay on
+    # /etc — DERIVED (#790) in the strictest sense: rewritten from config.json on every boot,
+    # persisted nowhere, gone the moment the machine powers off. (A bind-mounted shadow FILE
+    # does not survive chpasswd, which replaces the file by rename.)
+    if ! findmnt -no FSTYPE /etc 2>/dev/null | grep -q overlay; then
+        sudo mkdir -p /run/pithead-etc/upper /run/pithead-etc/work
+        sudo mount -t overlay overlay \
+            -o lowerdir=/etc,upperdir=/run/pithead-etc/upper,workdir=/run/pithead-etc/work /etc ||
+            {
+                warn "Could not prepare the console login (no /etc overlay)."
+                return 0
+            }
+    fi
+    local pass
+    pass=$(jq -r '.dashboard.auth.password // ""' "$CONFIG_FILE" 2>/dev/null)
+    if [ -z "$pass" ]; then
+        sudo passwd -l root >/dev/null 2>&1 || true
+        return 0
+    fi
+    printf 'root:%s\n' "$pass" | sudo chpasswd 2>/dev/null &&
+        log "Console login set: root, with the dashboard password." ||
+        warn "Could not set the console login."
+}
+
+# SSH per config (ssh.enabled + ssh.authorized_key) — the appliance's opt-in debug and
+# recovery path (#786). Key-only, never passwords. Everything it writes is DERIVED (#790) and
+# lives on tmpfs: the key under /run/pithead-ssh, sshd's override under /run/systemd/system —
+# rebuilt every boot by render, gone on the first boot after the flag turns off, and no key
+# material ever rests on disk outside config.json itself. Appliance-only: a DIY host owns its
+# own sshd. Deliberately in the HOST-ONLY config class (never dashboard-editable): a dashboard
+# session that could enable SSH and choose the key would own the machine.
+provision_ssh_access() {
+    is_appliance || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local unit_d="${PITHEAD_UNIT_DIR:-/run/systemd/system}/ssh.service.d"
+    local key_d="${PITHEAD_SSH_RUN_DIR:-/run/pithead-ssh}" en key
+    en=$(jq -r '.ssh.enabled // false' "$CONFIG_FILE" 2>/dev/null)
+    key=$(jq -r '.ssh.authorized_key // ""' "$CONFIG_FILE" 2>/dev/null)
+    if [ "$en" != "true" ] || [ -z "$key" ]; then
+        if [ -e "$unit_d/pithead.conf" ] || [ -d "$key_d" ]; then
+            log "SSH is OFF (ssh.enabled) — removing the runtime access."
+            rm -rf "$unit_d" "$key_d"
+            sudo systemctl daemon-reload
+            sudo systemctl stop ssh >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
+    mkdir -p "$unit_d" "$key_d"
+    chmod 755 "$key_d" # sshd's StrictModes walks the path — group/world-writable would refuse
+    printf '%s\n' "$key" >"$key_d/authorized_keys"
+    chmod 644 "$key_d/authorized_keys"
+    cat >"$unit_d/pithead.conf" <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/sshd -D -o AuthorizedKeysFile=$key_d/authorized_keys -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PermitRootLogin=prohibit-password
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl start ssh >/dev/null 2>&1 ||
+        warn "Could not start sshd — ssh.enabled is set but SSH is not running."
+    log "SSH is ON (key-only): root@$(hostname).local"
+}
+
+# Mint (or keep) the machine's ONE certificate in appliance_tls_dir. Idempotent: an existing
+# certificate that still covers the machine's names is reused, because the operator has already
+# trusted it and replacing it is indistinguishable from an attack.
+appliance_mint_cert() { # -> prints the SHA-256 fingerprint
+    local d alt ip
+    d=$(appliance_tls_dir)
+    mkdir -p "$d"
+    alt="DNS:$(hostname).local,DNS:$(hostname),DNS:localhost,IP:127.0.0.1"
+    for ip in $(hostname -I 2>/dev/null); do alt="$alt,IP:$ip"; done
+    if [ -s "$d/wizard.crt" ] && [ -s "$d/wizard.key" ] &&
+        openssl x509 -in "$d/wizard.crt" -noout -text 2>/dev/null | tr -d ' ' | grep -q "$(printf '%s' "$alt" | tr -d ' ' | cut -d, -f1)"; then
+        : # keep it
+    elif ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        -keyout "$d/wizard.key" -out "$d/wizard.crt" \
+        -subj "/CN=$(hostname).local" -addext "subjectAltName=$alt" \
+        -addext "basicConstraints=critical,CA:FALSE" >/dev/null 2>&1; then
+        return 1
+    fi
+    openssl x509 -in "$d/wizard.crt" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//'
+}
+
+wizard_mint_cert() { # <spool-dir>  -> prints the fingerprint
+    local d spool="$1" fp
+    d=$(appliance_tls_dir)
+    fp=$(appliance_mint_cert) || return 1
+    # The container reads its copy from the spool; the canonical pair stays on /data.
+    cp "$d/wizard.crt" "$spool/wizard.crt" 2>/dev/null || return 1
+    cp "$d/wizard.key" "$spool/wizard.key" 2>/dev/null || return 1
+    chown 1000:1000 "$spool/wizard.key" "$spool/wizard.crt" 2>/dev/null || true
+    chmod 640 "$spool/wizard.key" 2>/dev/null || true
+    printf '%s' "$fp"
+}
+
+# An appliance gets a dashboard login whether or not the onion is on.
+#
+# ensure_onion_password only fires for the onion, so a LAN appliance shipped an UNAUTHENTICATED
+# dashboard — and the setup page told the operator a login had been generated. On DIY that is a
+# defensible default: the operator ran the CLI wizard, was asked, and pressed Enter to skip. A
+# headless appliance was never asked, so the safe answer is the one it gets. The credential is
+# generated on the machine and printed to its console; it never crosses the setup page.
+ensure_appliance_dashboard_password() { # [spool-dir]
+    [ -f "$CONFIG_FILE" ] || return 0
+    [ -z "$(jq -r '.dashboard.auth.password // ""' "$CONFIG_FILE")" ] || return 0
+    # The operator's explicit "no login" is honoured — an empty password is also what "not
+    # chosen" looks like, so the choice cannot live in the config and rides beside it.
+    if [ -n "${1:-}" ] && [ "$(cat "$1/auth-mode" 2>/dev/null)" = "none" ]; then
+        warn "Dashboard login disabled at the operator's request — anyone on this network can open it."
+        return 0
+    fi
+    local gen tmp user
+    gen=$(generate_node_password) # 32 alnum: clears the >=16 floor, no quotes, no weak pattern
+    user=$(jq -r '.dashboard.auth.username // "admin"' "$CONFIG_FILE")
+    tmp=$(mktemp) || return 1
+    if jq --arg p "$gen" '.dashboard.auth.password = $p' "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"; then
+        _console "" "Dashboard login for this machine:" "    user: $user" "    password: $gen" \
+            "Write this down — it is also in config.json on the machine."
+        return 0
+    fi
+    rm -f "$tmp"
+    warn "Could not save a generated dashboard password; the dashboard will have no login."
+    return 1
+}
+
+# Defaults an APPLIANCE should carry that a DIY host should not. Applied only where a key is
+# ABSENT — an operator who wrote "false" meant it.
+#
+# tor.auto_heal: opt-in on DIY because restarting Tor drops every circuit, and the stack should
+# not reshape an operator's privacy boundary behind their back. On an appliance there is no back
+# to go behind: it is headless and unattended, and the failure it heals is SILENT — mining keeps
+# working while Healthchecks, Telegram and XvB all go dark at once. Production once sat that way
+# for six hours. The heal is probe-driven, rate-limited and bounded, so the risk it guards
+# against does not apply the way it does interactively.
+apply_appliance_defaults() {
+    [ -f "$CONFIG_FILE" ] || return 0
+    local tmp
+    tmp=$(mktemp) || return 1
+    # dashboard.control.enabled: on DIY the operator has a shell, so the config editor is a
+    # convenience and stays off. An appliance has NO other way in — no shell, ssh disabled — so
+    # without this the machine is unconfigurable after first boot and the only route to a changed
+    # payout address is a reflash. Production runs with it on. It sits behind the generated
+    # login, which is why the password above is not optional.
+    if jq '
+        if .tor.auto_heal == null then (.tor //= {}) | .tor.auto_heal = true else . end
+        | if .dashboard.control.enabled == null
+          then (.dashboard //= {}) | (.dashboard.control //= {}) | .dashboard.control.enabled = true
+          else . end' \
+        "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"; then
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
 # The one selection rule for every reader of the per-worker descriptors (#506): workers.list[]
 # wins whenever it is set to anything but an empty array; an empty or absent workers.list falls
 # back to the deprecated dashboard.workers[] (#172). An empty array is a schema default, not an
@@ -2897,6 +3642,15 @@ parse_and_validate_config() {
     # future field is missed. No legitimate config value contains a control character.
     if jq -e 'any(.. | strings; test("[[:cntrl:]]"))' "$CONFIG_FILE" >/dev/null 2>&1; then
         error "$CONFIG_FILE has a config value containing a control character or newline. That is not allowed — it could inject an extra line into the stack's .env. Remove the newline/control character (check secrets like node_password, bot_token, api_token)."
+    fi
+
+    # ssh.enabled without a key is a lockout-shaped mistake: sshd would run with nothing to
+    # accept. Key-only by design — password auth never turns on.
+    if [ "$(jq -r '.ssh.enabled // false' "$CONFIG_FILE")" = "true" ]; then
+        case "$(jq -r '.ssh.authorized_key // ""' "$CONFIG_FILE")" in
+        ssh-* | ecdsa-* | sk-*) ;;
+        *) error "ssh.enabled is true but ssh.authorized_key is not a public key (expected it to start with ssh-, ecdsa- or sk-). Paste the PUBLIC key (e.g. ~/.ssh/id_ed25519.pub)." ;;
+        esac
     fi
 
     # Required fields
@@ -3629,6 +4383,10 @@ update_current_symlink() {
 # effect). Interactive setup prompts, defaulting to any previously-set value then the hostname.
 resolve_dashboard_host() {
     local allow_prompt="${1:-}"
+    # An interactive ask with no terminal is an EOF that silently picks the bare hostname —
+    # exactly what happened on the appliance's headless pre-seed boot, whose dashboard then
+    # served a name no LAN client resolves. No tty → the non-interactive rules decide.
+    [ "$allow_prompt" == "interactive" ] && ! [ -t 0 ] && allow_prompt=""
     if [ -n "${DASHBOARD_HOST:-}" ]; then
         HOST_IP="$DASHBOARD_HOST"
         log "Using dashboard hostname '$HOST_IP' from $CONFIG_FILE."
@@ -3641,7 +4399,13 @@ resolve_dashboard_host() {
     else
         # "auto"/unset on a non-interactive run (e.g. apply): always the machine hostname, so
         # setting dashboard.host back to "auto" reverts HOST_IP instead of keeping a stale value.
-        HOST_IP=$(hostname)
+        # On the appliance the browsable name is what avahi publishes — <hostname>.local — not the
+        # bare hostname, which no client on the LAN can resolve.
+        if is_appliance; then
+            HOST_IP="$(hostname).local"
+        else
+            HOST_IP=$(hostname)
+        fi
     fi
 }
 
@@ -4442,6 +5206,7 @@ DASHBOARD_CONTROL_ENABLED=$DASHBOARD_CONTROL_ENABLED
 CONTROL_DIR=$CONTROL_DIR
 CADDY_LOG_DIR=$CADDY_LOG_DIR
 HOST_IP=$HOST_IP
+PITHEAD_TLS_DIR=$(appliance_tls_dir)
 HOST_PORT=$HOST_PORT
 DEPLOYMENT_COMPLETED=${DEPLOYMENT_COMPLETED:-false}
 EOF
@@ -4491,6 +5256,10 @@ caddy_hash_password_b64() {
     local pw="$1" img hash
     img=$(grep -oE 'caddy:[0-9.]+@sha256:[a-f0-9]+' docker-compose.yml | head -1)
     [ -n "$img" ] || return 1
+    # Fully qualified, because `docker run` here may be podman's shim: docker IMPLIES docker.io
+    # for a short name, podman's native path refuses one outright — the compose pull worked (the
+    # compat API keeps docker semantics) while this exact line killed appliance provisioning.
+    img="docker.io/library/$img"
     hash=$(docker run --rm "$img" caddy hash-password --plaintext "$pw" 2>/dev/null) || return 1
     [ -n "$hash" ] || return 1
     printf '%s' "$hash" | openssl base64 -A
@@ -4548,13 +5317,57 @@ generate_caddyfile() {
         [ -n "$dport" ] && port_suffix=":$dport"
     fi
 
+    # The site addresses. DIY serves the one host the operator reaches it by. The appliance is
+    # headless: the operator may browse by mDNS name, by IP (the wizard prints it), or from the
+    # console, and Caddy only answers addresses it was told about — a single-host site turns
+    # every other path into a TLS alert. dashboard.host set explicitly still wins and stays single.
+    local site_hosts="$HOST_IP"
+    if is_appliance && [ -z "${DASHBOARD_HOST:-}" ]; then
+        local extra_ip
+        for extra_ip in $(hostname -I 2>/dev/null) localhost; do
+            case " $site_hosts " in *" $extra_ip "*) continue ;; esac
+            site_hosts="$site_hosts $extra_ip"
+        done
+    fi
+    _site_addresses() { # $1 scheme — "https://a, https://b" from $site_hosts
+        local h out=""
+        for h in $site_hosts; do
+            out="${out:+$out, }$1://$h$port_suffix"
+        done
+        printf '%s' "$out"
+    }
+
     : >"Caddyfile"
     [ -n "$global_block" ] && printf '%s' "$global_block" >>"Caddyfile"
+    # The appliance hands its ONE certificate to Caddy — the same file the setup page served, so
+    # the operator's trust decision survives the handoff. Without this the wizard's cert is
+    # replaced by Caddy's own at the exact moment provisioning succeeds, and the browser that
+    # trusted the first one refuses the second: the setup page appears to die on success.
+    local tls_line="    tls internal" tlsd
+    if is_appliance; then
+        # MINT IT HERE if it is missing. The certificate was previously created only by the setup
+        # wizard, so any machine that skips the wizard — a pre-seeded config, or a reinstall whose
+        # preserved /data already held config.json — reached this point with the Caddyfile naming
+        # a file that did not exist. Caddy then answered :443 without a usable certificate and the
+        # dashboard failed the TLS handshake outright (ERR_SSL_PROTOCOL_ERROR): a bench machine
+        # looked hung when it was serving a broken listener. Generating on demand makes the
+        # directive true by construction, and the mint is idempotent — an existing certificate the
+        # operator has already trusted is reused, never replaced.
+        tlsd=$(appliance_tls_dir)
+        if [ ! -s "$tlsd/wizard.crt" ] || [ ! -s "$tlsd/wizard.key" ]; then
+            appliance_mint_cert >/dev/null 2>&1 || true
+        fi
+        if [ -s "$tlsd/wizard.crt" ] && [ -s "$tlsd/wizard.key" ]; then
+            tls_line="    tls /pithead-tls/wizard.crt /pithead-tls/wizard.key"
+        else
+            warn "Could not provide a certificate for the dashboard — falling back to Caddy's own."
+        fi
+    fi
     if [ "$DASHBOARD_SECURE" == "true" ]; then
-        log "Generating Caddyfile for automatic HTTPS ($HOST_IP$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
+        log "Generating Caddyfile for automatic HTTPS ($site_hosts$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >>"Caddyfile"
-https://$HOST_IP$port_suffix {
-    tls internal
+$(_site_addresses https) {
+$tls_line
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -4563,9 +5376,9 @@ $logblk
 }
 EOF
     else
-        log "Generating Caddyfile for HTTP ($HOST_IP$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
+        log "Generating Caddyfile for HTTP ($site_hosts$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >>"Caddyfile"
-http://$HOST_IP$port_suffix {
+$(_site_addresses http) {
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -5756,6 +6569,31 @@ apply_dry_run() {
     rm -f "$newenv"
 }
 
+# Regenerate every DERIVED file — .env, Caddyfile, service configs, host units — from
+# config.json plus THIS program, touching no containers. The appliance's boot path runs this
+# every boot (#790): derived files must never outlive the program that rendered them, and an
+# A/B update swaps the whole program, so the derived layer is rebuilt by construction instead
+# of inspected for staleness. Same preservation guarantees as apply: load_preserved_state
+# keeps Tor onions, RPC credentials and the proxy token across the rewrite.
+render_derived() {
+    require_env
+    ensure_onion_password
+    parse_and_validate_config
+    load_preserved_state
+    ensure_directories
+    resolve_dashboard_host # non-interactive
+    DEPLOYMENT_COMPLETED=true
+    render_env "$ENV_FILE"
+    provision_node_onions
+    inject_service_configs
+    generate_caddyfile
+    provision_onion_client_auth
+    provision_control_runner
+    provision_ssh_access
+    provision_console_login
+    log "Derived configuration regenerated from config.json."
+}
+
 apply() {
     local assume_yes=0 dry_run=0 porcelain=0 arg
     for arg in "$@"; do
@@ -5880,7 +6718,9 @@ apply() {
     # Client-auth keys must be written before tor is recreated below, so an onion just turned on (or a
     # client-auth toggle) takes effect on this apply rather than the next (#343).
     provision_onion_client_auth
-    provision_control_runner # #33: converge the control-runner units on the (new) toggle
+    provision_control_runner
+    provision_ssh_access
+    provision_console_login # #33: converge the control-runner units on the (new) toggle
 
     log "Updating containers..."
     migrate_compose_project
@@ -5898,8 +6738,9 @@ apply() {
     # commit above (never before the operator said yes) and under the marker, so a failed move is
     # retried; the recreate below then mounts the migrated directory.
     migrate_dashboard_data
-    # Compose recreates only the services whose resolved config changed; --remove-orphans
-    # drops monerod when a local→remote switch deactivates the local_node profile.
+    # Compose recreates only the services whose resolved config changed. --remove-orphans covers
+    # services that left the compose file entirely; a profile-deactivated service is NOT an orphan
+    # to compose, so compose_up_checked removes those containers itself before the up (#795).
     if ! compose_up_checked -d --remove-orphans; then
         warn "Config files were updated but containers were NOT recreated ('docker compose up' failed)."
         warn "Fix the cause shown above, then re-run '$0 apply' (it will retry the recreate) — or '$0 up'."
@@ -5930,7 +6771,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
+readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard load-images control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -6436,6 +7277,10 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     }
     if is_source_checkout; then
         _upg_reject "this install builds from source — upgrade from the host with 'git pull' then './pithead upgrade'."
+        return 0
+    fi
+    if is_appliance; then
+        _upg_reject "this machine is a Pithead OS appliance — it updates through signed OS images, not release tarballs, and a tarball upgrade would silently revert at the next reboot. The dashboard OS-update flow is tracked work; nothing was changed."
         return 0
     fi
     # Throttle: one attempt per 10 minutes, checked before any network dial.
@@ -7183,6 +8028,14 @@ provision_control_runner() {
     [ "$OS_TYPE" == "Linux" ] || return 0
     command -v systemctl >/dev/null 2>&1 || return 0
     local unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"
+    # The appliance's root is read-only by design, so /etc/systemd/system cannot take the unit
+    # (#791). /run/systemd/system is a first-class unit path, writable, and cleared every boot —
+    # which is fine, because the appliance re-renders derived files on every boot and these
+    # units are derived. Enablement must be --runtime for the same reason: symlinks under /etc
+    # cannot be written either.
+    local -a enable_args=(enable --now)
+    if [ -z "${PITHEAD_UNIT_DIR:-}" ] && is_appliance; then unit_dir=/run/systemd/system; fi
+    case "$unit_dir" in /run/*) enable_args=(enable --runtime --now) ;; esac
     if [ "${DASHBOARD_CONTROL_ENABLED:-false}" != "true" ]; then
         if [ -e "$unit_dir/pithead-control.path" ] || [ -e "$unit_dir/pithead-control.service" ]; then
             # The unit names are box-global but a box can hold several checkouts (release bench:
@@ -7246,7 +8099,7 @@ PathExistsGlob=$CONTROL_DIR/requests/*.json
 WantedBy=multi-user.target
 EOF
     sudo systemctl daemon-reload
-    sudo systemctl enable --now pithead-control.path >/dev/null 2>&1 ||
+    sudo systemctl "${enable_args[@]}" pithead-control.path >/dev/null 2>&1 ||
         warn "Could not enable pithead-control.path — dashboard config changes will not be applied until it is enabled."
 }
 
@@ -7324,6 +8177,10 @@ main() {
         setup
         ;;
     apply) apply "$@" ;;
+    render)
+        _reject_options render "$@"
+        render_derived
+        ;;
     up)
         _reject_options up "$@"
         require_deployed
@@ -7372,6 +8229,10 @@ main() {
     restore) stack_restore "$@" ;;
     uninstall) stack_uninstall "$@" ;;
     firstboot-wizard) firstboot_wizard "$@" ;;
+    load-images)
+        _reject_options load-images "$@"
+        load_baked_images
+        ;;
     control-run-pending)
         _reject_options control-run-pending "$@"
         require_deployed

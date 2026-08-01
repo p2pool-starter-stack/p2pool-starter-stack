@@ -3384,6 +3384,39 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "invalid tari.mode rejected" "$?" "1"
 assert_contains "invalid tari.mode message" "$out" "tari.mode must be"
 
+echo "== black-box: profile deactivation removes the old container (#795) =="
+# `compose up --remove-orphans` does not remove a profile-deactivated service's container — the
+# service is still in the compose file, so compose does not count it as an orphan — and a tari
+# local→remote switch left the old node running (offline, re-syncing) against a remote-mode
+# config. Apply must issue an explicit `compose rm -sf` for every profile-gated service whose
+# profile is off, BEFORE the recreate up. Asserted through the docker-stub call log.
+# (1) Baseline, both nodes local: the reconcile list is exactly the (off) payout-confirm wallets —
+# neither node container is touched.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+SWLOG="$V/docker-switch.log"
+: >"$SWLOG"
+out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "baseline local-nodes apply exits 0" "$?" "0"
+assert_contains "local nodes: only the off payout wallets reconcile" "$(cat "$SWLOG")" "compose rm -sf wallet-rpc tari-wallet"
+# (2) tari local→remote (the #795 reproduction): the tari container joins the removal list. No
+# re-seed — the committed local-mode .env from (1) makes this a real transition.
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+: >"$SWLOG"
+out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari local-to-remote switch applies cleanly" "$?" "0"
+assert_contains "switch removes the deactivated tari container" "$(cat "$SWLOG")" "compose rm -sf tari wallet-rpc tari-wallet"
+# The removal must precede the recreate up — the point is the old node never runs beside the
+# remote-mode p2pool, not that it eventually disappears.
+assert_contains "tari removal happens before the recreate up" "$(sed '/compose up --pull never -d --remove-orphans/q' "$SWLOG")" "compose rm -sf tari wallet-rpc tari-wallet"
+# (3) monerod rides the same guard on a monero local→remote switch.
+seed_env
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+: >"$SWLOG"
+out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "monero local-to-remote switch applies cleanly" "$?" "0"
+assert_contains "switch removes the deactivated monerod container" "$(cat "$SWLOG")" "compose rm -sf monerod wallet-rpc tari-wallet"
+
 echo "== black-box: monero.rpc_lan_access + prep_blocks_threads reflect into .env (#523) =="
 # The rendered .env must match the config input. rpc_lan_access gates the monerod RPC bind: default
 # (unset) keeps it localhost-only; true opens it to the LAN. prep_blocks_threads overrides the
@@ -7538,6 +7571,507 @@ ln -s "$PCR/versions/pithead-v1.9.3" "$PCR/current"
 assert_contains "own unit under its versioned spelling, run via the current symlink -> removed" \
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
+
+echo "== unit: the installer gate outlasts a slow device probe =="
+# An empty FIRST inventory put a reinstall boot into setup mode (KVM keep leg): the gate runs
+# ~18s into boot and races udev settling the target's partitions. It now retries before giving
+# up — a probe that answers on the third try still opens the installer.
+IGSB=$(mktemp -d)
+cat >"$IGSB/fake-install" <<'FAKE'
+#!/usr/bin/env bash
+[ "$1" = "--list" ] || exit 0
+N=$(cat "${IG_COUNT:?}" 2>/dev/null || echo 0)
+echo $((N + 1)) >"$IG_COUNT"
+[ "$N" -ge 2 ] && printf 'vda\t30G\tFake\tSN\tpithead-with-data\n'
+exit 0
+FAKE
+chmod +x "$IGSB/fake-install"
+igout=$(
+    cd "$IGSB" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    boot_is_removable() { return 0; }
+    udevadm() { :; }
+    sleep() { :; } # the retry cadence is not what is under test
+    echo 0 >"$IGSB/count"
+    PITHEAD_INSTALL_BIN="$IGSB/fake-install" IG_COUNT="$IGSB/count" installer_mode_available && echo GATE-OPEN
+)
+assert_contains "a third-try inventory still opens the installer" "$igout" "GATE-OPEN"
+rm -rf "$IGSB"
+unset IGSB igout
+
+echo "== unit: headless setup resolves the appliance's browsable name, never the bare hostname =="
+# 'interactive' with no terminal is an EOF that silently picked $(hostname) — the appliance's
+# dashboard then served a name no LAN client resolves (a bench machine showed a BLANK page:
+# pithead.local hit Caddy's empty default vhost). No tty -> the non-interactive rules decide.
+RDH=$(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    log() { :; }
+    PITHEAD_APPLIANCE=1 DASHBOARD_HOST="" resolve_dashboard_host interactive </dev/null
+    printf '%s' "$HOST_IP"
+)
+assert_eq "no tty + appliance -> <hostname>.local" "$RDH" "$(hostname).local"
+unset RDH
+
+echo "== unit: ssh access is derived — key-only, /run-resident, absent when disabled (#786) =="
+SSHSB="$SANDBOX/sshsb"
+mkdir -p "$SSHSB/bin" "$SSHSB/units" "$SSHSB/run"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$SSHSB/bin/systemctl"
+chmod +x "$SSHSB/bin/systemctl"
+ssh_run() { # <config-json>
+    printf '%s' "$1" >"$SSHSB/config.json"
+    (
+        cd "$SSHSB" || exit
+        PATH="$SSHSB/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        log() { :; }
+        warn() { :; }
+        sudo() { "$@"; }
+        PITHEAD_APPLIANCE=1 PITHEAD_UNIT_DIR="$SSHSB/units" PITHEAD_SSH_RUN_DIR="$SSHSB/run/ssh" \
+            CONFIG_FILE="$SSHSB/config.json" provision_ssh_access
+    )
+}
+ssh_run '{"ssh":{"enabled":true,"authorized_key":"ssh-ed25519 AAAATEST key@test"}}'
+grep -q "ssh-ed25519 AAAATEST" "$SSHSB/run/ssh/authorized_keys" 2>/dev/null &&
+    ok "enabled -> the key lands in the runtime dir" || bad "enabled -> the key lands in the runtime dir" "missing"
+grep -q "PasswordAuthentication=no" "$SSHSB/units/ssh.service.d/pithead.conf" 2>/dev/null &&
+    ok "password auth is forced OFF in the unit override" || bad "password auth is forced OFF in the unit override" "missing"
+ssh_run '{"ssh":{"enabled":false}}'
+[ ! -e "$SSHSB/run/ssh" ] && [ ! -e "$SSHSB/units/ssh.service.d" ] &&
+    ok "disabled -> key and override are REMOVED" || bad "disabled -> key and override are REMOVED" "residue"
+unset SSHSB ssh_run
+
+echo "== unit: ssh.enabled without a public key is refused at validation =="
+VSB="$SANDBOX/vsb"
+mkdir -p "$VSB"
+printf '{ "monero": {"wallet_address":"%s"}, "tari":{"wallet_address":"T"}, "ssh":{"enabled":true} }' "$WALLET" >"$VSB/config.json"
+vout=$(
+    cd "$VSB" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    log() { :; }
+    CONFIG_FILE="$VSB/config.json" parse_and_validate_config 2>&1
+)
+assert_contains "refusal names the missing key" "$vout" "ssh.authorized_key"
+unset VSB vout
+
+echo "== unit: pithead render rebuilds the whole derived layer in place (#790) =="
+# The defect this guards: pithead-sync delivers a NEW program on every A/B update, but .env and
+# the Caddyfile kept whatever the LAST build rendered. A bench machine served a days-old
+# Caddyfile whose site list didn't include pithead.local — new code, stale derived config, dead
+# TLS. render is the chokepoint: derived files are regenerated from config.json + this program,
+# never inspected or patched, and no container is touched.
+RSUT="$SANDBOX/render-sut"
+mkdir -p "$RSUT/bin"
+cp "$STACK" "$RSUT/pithead" && chmod +x "$RSUT/pithead"
+cp -R "$(dirname "$STACK")/build" "$RSUT/build" # service-config templates render injects from
+make_stubs "$RSUT/bin"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false} }\n' "$WALLET" >"$RSUT/config.json"
+(cd "$RSUT" && printf '\nn\n' | DOCKER_LOG=/dev/null PATH="$RSUT/bin:$PATH" ./pithead setup --skip-deps --skip-optimize >/dev/null 2>&1)
+echo "# stale — written by an older build" >"$RSUT/Caddyfile"
+render_out=$(cd "$RSUT" && DOCKER_LOG=/dev/null PATH="$RSUT/bin:$PATH" ./pithead render 2>&1)
+assert_rc "render exits 0 on a provisioned tree" "$?" "0"
+grep -q "reverse_proxy" "$RSUT/Caddyfile" &&
+    ok "a stale Caddyfile is rebuilt from config + program" ||
+    bad "a stale Caddyfile is rebuilt from config + program" "$(head -2 "$RSUT/Caddyfile")"
+case "$render_out" in
+*"Updating containers"*) bad "render never touches containers" "$render_out" ;;
+*) ok "render never touches containers" ;;
+esac
+unset RSUT render_out
+
+echo "== unit: on the appliance, control-runner units render into /run — root is read-only (#791) =="
+# /etc/systemd/system cannot take a write on the appliance (RO root by design): apply died at
+# 'tee: Read-only file system' on hardware, killing the ONLY post-setup management path. /run is
+# a first-class unit dir, writable, and cleared every boot — fine, because these units are
+# derived and the boot path re-renders them every boot. Enablement must be --runtime for the
+# same reason (no symlinks under /etc either).
+PCR791="$SANDBOX/pcr791"
+mkdir -p "$PCR791/bin"
+printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$PCR791/bin/uname"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$PCR791/bin/systemctl"
+chmod +x "$PCR791/bin/uname" "$PCR791/bin/systemctl"
+pcr791_run() { # <PITHEAD_APPLIANCE value> — run the install branch, echo recorded sudo calls
+    (
+        cd "$PCR791" || exit
+        PATH="$PCR791/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        log() { :; }
+        warn() { :; }
+        # a file, not a stream: the function /dev/null's both stdout AND stderr on some calls
+        sudo() { echo "sudo:$*" >>"$PCR791/calls"; }
+        PITHEAD_APPLIANCE="$1" CONTROL_DIR="$PCR791/control" DASHBOARD_CONTROL_ENABLED=true provision_control_runner
+    )
+}
+: >"$PCR791/calls"
+pcr791_run 1 >/dev/null 2>&1
+appl_out=$(cat "$PCR791/calls")
+assert_contains "appliance -> units written under /run/systemd/system" "$appl_out" "sudo:tee /run/systemd/system/pithead-control.service"
+assert_contains "appliance -> enablement is --runtime" "$appl_out" "systemctl enable --runtime --now"
+: >"$PCR791/calls"
+PITHEAD_UNIT_DIR="$PCR791/units" pcr791_run 0 >/dev/null 2>&1
+diy_out=$(cat "$PCR791/calls")
+case "$diy_out" in
+*"--runtime"*) bad "DIY keeps persistent /etc enablement (no --runtime)" "$diy_out" ;;
+*) ok "DIY keeps persistent /etc enablement (no --runtime)" ;;
+esac
+unset PCR791 pcr791_run appl_out diy_out
+
+echo "== unit: the dashboard certificate exists whenever the Caddyfile names it =="
+# A machine that SKIPS the wizard (pre-seeded config, or a reinstall whose preserved /data
+# already held config.json) still gets a certificate: the Caddyfile named a file only the wizard
+# used to create, so Caddy answered :443 with no usable cert and the dashboard failed the TLS
+# handshake outright — a bench machine looked hung while serving a broken listener.
+TLSSB=$(mktemp -d)
+export PITHEAD_TLS_DIR="$TLSSB/tls"
+fp1=$(run_sourced "$SANDBOX" appliance_mint_cert 2>/dev/null)
+[ -s "$TLSSB/tls/wizard.crt" ] && ok "mints a certificate on demand" || bad "mints a certificate on demand" "no crt"
+[ -s "$TLSSB/tls/wizard.key" ] && ok "mints the matching key" || bad "mints the matching key" "no key"
+assert_contains "prints a SHA-256 fingerprint" "$fp1" ":"
+# Idempotent: the operator has already trusted this one, so a second call must NOT replace it.
+fp2=$(run_sourced "$SANDBOX" appliance_mint_cert 2>/dev/null)
+assert_eq "an existing certificate is reused, never replaced" "$fp2" "$fp1"
+unset PITHEAD_TLS_DIR
+rm -rf "$TLSSB"
+unset TLSSB fp1 fp2
+
+echo "== unit: preflight_remote_nodes dials before provisioning commits =="
+PFSB=$(mktemp -d)
+printf '{"monero":{"mode":"local"},"tari":{"mode":"local"}}' >"$PFSB/local.json"
+run_sourced "$PFSB" preflight_remote_nodes "$PFSB/local.json" >/dev/null 2>&1
+assert_rc "all-local config -> nothing to dial, rc 0" "$?" "0"
+# 127.0.0.1:1 — reliably closed; the dial must fail fast and NAME the endpoint.
+printf '{"monero":{"mode":"local"},"tari":{"mode":"remote","remote":{"host":"127.0.0.1","grpc_port":1}}}' >"$PFSB/bad.json"
+out=$(run_sourced "$PFSB" preflight_remote_nodes "$PFSB/bad.json" 2>/dev/null)
+assert_rc "unreachable remote Tari -> rc 1" "$?" "1"
+assert_contains "failure names host and port" "$out" "127.0.0.1:1"
+assert_contains "failure points at the LAN-access switch" "$out" "grpc_lan_access"
+rm -rf "$PFSB"
+unset PFSB out
+
+echo "== unit: appliance defaults (tor.auto_heal) =="
+# Applied only where ABSENT: an operator who wrote false meant it.
+ADSB=$(mktemp -d)
+printf '{"monero":{"wallet_address":"x"}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "absent auto_heal -> enabled" "$(jq -r '.tor.auto_heal' "$ADSB/config.json")" "true"
+printf '{"tor":{"auto_heal":false}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "explicit false is respected" "$(jq -r '.tor.auto_heal' "$ADSB/config.json")" "false"
+printf '{"tor":{"data_dir":"/x"}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "other tor keys survive" "$(jq -r '.tor.data_dir' "$ADSB/config.json")" "/x"
+rm -rf "$ADSB"
+unset ADSB
+
+echo "== unit: load_baked_images — the archive digest, not the tag, decides a load (#798) =="
+# Every build tags its images identically and the engine's storage lives on /data, which
+# survives reinstalls and A/B updates — so "does the tag exist" pins a machine to the first
+# image it ever loaded. Both boot owners (pithead-boot and the first-boot wizard) run this ONE
+# loader; the digest record beside the store is what makes a keep-reinstall or A/B update
+# converge on the shipped containers.
+WSB=$(mktemp -d)
+mkdir -p "$WSB/images" "$WSB/bin"
+printf 'v1-archive' >"$WSB/images/dashboard.tar.gz"
+cat >"$WSB/bin/podman" <<'EOF'
+#!/usr/bin/env bash
+echo "[podman] $*" >>"${PODMAN_LOG:-/dev/null}"
+case "$1" in
+  image) [ -e "${PODMAN_IMAGE_PRESENT:-/nonexistent}" ] ;;   # `image exists <ref>`
+  load) exit "${PODMAN_LOAD_RC:-0}" ;;
+esac
+EOF
+chmod +x "$WSB/bin/podman"
+export PODMAN_LOG="$WSB/podman.log" PITHEAD_IMAGES_DIR="$WSB/images"
+lbl() { PITHEAD_ENGINE=podman PATH="$WSB/bin:$PATH" run_sourced "$WSB" load_baked_images "$@"; }
+WREC="$WSB/data/.loaded-dashboard.tar.gz.sha"
+sha_of() { sha256sum "$1" | cut -d' ' -f1; }
+
+lbl >/dev/null 2>&1
+grep -q "load -i" "$PODMAN_LOG" && ok "first boot loads the archive" ||
+    bad "first boot loads the archive" "no load call"
+assert_eq "the digest is recorded beside the store" \
+    "$(cat "$WREC" 2>/dev/null)" "$(sha_of "$WSB/images/dashboard.tar.gz")"
+: >"$PODMAN_LOG"
+lbl >/dev/null 2>&1
+grep -q "load -i" "$PODMAN_LOG" && bad "an unchanged archive is not reloaded" "loaded again" ||
+    ok "an unchanged archive is not reloaded"
+printf 'v2-archive-different' >"$WSB/images/dashboard.tar.gz"
+: >"$PODMAN_LOG"
+lbl >/dev/null 2>&1
+grep -q "load -i" "$PODMAN_LOG" &&
+    ok "a changed archive reloads — the keep-reinstall and A/B update path" ||
+    bad "a changed archive reloads" "no load call"
+# The wizard names the image it needs: a matching record must not count when the image is gone
+# (the record can outlive the storage it describes).
+: >"$PODMAN_LOG"
+lbl ghcr.io/x/pithead-dashboard:v0 >/dev/null 2>&1
+grep -q "load -i" "$PODMAN_LOG" &&
+    ok "a missing required image forces a load despite a matching record" ||
+    bad "a missing required image forces a load" "no load call"
+# A failed load leaves the old record: the next boot must retry, not skip.
+WV2SHA=$(cat "$WREC")
+printf 'v3-archive' >"$WSB/images/dashboard.tar.gz"
+export PODMAN_LOAD_RC=1
+lbl >/dev/null 2>&1
+unset PODMAN_LOAD_RC
+assert_eq "a failed load records nothing — the next boot retries" "$(cat "$WREC")" "$WV2SHA"
+unset PODMAN_LOG PITHEAD_IMAGES_DIR
+unset -f lbl sha_of
+rm -rf "$WSB"
+unset WSB WREC WV2SHA
+
+echo "== unit: pre-seeding from the installation medium =="
+# The ESP is FAT and anyone can write it, so both readers treat its contents as input, not truth.
+PSD=$(mktemp -d)
+export PITHEAD_PRESEED_DIR="$PSD"
+
+run_sourced "$SANDBOX" preseed_token >/dev/null 2>&1
+assert_rc "no token file -> rc 1 (mint one instead)" "$?" "1"
+
+printf 'pit-ABC123\n' >"$PSD/pithead-token.txt"
+assert_eq "token read from the medium" "$(run_sourced "$SANDBOX" preseed_token)" "pit-ABC123"
+
+printf 'pit-ABC123; rm -rf /\n' >"$PSD/pithead-token.txt"
+assert_eq "token sanitised to its alphabet" "$(run_sourced "$SANDBOX" preseed_token)" "pit-ABC123rm-rf"
+
+printf 'ab\n' >"$PSD/pithead-token.txt"
+run_sourced "$SANDBOX" preseed_token >/dev/null 2>&1
+assert_rc "implausibly short token refused" "$?" "1"
+rm -f "$PSD/pithead-token.txt"
+
+run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
+assert_rc "no config file -> rc 2 (nothing pre-seeded)" "$?" "2"
+
+printf '{"monero":{"wallet_address":"nope"},"tari":{"wallet_address":"t"}}' >"$PSD/pithead-config.json"
+run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
+assert_rc "invalid config -> rc 1, wizard still opens" "$?" "1"
+[ -f "$PSD/out.json" ] && bad "rejected config NOT installed" "it was" || ok "rejected config NOT installed"
+
+printf '{"monero":{"wallet_address":"4%s"},"tari":{"wallet_address":"harness-tari"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
+    "$(printf 'A%.0s' $(seq 1 94))" >"$PSD/pithead-config.json"
+cp "$PSD/pithead-config.json" "$PSD/original.json"
+run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
+assert_rc "valid config -> rc 0" "$?" "0"
+[ -s "$PSD/out.json" ] && ok "valid config installed" || bad "valid config installed" "missing"
+# The medium must come back unchanged: validation fills in generated credentials, and writing
+# those back would hand every machine in a fleet the first one's secrets.
+if cmp -s "$PSD/pithead-config.json" "$PSD/original.json"; then
+    ok "the medium is left byte-for-byte unchanged"
+else
+    bad "the medium is left byte-for-byte unchanged" "it was rewritten"
+fi
+unset PITHEAD_PRESEED_DIR PSD
+
+echo "== unit: is_appliance gates the tarball upgrade =="
+# The appliance's program tree is resynced from the system slot every boot, so a DIY tarball
+# upgrade would silently revert — both upgrade entrances must refuse when the host is one.
+out=$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" stack_upgrade 2>&1)
+assert_rc "appliance: stack_upgrade refuses" "$?" "1"
+assert_contains "refusal explains the revert-at-reboot trap" "$out" "revert at the next reboot"
+PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" is_appliance
+assert_rc "override PITHEAD_APPLIANCE=1 -> appliance" "$?" "0"
+PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" is_appliance
+assert_rc "override PITHEAD_APPLIANCE=0 -> not appliance" "$?" "1"
+
+echo "== unit: consume_install_request (disk installer host side) =="
+# The request file is operator input arriving through a web form; the host must validate it
+# against its own inventory and never trust a browser-supplied target. Driven against a fake
+# pithead-install via PITHEAD_INSTALL_BIN — the real one partitions disks.
+INSTSB=$(mktemp -d)
+cat >"$INSTSB/fake-install" <<'FAKE'
+#!/usr/bin/env bash
+case "$1" in
+--list) printf 'vda\t40G\tFake Disk\tSN1\tempty\n' ;;
+--target)
+    # record target + wipe mode (args: --target /dev/X [--wipe M] --yes)
+    echo "$2 ${4:-}" >>"${FAKE_LOG:?}"
+    exit "${FAKE_RC:-0}"
+    ;;
+esac
+FAKE
+chmod +x "$INSTSB/fake-install"
+export PITHEAD_INSTALL_BIN="$INSTSB/fake-install" FAKE_LOG="$INSTSB/calls" FAKE_RC=0
+
+mkdir -p "$INSTSB/spool"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "empty spool -> rc 2 (nothing requested)" "$?" "2"
+
+printf 'vda\tkeep' >"$INSTSB/spool/install-request"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "offered target -> rc 0" "$?" "0"
+assert_eq "installer invoked with /dev/vda and the wipe mode" "$(cat "$INSTSB/calls")" "/dev/vda keep"
+[ -f "$INSTSB/spool/installed" ] && ok "installed marker written" || bad "installed marker written" "missing"
+[ -f "$INSTSB/spool/install-request" ] && bad "request consumed" "still present" || ok "request consumed"
+
+# The wipe mode is validated HERE too: a crafted mode falls back to keep, never reaches a shell.
+rm -f "$INSTSB/spool/installed" "$INSTSB/calls"
+printf 'vda\tdata' >"$INSTSB/spool/install-request"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_eq "wipe mode passes through" "$(cat "$INSTSB/calls")" "/dev/vda data"
+rm -f "$INSTSB/spool/installed" "$INSTSB/calls"
+printf 'vda\t; rm -rf /' >"$INSTSB/spool/install-request"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_eq "hostile wipe mode normalized to keep" "$(cat "$INSTSB/calls")" "/dev/vda keep"
+
+rm -f "$INSTSB/spool/installed" "$INSTSB/calls"
+printf 'sdz\tkeep' >"$INSTSB/spool/install-request"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "unlisted target -> rc 1, refused" "$?" "1"
+assert_contains "refusal names the target" "$(cat "$INSTSB/spool/error.txt")" "sdz"
+[ -f "$INSTSB/calls" ] && bad "installer NOT invoked for unlisted target" "was invoked" || ok "installer NOT invoked for unlisted target"
+
+# A browser-supplied name is sanitized before it can reach a shell: path characters vanish and
+# the remainder no longer matches the inventory.
+rm -f "$INSTSB/spool/error.txt"
+printf '../../vda; rm -rf /\tkeep' >"$INSTSB/spool/install-request"
+run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "hostile target string -> rc 1, refused" "$?" "1"
+[ -f "$INSTSB/calls" ] && bad "installer NOT invoked for hostile string" "was invoked" || ok "installer NOT invoked for hostile string"
+
+# Installer failure surfaces into the spool for the page, and no success marker appears.
+rm -f "$INSTSB/spool/error.txt"
+printf 'vda\tkeep' >"$INSTSB/spool/install-request"
+FAKE_RC=1 run_sourced "$SANDBOX" consume_install_request "$INSTSB/spool" >/dev/null 2>&1
+assert_rc "installer failure -> rc 1" "$?" "1"
+[ -f "$INSTSB/spool/error.txt" ] && ok "failure surfaced to the page" || bad "failure surfaced to the page" "no error.txt"
+[ -f "$INSTSB/spool/installed" ] && bad "no success marker on failure" "present" || ok "no success marker on failure"
+
+unset PITHEAD_INSTALL_BIN FAKE_LOG FAKE_RC INSTSB
+
+echo "== unit: strip_config_secrets — no secret class survives the reinstall pre-fill =="
+# The strip runs before a previous install's config may be SHOWN on the setup page. Every
+# secret carries the same marker value, so one grep proves the whole list at once; the
+# non-secret answers (the point of the pre-fill) must all survive.
+SCS=$(mktemp -d)
+cat >"$SCS/prev.json" <<'PREV'
+{
+  "monero": {"wallet_address": "4KEEP-WALLET", "mode": "remote",
+             "remote": {"host": "node.lan", "rpc_port": 18081, "zmq_port": 18083},
+             "node_username": "LEAK-user", "node_password": "LEAK-nodepw", "view_key": "LEAK-mvk"},
+  "tari": {"wallet_address": "KEEP-TARI", "mode": "remote",
+           "remote": {"host": "tari.lan", "grpc_port": 18142},
+           "view_key": "LEAK-tvk", "spend_public_key": "LEAK-tspk"},
+  "p2pool": {"pool": "main", "stratum_password": "LEAK-stratum"},
+  "dashboard": {"timezone": "Europe/Berlin",
+                "auth": {"username": "LEAK-dashuser", "password": "LEAK-dashpw"},
+                "workers": [{"name": "w0", "host": "h", "token": "LEAK-oldworker"}]},
+  "workers": {"api_auth": true, "api_token": "LEAK-apitoken",
+              "list": [{"name": "rig1", "host": "rig1.lan", "token": "LEAK-workertoken"}]},
+  "telegram": {"enabled": true, "bot_token": "LEAK-bot", "chat_id": "LEAK-chat"},
+  "healthchecks": {"ping_url": "https://hc.example/LEAK-ping"},
+  "notifications": {"ntfy": {"url": "https://ntfy.example/LEAK-url", "token": "LEAK-ntfy"}},
+  "ssh": {"enabled": true, "authorized_key": "ssh-ed25519 LEAK-sshkey"},
+  "xvb": {"enabled": true, "standby": {"source": "LEAK-standby"}}
+}
+PREV
+stripped=$(run_sourced "$SANDBOX" strip_config_secrets "$SCS/prev.json")
+assert_rc "a real config strips cleanly (rc 0)" "$?" "0"
+assert_eq "no secret of ANY class survives" "$(printf '%s' "$stripped" | grep -c 'LEAK-')" "0"
+assert_eq "wallet address survives" "$(printf '%s' "$stripped" | jq -r '.monero.wallet_address')" "4KEEP-WALLET"
+assert_eq "remote node mode survives" "$(printf '%s' "$stripped" | jq -r '.tari.mode')" "remote"
+assert_eq "remote node host survives" "$(printf '%s' "$stripped" | jq -r '.tari.remote.host')" "tari.lan"
+assert_eq "pool tier survives" "$(printf '%s' "$stripped" | jq -r '.p2pool.pool')" "main"
+assert_eq "timezone survives" "$(printf '%s' "$stripped" | jq -r '.dashboard.timezone')" "Europe/Berlin"
+# Not-a-config shapes are refused, not partially stripped: rc != 0 means "no pre-fill".
+printf 'not json at all' >"$SCS/garbage.json"
+if run_sourced "$SANDBOX" strip_config_secrets "$SCS/garbage.json" >/dev/null 2>&1; then
+    bad "garbage file -> refused" "rc 0"
+else
+    ok "garbage file -> refused"
+fi
+printf '[1,2,3]' >"$SCS/array.json"
+if run_sourced "$SANDBOX" strip_config_secrets "$SCS/array.json" >/dev/null 2>&1; then
+    bad "non-object JSON -> refused" "rc 0"
+else
+    ok "non-object JSON -> refused"
+fi
+rm -rf "$SCS"
+unset SCS stripped
+
+echo "== unit: prefill_from_previous_install — fail open, publish only the stripped remainder =="
+# The orchestration around the strip: exactly one disk with an install, a read-only mount, and
+# every failure degrading to "no pre-fill" — never to a blocked install. mount/umount/lsblk are
+# PATH stubs; the fake mount copies a fixture tree under the mountpoint.
+PFSB=$(mktemp -d)
+mkdir -p "$PFSB/bin" "$PFSB/spool" "$PFSB/prev/pithead"
+printf '#!/bin/bash\necho "/dev/fake2 data"\n' >"$PFSB/bin/lsblk"
+cat >"$PFSB/bin/mount" <<'MNT'
+#!/bin/bash
+[ "${PF_MOUNT_RC:-0}" -eq 0 ] || exit "$PF_MOUNT_RC"
+# The mountpoint is the last argument; -P keeps fixture symlinks AS symlinks.
+cp -RP "${PF_TREE:?}/." "${!#}/"
+MNT
+printf '#!/bin/bash\nexit 0\n' >"$PFSB/bin/umount"
+chmod +x "$PFSB/bin/lsblk" "$PFSB/bin/mount" "$PFSB/bin/umount"
+export PF_TREE="$PFSB/prev"
+printf 'sda\t4T\tPrev Disk\tSN9\tpithead-with-data\n' >"$PFSB/spool/disks.tsv"
+printf '{"monero":{"wallet_address":"4PREV"},"dashboard":{"auth":{"username":"op","password":"LEAK-pw"}}}' \
+    >"$PFSB/prev/pithead/config.json"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "previous install found -> pre-fill published (rc 0)" "$?" "0"
+assert_eq "pre-fill keeps the wallet" "$(jq -r '.monero.wallet_address' "$PFSB/spool/last-attempt.json")" "4PREV"
+assert_eq "pre-fill carries NO login" "$(grep -c 'LEAK-' "$PFSB/spool/last-attempt.json")" "0"
+assert_eq "no temp file left beside the atomic target" "$(find "$PFSB/spool" -name '.last-attempt*' | wc -l | tr -d ' ')" "0"
+
+# Broken previous config -> no pre-fill, no error surfaced to the page.
+rm -f "$PFSB/spool/last-attempt.json"
+printf '{broken' >"$PFSB/prev/pithead/config.json"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "broken previous config -> rc 1" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "broken config publishes nothing" "file exists" || ok "broken config publishes nothing"
+[ -f "$PFSB/spool/error.txt" ] && bad "broken config surfaces no page error" "error.txt written" || ok "broken config surfaces no page error"
+
+# Absent previous config -> no pre-fill.
+rm -f "$PFSB/prev/pithead/config.json"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "no previous config -> rc 1" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "no config publishes nothing" "file exists" || ok "no config publishes nothing"
+
+# A mount failure (corrupt filesystem, busy partition) fails open too.
+printf '{"monero":{"wallet_address":"4PREV"}}' >"$PFSB/prev/pithead/config.json"
+PF_MOUNT_RC=32 PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "mount failure -> rc 1, nothing blocked" "$?" "1"
+
+# Symlink escape: a crafted disk pointing config.json — or the pithead dir itself — at a file
+# on the RUNNING host must publish nothing, even when the target parses as a valid config.
+printf '{"monero":{"wallet_address":"4HOST-FILE"}}' >"$PFSB/outside.json"
+rm -f "$PFSB/prev/pithead/config.json"
+ln -s "$PFSB/outside.json" "$PFSB/prev/pithead/config.json"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "symlinked config.json -> rc 1, refused" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "symlinked config publishes nothing" "file exists" || ok "symlinked config publishes nothing"
+mkdir -p "$PFSB/outside-dir"
+printf '{"monero":{"wallet_address":"4HOST-FILE"}}' >"$PFSB/outside-dir/config.json"
+rm -rf "$PFSB/prev/pithead"
+ln -s "$PFSB/outside-dir" "$PFSB/prev/pithead"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "symlinked pithead dir -> rc 1, refused" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "symlinked dir publishes nothing" "file exists" || ok "symlinked dir publishes nothing"
+rm -rf "$PFSB/prev/pithead"
+mkdir -p "$PFSB/prev/pithead"
+
+# Two disks carrying installs: WHICH machine's answers is a guess — publish none.
+printf 'sda\t4T\tPrev A\tSN9\tpithead-with-data\nsdb\t4T\tPrev B\tSN8\tpithead-with-data\n' >"$PFSB/spool/disks.tsv"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "two candidate disks -> rc 1, no guessing" "$?" "1"
+[ -f "$PFSB/spool/last-attempt.json" ] && bad "ambiguous target publishes nothing" "file exists" || ok "ambiguous target publishes nothing"
+
+# No disk with data at all (the everyday fresh-install stick) -> rc 1, quietly.
+printf 'vda\t40G\tBlank\tSN1\tempty\n' >"$PFSB/spool/disks.tsv"
+PATH="$PFSB/bin:$PATH" run_sourced "$SANDBOX" prefill_from_previous_install "$PFSB/spool" >/dev/null 2>&1
+assert_rc "no install on any disk -> rc 1" "$?" "1"
+rm -rf "$PFSB"
+unset PFSB PF_TREE
 
 # ---------------------------------------------------------------------------
 echo ""

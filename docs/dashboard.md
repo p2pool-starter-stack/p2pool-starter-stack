@@ -70,7 +70,7 @@ Once both nodes are synced, the dashboard shows the operational view.
 The page updates every 30 seconds, refreshing each panel in place rather than reloading. Scroll
 position, the worker-table sort column, and the chart stay put between updates. View preferences —
 theme, Simple/Advanced view, the chart's averaging window and series toggles, the worker-table
-sort, the earnings tab, the Form/JSON editor modes, and the topology mesh toggle — are also
+sort, the earnings tab, and the topology mesh toggle — are also
 remembered across reloads. A poll that fails —
 or hangs, as a dropped Tor circuit can — aborts after 25 seconds and shows a red banner naming the
 timestamp of the data still on screen ("Disconnected — showing data from …"); it clears on the next
@@ -114,7 +114,8 @@ The top bar also surfaces the persistent host conditions that `setup` warns abou
 | Badge | Means | Fix |
 |---|---|---|
 | `⚠ HugePages off` | HugePages aren't reserved — RandomX hashrate is capped. | Run setup's tuning (or edit GRUB) and reboot; the badge clears once they're reserved. |
-| `⚠ Low RAM (N GB)` | Under 16 GB of RAM — syncing is memory-heavy and Tari can OOM. | Add RAM for a stable node. |
+| `⚠ Low RAM (N GB)` | Under what this machine's workload wants: ~14 GB running both nodes locally, ~8 GB with one remote, ~3 GB with both remote. Remote nodes take their memory appetite with them; a nominal 16 GB machine reports ~15 and is fine for the full stack. | Add RAM, or point a node at a machine that has it. |
+| `⚠ Memory pressure (N GB free)` | Live signal: under 1.5 GB actually available right now, whatever the machine's size — the next spike can OOM a container. | Check which service is growing on the System panel. |
 | `⚠ No AVX2` | The CPU lacks AVX2, so RandomX mining is much slower. | A hardware limit; nothing to change at runtime. |
 | `⚠ Payout wallet changed` | The wallet p2pool mines to changed within the last 72 hours (old → new, truncated). A confirmation if you changed it; an alarm if you didn't. | Verify `monero.wallet_address` in `config.json`; see [Operations › wallet changes](operations.md). The badge expires on its own after 72 h. |
 
@@ -259,6 +260,29 @@ The summary panel pulls the key numbers together:
 | **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
 | **Wallet XMR / Wallet TARI** | Your configured Monero and Tari payout addresses, one card each. |
 
+### Earnings — Expected vs Actual
+
+One compact table, shown in **both** views, that answers "am I earning what this hashrate should?"
+— the comparison you'd otherwise assemble by hand from the Earnings tabs. One row per income
+stream, each over the window that suits how that stream pays:
+
+| Row | Expected | Actual |
+|---|---|---|
+| **Monero (7d)** | The linear estimate over the trailing 7 days, at your **7-day average** routed P2Pool hashrate — the hashrate that actually ran the window, so a fleet that grew or shrank mid-week is judged against what really ran. | Confirmed on-chain payouts over the same 7 days ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
+| **Tari (30d)** | Expected **blocks** over the trailing 30 days (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
+| **XvB wins (30d)** | XvB's published per-day estimate for your current tier — XvB's own raffle-wide expectation, not a promise. | Raffle wins recorded in the window, and how long ago the last one landed. |
+
+Rows degrade honestly rather than guess: a stream with [payout confirmation](#payout-confirmation)
+off shows the config key to set instead of a zero that would read as "earned nothing"; the XvB row
+disappears when XvB is off; a `*` marks a window that reaches back past the oldest recorded payout.
+The XvB row deliberately shows **no XMR figure and no percent**: a win pays out through ordinary
+small payouts that can't be told apart from P2Pool payouts, so any "XvB XMR earned" number would be
+an invention.
+
+Short windows swing with mining luck — P2Pool pays when the pool finds blocks, and solo Tari blocks
+are rarer still. A sustained gap between expected and actual is the signal worth checking (workers
+offline, a misconfigured payout address); a single quiet week is not.
+
 ### Workers Alive
 
 A live table of every connected rig: worker name, IP, uptime, and per-worker hashrate over the 1m
@@ -353,8 +377,8 @@ How it stays safe:
 - **Masked values stay masked.** If a writable value is ever a masked secret (the same
   `{__secret__: true}` sentinel the [Configuration view](#configuration-view) uses), the table
   editor renders it as a blank password field, never as JSON you could copy or mangle; leave it
-  blank to keep it, type a value to replace it. JSON mode carries the sentinel through untouched
-  unless you edit that key yourself.
+  blank to keep it, type a value to replace it. the config tab's Advanced pane carries the sentinel
+  through untouched unless you edit that key yourself.
 
 RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
 recorded with its keys, outcome, and time. Because the rig's enriched feed doesn't expose the writable
@@ -374,14 +398,15 @@ sync gaps, or other noise the average doesn't separate out.
 ### Simple vs. Advanced view
 
 A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) shows the chart, the
-Overview summary, and the worker table. **Advanced** swaps the Overview for cards that break out the
-same data in more detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**,
-**XMR Network**, **Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
-choice is remembered across reloads.
+Overview summary, the [Earnings — Expected vs Actual](#earnings--expected-vs-actual) table, and the
+worker table. **Advanced** swaps the Overview for cards that break out the same data in more
+detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**,
+**Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
+expected-vs-actual table stays in both views. The choice is remembered across reloads.
 
-The earnings estimates and the XvB tier calculator live only in Advanced view. Simple view shows a
-one-time banner pointing there; it goes away once you dismiss it or open Advanced view, and stays
-away across reloads.
+The what-if earnings calculator and the XvB tier calculator live only in Advanced view. Simple view
+shows a one-time banner pointing there; it goes away once you dismiss it or open Advanced view, and
+stays away across reloads.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/launch/advanced.png">
@@ -504,10 +529,26 @@ when you give the stack a way to check the chain. Set `monero.view_key` (the pri
 for your payout address) and the stack runs a **view-only** `monero-wallet-rpc` against your local
 node, scanning for confirmed incoming payouts. P2Pool pays each miner's share directly in a Monero
 block's coinbase, so the wallet is the only ground truth that a payout arrived. The Monero tab of
-the earnings card then shows a **Confirmed on-chain** block under the estimate — 24-hour, 7-day, and
-all-time XMR totals plus the time since the **last payout** — and a `payout_confirmed` alert fires
-once per payout (Telegram and the other sinks). The Tari tab carries the same **Confirmed on-chain**
-block in XTM once Tari payout confirmation is on (see the Tari note below).
+the earnings card then shows a **Confirmed on-chain** block under the estimate — and a
+`payout_confirmed` alert fires once per payout (Telegram and the other sinks). The Tari tab carries
+the same **Confirmed on-chain** block in XTM once Tari payout confirmation is on (see the Tari note
+below).
+
+| Figure | What it sums |
+|---|---|
+| **Yesterday** | The previous full calendar day, midnight to midnight in the dashboard's timezone (`dashboard.timezone`) — the same clock the daily summary fires on. Not a trailing 24 hours. |
+| **Confirmed 24h** | The trailing 24 hours from now. Deliberately a different span from **Yesterday**, so the two disagree during the day. |
+| **Running 7d** | The trailing 7 days from now. |
+| **Running 30d** | The trailing 30 days from now. |
+| **Confirmed all-time** | Every payout recorded, however far back. |
+| **Last payout** | Time since the most recent confirmed payout, hover for the payout count. |
+
+A running window is marked with a `*` when it reaches back further than the oldest payout on
+record — the total then covers only the history the wallet gave the dashboard, not the full span its
+label names, and a footnote says where that history starts. Read the marker as *may be incomplete*:
+a wallet that genuinely earned nothing for six weeks is marked too, because the recorded payouts
+alone can't tell "no payout arrived" apart from "we weren't watching yet". A fresh install marks
+every running window until history builds up behind it.
 
 Each confirmed Monero payout also drops a **Payouts** marker — a green coin at the block time it
 landed — onto the hashrate chart, on the same marker row as the event diamonds and raffle stars.
@@ -642,10 +683,14 @@ Edit `config.json` from the dashboard. Off by default: set `dashboard.control.en
 wallet, so it refuses to run without a login), and run `./pithead apply`. A **Configuration**
 button then appears next to the Simple/Advanced toggle.
 
-Two edit modes build the same candidate config and submit it through the same pipeline below
+One editing surface: the form on top and, beneath it, a collapsed **Advanced** pane holding
+the exact configuration that will be applied — both live views of a single candidate. Editing
+a field rewrites the pane; editing the pane refills the fields; what the pane shows is
+byte-for-byte what Save previews. (This is the setup wizard's pattern — the first page and
+the config tab now behave identically.) The pieces:
 ([#529](https://github.com/p2pool-starter-stack/pithead/issues/529)):
 
-- **Form** (the default) pins a **Core** group at the top — the same wallet-address /
+- **The form** pins a **Core** group at the top — the same wallet-address /
   `monero.mode` / `p2pool.pool` / dashboard-auth-and-host shortlist
   [`./pithead setup`](getting-started.md#3-run-setup) asks, read from the one file the wizard and
   this view share, [`config.core-keys.json`](../config.core-keys.json), so the two can't drift
@@ -678,21 +723,24 @@ Two edit modes build the same candidate config and submit it through the same pi
   enforces (see below) and surfaced on `GET /api/config` as `_editable_keys` and `_confirm_keys`,
   so neither can drift from what the gate actually accepts; a greyed field never enters the staged
   edit set at all.
-- **JSON** edits the whole fetched config as one text block, for operators who'd rather paste than
-  click through fields. A **Load from file** control (`FileReader`, no upload) fills it from a
-  saved `config.json`, the same pattern [Worker Inspect's JSON mode](#worker-inspect) uses. A
-  malformed edit is flagged inline before you click Save. JSON mode edits the whole config as text,
-  so grouping and the host-only grey-out (both display-layer, form-mode only) don't apply to it —
-  the gate still validates and gates it identically to form mode.
+- **The Advanced pane** is the whole candidate as one text block, for operators who'd rather
+  paste than click through fields. A **Load from file** control (`FileReader`, no upload) fills
+  it from a saved `config.json`, the same pattern [Worker Inspect's JSON mode](#worker-inspect)
+  uses. A malformed edit is flagged inline, keeps the last good candidate as what Save would
+  send, and blocks Save until fixed. The pane edits the whole config as text, so grouping and
+  the host-only grey-out (both display-layer, form-only) don't constrain it — the gate still
+  validates and gates it identically.
 
-The flow mirrors the CLI's `apply` either way:
+The flow mirrors the CLI's `apply`:
 
 1. The form/textarea is prefilled from a pre-masked copy of `config.json` the host renders into the
    control spool ([#440](https://github.com/p2pool-starter-stack/pithead/issues/440)). Secrets (the
    dashboard password, the Telegram bot token, node RPC credentials, the stratum password) show as
    "set — leave blank to keep"; their values never enter the dashboard container, let alone the
-   browser — leaving one untouched sends a sentinel back (JSON mode carries it through verbatim
-   too), and the host swaps in the live value when it stages the change.
+   browser — leaving one untouched sends a sentinel back (the Advanced pane shows it as a
+   `__secret__` marker and carries it verbatim), blanking a previously-edited secret field
+   restores the sentinel rather than setting an empty value, and the host swaps in the live
+   value when it stages the change.
 2. **Save & preview changes** stages the edited config on the host, which dry-runs it and returns
    the same change preview `./pithead apply` prints — one row per changed setting, disruptive rows
    (⚠) styled as warnings. A config that fails validation is rejected here with pithead's own

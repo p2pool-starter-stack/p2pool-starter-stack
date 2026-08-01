@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# Install the running appliance onto a local disk.
+#
+# The installer carries no image payload. It rebuilds the layout on the target and copies the
+# RUNNING slot into it — the same work os/rauc/mkimage.sh does, sourced from the live system
+# instead of a tarball. Carrying a compressed copy of the image inside the image would double
+# every download to avoid a copy the machine can already make.
+#
+# The target then boots and systemd-repart creates slot B and /data sized to ITS disk, exactly as
+# it did for the USB. There is no second layout mechanism.
+#
+#   pithead-install --list                 machine-readable inventory of candidate disks
+#   pithead-install --target /dev/nvme0n1  install (destructive unless the disk is already ours)
+#
+# Called by the host, never by a container: this partitions disks. The web installer asks, writes
+# a request to the spool, and `pithead firstboot-wizard` runs this — the same trust shape as the
+# #33 control channel. Exercised end to end by `tests/os/run.sh --phase install`.
+set -euo pipefail
+
+# Must match os/rauc/mkimage.sh and os/rootfs/repart.d — the three describe one layout.
+ESP_MIB=256
+SLOT_GIB=4
+
+die() {
+    echo "pithead-install: $*" >&2
+    exit 1
+}
+
+# The disk this system booted from. Never an install target: overwriting the medium you are
+# running from destroys the installer mid-flight.
+boot_disk() {
+    local src
+    src=$(findmnt -no SOURCE / 2>/dev/null) || return 1
+    lsblk -no PKNAME "$src" 2>/dev/null | head -1
+}
+
+# Any partition of the disk mounted (or active as swap)? Such a disk is in use by SOMETHING, and
+# partitioning underneath a mounted filesystem corrupts it. Refuse rather than reason about why.
+disk_in_use() { # $1 disk name (no /dev/)
+    lsblk -no MOUNTPOINTS "/dev/$1" 2>/dev/null | grep -q .
+}
+
+# Candidate targets as TSV: name, size, model, serial, layout state. Model and serial are shown
+# because a bare /dev/sda is not enough to choose safely — an operator picking the wrong disk
+# here loses a 250+ GB synced chain.
+#
+# NB parsed from lsblk's JSON via jq, never its column output: a model with spaces ("Samsung SSD
+# 990 PRO") shifts every column right and an EMPTY model (all virtio, some NVMe) shifts them
+# left, so `read name size model serial type` silently drops real disks either way.
+list_disks() {
+    local boot name size model serial
+    boot=$(boot_disk || true)
+    lsblk -Jdno NAME,SIZE,MODEL,SERIAL,TYPE |
+        jq -r '.blockdevices[] | select(.type == "disk")
+               | [.name, .size, (.model // "unknown"), (.serial // "unknown")] | @tsv' |
+        while IFS=$'\t' read -r name size model serial; do
+            [ "$name" = "$boot" ] && continue
+            case "$name" in loop* | ram* | sr* | zram*) continue ;; esac
+            disk_in_use "$name" && continue
+            printf '%s\t%s\t%s\t%s\t%s\n' \
+                "$name" "$size" "$model" "$serial" "$(layout_state "/dev/$name")"
+        done
+}
+
+# Does the target already carry a pithead layout? Decides destructive-vs-reinstall, and a
+# reinstall must preserve /data — a synced chain is not re-downloadable in an afternoon.
+layout_state() { # $1 disk
+    local labels
+    labels=$(lsblk -no PARTLABEL "$1" 2>/dev/null | tr '\n' ' ')
+    case "$labels" in
+    *system-a*) case "$labels" in *data*) echo "pithead-with-data" ;; *) echo "pithead" ;; esac ;;
+    *) echo "empty" ;;
+    esac
+}
+
+partition_fresh() { # $1 disk — DESTRUCTIVE
+    echo "==> partitioning $1 (this erases it)"
+    sgdisk -Z "$1" >/dev/null
+    # Only the ESP and slot A, matching the shipped image. systemd-repart creates slot B and /data
+    # on first boot, sized to this disk.
+    sgdisk -n "1:0:+${ESP_MIB}M" -t 1:ef00 -c 1:esp \
+        -n "2:0:+${SLOT_GIB}G" -t 2:8300 -c 2:system-a "$1" >/dev/null
+    partprobe "$1" 2>/dev/null || true
+    sleep 2
+}
+
+part_of() { # $1 disk, $2 index — nvme/mmc need a 'p' separator
+    case "$1" in
+    *[0-9]) printf '%sp%s' "$1" "$2" ;;
+    *) printf '%s%s' "$1" "$2" ;;
+    esac
+}
+
+# Reinstall data semantics (#combined-installer). Only meaningful when the target already
+# carries a data partition; a fresh disk has nothing to keep or wipe.
+#   keep   /data survives untouched — a synced chain is not re-downloadable in an afternoon.
+#   data   user data goes (config, wallets, dashboard db, Tor keys, TLS, backups) but the
+#          SYNCED CHAINS stay: data/monero and data/tari are the only dirs whose loss costs
+#          days, and they hold public chain data, not secrets. The container-image cache also
+#          stays — it is derived, and keeping it saves a multi-GB re-pull.
+#   all    the data partition is reformatted. Everything goes, chains included.
+wipe_data_partition() { # $1 disk, $2 mode (data|all)
+    local part mnt keep d
+    part=$(lsblk -lnpo NAME,PARTLABEL "$1" | awk '$2 == "data" {print $1; exit}')
+    [ -b "$part" ] || die "no data partition found on $1 to wipe"
+    if [ "$2" = "all" ]; then
+        echo "==> wiping the data partition (everything, chains included)"
+        mkfs.ext4 -q -F -L data "$part"
+        return 0
+    fi
+    echo "==> wiping user data, preserving the synced chains"
+    mnt=$(mktemp -d)
+    mount "$part" "$mnt"
+    keep="$mnt/.wipe-keep.$$"
+    mkdir -p "$keep"
+    # Same-filesystem renames: preserving a 250 GB chain must not copy it.
+    for d in monero tari; do
+        [ -d "$mnt/pithead/data/$d" ] && mv "$mnt/pithead/data/$d" "$keep/$d"
+    done
+    rm -rf "$mnt/pithead"
+    mkdir -p "$mnt/pithead/data"
+    for d in monero tari; do
+        [ -d "$keep/$d" ] && mv "$keep/$d" "$mnt/pithead/data/$d"
+    done
+    rmdir "$keep" 2>/dev/null || true
+    umount "$mnt"
+    rmdir "$mnt"
+}
+
+main() {
+    local target="" assume_yes=0 action="install" wipe="keep"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        --list)
+            action="list"
+            shift
+            ;;
+        --target)
+            target="$2"
+            shift 2
+            ;;
+        --wipe)
+            wipe="$2"
+            shift 2
+            ;;
+        --yes)
+            assume_yes=1
+            shift
+            ;;
+        *) die "unknown argument: $1" ;;
+        esac
+    done
+    case "$wipe" in keep | data | all) ;; *) die "unknown --wipe mode: $wipe (keep|data|all)" ;; esac
+
+    [ "$(id -u)" -eq 0 ] || die "must run as root"
+
+    if [ "$action" = "list" ]; then
+        list_disks
+        return 0
+    fi
+
+    [ -n "$target" ] || die "--target is required"
+    [ -b "$target" ] || die "$target is not a block device"
+    local boot
+    boot=$(boot_disk || true)
+    [ -n "$boot" ] && [ "$target" = "/dev/$boot" ] &&
+        die "refusing to install onto the disk this system booted from ($target)"
+    disk_in_use "${target#/dev/}" &&
+        die "refusing: $target has mounted filesystems (or active swap) — unmount them first"
+
+    local state
+    state=$(layout_state "$target")
+    if [ "$assume_yes" -ne 1 ]; then
+        die "refusing to write to $target without --yes (state: $state)"
+    fi
+
+    # Reinstall keeps the partition table so an existing /data survives untouched; only the ESP
+    # and slot A are reformatted and repopulated. A fresh install repartitions and destroys
+    # everything.
+    if [ "$state" = "pithead-with-data" ]; then
+        if [ "$wipe" = "keep" ]; then
+            echo "==> $target already carries a pithead layout — preserving its data partition"
+        else
+            wipe_data_partition "$target" "$wipe"
+        fi
+    else
+        partition_fresh "$target"
+    fi
+
+    local esp slot_a
+    esp=$(part_of "$target" 1)
+    slot_a=$(part_of "$target" 2)
+    [ -b "$esp" ] && [ -b "$slot_a" ] || die "expected $esp and $slot_a after partitioning"
+
+    echo "==> filesystems"
+    mkfs.vfat -n ESP "$esp" >/dev/null
+    mkfs.ext4 -q -F -L system-a "$slot_a"
+
+    echo "==> copying the running system to $slot_a"
+    local mnt src
+    mnt=$(mktemp -d)
+    src=$(mktemp -d)
+    # ${var:-} in the trap, not $var: the trap also fires AFTER main returns, when these locals
+    # no longer exist, and set -u would turn that into a failure exit on a successful install.
+    trap 'umount -R "${mnt:-}" 2>/dev/null || true
+          umount "${src:-}" 2>/dev/null || true
+          rmdir "${mnt:-}" "${src:-}" 2>/dev/null || true' EXIT
+    mount "$slot_a" "$mnt"
+    # A bind mount of / exposes the slot filesystem UNDERNEATH every runtime mount: /var without
+    # the overlay that masks it, /data and /boot/efi as the empty directories they are on the
+    # slot, no /proc, /sys or /run. Copying from / directly does NOT work — /var is an overlay,
+    # i.e. a different filesystem, so --one-file-system ships an empty /var and the installed
+    # machine boots with no dpkg database and no /var/lib. The root is already read-only, so the
+    # bind view is a consistent source with nothing to quiesce.
+    mount --bind / "$src"
+    tar -C "$src" -cf - . | tar -C "$mnt" -xf -
+    umount "$src"
+
+    # Per-machine identity. The machine-id must NOT travel: every install would otherwise share
+    # the USB's identity, and DHCP/DUID collisions between two appliances on one LAN follow.
+    # Empty file = "regenerate on first boot" to systemd.
+    : >"$mnt/etc/machine-id"
+    # Harness artefact; absent on release images, must not travel from a test stick either.
+    rm -f "$mnt/etc/pithead-test-marker"
+
+    echo "==> bootloader"
+    mount "$esp" "$mnt/boot/efi"
+    mkdir -p "$mnt/boot/efi/EFI/BOOT" "$mnt/boot/efi/grub"
+    grub-mkimage -O x86_64-efi -o "$mnt/boot/efi/EFI/BOOT/BOOTX64.EFI" -p /grub \
+        part_gpt fat ext2 normal linux echo search search_label configfile test loadenv regexp probe
+    install -m 644 /usr/share/pithead/grub.cfg "$mnt/boot/efi/grub/grub.cfg"
+    # Slot A good, B empty — the same seed the image ships with. The env block lives in GRUB's
+    # prefix directory because bare `load_env` reads $prefix/grubenv; at the ESP root it is a
+    # silent no-op and the machine ignores every boot-state write the updater makes.
+    grub-editenv "$mnt/boot/efi/grub/grubenv" create
+    grub-editenv "$mnt/boot/efi/grub/grubenv" set ORDER="A B" A_OK=1 A_TRY=0 B_OK=0 B_TRY=0
+
+    # Carry pre-seeded files onto the target's ESP. Without this a fleet install loses them at
+    # the first reboot: the installer builds a fresh ESP, and the operator's config — the whole
+    # point of pre-seeding — would stay behind on the stick.
+    local seed
+    for seed in pithead-config.json pithead-token.txt; do
+        [ -f "/boot/efi/$seed" ] && install -m 600 "/boot/efi/$seed" "$mnt/boot/efi/$seed"
+    done
+
+    sync
+    # Release the target DETERMINISTICALLY, before declaring success. The EXIT trap stays as a
+    # best-effort backstop, but its silent \`|| true\` once leaked these mounts when the ESP was
+    # still busy right after the grubenv write — and the NEXT install on the same boot (a retry,
+    # or a fleet stick doing several machines) then refused with "has mounted filesystems".
+    umount -R "$mnt" 2>/dev/null || {
+        sleep 2
+        umount -R "$mnt" || die "could not release $target — its filesystems are still mounted; do not remove media"
+    }
+    echo "==> installed to $target — reboot and remove the installation medium"
+}
+
+main "$@"

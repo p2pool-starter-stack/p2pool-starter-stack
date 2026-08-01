@@ -168,7 +168,7 @@ services:
     # entrypoint writes the create-from-keys JSON to /tmp (tmpfs). Nothing else is written.
     read_only: true
     tmpfs:
-      - /tmp:size=16m,mode=1777,uid=1000,gid=1000
+      - /tmp:size=16m,mode=1777
     volumes:
       - wallet_data:/home/ubuntu/wallets
     environment:
@@ -320,7 +320,7 @@ services:
     # only /tmp (tmpfs). Nothing else is written.
     read_only: true
     tmpfs:
-      - /tmp:size=32m,mode=1777,uid=1000,gid=1000
+      - /tmp:size=32m,mode=1777
     volumes:
       - tari_wallet_data:/home/ubuntu/wallet
       - ./build/tari-wallet:/wallet-config:ro
@@ -355,8 +355,10 @@ services:
     healthcheck:
       # Process-liveness (like the Tari node) rather than a gRPC probe: the wallet's own gRPC is a
       # long stream, and a liveness ps is enough to catch a crashed daemon. '[m]' stops grep matching
-      # its own argv. The long start_period tolerates the first-run blockchain scan.
-      test: ["CMD-SHELL", "ps | grep '[m]inotari_console_wallet' || exit 1"]
+      # its own argv. The long start_period tolerates the first-run blockchain scan. The pattern is
+      # capped at 15 chars — procps' ps truncates the CMD column there, so the full binary name
+      # 'minotari_console_wallet' can never match (#777).
+      test: ["CMD-SHELL", "ps | grep '[m]inotari_consol' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -466,7 +468,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
-      - /home/ubuntu:size=64m,uid=1000,gid=1000
+      - /home/ubuntu:size=64m,mode=1777
     volumes:
       # Stratum TLS keypair (#261), read-only; the wrapper passes the cert flags only when
       # PROXY_STRATUM_TLS=true, so an empty dir (TLS off) changes nothing.
@@ -885,6 +887,10 @@ services:
       # JSON access log (#349): Caddy rolls it natively (4 MiB × 3 files, see generate_caddyfile);
       # the dashboard mounts the same dir read-only to show recent accesses and failed logins.
       - ${CADDY_LOG_DIR:-./data/caddy-logs}:/var/log/caddy
+      # The appliance's own certificate — the same one its setup page served, so the browser
+      # that trusted it there is not asked again by the dashboard. Empty on DIY, where Caddy
+      # keeps managing its internal CA (`tls internal`) and this mount is simply unused.
+      - ${PITHEAD_TLS_DIR:-./data/tls}:/pithead-tls:ro
 
 # --- Volumes ---
 volumes:

@@ -12,7 +12,7 @@ test-frontend: ## Frontend logic tests with Node's built-in runner (#632; same i
 
 test-patch-coverage: ## diff-cover (#286): new/changed lines must be >=90% covered (run after test-dashboard)
 	cd build/dashboard && uv run --locked --extra test \
-		diff-cover coverage.xml --compare-branch=origin/develop --fail-under=90
+		diff-cover coverage.xml --compare-branch=origin/$${GITHUB_BASE_REF:-develop} --fail-under=90
 
 test-stack: ## pithead shell test suite
 	bash tests/stack/run.sh
@@ -43,8 +43,9 @@ lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-st
 
 lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release + test scripts
 	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
-		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh
-	shfmt -i 4 -d pithead pithead-completion.bash $(shell git ls-files '*.sh')
+		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh \
+		os/installer/pithead-install os/build-image.sh os/rauc/*.sh os/overlay/pithead-sync os/overlay/pithead-boot tests/os/run.sh tests/os/verify-image.sh
+	shfmt -i 4 -d pithead pithead-completion.bash os/installer/pithead-install $(shell git ls-files '*.sh')
 
 lint-py: ## ruff lint + format check on all repo Python (ruff runs via uv from the locked dev extra)
 	uv run --locked --project build/dashboard --extra dev ruff check .

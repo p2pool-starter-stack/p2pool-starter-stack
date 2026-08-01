@@ -1,22 +1,31 @@
 [Unit]
 Description=Pithead first-boot setup wizard (#77 phase 3)
 # Only while unprovisioned — the wizard window closes permanently at handoff.
-ConditionPathExists=!/opt/pithead/config.json
-Wants=network-online.target systemd-timesyncd.service podman.socket
+ConditionPathExists=!/data/pithead/config.json
+# Guard: container storage lives on /data. If it is not a real mount, podman would silently build
+# storage on the discarded root overlay and fill it — refuse to start instead.
+ConditionPathIsMountPoint=/data
+Wants=network-online.target systemd-timesyncd.service podman.socket pithead-sync.service
 # Time before Tor (and before anything TLS): an RTC-less box that thinks it is 1970 can do
 # neither. htpdate is the wizard's own fallback on NTP-blocked networks (phase-3 rule).
-After=network-online.target systemd-timesyncd.service podman.socket
+After=network-online.target systemd-timesyncd.service podman.socket pithead-sync.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=no
-WorkingDirectory=/opt/pithead
+WorkingDirectory=/data/pithead
 Environment=PITHEAD_ENGINE=podman
+# systemd sets neither HOME nor USER for services without User= — but pithead (and tools it
+# shells out to) grew up in login sessions where both always exist. Two set -u crashes came from
+# exactly this (USER, then HOME); setting them here means the NEXT login-session assumption
+# degrades gracefully instead of bricking first boot.
+Environment=HOME=/root
+Environment=USER=root
 # The URL + one-time token must reach a human standing at the machine.
 StandardOutput=journal+console
 StandardError=journal+console
 ExecStartPre=/bin/sh -c 'timedatectl show -p NTPSynchronized --value | grep -qx yes || htpdate -s www.debian.org || true'
-ExecStart=/opt/pithead/pithead firstboot-wizard
+ExecStart=/data/pithead/pithead firstboot-wizard
 TimeoutStartSec=infinity
 
 [Install]

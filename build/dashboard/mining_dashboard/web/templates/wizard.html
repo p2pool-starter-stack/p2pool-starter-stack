@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pithead setup</title>
+    <link rel="icon" type="image/svg+xml" href="/static/pithead-mark.svg">
+    <!-- Same shell shape as the dashboard's index.html: theme before paint, shared stylesheet,
+         then the app as an ES module. The wizard is the first page anyone sees of this product,
+         and it looks and behaves like the dashboard they will live in afterwards. -->
+    <script src="/static/theme-init.js"></script>
+    <link rel="stylesheet" href="/static/dashboard.css">
+    <link rel="stylesheet" href="/static/wizard.css">
+</head>
+<body>
+    <!-- "Pithead setup" stays server-side in the shell: the tier-4 harness (and any curl) can
+         recognize the page without executing the module. -->
+    <main id="app" class="wizard-shell"><h1>Pithead setup</h1><p class="text-muted">Loading…</p></main>
+    <noscript><p class="wizard-noscript">This setup page needs JavaScript. The machine is fine —
+    enable JavaScript, or pre-seed a configuration on the USB stick (see the appliance guide).</p></noscript>
+    <script type="module" src="/static/wizard.mjs"></script>
+</body>
+</html>

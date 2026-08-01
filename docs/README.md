@@ -10,6 +10,7 @@ stack. The other guides cover individual topics once you're running.
 | Guide | What it covers |
 |---|---|
 | [Getting Started](getting-started.md) | Prerequisites, installation, first-run setup, and what to expect while the node syncs. |
+| [Pithead OS (appliance)](appliance.md) | The flashable appliance image: write it to USB, install it to a disk from your browser, configure by paste, and how A/B updates and rollback behave. |
 | [Hardware Requirements](hardware.md) | Minimum vs. recommended specs for the stack host (CPU, RAM, disk, network, OS), plus lighter-footprint options. (Miner hardware lives in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
 | [Configuration](configuration.md) | Every `config.json` key and default, applying changes safely, reusing an existing node via data directories, and connecting to a remote Monero node. |
 | [The Dashboard](dashboard.md) | Sync Mode, the live operational view and how to read every panel, plus the opt-in control channel: editing `config.json`, one-click upgrades, and the access + config-change audit logs, all from the browser. |
@@ -28,6 +29,8 @@ Docs for working on Pithead itself live in [`dev/`](dev/). Operators don't need 
 | Doc | What it covers |
 |---|---|
 | [Style Guide](dev/STYLE.md) | The house documentation voice; the banned-word list is enforced by `make lint-docs-voice`. |
+| [Appliance Release](dev/appliance-release.md) | Building, testing and releasing the Pithead OS image: the KVM battery, the manual hardware battery, and the bad-release runbook. |
+| [Appliance Wizard](dev/appliance-wizard.md) | The first-boot wizard's two breakable contracts — the server-owned stage machine and the machine's single TLS certificate — plus which test layer owns which promise. |
 | [Testing Strategy](dev/testing-strategy.md) | The four test tiers (unit → contract → fake-daemon mini-stack → live matrix), the full scenario catalog, and which tier proves each situation. |
 | [Testing Guide](dev/testing-guide.md) | How to write and run tests, per-change recipes, conventions, and real-hardware gotchas. |
 | Test Inventory | An exhaustive list of every test/scenario across all suites — generated on demand by `make test-inventory` (not committed). |
