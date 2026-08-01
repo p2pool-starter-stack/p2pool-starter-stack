@@ -48,6 +48,17 @@ and stages the accepted config onto the target's ESP. The first boot from disk p
 headlessly through the pre-seed path; there is no second wizard. A missing ack installs
 nothing: the erase waits for a human, and a timeout hands the form back intact.
 
+On a reinstall the form opens with the previous machine's answers. When the inventory holds
+exactly one disk that already carries an install, the host mounts its data partition
+read-only, reads the previous `config.json`, strips every secret
+(`strip_config_secrets` — the login, worker inventory, node credentials, view keys, alert
+tokens, the ssh key) and publishes the remainder through the same `last-attempt.json` channel
+the pre-seed path fills; an operator pre-seed outranks it. Derived fresh each boot and cleared
+first — a fleet stick's spool survives between machines, and machine 2 must never open on
+machine 1's answers. Pure convenience: any failure (no config, unreadable, ambiguous targets)
+opens the form blank and blocks nothing. On keep, none of it matters — the survivor config
+wins and no config crosses.
+
 **Why the server owns this.** Two defects came from the client deciding:
 
 - A client-side stage flag was set with `setState` and read back on the next line. Preact
@@ -136,7 +147,7 @@ had a gap between it and the next one.
 | pure logic | `tests/frontend/configsync.test.mjs` | path access, typed coercion, address/pair guidance |
 | view rendering | `tests/frontend/wizard.test.mjs` (probes) | each view given its props |
 | **app orchestration** | `tests/frontend/wizard.test.mjs` (stubbed server) | **stage mapping, the handoff arriving through the poll, refresh-mid-provision, rejection round-trip, request bodies** |
-| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests |
+| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, reinstall pre-fill (secret strip + fail-open) |
 | the real thing | `tests/os/run.sh --phase provision` | token from the console → submit → handoff → ack → running stack → reboot through a corrupted Caddyfile → no failed units → slot self-commit |
 
 The orchestration row is the one that was missing. pytest proved the endpoint published the

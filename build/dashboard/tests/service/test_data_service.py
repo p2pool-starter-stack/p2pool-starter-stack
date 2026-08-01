@@ -858,8 +858,9 @@ class TestMoneroSyncBlipHolding:
     mid-sync — the bench box flashed 'Synced 0 / 1' while monerod ground through 99%."""
 
     def _svc(self):
-        from mining_dashboard.service.data_service import DataService
         from unittest.mock import MagicMock
+
+        from mining_dashboard.service.data_service import DataService
 
         return DataService(MagicMock(), MagicMock(), MagicMock())
 
