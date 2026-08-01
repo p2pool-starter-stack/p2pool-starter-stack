@@ -28,6 +28,34 @@ The image also carries no installer payload. `pithead-install` rebuilds the layo
 target and copies the running slot, so the artifact never contains a compressed copy of
 itself.
 
+## Build variants and the variant stamp
+
+Every build is one of two variants, decided by whether the rootfs bakes an SSH key
+(`PITHEAD_TEST_SSH_PUBKEY` at build time):
+
+- **release** — shell-less. No key, sshd disabled, the dashboard is the only management
+  surface. The only variant that ships.
+- **debug** — the bench build: a root SSH key baked, sshd enabled. Never publish one;
+  `verify-image` without `--test` refuses it.
+
+The variant is stamped into the artifacts so tooling can tell them apart after the build:
+
+| Where | What |
+|---|---|
+| `/etc/pithead-variant` | in the rootfs — the running system and every installed slot carry it |
+| `[meta.pithead] variant=` | in the update bundle's manifest — `rauc info` shows it before anything is installed |
+
+`verify-image` asserts the stamp matches the mode it runs in: `--test` expects `debug`,
+no flag expects `release`.
+
+The stamp exists because the debug→release transition is one-way and used to be silent: a
+debug box that installs a release bundle drops SSH by design — the channel that drove the
+install — and recovery needs a console. This happened live on the bench and ended in a
+stick reinstall. `pithead os-update BUNDLE` is the install path that reads both stamps and
+warns before making that transition, requiring a y/N confirmation (or `--yes`). A bare
+`rauc install` bypasses the guard; use it only when you have already decided the SSH loss
+is acceptable.
+
 ## Development loop
 
 Everything runs from the repo root on a Linux box with docker, KVM and libvirt. The
@@ -121,10 +149,12 @@ Confirm a pasted **subaddress** (`8…`) is rejected with an explanation before 
 Expected: the stack provisions and the dashboard comes up.
 
 **M7 — real update.** Build a `v+1` bundle, copy it to the machine, and install it with
-`rauc install` (the test image carries SSH for exactly this). Expected: installs, reboots
-into the new version, and an uncommitted update reverts on the next reboot. The
-dashboard-driven OS update is tracked pre-GA work — until it exists, this is the honest
-mechanism, and it is the same one the KVM update phase exercises.
+`pithead os-update BUNDLE` (the test image carries SSH for exactly this; the command wraps
+`rauc install` and compares the variant stamps first — a debug box taking a release bundle
+must warn before removing its own SSH). Expected: installs, reboots into the new version,
+and an uncommitted update reverts on the next reboot. The dashboard-driven OS update is
+tracked pre-GA work — until it exists, this is the honest mechanism, and it is the same
+one the KVM update phase exercises.
 
 **M8 — pull the plug.** During the update's write phase, physically cut power. Repeat
 three times. Expected: the machine boots the old version every time. *A brick here blocks

@@ -30,6 +30,10 @@ mkfs.ext4 -q -L system "$WORK/rootfs.ext4"
 mount -o loop "$WORK/rootfs.ext4" "$WORK/mnt"
 tar -xf "$TARBALL" -C "$WORK/mnt"
 populate_slot "$WORK/mnt"
+# The build variant, read from the rootfs the bundle actually ships so the stamp cannot drift
+# from the payload: debug (SSH baked) or release (shell-less). Carried as bundle metadata so
+# `pithead os-update` can warn BEFORE a debug box replaces the SSH channel driving the install.
+VARIANT=$(tr -d ' \t\r\n' 2>/dev/null <"$WORK/mnt/etc/pithead-variant" || echo release)
 umount "$WORK/mnt"
 mv "$WORK/rootfs.ext4" "$WORK/bundle/rootfs.ext4"
 
@@ -37,6 +41,9 @@ cat >"$WORK/bundle/manifest.raucm" <<EOF
 [update]
 compatible=pithead-amd64
 version=$(tr -d ' \t\r\n' <VERSION)
+
+[meta.pithead]
+variant=$VARIANT
 
 [image.rootfs]
 filename=rootfs.ext4
