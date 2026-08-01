@@ -7,7 +7,7 @@ name = "mining-dashboard"
 # Keep in lockstep with the top-level VERSION file — the single source of truth for the stack version
 # (#44). A shell test (tests/stack/run.sh) fails if these drift; the dashboard *displays* the version
 # from VERSION (baked in as PITHEAD_VERSION, #58), so this is packaging metadata only.
-version = "1.14.1"
+version = "1.15.0"
 description = "Monitoring dashboard and XvB switching engine for Pithead"
 readme = "README.md"
 requires-python = ">=3.11"
