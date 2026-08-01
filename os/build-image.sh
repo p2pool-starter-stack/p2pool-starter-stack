@@ -2,9 +2,44 @@
 # Build the pithead-os appliance rootfs (#77 phase 2): the OS as a container build, exported to a
 # tarball. os/rauc/mkimage.sh turns that tarball into a bootable image and os/rauc/mkbundle.sh
 # turns it into an update bundle. Run from the repo root on a box with docker.
-#   os/build-image.sh   -> os/build/pithead-root.tar
+#   os/build-image.sh [--ssh [PUBKEY_FILE]]   -> os/build/pithead-root.tar
+#
+#   --ssh [FILE]   debug/bench variant: bake FILE (default: the builder's ~/.ssh/id_ed25519.pub,
+#                  falling back to id_rsa.pub) as root's authorized key and enable sshd. Release
+#                  builds omit it and stay shell-less. Sets the same PITHEAD_TEST_SSH_PUBKEY the
+#                  env path always honored — the flag exists so the bench recipe is one word,
+#                  not a rediscovered env var.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --ssh)
+        keyfile=""
+        # An optional value: `--ssh path/to/key.pub` or bare `--ssh` for the builder's own key.
+        if [ $# -gt 1 ] && [ "${2#--}" = "$2" ]; then
+            keyfile="$2"
+            shift
+        else
+            for k in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub"; do
+                [ -s "$k" ] && keyfile="$k" && break
+            done
+        fi
+        [ -s "${keyfile:-}" ] || {
+            echo "--ssh: no public key found (looked for ~/.ssh/id_ed25519.pub, ~/.ssh/id_rsa.pub); pass one explicitly" >&2
+            exit 1
+        }
+        PITHEAD_TEST_SSH_PUBKEY="$(head -n1 "$keyfile")"
+        export PITHEAD_TEST_SSH_PUBKEY
+        echo "==> debug build: sshd enabled, key from $keyfile"
+        ;;
+    *)
+        echo "unknown argument: $1 (usage: os/build-image.sh [--ssh [PUBKEY_FILE]])" >&2
+        exit 1
+        ;;
+    esac
+    shift
+done
 
 # Bake the wizard's container image into the appliance: first boot must reach the setup page
 # without a registry (the operator may have no working network config yet, and the plan's
@@ -58,7 +93,7 @@ echo "==> rootfs: container build + export"
 docker build -f os/rootfs/Containerfile -t "$ROOTFS_TAG" \
     --build-arg PITHEAD_TEST_SSH_PUBKEY="${PITHEAD_TEST_SSH_PUBKEY:-}" \
     --build-arg PITHEAD_TEST_MARKER="${PITHEAD_TEST_MARKER:-}" \
-    --build-arg PITHEAD_UPDATER="${PITHEAD_UPDATER:-}" .
+    --build-arg PITHEAD_UPDATER="${PITHEAD_UPDATER:-rauc}" .
 cid=$(docker create "$ROOTFS_TAG")
 mkdir -p os/build
 docker export --output os/build/pithead-root.tar "$cid"

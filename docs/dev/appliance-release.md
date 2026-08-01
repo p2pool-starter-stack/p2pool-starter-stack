@@ -37,6 +37,19 @@ bench is `gouda`; a laptop cannot run this (`/dev/kvm` is required).
 os/build-image.sh && sudo os/rauc/mkimage.sh
 ```
 
+Two build variants, chosen by one flag:
+
+- **Release** (the artifact that ships): no flag. Shell-less — sshd stays disabled and no key
+  is baked; `tests/os/verify-image.sh` refuses test material in this variant.
+- **Debug/bench** (`--ssh [PUBKEY_FILE]`): bakes the given public key (default: the builder's
+  own `~/.ssh/id_ed25519.pub`) as root's authorized key and enables sshd, for benches driven
+  over SSH. Verify with `tests/os/verify-image.sh IMAGE --test`. A bench that takes an A/B
+  update to a *release* bundle loses SSH — deliberate, and worth remembering before pressing
+  install.
+
+The updater defaults to RAUC; an image built without it cannot take another update, and the
+only way to get one now is to set `PITHEAD_UPDATER` to something else on purpose.
+
 Then the tiered battery, lowest tier first — the same rule as
 [`testing-strategy.md`](testing-strategy.md):
 
