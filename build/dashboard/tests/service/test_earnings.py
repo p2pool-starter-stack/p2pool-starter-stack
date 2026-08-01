@@ -168,6 +168,10 @@ class TestConfirmedPayoutsSummary:
             "xmr_7d": 0.0,
             "xmr_30d": 0.0,
             "xmr_all": 0.0,
+            "n_24h": 0,
+            "n_yesterday": 0,
+            "n_7d": 0,
+            "n_30d": 0,
             "last_ts": 0,
             "since_ts": 0,
             "partial": {"yesterday": True, "7d": True, "30d": True},
@@ -187,6 +191,11 @@ class TestConfirmedPayoutsSummary:
         assert s["xmr_7d"] == 3.0
         assert s["xmr_30d"] == 7.0
         assert s["xmr_all"] == 15.0
+        # Per-window counts mirror the sums (#808) — for Tari a payout IS a found block, so the
+        # count is the actual the expected-vs-actual card holds against the expected block count.
+        assert s["n_24h"] == 1
+        assert s["n_7d"] == 2
+        assert s["n_30d"] == 3
         assert s["last_ts"] == self.NOW - 3_600
         assert s["since_ts"] == self.NOW - 40 * 86_400
 
@@ -202,6 +211,7 @@ class TestConfirmedPayoutsSummary:
         ]
         s = confirmed_payouts_summary(payouts, now=self.NOW)
         assert s["xmr_yesterday"] == 6.0
+        assert s["n_yesterday"] == 2
         # The trailing 24h is a different span and deliberately disagrees: it reaches back into
         # yesterday noon and includes today's midnight payout.
         assert s["xmr_24h"] == 12.0

@@ -585,6 +585,100 @@ function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
     </div>`;
 }
 
+// Expected vs actual (#808): the comparison the operator otherwise assembles by hand across the
+// Earnings tabs, compact enough to be the Simple view's one earnings card. Deliberately carries
+// NEITHER view class — card-simple and card-advanced are disjoint (each hides in the other's
+// mode), and this is the one earnings surface both views share.
+// The server rolls the rows up (build_earnings_vs_actual — window-matched
+// hashrate, same confirmed roll-up as the Earnings card); this renders them. Per-stream windows
+// match cadence: Monero XMR over 7d with a percent-of-expected, Tari BLOCKS over 30d (solo
+// merge-mining pays whole blocks — a count, not a percent), XvB wins over 30d beside XvB's
+// published estimate with deliberately NO ratio (a win pays out through ordinary small payouts
+// the payout table cannot attribute). A stream with payout confirmation off shows the config key
+// to set instead of a zero that would read as "earned nothing"; the card yields to nothing when
+// no stream has anything to compare.
+function ExpectedVsActualCard({ summary }) {
+  if (!summary) return null;
+  const { xmr, tari, xvb } = summary;
+  if (!xmr.available && !tari.available && !xvb.enabled) return null;
+  const partialMark = (row, text) => (row.partial ? text + " *" : text);
+  const anyPartial = (xmr.enabled && xmr.partial) || (tari.enabled && tari.partial);
+  const rows = [];
+  rows.push({
+    label: "Monero (7d)",
+    expected: xmr.available ? formatXmr(xmr.expected_7d) : "—",
+    actual: !xmr.enabled
+      ? "set monero.view_key"
+      : partialMark(xmr, formatXmr(xmr.actual_7d) + (xmr.pct !== null ? ` (${xmr.pct}%)` : "")),
+    dim: !xmr.enabled,
+    title:
+      "Confirmed on-chain payouts over the trailing 7 days vs the linear expectation at your " +
+      "7-day average P2Pool hashrate. P2Pool pays when the pool finds blocks, so a single week " +
+      "swings with luck — a sustained gap is the signal worth checking, not one short window.",
+  });
+  rows.push({
+    label: "Tari (30d)",
+    // Two significant digits, not a fixed decimal: at real Tari difficulty the expectation is a
+    // FRACTION of a block per month, and "0.0" would erase exactly the number this row exists
+    // to show (≈ 0.0052 blocks is the honest, legible form).
+    expected: tari.available ? `≈ ${Number(tari.expected_blocks_30d.toPrecision(2))} blocks` : "—",
+    actual: !tari.enabled
+      ? "set tari.view_key"
+      : partialMark(
+          tari,
+          `${tari.blocks_30d} block${tari.blocks_30d === 1 ? "" : "s"} · ${formatXtm(tari.xtm_30d)}`,
+        ),
+    dim: !tari.enabled,
+    title:
+      "Tari is merge-mined SOLO: a confirmed payout IS a found block, all at once. Expected is " +
+      "your 30-day average hashrate × 30 days ÷ the Tari difficulty — at fractions of a block " +
+      "per month, zero found is the normal case, not a fault.",
+  });
+  if (xvb.enabled) {
+    rows.push({
+      label: "XvB wins (30d)",
+      expected: xvb.published_day !== null ? formatXmr(xvb.published_day) + "/day (XvB est.)" : "—",
+      actual:
+        `${xvb.wins_30d} win${xvb.wins_30d === 1 ? "" : "s"}` +
+        (xvb.last_win_ts ? ` · last ${formatAgo(xvb.last_win_ts)}` : ""),
+      dim: false,
+      title:
+        "Raffle wins recorded in the last 30 days. A win pays out through ordinary small " +
+        "payouts that cannot be told apart from P2Pool payouts, so no XvB XMR figure is shown. " +
+        "The published estimate is XvB's own raffle-wide expectation for your current tier — " +
+        "not a promise.",
+    });
+  }
+  return html`
+    <div class="card" id="card-expected-vs-actual">
+        <h3>Earnings — Expected vs Actual</h3>
+        <div class="est-scroll">
+        <table class="est-table">
+            <thead><tr>
+                <th></th>
+                <th scope="col">Expected</th>
+                <th scope="col">Actual</th>
+            </tr></thead>
+            <tbody>
+                ${rows.map(
+                  (r) => html`
+                <tr title=${r.title}>
+                    <th scope="row">${r.label}</th>
+                    <td class="c-accent">${r.expected}</td>
+                    <td class=${r.dim ? "text-muted" : ""}>${r.actual}</td>
+                </tr>`,
+                )}
+            </tbody>
+        </table>
+        </div>
+        ${
+          anyPartial
+            ? html`<p class="text-muted text-xs">* covers only the payout history on record, not the window's full span.</p>`
+            : null
+        }
+    </div>`;
+}
+
 // P2Pool earnings calculator (Issue #12). A power-user card (Advanced view) over the metrics
 // layer that estimates XMR from *P2Pool mining only* — explicitly not XvB — plus the Tari the
 // same hashrate merge-mines alongside it (#117; "—" while merge-mining is inactive). The server
@@ -1129,6 +1223,7 @@ function DashboardView({
         <div class="grid">
             <div class="grid-section-label">Your Stack</div>
             <${Overview} state=${state} />
+            <${ExpectedVsActualCard} summary=${state.earnings_summary} />
             <${NodeStats} state=${state} />
             <${XvBStats} state=${state} />
             <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} energy=${state.energy} />

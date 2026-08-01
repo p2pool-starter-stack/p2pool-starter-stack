@@ -120,7 +120,10 @@ def confirmed_payouts_summary(payouts, now=None, divisor=ATOMIC_PER_XMR, unit="x
     confirmed yet" (shows 0.000000).
 
     Windows: ``24h``/``7d``/``30d`` are trailing spans from ``now``, ``yesterday`` is the previous
-    full local day (:func:`previous_local_day`), ``all`` is everything stored.
+    full local day (:func:`previous_local_day`), ``all`` is everything stored. Each window also
+    carries its payout **count** (``n_24h`` … ``n_30d``, #808): for solo-merge-mined Tari a payout
+    IS a found block, so the count is the honest actual to hold against the expected block count —
+    the all-time count stays ``count``.
 
     ``partial`` marks each running window whose span begins before the oldest payout on record
     (``since_ts``) — the sum then covers only part of the window it is labelled with, so the UI
@@ -135,20 +138,25 @@ def confirmed_payouts_summary(payouts, now=None, divisor=ATOMIC_PER_XMR, unit="x
     day, week, month = now - 86_400, now - 7 * 86_400, now - 30 * 86_400
     y_start, y_end = previous_local_day(now)
     atomic = dict.fromkeys(("24h", "yesterday", "7d", "30d", "all"), 0)
+    counts = dict.fromkeys(("24h", "yesterday", "7d", "30d"), 0)
     for p in payouts:
         amt = p.get("amount_atomic", 0) or 0
         ts = p.get("ts", 0) or 0
         atomic["all"] += amt
         if ts >= month:
             atomic["30d"] += amt
+            counts["30d"] += 1
         if ts >= week:
             atomic["7d"] += amt
+            counts["7d"] += 1
         if ts >= day:
             atomic["24h"] += amt
+            counts["24h"] += 1
         # Half-open [start, end) so a payout landing exactly at midnight belongs to the day it
         # starts, never to both days.
         if y_start <= ts < y_end:
             atomic["yesterday"] += amt
+            counts["yesterday"] += 1
     # Only positive stamps: a row with a missing/zero ts can't date the history, and letting it
     # win the min would mark every window complete on the strength of a broken row.
     stamps = [t for t in (p.get("ts", 0) or 0 for p in payouts) if t > 0]
@@ -164,4 +172,5 @@ def confirmed_payouts_summary(payouts, now=None, divisor=ATOMIC_PER_XMR, unit="x
         "partial": {w: since_ts <= 0 or since_ts > starts[w] for w in RUNNING_WINDOWS},
     }
     summary.update({f"{unit}_{w}": v / divisor for w, v in atomic.items()})
+    summary.update({f"n_{w}": v for w, v in counts.items()})
     return summary
