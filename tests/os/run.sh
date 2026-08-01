@@ -79,6 +79,13 @@ have() { command -v "$1" >/dev/null 2>&1; }
 KEY="$HOME/.ssh/pithead-os-test"
 ip=""
 
+# The wallet every phase submits. It must be checksum-VALID: p2pool refuses a well-formed but
+# checksum-invalid address at startup with a SIGABRT and crash-loops (#829), which killed the
+# provision phase's whole miner chain when the harness used `4` + 94×`A`. Host-side validation
+# only checks the shape, so the crash is the first honest verdict. XMRig's public donation
+# address: obviously not ours, plainly labelled, and any share it ever earned would be a donation.
+HARNESS_WALLET="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
+
 _ssh() {
     ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
@@ -595,7 +602,7 @@ phase_install() {
         return
     }
     local body
-    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini&disk=vda&confirm=vda&wipe=keep"
+    body="monero_wallet=$HARNESS_WALLET&tari_wallet=harness-dummy-tari-address&pool=mini&disk=vda&confirm=vda&wipe=keep"
     scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
         bad "combined submit (config + disk) did not return 200 (got ${scode:-none})"
@@ -776,7 +783,7 @@ phase_install() {
         curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
             pf_state=$(curl -fsSk -b "$jar" "https://$ip/api/wizard-state" 2>/dev/null)
         rm -f "$jar"
-        if printf '%s' "$pf_state" | grep -q '"wallet_address": "4AAAA'; then
+        if printf '%s' "$pf_state" | grep -q "\"wallet_address\": \"${HARNESS_WALLET:0:8}"; then
             ok "pre-fill carries the previous install's wallet"
         else
             bad "the previous install's answers did not pre-fill the reinstall page"
@@ -1070,13 +1077,13 @@ phase_provision() {
         rm -f "$jar"
         return
     }
-    # Minimal honest config: a well-formed (dummy) primary Monero address, Monero-only mining.
+    # Minimal honest config: a checksum-valid primary Monero address (see HARNESS_WALLET — the
+    # old dummy crash-looped p2pool, #829). Tari's gate is deliberately format-free host-side
+    # and p2pool tolerates a bad merge-mine address, so a labelled dummy stays obviously fake.
     # Everything else keeps its default — which is itself part of what this proves.
-    # Both addresses are required — Monero's has a format gate (95 chars, leading 4), Tari's is
-    # deliberately format-free host-side, so a labelled dummy passes and stays obviously fake.
     # local_miner=true: the Both role (#796) — the same submit must also light the built-in
     # RigForge worker, asserted in the local-miner leg below.
-    body="monero_wallet=4$(printf 'A%.0s' $(seq 1 94))&tari_wallet=harness-dummy-tari-address&pool=mini&local_miner=true"
+    body="monero_wallet=$HARNESS_WALLET&tari_wallet=harness-dummy-tari-address&pool=mini&local_miner=true"
     scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
         bad "config submit did not return 200 (got ${scode:-none} — a 30x means the session was not accepted)"
