@@ -473,7 +473,20 @@ _pred_share_stats_nonempty() {
     [ -n "$n" ] && [ "$n" -gt 0 ] 2>/dev/null
 }
 
+# Predicate: the proxy's stratum counters show hashes accumulating — proof a rig is actually
+# submitting work, not merely listed. A REAL borrowed rig fails over to its secondary pool when
+# the bench stratum bounces between scenarios and returns on xmrig's own retry clock (~60-90s),
+# so a single early sample legitimately reads 0 on a rig that is mining a minute later (#831).
+_pred_stratum_hashes() {
+    local st h
+    st="$(api_state)"
+    [ -n "$st" ] || return 1
+    h="$(jq_get "$st" '.stratum.total_hashes')"
+    [ -n "$h" ] && [ "$h" -gt 0 ] 2>/dev/null
+}
+
 wait_status_ok() { wait_for "${1:-180}" 5 "pithead status OK" _pred_status_ok; }
+wait_stratum_hashes() { wait_for "${1:-180}" 10 "stratum hashes accumulating" _pred_stratum_hashes; }
 wait_monero_synced() { wait_for "${1:-300}" 10 "Monero sync complete" _pred_monero_synced; }
 wait_miner_running() { wait_for "${1:-180}" 5 "miner released" _pred_miner_running; }
 wait_tari_synced() { wait_for "${1:-300}" 10 "Tari sync complete" _pred_tari_synced; }
