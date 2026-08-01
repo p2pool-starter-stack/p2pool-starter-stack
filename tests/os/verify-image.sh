@@ -50,7 +50,7 @@ trap cleanup EXIT
 # Same race as mkimage.sh: losetup -P returns before the partition nodes exist. Wait once here
 # so the checks below read the image, not the timing of udev on a busy box.
 udevadm settle 2>/dev/null || true
-for _ in $(seq 1 25); do
+for _ in {1..25}; do
     [ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] && break
     sleep 0.2
 done

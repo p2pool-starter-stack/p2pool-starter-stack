@@ -63,7 +63,7 @@ trap cleanup EXIT
 # retry succeeds, which is exactly how it stays invisible until release day. One guarded wait:
 # settle udev, then poll briefly for both nodes.
 udevadm settle 2>/dev/null || true
-for _ in $(seq 1 25); do
+for _ in {1..25}; do
     [ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] && break
     sleep 0.2
 done
