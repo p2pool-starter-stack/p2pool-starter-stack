@@ -1437,6 +1437,9 @@ load_baked_images() { # $1 (optional): image ref whose absence forces a load des
     local required="${1:-}" dir="${PITHEAD_IMAGES_DIR:-/opt/pithead/images}"
     local engine archive sha rec recorded
     engine=$(container_engine)
+    # The wizard-era record lived at a different path; retire it so an upgraded machine doesn't
+    # carry a stale file forever (its absence costs one reload on the first boot after upgrading).
+    rm -f "$PWD/.wizard-image-sha"
     for archive in "$dir"/*.tar.gz "$dir"/*.tar; do
         [ -f "$archive" ] || continue
         sha=$(sha256sum "$archive" 2>/dev/null | cut -d' ' -f1)
