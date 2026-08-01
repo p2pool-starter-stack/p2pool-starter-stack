@@ -95,6 +95,9 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
   gap: 20px;
   margin-bottom: 20px;
+  /* Cards hug their content instead of stretching to the row's tallest neighbour (#817) — the
+   * default stretch rendered short cards as mostly-empty bordered boxes across the grid. */
+  align-items: start;
 }
 /* Section label inside the Advanced card grid (#159): the grid itself has no visual grouping, so
  * these mark the "mine" -> "the world" transition the layout comment describes. Spans the full
@@ -487,6 +490,21 @@ tr:last-child td {
 }
 .est-scroll {
   overflow-x: auto;
+}
+/* Expected-vs-actual card (#808/#817): three labelled rows, not a shared-precision numeric
+ * grid — values wrap instead of panning (this card must never scroll in either view) and the
+ * table fills the card. table-layout fixed, because in auto layout a cell's min-content width
+ * ignores overflow-wrap break opportunities (WebKit) and the table overflows anyway. */
+.eva-table {
+  width: 100%;
+  table-layout: fixed;
+}
+.eva-table thead th:first-child {
+  width: 26%; /* the row-label column; the two value columns split the rest */
+}
+.eva-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .est-heading {
   margin: 14px 0 6px 0;
