@@ -1341,7 +1341,20 @@ boot_is_removable() {
 installer_mode_available() {
     [ -x "$(install_bin)" ] || return 1
     boot_is_removable || return 1
-    [ -n "$("$(install_bin)" --list 2>/dev/null)" ]
+    # The gate runs ~18s into boot and RACES udev's settling of a multi-partition internal
+    # disk: an empty first probe put a reinstall boot into SETUP mode while the same --list
+    # answered fine seconds later over SSH (KVM keep leg, deterministic after an unrelated
+    # boot-timing shift). Settle, then give the inventory a few honest tries — a stick with
+    # genuinely no target pays ~10 extra seconds once, against a wizard that otherwise opens
+    # in the wrong mode with no way back short of a power cycle.
+    udevadm settle --timeout=10 2>/dev/null || true
+    local tries=0
+    while [ "$tries" -lt 5 ]; do
+        [ -n "$("$(install_bin)" --list 2>/dev/null)" ] && return 0
+        sleep 2
+        tries=$((tries + 1))
+    done
+    return 1
 }
 
 # The HOST enumerates disks; the container only renders what it is given. A browser must never be

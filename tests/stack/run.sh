@@ -7539,6 +7539,35 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: the installer gate outlasts a slow device probe =="
+# An empty FIRST inventory put a reinstall boot into setup mode (KVM keep leg): the gate runs
+# ~18s into boot and races udev settling the target's partitions. It now retries before giving
+# up — a probe that answers on the third try still opens the installer.
+IGSB=$(mktemp -d)
+cat >"$IGSB/fake-install" <<'FAKE'
+#!/usr/bin/env bash
+[ "$1" = "--list" ] || exit 0
+N=$(cat "${IG_COUNT:?}" 2>/dev/null || echo 0)
+echo $((N + 1)) >"$IG_COUNT"
+[ "$N" -ge 2 ] && printf 'vda\t30G\tFake\tSN\tpithead-with-data\n'
+exit 0
+FAKE
+chmod +x "$IGSB/fake-install"
+igout=$(
+    cd "$IGSB" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    boot_is_removable() { return 0; }
+    udevadm() { :; }
+    sleep() { :; } # the retry cadence is not what is under test
+    echo 0 >"$IGSB/count"
+    PITHEAD_INSTALL_BIN="$IGSB/fake-install" IG_COUNT="$IGSB/count" installer_mode_available && echo GATE-OPEN
+)
+assert_contains "a third-try inventory still opens the installer" "$igout" "GATE-OPEN"
+rm -rf "$IGSB"
+unset IGSB igout
+
 echo "== unit: headless setup resolves the appliance's browsable name, never the bare hostname =="
 # 'interactive' with no terminal is an EOF that silently picked $(hostname) — the appliance's
 # dashboard then served a name no LAN client resolves (a bench machine showed a BLANK page:
