@@ -71,6 +71,47 @@ wins and no config crosses.
 Never a client flag. `/api/wizard-state` carries the handoff payload inline for the same
 reason — a separate fetch is a separate race.
 
+## The role select — one stick, three machines
+
+The page's FIRST disclosure, above the disk, is what the machine IS. One select, reading
+exactly **Pithead** / **Pithead + RigForge** / **RigForge**, and everything downstream
+reshapes to the answer the same way the disk choice already reshapes the form:
+
+| Role | The form | What lands |
+|---|---|---|
+| Pithead | today's flow, byte for byte — the default, and the regression bar | `config.json` (the whole contract above) |
+| Pithead + RigForge | Pithead's form with the mine-on-this-machine switch preset to Yes. The role IS `local_miner.enabled` — the switch below stays live, and flipping it back submits today's config unchanged | `config.json` with `local_miner.enabled: true`; the boot contract's step 5 starts the miner |
+| RigForge | collapses to a pool address, a worker name and an optional stratum password. The pool field opens pre-filled when the host found a Pithead answering `pithead.local:3333` — dialed HOST-side and published to the spool as `rig-defaults.json`, the way the disk inventory travels, failing open to an empty field. The disk section gains **Run from this USB stick** as a first-class target: a rig holds almost no state, so the stick can BE the system — no erase, no commitment on machines whose disks belong to something else. The card shows the worker name and where it points; a rig has no dashboard and no login | `machine-role` + `rig.json` (below) |
+
+Validation-before-erase, the keep semantics, the card-then-ack gate, self-power-off and the
+headless first boot are identical in every role — one flow, three shapes. And keep means KEEP
+whatever the role says: the survivor config wins, and no role change crosses.
+
+The rig submission travels on its own spool channel (`rig-request.json`; the server never
+writes a `config.json` candidate for it), and the host dials the pool BEFORE anything
+irreversible — the same discipline `preflight_remote_nodes` gives remote nodes.
+
+### The machine-role contract
+
+What the boot path reads, written by the host at the moment a role is accepted:
+
+| File (under `/data/pithead`) | Meaning |
+|---|---|
+| `machine-role` | `pithead`, `both` or `rig`. Absent means `pithead` — every machine provisioned before this contract. The coordinator values are derivable from `config.json` (both IS `local_miner.enabled`); the rig value is load-bearing, because a rig has no `config.json` at all. |
+| `rig.json` | rig role only: `pool`, `worker`, and `stratum_password` when one was set. |
+
+A rig install to a disk stages the accepted answers as `pithead-rig.json` on the ESP —
+carried to the target by `pithead-install` beside the config and token pre-seeds — and the
+installed machine's first boot lands them as the two files above, scrubbing the ESP copy the
+way the config pre-seed is scrubbed. The stick keeps neither copy after a disk install: a
+stick whose own `/data` carries the rig marker IS a rig (run-from-USB), and that marker
+outranks installer mode on every later boot.
+
+**The rig boot leg belongs to the next phase.** Today a machine carrying `machine-role: rig`
+states its role on the console and stops — nothing mines yet, and the message says exactly
+that. The Both role is fully live end to end: the boot contract's step 5 already honours
+`local_miner.enabled`.
+
 ## The certificate lifecycle
 
 **One certificate for the machine's whole life**, at `appliance_tls_dir()`
@@ -168,7 +209,7 @@ had a gap between it and the next one.
 | pure logic | `tests/frontend/configsync.test.mjs` | path access, typed coercion, address/pair guidance |
 | view rendering | `tests/frontend/wizard.test.mjs` (probes) | each view given its props |
 | **app orchestration** | `tests/frontend/wizard.test.mjs` (stubbed server) | **stage mapping, the handoff arriving through the poll, refresh-mid-provision, rejection round-trip, request bodies** |
-| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, the digest-keyed image loader, reinstall pre-fill (secret strip + fail-open), the local-miner legs (derived config, sync seeding, boot-leg wiring) |
+| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, the digest-keyed image loader, reinstall pre-fill (secret strip + fail-open), the local-miner legs (derived config, sync seeding, boot-leg wiring), the rig-role legs (pool discovery publisher, rig request consumption, the role marker + boot stub) |
 | the real thing | `tests/os/run.sh --phase provision` | token from the console → submit → handoff → ack → running stack → built-in miner up and its shares accepted → reboot through a corrupted Caddyfile → no failed units → slot self-commit → miner back |
 
 The orchestration row is the one that was missing. pytest proved the endpoint published the

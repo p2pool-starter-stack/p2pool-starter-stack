@@ -1285,6 +1285,75 @@ firstboot_consume_spool() { # <spool-dir>
     return 1
 }
 
+# --- the machine role (one stick, three machines) -------------------------------------------
+# What a machine IS is the wizard's first question: a Pithead coordinator, a coordinator that
+# also mines (Both), or a RigForge rig. config.json states the coordinator roles exactly — Both
+# IS local_miner.enabled — so the marker is derived from it there. The rig role has no
+# config.json at all, which is why the marker, with rig.json beside it, exists: the boot path
+# reads machine-role to know which leg to start. Absent marker = pithead (every machine
+# provisioned before this contract).
+
+record_machine_role() { # <pithead|both|rig>
+    printf '%s\n' "$1" >"$PWD/machine-role" 2>/dev/null || true
+}
+
+machine_role_from_config() { # <config-file>
+    if [ "$(jq -r '.local_miner.enabled // false' "$1" 2>/dev/null)" = "true" ]; then
+        printf 'both'
+    else
+        printf 'pithead'
+    fi
+}
+
+# The rig role's pool pre-fill: a Pithead on the LAN answers pithead.local:3333. The HOST
+# dials — the container never touches the network — and publishes the finding to the spool the
+# way the disk inventory travels. Fail open: no answer publishes only this machine's name, and
+# the pool field opens empty. PITHEAD_RIG_PROBE overrides the target for tests.
+publish_rig_defaults() { # <spool-dir>
+    local probe="${PITHEAD_RIG_PROBE:-pithead.local:3333}" tmp="$1/.rig-defaults.json.$$" pool=""
+    if timeout 3 bash -c "</dev/tcp/${probe%:*}/${probe##*:}" 2>/dev/null; then
+        pool="$probe"
+    fi
+    jq -n --arg pool "$pool" --arg worker "$(hostname)" \
+        '{worker: $worker} + (if $pool == "" then {} else {pool: $pool} end)' >"$tmp" 2>/dev/null || : >"$tmp"
+    chown 1000:1000 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$1/rig-defaults.json"
+}
+
+# Consume one rig-role submission: shape-check the pool address, dial it BEFORE anything
+# irreversible — the same validate-before-erase discipline the coordinator flow gets — and
+# land the accepted answers as $PWD/rig.json, host-side and outside the spool (the same trust
+# move firstboot_consume_spool makes: what got validated is what gets used, whatever the
+# container writes afterwards). rc: 0 accepted, 1 rejected, 2 none.
+firstboot_consume_rig() { # <spool-dir>
+    local spool="$1" req="$1/rig-request.json" pool worker host port
+    [ -f "$req" ] || return 2
+    pool=$(jq -r '.pool // ""' "$req" 2>/dev/null | tr -d '[:cntrl:]')
+    worker=$(jq -r '.worker // ""' "$req" 2>/dev/null | tr -d '[:cntrl:]')
+    host="${pool%:*}"
+    port="${pool##*:}"
+    if [ -z "$host" ] || [ "$host" = "$pool" ] || ! [[ "$port" =~ ^[0-9]+$ ]]; then
+        printf 'the pool address must look like host:port — a Pithead answers on port 3333' >"$spool/error.txt"
+        rm -f "$req"
+        return 1
+    fi
+    if ! timeout 5 bash -c "</dev/tcp/$host/$port" 2>/dev/null; then
+        printf 'cannot reach a pool at %s:%s — check the address, and that the Pithead is up' "$host" "$port" >"$spool/error.txt"
+        rm -f "$req"
+        return 1
+    fi
+    if ! jq --arg w "${worker:-$(hostname)}" '{pool: .pool, worker: $w}
+        + (if (.stratum_password // "") == "" then {} else {stratum_password: .stratum_password} end)' \
+        "$req" >"$PWD/rig.json" 2>/dev/null; then
+        rm -f "$req" "$PWD/rig.json"
+        printf 'could not record the rig settings — submit again' >"$spool/error.txt"
+        return 1
+    fi
+    chmod 600 "$PWD/rig.json" 2>/dev/null || true
+    rm -f "$req"
+    return 0
+}
+
 # --- disk installer (appliance only) -------------------------------------------------------
 # The appliance can boot from the installation medium itself. When it does, the wizard leads with
 # a disk picker instead of the setup form: the operator installs first, reboots, and configures
@@ -1554,6 +1623,34 @@ firstboot_wizard() {
         *) error "Unknown option for firstboot-wizard: $arg. Run '$0 help'." ;;
         esac
     done
+    # A machine already carrying the rig role: state it and stop — even on a stick that could
+    # offer the installer, because a run-from-USB rig's stick IS that rig's system, not a
+    # fleet tool. The rig boot leg lands with the next phase; until it does, an honest console
+    # line beats a coordinator's setup page collecting answers a rig can never use.
+    if [ "$(tr -d '[:space:]' <"$PWD/machine-role" 2>/dev/null)" = "rig" ]; then
+        _console "This machine carries the RigForge rig role ($(jq -r '.worker // "unnamed"' "$PWD/rig.json" 2>/dev/null) -> $(jq -r '.pool // "no pool recorded"' "$PWD/rig.json" 2>/dev/null))." \
+            "Rig provisioning lands with the next phase of the system — nothing mines yet."
+        return 0
+    fi
+    # A rig install staged its answers on this ESP (the disk-install leg below): land them on
+    # /data and stop, the same one-move consumption as the config pre-seed — never on the
+    # installation medium, where staged files are cleaned up by the installer itself.
+    if [ -f "$PRESEED_DIR/pithead-rig.json" ] && ! installer_mode_available; then
+        if jq -e 'type == "object" and ((.pool // "") | length > 0)' "$PRESEED_DIR/pithead-rig.json" >/dev/null 2>&1 &&
+            install -m 600 "$PRESEED_DIR/pithead-rig.json" "$PWD/rig.json" 2>/dev/null; then
+            record_machine_role rig
+            # Spent: the settings (possibly a stratum password) must not sit on the ESP forever.
+            if ! boot_is_removable; then
+                mount -o remount,rw "$PRESEED_DIR" 2>/dev/null || true
+                rm -f "$PRESEED_DIR/pithead-rig.json" 2>/dev/null ||
+                    warn "Could not remove the consumed rig settings from $PRESEED_DIR — they may hold a password; delete the file."
+            fi
+            _console "This machine is now a RigForge rig ($(jq -r '.worker // "unnamed"' "$PWD/rig.json" 2>/dev/null))." \
+                "Rig provisioning lands with the next phase of the system — nothing mines yet."
+            return 0
+        fi
+        warn "The staged rig settings at $PRESEED_DIR/pithead-rig.json are unusable — opening the setup page."
+    fi
     # A configuration dropped on the medium beats opening a browser at all — but never on the
     # INSTALLATION medium: pre-seeding covers configuration, not the erase decision (the docs'
     # exact promise), and a fleet stick that provisioned ITSELF instead of offering the
@@ -1577,6 +1674,7 @@ firstboot_wizard() {
             # not mean skipping the login.
             ensure_appliance_dashboard_password || true
             apply_appliance_defaults || true
+            record_machine_role "$(machine_role_from_config "$PWD/config.json")"
             setup
             return
         fi
@@ -1601,6 +1699,9 @@ firstboot_wizard() {
     cp /opt/pithead/config.reference.json "$spool/config.reference.json" 2>/dev/null ||
         cp "$PWD/config.reference.json" "$spool/config.reference.json" 2>/dev/null || true
     chown 1000:1000 "$spool/config.reference.json" 2>/dev/null || true
+    # The rig role's pre-fill rides beside the reference — derived fresh each boot, like the
+    # disk inventory, so machine 2 on a fleet stick never opens on machine 1's discovery.
+    publish_rig_defaults "$spool"
 
     local installer=0 operator_preseed=0
     [ -f "$PRESEED_DIR/pithead-config.json" ] && operator_preseed=1
@@ -1645,7 +1746,8 @@ firstboot_wizard() {
         # error.txt and last-attempt.json survive on purpose: they are the retry context the
         # failed-provisioning path just wrote for the reopened page.
         rm -f "$spool/handoff.json" "$spool/handoff-ack" "$spool/installing" \
-            "$spool/installed" "$spool/applied" "$spool/install-request"
+            "$spool/installed" "$spool/applied" "$spool/install-request" \
+            "$spool/rig-request.json" "$spool/role"
         # A pre-seeded token is the operator's own choice and stays fixed across restarts of
         # this loop; without one, mint a fresh secret every round.
         token=$(preseed_token) || token=$(wizard_mint_token)
@@ -1717,6 +1819,86 @@ firstboot_wizard() {
                 sleep 3
                 systemctl poweroff
                 return
+            fi
+            # The rig role's submission travels on its own channel — no pithead config exists
+            # to validate. Same discipline, different shape: dial the pool BEFORE anything
+            # irreversible, card before commitment, the ack releases the erase.
+            local rrc=0
+            firstboot_consume_rig "$spool" || rrc=$?
+            if [ "$rrc" -eq 1 ]; then
+                warn "Rig settings rejected — the page shows the reason."
+                sleep 2
+                continue
+            fi
+            if [ "$rrc" -eq 0 ]; then
+                log "Rig settings accepted."
+                local rig_worker rig_pool
+                rig_worker=$(jq -r '.worker // ""' "$PWD/rig.json" 2>/dev/null)
+                rig_pool=$(jq -r '.pool // ""' "$PWD/rig.json" 2>/dev/null)
+                # The rig's card: the worker name and where it points. No dashboard, no login —
+                # a rig serves neither, so there is nothing to save; the same ack still gates
+                # the erase on the installation medium.
+                jq -n --arg w "$rig_worker" --arg s "stratum+tcp://$rig_pool" \
+                    '{role: "rig", worker: $w, stratum: $s}' >"$spool/handoff.json"
+                chown 1000:1000 "$spool/handoff.json" 2>/dev/null || true
+                local hwait=0
+                while [ ! -f "$spool/handoff-ack" ] && [ "$hwait" -lt 600 ]; do
+                    sleep 2
+                    hwait=$((hwait + 2))
+                done
+                if [ "$installer" -eq 1 ] && [ -f "$spool/install-request" ]; then
+                    # Rig onto a disk: identical erase discipline to the coordinator install —
+                    # the ack releases it, and a missing human hands the form back intact.
+                    if [ ! -f "$spool/handoff-ack" ]; then
+                        rm -f "$spool/handoff.json" "$spool/install-request" "$PWD/rig.json"
+                        printf 'The rig card was never confirmed — nothing was installed. Submit again when you are ready.' >"$spool/error.txt"
+                        chown 1000:1000 "$spool/error.txt" 2>/dev/null || true
+                        continue
+                    fi
+                    touch "$spool/installing"
+                    chown 1000:1000 "$spool/installing" 2>/dev/null || true
+                    # Stage the accepted settings onto the running ESP: the installer carries
+                    # them to the target's ESP, and the first boot from disk lands them on its
+                    # /data (the top of this function). The stick keeps NEITHER copy — rig.json
+                    # on its /data would turn the stick itself into a rig at the next boot, and
+                    # a leftover ESP file would seed every later machine.
+                    mount -o remount,rw /boot/efi 2>/dev/null || true
+                    if ! install -m 600 "$PWD/rig.json" /boot/efi/pithead-rig.json; then
+                        rm -f "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack" "$spool/install-request" "$PWD/rig.json"
+                        printf 'Could not stage the rig settings for the installed system — nothing was installed.' >"$spool/error.txt"
+                        chown 1000:1000 "$spool/error.txt" 2>/dev/null || true
+                        continue
+                    fi
+                    local irc=0
+                    consume_install_request "$spool" || irc=$?
+                    rm -f "$PWD/rig.json" /boot/efi/pithead-rig.json
+                    if [ "$irc" -ne 0 ]; then
+                        rm -f "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack"
+                        publish_disk_inventory "$spool"
+                        warn "Install failed — the page shows the reason."
+                        sleep 2
+                        continue
+                    fi
+                    _console "" "Installation complete — switching off now." \
+                        "When the machine is dark, remove the USB stick and switch it back on." \
+                        "It will come up as the rig you just confirmed."
+                    sleep 8
+                    "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
+                    _console "" "Shutting down. Remove the USB stick, then switch the machine on."
+                    sleep 3
+                    systemctl poweroff
+                    return
+                fi
+                # Run from this medium — or an installed machine choosing the rig role: the
+                # answers stay on THIS machine's /data and the marker closes the wizard window.
+                record_machine_role rig
+                touch "$spool/applied"
+                chown 1000:1000 "$spool/applied" 2>/dev/null || true
+                sleep 8 # long enough for the page's poll to show the saved state
+                "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
+                _console "Rig settings saved: $rig_worker -> stratum+tcp://$rig_pool." \
+                    "Rig provisioning lands with the next phase of the system — nothing mines yet."
+                return 0
             fi
             if firstboot_consume_spool "$spool"; then
                 # Reachability before commitment: a remote node that cannot be dialed fails HERE,
@@ -1821,6 +2003,9 @@ firstboot_wizard() {
                     systemctl poweroff
                     return
                 fi
+                # Installed machine, config accepted: record what it IS. The installer path
+                # above never reaches here — its role lands on the TARGET, at its first boot.
+                record_machine_role "$(machine_role_from_config "$PWD/config.json")"
                 sleep 2
                 "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
                 rm -rf "$spool"
@@ -3482,8 +3667,13 @@ ensure_onion_password() {
 # operator watching the other. Between power-on and the setup page there is a minute or more of
 # image loading, and silence there reads as a broken machine.
 _console() { # $1... lines
-    local dev
-    log "$@"
+    local dev line
+    # Every line reaches the journal too — a message that lives only on a physical console
+    # cost a bench session an hour once (see firstboot's teed setup log for the same lesson).
+    for line in "$@"; do
+        # if, not '&&': an empty spacer line under set -e must not become the exit status.
+        if [ -n "$line" ]; then log "$line"; fi
+    done
     for dev in /dev/tty1 /dev/ttyS0; do
         [ -w "$dev" ] || continue
         printf '  %s\n' "$@" >"$dev" 2>/dev/null || true
