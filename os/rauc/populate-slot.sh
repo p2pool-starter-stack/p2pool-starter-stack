@@ -10,6 +10,66 @@
 # Rugix needs no equivalent: its bakery builds the image and the bundle from one layer definition,
 # so there is no second copy to keep in sync.
 
+# Resolve the RAUC signing material into RAUC_CERT / RAUC_KEY, and decide whether auto-generating a
+# throwaway is allowed. Both mkimage.sh and mkbundle.sh route through here so the rule is enforced
+# once: the cert this returns becomes the device trust root (mkimage bakes it as the keyring) and
+# the key signs update bundles (mkbundle). Getting it wrong ships a fleet whose update trust root
+# is a throwaway dev key with no offline backup and no revocation — so the guard, not human memory
+# of a runbook, is what separates a release key from whatever cert happens to sit on the build host.
+#
+#   $1 = 1 for an explicitly-marked dev/bench build (auto-generation allowed), 0 otherwise.
+#
+# A release build (the default, $1=0) MUST name the signing key explicitly: PITHEAD_RAUC_CERT +
+# PITHEAD_RAUC_KEY. A dev build with no key named auto-generates a clearly-labelled CN=pithead-dev
+# throwaway into os/rauc/certs/ (chmod 600 key, 700 dir). The two paths never cross — a release
+# build refuses to run without an explicit key, so a dev cert can never silently become the fleet's
+# update trust root. Custody of the real release key: docs/dev/release-server.md.
+#
+# Trust anchor vs. signer are separate axes. RAUC_KEYRING is the cert(s) baked into every slot as
+# the device trust anchor; RAUC_CERT/RAUC_KEY are the leaf that signs the bundle. For a root+leaf
+# release, set PITHEAD_RAUC_KEYRING to the root (or old+new roots concatenated during a rotation)
+# and PITHEAD_RAUC_CERT to the leaf chain. It defaults to the signing cert, which is the single
+# self-signed cert the dev model uses.
+resolve_signing_material() { # $1 = dev(1/0); sets RAUC_CERT, RAUC_KEY, RAUC_KEYRING
+    local dev="${1:-0}"
+    local certdir="os/rauc/certs"
+
+    if [ -n "${PITHEAD_RAUC_CERT:-}" ] || [ -n "${PITHEAD_RAUC_KEY:-}" ]; then
+        # An explicit key was named: the release path. Both halves are required and readable.
+        RAUC_CERT="${PITHEAD_RAUC_CERT:-}"
+        RAUC_KEY="${PITHEAD_RAUC_KEY:-}"
+        [ -s "$RAUC_CERT" ] && [ -s "$RAUC_KEY" ] || {
+            echo "PITHEAD_RAUC_CERT and PITHEAD_RAUC_KEY must both point at readable files" >&2
+            return 2
+        }
+    elif [ "$dev" != 1 ]; then
+        # No explicit key and not a dev build: stop loudly, never auto-generate.
+        echo "refusing to build without a signing key: set PITHEAD_RAUC_CERT + PITHEAD_RAUC_KEY to" \
+            "the release key (custody: docs/dev/release-server.md), or pass --dev to auto-generate a" \
+            "throwaway development key" >&2
+        return 2
+    else
+        # Dev/bench build: auto-generate a labelled throwaway, reusing one already on the box.
+        RAUC_CERT="$certdir/cert.pem"
+        RAUC_KEY="$certdir/key.pem"
+        mkdir -p "$certdir"
+        chmod 700 "$certdir"
+        if [ ! -s "$RAUC_CERT" ]; then
+            echo "==> DEV BUILD: generating a throwaway CN=pithead-dev signing key (never a release trust root)"
+            openssl req -x509 -newkey rsa:4096 -nodes -keyout "$RAUC_KEY" \
+                -out "$RAUC_CERT" -days 3650 -subj "/CN=pithead-dev" 2>/dev/null
+        fi
+        chmod 600 "$RAUC_KEY"
+    fi
+
+    RAUC_KEYRING="${PITHEAD_RAUC_KEYRING:-$RAUC_CERT}"
+    [ -s "$RAUC_KEYRING" ] || {
+        echo "PITHEAD_RAUC_KEYRING must point at a readable cert file" >&2
+        return 2
+    }
+    return 0
+}
+
 populate_slot() { # $1 = mounted rootfs
     local root="$1"
 
@@ -48,5 +108,8 @@ overlay /var overlay lowerdir=/var,upperdir=/data/overlay/var,workdir=/data/over
 FSTAB
 
     install -D -m 644 os/rauc/system.conf "$root/etc/rauc/system.conf"
-    install -D -m 644 os/rauc/certs/cert.pem "$root/etc/rauc/keyring.pem"
+    # The keyring is the device's update trust anchor. resolve_signing_material must have run first
+    # (both callers do) so this bakes the resolved keyring — the root for a root+leaf release, or
+    # the single dev cert — not a hardcoded path.
+    install -D -m 644 "$RAUC_KEYRING" "$root/etc/rauc/keyring.pem"
 }

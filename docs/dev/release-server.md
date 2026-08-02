@@ -169,6 +169,111 @@ compromised, sign with the new key immediately: the transition release then fail
 check on existing installs, so call it out in the release notes and have operators verify that
 one by hand against the new committed key.
 
+### The RAUC update-signing key
+
+cosign signs the GHCR image digests and the install bundle. The **appliance** takes a second,
+independent signature: every A/B update bundle (`os/rauc/mkbundle.sh` → `*.raucb`) is signed, and
+RAUC on the device refuses any bundle that does not verify against the keyring baked into the
+running slot (`os/rauc/system.conf` → `[keyring] path=/etc/rauc/keyring.pem`). This key is the
+appliance fleet's update trust root: whoever holds it can push a bundle every fielded box will
+install as authentic. Treat it exactly as you treat `cosign.key`.
+
+The tooling refuses to invent one. `mkimage.sh` / `mkbundle.sh` auto-generate a throwaway
+`CN=pithead-dev` key only for a build explicitly marked `--dev`; a release build (no `--dev`) exits
+non-zero unless the key is named:
+
+- `PITHEAD_RAUC_KEY` / `PITHEAD_RAUC_CERT` — the leaf that signs the bundle (private key + its
+  cert/chain).
+- `PITHEAD_RAUC_KEYRING` — the cert(s) baked into every slot as the device trust anchor. Defaults
+  to `PITHEAD_RAUC_CERT`; for the root+leaf model below, set it to the **root** so a leaf can be
+  rotated without re-imaging.
+
+So a dev cert can never silently become a shipped keyring — the guard, not memory of this page, is
+what enforces it.
+
+**Trust model: root + leaf, only the root baked.** Use a two-cert chain, not one self-signed cert
+doing both jobs. A single self-signed cert used as both trust anchor and signer is the shape the
+bake-off found stricter verifiers reject (`CaUsedAsEndEntity`), and it couples the two rotations
+that should be independent: the root that every device trusts is baked into the image and cannot
+change without re-imaging, while the leaf that signs day-to-day should be cheap to replace. Bake
+the **root** as the keyring; sign bundles with a **leaf** issued from it. RAUC verifies the bundle's
+leaf against the baked root, so a leaf reissued from the same root is trusted by every fielded box
+with no image change.
+
+Generate the pair once, on this box (RSA-4096 mirrors the dev chain; the root is a CA, the leaf is
+a `digitalSignature` end entity):
+
+```bash
+mkdir -p ~/.config/pithead-release && cd ~/.config/pithead-release
+
+# Root — the device trust anchor. Baked into every slot; its private key is used ONLY to issue
+# leaves, so keep it offline and out of the release shell's environment.
+openssl req -x509 -newkey rsa:4096 -keyout rauc-root.key -out rauc-root.pem \
+    -days 3650 -subj "/CN=pithead-update-root" \
+    -addext "basicConstraints=critical,CA:TRUE"        # prompts for a passphrase
+
+# Leaf — the day-to-day signer, issued from the root.
+openssl req -newkey rsa:4096 -nodes -keyout rauc-signer.key -out rauc-signer.csr \
+    -subj "/CN=pithead-update-signer"
+openssl x509 -req -in rauc-signer.csr -CA rauc-root.pem -CAkey rauc-root.key \
+    -CAcreateserial -out rauc-signer.pem -days 825 \
+    -extfile <(printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n')
+
+chmod 600 rauc-root.key rauc-signer.key
+chmod 700 ~/.config/pithead-release
+```
+
+**Storage.** The root private key (`rauc-root.key`) is the crown jewel: keep it offline (an
+encrypted volume or a hardware token), passphrase-protected, and off this box between rotations —
+it is needed only to mint a new leaf, never to cut a routine release. The leaf key
+(`rauc-signer.key`) lives on this box like `cosign.key`, `chmod 600`, owner-only, with an offline
+backup. Only the certs (`rauc-root.pem`, the leaf `.pem`) are ever safe to hand out; neither
+private key enters the repo, an image, or a log. Point the release shell at the release material:
+
+```bash
+export PITHEAD_RAUC_KEYRING=~/.config/pithead-release/rauc-root.pem     # baked as the device keyring
+export PITHEAD_RAUC_CERT=~/.config/pithead-release/rauc-signer.pem      # leaf that signs the bundle
+export PITHEAD_RAUC_KEY=~/.config/pithead-release/rauc-signer.key
+```
+
+`mkimage.sh` bakes the keyring cert into slot A; `mkbundle.sh` signs the bundle with the leaf. Both
+refuse to run for a release with these unset — there is no silent fallback to a dev cert.
+
+**Rotation.** The constraint that shapes the whole runbook: **RAUC trusts the keyring baked at
+image build time, so a device only ever trusts what shipped in its running slot.** A new trust
+anchor therefore has to reach devices *inside an OS update they already trust*, before any bundle
+is signed under it — a keyring is not something a device can be told to add out of band.
+
+- *Routine, or a leaf compromise (root intact).* Issue a fresh leaf from the same root (the second
+  `openssl` pair above), and sign with it. Every fielded box already trusts the root, so nothing
+  needs re-imaging. This is the case root+leaf exists for, and it should be the only one you ever
+  hit in practice.
+- *Root rotation (planned key change, or a suspected root compromise you can still sign around).*
+  You cannot swap the anchor in one step. Build a **transition OS update** whose baked keyring
+  contains **both** the old and new roots (concatenate the PEMs), and sign that bundle with a leaf
+  under the **old** root so existing boxes accept it:
+
+  ```bash
+  cat rauc-root.pem rauc-root-new.pem > rauc-keyring-transition.pem
+  PITHEAD_RAUC_KEYRING=~/.config/pithead-release/rauc-keyring-transition.pem \
+    PITHEAD_RAUC_CERT=~/.config/pithead-release/rauc-signer.pem \
+    PITHEAD_RAUC_KEY=~/.config/pithead-release/rauc-signer.key \
+    ...build image + bundle...
+  ```
+
+  Ship it and wait for the fleet to take it. Only once a box is running that slot does its keyring
+  trust the new root; from then on you may sign with a leaf under the new root. A later update can
+  bake the new root alone and drop the old one. Sequencing is everything — sign under the new root
+  before the fleet has taken the transition update and those boxes reject the bundle.
+- *Root lost or compromised beyond signing (you can no longer produce a bundle the fleet trusts).*
+  There is no remote recovery, the same dead end as a lost `cosign.key`: fielded devices trust only
+  the baked root, so a bundle signed by anything else is refused. Recovery is a hands-on re-image
+  of each box with a fresh keyring. Call it out in the release notes and, as with cosign, have
+  operators verify the first post-incident image by hand against the new published root.
+
+The dev/bench loop is unchanged — `os/rauc/mkimage.sh --dev` still auto-generates a throwaway into
+the gitignored `os/rauc/certs/` and needs none of the above.
+
 ### Recipe: prune-axis coverage, and the storage that matters
 
 Put the active chain on fast storage. The biggest factor is the disk, not the filesystem:
@@ -267,9 +372,11 @@ Treat the box as production-sensitive. It holds keys and it's the thing that sig
   private keys) must be owner-only (`chmod 600 .env`; the `--readiness` check verifies this).
   Never print secrets in logs; the harness hashes them on the box and redacts artifacts. If the
   box also publishes releases, the GHCR token lives in the environment / a secret store, never in
-  the repo — and so does the release signing key (`cosign.key` + `COSIGN_PASSWORD`,
-  [#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): owner-only on this box,
-  only its public half (`cosign.pub`) is committed.
+  the repo — and so do the release signing keys: `cosign.key` + `COSIGN_PASSWORD`
+  ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)), and the RAUC update leaf
+  key (`rauc-signer.key`) with the RAUC root key kept offline entirely — all owner-only on this
+  box, only their certs/public halves ever committed or handed out (see the signing-key sections
+  above).
 - Network. Firewall to least exposure: inbound SSH (key-only, no root login, fail2ban) and the
   stratum port scoped to the LAN ([workers › firewall](../workers.md#firewall)); the dashboard
   stays on localhost behind Caddy and the monerod RPC on localhost (both asserted by

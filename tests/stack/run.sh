@@ -8528,6 +8528,85 @@ rm -rf "$OUSB"
 unset OUSB
 
 # ---------------------------------------------------------------------------
+# os/rauc signing-material guard (resolve_signing_material in populate-slot.sh). A release build
+# must name the signing key; only an explicitly-marked --dev build auto-generates a throwaway. The
+# refuse logic is proven here at the shell-unit tier — sourced and called directly, no docker/loop
+# image build. The guard is the safety fix: a dev cert must never become the fleet's update trust
+# root because a build host happened to have one lying around.
+RSM="$ROOT/os/rauc/populate-slot.sh"
+RSMTMP=$(mktemp -d)
+# Run the resolver in an isolated cwd (it writes os/rauc/certs/ relative to $PWD). $1=dev(0/1),
+# $2=where to send stderr. Prints: rc=<n> cert=<..> key=<..> keyring=<..>
+rsm() {
+    local dev="$1" errto="$2" d
+    d=$(mktemp -d)
+    (
+        cd "$d" || exit
+        # shellcheck disable=SC1090
+        . "$RSM"
+        set +e
+        resolve_signing_material "$dev" 2>"$errto"
+        printf ' rc=%s cert=%s key=%s keyring=%s\n' "$?" "${RAUC_CERT:-}" "${RAUC_KEY:-}" "${RAUC_KEYRING:-}"
+    )
+    rm -rf "$d"
+}
+rsm_field() { echo "$1" | sed -n "s/.* $2=\([^ ]*\).*/\1/p"; }
+
+# Release build (dev=0), no key named -> refuses, non-zero, names the env vars and --dev.
+res=$(
+    unset PITHEAD_RAUC_CERT PITHEAD_RAUC_KEY PITHEAD_RAUC_KEYRING
+    rsm 0 "$RSMTMP/err"
+)
+assert_eq "release build with no signing key refuses (rc 2)" "$(rsm_field "$res" rc)" "2"
+assert_contains "refusal names the release key env vars" "$(cat "$RSMTMP/err")" "PITHEAD_RAUC_CERT"
+assert_contains "refusal points at --dev for a throwaway key" "$(cat "$RSMTMP/err")" "--dev"
+
+# Explicit key (dev=0) -> accepted; keyring defaults to the signing cert. Content is irrelevant to
+# the guard (it checks readability, not validity), so dummy files exercise the branch openssl-free.
+printf 'cert\n' >"$RSMTMP/rel-cert.pem"
+printf 'key\n' >"$RSMTMP/rel-key.pem"
+res=$(
+    PITHEAD_RAUC_CERT="$RSMTMP/rel-cert.pem" PITHEAD_RAUC_KEY="$RSMTMP/rel-key.pem"
+    export PITHEAD_RAUC_CERT PITHEAD_RAUC_KEY
+    unset PITHEAD_RAUC_KEYRING
+    rsm 0 "$RSMTMP/err"
+)
+assert_eq "explicit release key is accepted (rc 0)" "$(rsm_field "$res" rc)" "0"
+assert_eq "the named cert is used for signing" "$(rsm_field "$res" cert)" "$RSMTMP/rel-cert.pem"
+assert_eq "keyring defaults to the signing cert" "$(rsm_field "$res" keyring)" "$RSMTMP/rel-cert.pem"
+
+# Explicit keyring overrides the baked trust anchor (root+leaf: root baked, leaf signs).
+printf 'root\n' >"$RSMTMP/rel-root.pem"
+res=$(
+    export PITHEAD_RAUC_CERT="$RSMTMP/rel-cert.pem" PITHEAD_RAUC_KEY="$RSMTMP/rel-key.pem" PITHEAD_RAUC_KEYRING="$RSMTMP/rel-root.pem"
+    rsm 0 "$RSMTMP/err"
+)
+assert_eq "PITHEAD_RAUC_KEYRING is what gets baked" "$(rsm_field "$res" keyring)" "$RSMTMP/rel-root.pem"
+
+# A cert with no matching key is rejected — both halves are required.
+res=$(
+    export PITHEAD_RAUC_CERT="$RSMTMP/rel-cert.pem"
+    unset PITHEAD_RAUC_KEY PITHEAD_RAUC_KEYRING
+    rsm 0 "$RSMTMP/err"
+)
+assert_eq "cert without key refuses (rc 2)" "$(rsm_field "$res" rc)" "2"
+
+# Dev build (dev=1) still auto-generates a throwaway — the local/bench loop is preserved.
+if command -v openssl >/dev/null 2>&1; then
+    res=$(
+        unset PITHEAD_RAUC_CERT PITHEAD_RAUC_KEY PITHEAD_RAUC_KEYRING
+        rsm 1 "$RSMTMP/err"
+    )
+    assert_eq "dev build auto-generates and succeeds (rc 0)" "$(rsm_field "$res" rc)" "0"
+    assert_contains "dev key lands in os/rauc/certs" "$(rsm_field "$res" key)" "os/rauc/certs/key.pem"
+else
+    ok "dev auto-gen skipped (no openssl on this host)"
+fi
+rm -rf "$RSMTMP"
+unset RSM RSMTMP
+unset -f rsm rsm_field
+
+# ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
 if [ "$FAIL" -gt 0 ]; then

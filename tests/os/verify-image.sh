@@ -194,6 +194,14 @@ else
     chk "NO SSH authorized_keys" '[ ! -s "$ROOT/root/.ssh/authorized_keys" ]'
     chk "ssh service disabled" '! ls "$ROOT"/etc/systemd/system/multi-user.target.wants/ssh.service'
     chk "variant stamp says release" '[ "$(cat "$ROOT/etc/pithead-variant")" = "release" ]'
+    # The keyring is the fleet's update trust root. A dev build auto-generates a CN=pithead-dev
+    # cert; if that baked as the release keyring, every device would trust a throwaway,
+    # unencrypted key with no offline backup — a backdoor of the same class as a leaked SSH key,
+    # so it is a hard fail here (the build guard should stop it upstream, this catches a slip at
+    # the artifact). A legitimately self-signed release root is fine — only the known dev CN is
+    # refused, so this never false-positives on a real single-cert keyring.
+    chk "keyring is NOT the dev signing cert (CN=pithead-dev)" \
+        '! openssl x509 -in "$ROOT/etc/rauc/keyring.pem" -noout -subject 2>/dev/null | grep -q "pithead-dev"'
 fi
 
 echo ""
