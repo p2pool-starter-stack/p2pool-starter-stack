@@ -127,6 +127,16 @@ test("pageFor: slices, clamps past-the-end pages, and reports totals", () => {
   // Empty set: one empty page, never NaN/negative.
   const empty = pageFor([], 0, 10);
   assert.deepEqual([empty.page, empty.pages, empty.total], [0, 1, 0]);
+  // Hostile size/page inputs fall back instead of dividing into NaN/Infinity.
+  for (const badSize of [0, -5, NaN, undefined]) {
+    const g = pageFor(entries, 0, badSize);
+    assert.deepEqual([g.pages, g.slice.length], [2, 20], `size=${badSize} must fall back to 20`);
+  }
+  assert.equal(pageFor(entries, NaN, 10).page, 0);
+  assert.equal(pageFor(entries, -999, 10).page, 0);
+  // The clamp is the safety net behind every pager callback: a stale page (result set shrank,
+  // size grew, a reset that never fired) lands on the last REAL page, never off the end.
+  assert.equal(pageFor(entries, 5, 100).page, 0);
 });
 
 test("cards render the pager: count, rows-per-page select, prev/next with edge disabling", () => {
@@ -140,13 +150,27 @@ test("cards render the pager: count, rows-per-page select, prev/next with edge d
   assert.match(out, /aria-label="Access log: rows per page"/);
   assert.match(out, /‹ Prev/);
   assert.match(out, /Next ›/);
-  // Middle page: neither edge disabled on the access pager; the single-page audit pager
-  // disables both (vnode walker serializes boolean true as a bare attribute).
+  // Edge disabling, actually asserted (vnode walker serializes boolean true as a bare
+  // attribute and DROPS false), scoped per pager via its aria-label: the middle-page access
+  // pager disables neither button, the single-page audit pager disables both.
+  assert.doesNotMatch(out, /disabled aria-label="Access log: previous page"/);
+  assert.doesNotMatch(out, /disabled aria-label="Access log: next page"/);
+  assert.match(out, /disabled aria-label="Config changes: previous page"/);
+  assert.match(out, /disabled aria-label="Config changes: next page"/);
   assert.match(out, /1 entry(?! · page)/); // audit count, no page suffix on one page
   // Page 2 of 3 shows rows 10-19.
   assert.match(out, /\/p\/10/);
   assert.doesNotMatch(out, /\/p\/9</);
   assert.doesNotMatch(out, /\/p\/20/);
+  // ...and on the last page, Next is disabled while Prev stays live.
+  const lastPage = renderPanel({
+    access: { available: true, entries: Array.from({ length: 23 }, (_, i) => ({
+      ts: 1000 + i, status: 200, method: "GET", uri: `/p/${i}`, user: "u" })) },
+    audit: null,
+    accessPager: { page: 2, size: 10 },
+  });
+  assert.match(lastPage, /disabled aria-label="Access log: next page"/);
+  assert.doesNotMatch(lastPage, /disabled aria-label="Access log: previous page"/);
 });
 
 test("audit card renders flat rows only — grouping artifacts are gone", () => {

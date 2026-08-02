@@ -78,10 +78,13 @@ const isFiltering = (f) => f.preset !== "all" || !!f.fromDate || !!f.toDate || !
 export const PAGE_SIZES = [5, 10, 20, 50, 100];
 
 export function pageFor(entries, page, size) {
+  // Guarded, not trusted: size comes from a fixed select in practice, but a 0/NaN reaching the
+  // division would render "page NaN of Infinity" — fall back to the default page size instead.
+  const s = Number.isFinite(size) && size >= 1 ? Math.floor(size) : 20;
   const total = entries.length;
-  const pages = Math.max(1, Math.ceil(total / size));
-  const p = Math.min(Math.max(0, page), pages - 1);
-  return { slice: entries.slice(p * size, (p + 1) * size), page: p, pages, total };
+  const pages = Math.max(1, Math.ceil(total / s));
+  const p = Math.min(Math.max(0, Number.isFinite(page) ? page : 0), pages - 1);
+  return { slice: entries.slice(p * s, (p + 1) * s), page: p, pages, total };
 }
 
 const Pager = ({ label, total, page, pages, size, onPage, onSize }) => html`<div class="log-pager">
