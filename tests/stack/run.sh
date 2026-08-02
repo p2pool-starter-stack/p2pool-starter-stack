@@ -1207,17 +1207,45 @@ assert_eq "clock_sync_status: NTP no => unsynced" "$(PATH="$CLKBIN:$PATH" run_so
 mk_timedatectl ""
 assert_eq "clock_sync_status: blank => unknown" "$(PATH="$CLKBIN:$PATH" run_sourced "$SANDBOX" clock_sync_status)" "unknown"
 
-echo "== unit: monero_address_type — p2pool needs a PRIMARY address (#250) =="
-# Classify by network-byte prefix + length: primary 4…/95 (the only payable kind), integrated 4…/106,
-# subaddress 8…/95. setup/apply hard-fail anything but primary so nobody mines to an unpayable address.
+echo "== unit: monero_address_type — p2pool needs a PRIMARY address, and a REAL one (#250, #829) =="
+# Two gates in one verdict. Shape (network-byte prefix + length): primary 4…/95 (the only payable
+# kind), integrated 4…/106, subaddress 8…/95. Then base58-check: block-wise decode + the 4-byte
+# legacy-Keccak checksum — a well-shaped address with one mistyped character crashes p2pool at
+# startup, so "checksum" is its own verdict with its own operator message.
+#
+# Checksum-VALID fixtures are well-known PUBLIC addresses (never ours): XMRig's donation address
+# (primary) and the Monero project's donation address (subaddress). The integrated fixture is the
+# XMRig donation keys re-tagged with a zero payment id and a recomputed checksum — no public
+# project publishes a stable integrated donation address. The checksum-INVALID primary is the KVM
+# harness wallet that slipped the shape-only gate and crash-looped a provisioned appliance.
+VALID_PRIMARY="48edfHu7V9Z84YzzMa6fUueoELZ9ZRXq9VetWzYGzKt52XU5xvqgzYnDK9URnRoJMk1j8nLwEVsaSWJ4fhdUyZijBGUicoD"
+VALID_SUBADDR="888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H"
+VALID_INTEGRATED="4JMJg6ic6R584YzzMa6fUueoELZ9ZRXq9VetWzYGzKt52XU5xvqgzYnDK9URnRoJMk1j8nLwEVsaSWJ4fhdUyZijGDpDGTWtLM516v46mB"
 _a94="$(printf 'a%.0s' $(seq 94))"
 _a93="$(printf 'a%.0s' $(seq 93))"
-_a105="$(printf 'a%.0s' $(seq 105))"
-assert_eq "monero_address_type: 4…/95  => primary" "$(run_sourced "$SANDBOX" monero_address_type "4$_a94")" "primary"
-assert_eq "monero_address_type: 8…/95  => subaddress" "$(run_sourced "$SANDBOX" monero_address_type "8$_a94")" "subaddress"
-assert_eq "monero_address_type: 4…/106 => integrated" "$(run_sourced "$SANDBOX" monero_address_type "4$_a105")" "integrated"
+assert_eq "monero_address_type: real 4…/95  => primary" "$(run_sourced "$SANDBOX" monero_address_type "$VALID_PRIMARY")" "primary"
+assert_eq "monero_address_type: real 8…/95  => subaddress" "$(run_sourced "$SANDBOX" monero_address_type "$VALID_SUBADDR")" "subaddress"
+assert_eq "monero_address_type: real 4…/106 => integrated" "$(run_sourced "$SANDBOX" monero_address_type "$VALID_INTEGRATED")" "integrated"
 assert_eq "monero_address_type: 4…/94  => invalid" "$(run_sourced "$SANDBOX" monero_address_type "4$_a93")" "invalid"
 assert_eq "monero_address_type: other  => invalid" "$(run_sourced "$SANDBOX" monero_address_type "1abc")" "invalid"
+# The #829 class: perfect shape, wrong content. The exact harness wallet, and a single flipped
+# character in an otherwise valid address — both must fail as "checksum", not pass as "primary".
+_h94="$(printf 'A%.0s' $(seq 94))"
+assert_eq "monero_address_type: harness 4+94×A => checksum" "$(run_sourced "$SANDBOX" monero_address_type "4$_h94")" "checksum"
+assert_eq "monero_address_type: one flipped char => checksum" "$(run_sourced "$SANDBOX" monero_address_type "${VALID_PRIMARY:0:50}B${VALID_PRIMARY:51}")" "checksum"
+assert_eq "monero_address_type: shape-valid 8…/95 bad checksum => checksum" "$(run_sourced "$SANDBOX" monero_address_type "8$_h94")" "checksum"
+# Base58 charset: 0, O, I, l are not in the alphabet — a paste with one of them can't decode.
+assert_eq "monero_address_type: non-base58 char => invalid" "$(run_sourced "$SANDBOX" monero_address_type "${VALID_PRIMARY:0:50}0${VALID_PRIMARY:51}")" "invalid"
+# Network byte comes free with the decode: a checksum-valid body whose tag is integrated (19) but
+# whose payload is primary-length is no mainnet address of any kind.
+assert_eq "monero_address_type: valid checksum, wrong tag/length => invalid" "$(run_sourced "$SANDBOX" monero_address_type "4JMJg6ic6R584YzzMa6fUueoELZ9ZRXq9VetWzYGzKt52XU5xvqgzYnDK9URnRoJMk1j8nLwEVsaSWJ4fhdUyZijBJG8KmJ")" "invalid"
+# A host whose python3 can't run the validator: the shape verdict stands alone (the
+# pre-checksum behaviour — degraded, not broken, and never a false reject).
+NOPY="$SANDBOX/nopy-bin"
+mkdir -p "$NOPY"
+printf '#!/usr/bin/env bash\nexit 127\n' >"$NOPY/python3"
+chmod +x "$NOPY/python3"
+assert_eq "monero_address_type: python3 unusable => shape-only primary" "$(PATH="$NOPY:$PATH" run_sourced "$SANDBOX" monero_address_type "4$_h94")" "primary"
 
 echo "== unit: dashboard auth (#8) =="
 # Dashboard login (#8): enabling/changing is DEST (caddy is recreated), disabling is INFO. The bcrypt
@@ -2757,7 +2785,7 @@ DEPLOYMENT_COMPLETED=true
 COMPOSE_PROFILES=local_node
 EOF
 }
-WALLET="4$(printf 'A%.0s' $(seq 94))" # 95-char mainnet primary (starts with 4); #250 now hard-validates this
+WALLET="$VALID_PRIMARY" # checksum-valid mainnet primary (the XMRig donation address) — #250 gates the type, #829 the checksum
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"banana"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
@@ -3049,8 +3077,8 @@ assert_contains "onion-client-key off message" "$out" "password-only"
 # integrated address — a wrong type MINES but is NEVER paid, silently. monero_address_type is
 # unit-tested in isolation; these prove parse_and_validate_config actually ABORTS apply on each,
 # so the guardrail against losing every reward is wired, not just present.
-SUBADDR="8$(printf 'A%.0s' $(seq 94))"  # 95-char, starts with 8 -> subaddress
-INTADDR="4$(printf 'A%.0s' $(seq 105))" # 106-char, starts with 4 -> integrated
+SUBADDR="$VALID_SUBADDR"    # checksum-valid subaddress (the Monero project donation address)
+INTADDR="$VALID_INTEGRATED" # checksum-valid integrated address (derived fixture, see the unit block)
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$SUBADDR" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
@@ -3063,6 +3091,14 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "integrated payout rejected (would never be paid)" "$rc" "1"
 assert_contains "integrated message names the type" "$out" "INTEGRATED"
+# Checksum hard-fail: a well-shaped primary with mistyped characters must abort apply with the
+# retype message — accepted, it crash-loops p2pool on a stack that looks healthy from outside.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"4%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$(printf 'A%.0s' $(seq 94))" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "checksum-invalid payout rejected (would crash p2pool)" "$rc" "1"
+assert_contains "checksum message says to re-copy the address" "$out" "checksum"
 
 # tari.wallet_address left at the placeholder -> rejected by the shared template-placeholder guard
 # (else mining earns Tari that goes nowhere, the #250 failure mode). No exact-format gate
@@ -3799,7 +3835,7 @@ assert_contains "omitted p2pool.pool defaults to the mini sidechain flag (#502)"
 echo "== black-box: payout-wallet change needs a typed confirm (#375) =="
 # Swapping the payout wallet is the highest-value tamper: apply must demand the first 8 chars of
 # the new address typed back (a pasted 'y' can't wave it through), while -y keeps automation alive.
-WALLET2="4$(printf 'B%.0s' $(seq 94))" # a second valid mainnet primary; first 8 chars = 4BBBBBBB
+WALLET2="44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A" # a second checksum-valid primary (the Monero project's legacy donation address); first 8 chars = 44AFFq5k
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)" # baseline .env
@@ -3808,13 +3844,13 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && printf 'y\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
 rc=$?
 assert_rc "wallet change with 'y' aborts cleanly" "$rc" "0"
-assert_contains "wallet prompt shows the new address's first 8 chars" "$out" "(4BBBBBBB)"
+assert_contains "wallet prompt shows the new address's first 8 chars" "$out" "(44AFFq5k)"
 assert_contains "wallet change cancelled" "$out" "Apply cancelled"
 assert_eq "wallet unchanged in .env after abort" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
 # The preview/prompt never echoes the full new address (only its first 8 chars).
 assert_not_contains "full new address not echoed by apply" "$out" "$WALLET2"
 # (2) Typing the first 8 chars confirms and applies.
-out="$(cd "$V" && printf '4BBBBBBB\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+out="$(cd "$V" && printf '44AFFq5k\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
 assert_rc "typed confirm applies" "$?" "0"
 assert_eq "wallet updated in .env after typed confirm" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET2"
 # (3) -y still bypasses the prompt for automation.
@@ -3838,14 +3874,14 @@ assert_eq "tari wallet updated in .env after typed confirm" "$(run_sourced "$V" 
 # through (env_changed_keys sorts, so Monero prompts first, then Tari).
 TARI3="TARIXTARIX3" # first 8 chars = TARIXTAR
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"%s"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET2" "$TARI3" >"$V/config.json"
-out="$(cd "$V" && printf '4BBBBBBB\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+out="$(cd "$V" && printf '44AFFq5k\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
 assert_rc "both-wallet change with one prefix aborts cleanly" "$?" "0"
-assert_contains "both-wallet change prompts for the Monero prefix" "$out" "(4BBBBBBB)"
+assert_contains "both-wallet change prompts for the Monero prefix" "$out" "(44AFFq5k)"
 assert_contains "both-wallet change prompts for the Tari prefix too" "$out" "(TARIXTAR)"
 assert_contains "both-wallet change with one prefix is cancelled" "$out" "Apply cancelled"
 assert_eq "monero wallet unchanged after one-prefix abort" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
 assert_eq "tari wallet unchanged after one-prefix abort" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI2"
-out="$(cd "$V" && printf '4BBBBBBB\nTARIXTAR\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+out="$(cd "$V" && printf '44AFFq5k\nTARIXTAR\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
 assert_rc "both typed confirms apply" "$?" "0"
 assert_eq "monero wallet updated after both confirms" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET2"
 assert_eq "tari wallet updated after both confirms" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI3"
@@ -7884,8 +7920,8 @@ run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
 assert_rc "invalid config -> rc 1, wizard still opens" "$?" "1"
 [ -f "$PSD/out.json" ] && bad "rejected config NOT installed" "it was" || ok "rejected config NOT installed"
 
-printf '{"monero":{"wallet_address":"4%s"},"tari":{"wallet_address":"harness-tari"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
-    "$(printf 'A%.0s' $(seq 1 94))" >"$PSD/pithead-config.json"
+printf '{"monero":{"wallet_address":"%s"},"tari":{"wallet_address":"harness-tari"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
+    "$VALID_PRIMARY" >"$PSD/pithead-config.json"
 cp "$PSD/pithead-config.json" "$PSD/original.json"
 run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
 assert_rc "valid config -> rc 0" "$?" "0"
