@@ -8136,6 +8136,98 @@ assert_rc "no install on any disk -> rc 1" "$?" "1"
 rm -rf "$PFSB"
 unset PFSB PF_TREE
 
+echo "== unit: publish_rig_defaults — host-side pool discovery, fail open (#797 R3) =="
+# The rig role's pre-fill: the HOST dials for a Pithead and publishes the finding to the spool
+# like the disk inventory. The dial is 'timeout N bash -c </dev/tcp/...' — timeout is a PATH
+# stub here (like mount in the pre-fill tests), so the probe answers deterministically.
+RDSB=$(mktemp -d)
+mkdir -p "$RDSB/bin" "$RDSB/spool"
+printf '#!/bin/bash\nexit 0\n' >"$RDSB/bin/timeout"
+chmod +x "$RDSB/bin/timeout"
+PITHEAD_RIG_PROBE="coordinator.lan:3333" PATH="$RDSB/bin:$PATH" \
+    run_sourced "$SANDBOX" publish_rig_defaults "$RDSB/spool" >/dev/null 2>&1
+assert_eq "a Pithead answering -> pool published" "$(jq -r '.pool' "$RDSB/spool/rig-defaults.json")" "coordinator.lan:3333"
+assert_eq "the worker default is this machine's own name" "$(jq -r '.worker' "$RDSB/spool/rig-defaults.json")" "$(hostname)"
+printf '#!/bin/bash\nexit 1\n' >"$RDSB/bin/timeout"
+PITHEAD_RIG_PROBE="coordinator.lan:3333" PATH="$RDSB/bin:$PATH" \
+    run_sourced "$SANDBOX" publish_rig_defaults "$RDSB/spool" >/dev/null 2>&1
+assert_eq "no answer -> NO pool key, the field opens empty" "$(jq -r 'has("pool")' "$RDSB/spool/rig-defaults.json")" "false"
+assert_eq "no temp file beside the atomic target" "$(find "$RDSB/spool" -name '.rig-defaults*' | wc -l | tr -d ' ')" "0"
+rm -rf "$RDSB"
+unset RDSB
+
+echo "== unit: firstboot_consume_rig — the pool is dialed BEFORE anything irreversible (#797 R3) =="
+RCSB=$(mktemp -d)
+mkdir -p "$RCSB/bin" "$RCSB/spool"
+printf '#!/bin/bash\nexit 0\n' >"$RCSB/bin/timeout"
+chmod +x "$RCSB/bin/timeout"
+
+run_sourced "$RCSB" firstboot_consume_rig "$RCSB/spool" >/dev/null 2>&1
+assert_rc "no request -> rc 2 (nothing submitted)" "$?" "2"
+
+printf '{"pool":"not-an-address"}' >"$RCSB/spool/rig-request.json"
+PATH="$RCSB/bin:$PATH" run_sourced "$RCSB" firstboot_consume_rig "$RCSB/spool" >/dev/null 2>&1
+assert_rc "shapeless pool -> rc 1, rejected" "$?" "1"
+assert_contains "the rejection names the format" "$(cat "$RCSB/spool/error.txt")" "host:port"
+[ -f "$RCSB/rig.json" ] && bad "a rejected request lands nothing" "rig.json exists" || ok "a rejected request lands nothing"
+
+printf '{"pool":"10.0.0.5:3333","worker":"shed-3","stratum_password":"pw-fixture"}' >"$RCSB/spool/rig-request.json"
+printf '#!/bin/bash\nexit 1\n' >"$RCSB/bin/timeout"
+PATH="$RCSB/bin:$PATH" run_sourced "$RCSB" firstboot_consume_rig "$RCSB/spool" >/dev/null 2>&1
+assert_rc "unreachable pool -> rc 1 (validate before erase)" "$?" "1"
+assert_contains "the failure names the endpoint" "$(cat "$RCSB/spool/error.txt")" "10.0.0.5:3333"
+
+printf '{"pool":"10.0.0.5:3333","worker":"shed-3","stratum_password":"pw-fixture"}' >"$RCSB/spool/rig-request.json"
+printf '#!/bin/bash\nexit 0\n' >"$RCSB/bin/timeout"
+PATH="$RCSB/bin:$PATH" run_sourced "$RCSB" firstboot_consume_rig "$RCSB/spool" >/dev/null 2>&1
+assert_rc "reachable pool -> rc 0, accepted" "$?" "0"
+assert_eq "the accepted answers land host-side" "$(jq -r '.worker' "$RCSB/rig.json")" "shed-3"
+assert_eq "the password rides along" "$(jq -r '.stratum_password' "$RCSB/rig.json")" "pw-fixture"
+[ -f "$RCSB/spool/rig-request.json" ] && bad "the request is consumed" "still present" || ok "the request is consumed"
+
+printf '{"pool":"10.0.0.5:3333"}' >"$RCSB/spool/rig-request.json"
+PATH="$RCSB/bin:$PATH" run_sourced "$RCSB" firstboot_consume_rig "$RCSB/spool" >/dev/null 2>&1
+assert_eq "no worker named -> this machine's own name" "$(jq -r '.worker' "$RCSB/rig.json")" "$(hostname)"
+assert_eq "no password -> the key is omitted, not written empty" "$(jq -r 'has("stratum_password")' "$RCSB/rig.json")" "false"
+rm -rf "$RCSB"
+unset RCSB
+
+echo "== unit: the machine-role marker + the rig boot stub (#797 R3; the boot leg is R4's) =="
+MRSB=$(mktemp -d)
+printf '{"local_miner":{"enabled":true}}' >"$MRSB/config.json"
+assert_eq "local_miner on -> both (the role IS the switch)" "$(run_sourced "$MRSB" machine_role_from_config "$MRSB/config.json")" "both"
+printf '{}' >"$MRSB/config.json"
+assert_eq "no local_miner -> pithead" "$(run_sourced "$MRSB" machine_role_from_config "$MRSB/config.json")" "pithead"
+rm -f "$MRSB/config.json"
+run_sourced "$MRSB" record_machine_role rig >/dev/null 2>&1
+assert_eq "the marker lands where the boot path reads it" "$(cat "$MRSB/machine-role")" "rig"
+
+# A machine already marked rig: firstboot states the role and STOPS — no wizard container, no
+# coordinator questions, an honest console line until the rig boot leg lands with R4.
+printf '{"pool":"10.0.0.5:3333","worker":"shed-3"}' >"$MRSB/rig.json"
+out=$(PITHEAD_INSTALL_BIN=/nonexistent run_sourced "$MRSB" firstboot_wizard 2>&1)
+assert_rc "rig-marked machine -> firstboot returns 0, no wizard" "$?" "0"
+assert_contains "the console states the role and the worker" "$out" "RigForge rig role"
+assert_contains "the stub is honest about what does not run yet" "$out" "nothing mines yet"
+assert_not_contains "no wizard container is started" "$out" "Setup wizard is up"
+rm -rf "$MRSB"
+unset MRSB out
+
+echo "== unit: a staged rig install lands on /data at the target's first boot (#797 R3) =="
+RPSB=$(mktemp -d)
+RPESP=$(mktemp -d)
+export PITHEAD_PRESEED_DIR="$RPESP"
+printf '{"pool":"10.0.0.5:3333","worker":"shed-3"}' >"$RPESP/pithead-rig.json"
+out=$(PITHEAD_INSTALL_BIN=/nonexistent run_sourced "$RPSB" firstboot_wizard 2>&1)
+assert_rc "staged rig settings -> consumed, rc 0" "$?" "0"
+assert_eq "the answers land beside the program" "$(jq -r '.worker' "$RPSB/rig.json")" "shed-3"
+assert_eq "the role marker is written" "$(cat "$RPSB/machine-role")" "rig"
+assert_contains "the stub message narrates the wait" "$out" "nothing mines yet"
+# Spent, like the config pre-seed: settings (possibly a password) must not sit on the ESP.
+[ -f "$RPESP/pithead-rig.json" ] && bad "the consumed settings leave the ESP" "still there" || ok "the consumed settings leave the ESP"
+rm -rf "$RPSB" "$RPESP"
+unset PITHEAD_PRESEED_DIR RPSB RPESP out
+
 echo "== unit: render_local_miner_config — the built-in miner's config is DERIVED (#796) =="
 # On the appliance, RigForge's config.json is a pure function of pithead's config.json + .env,
 # rebuilt on every render like the Caddyfile: the stack's own stratum over loopback, the stratum

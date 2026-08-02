@@ -403,6 +403,153 @@ test("saying yes promises the built-in miner, never a manual install", async () 
   restore();
 });
 
+// --- the role select (#797 R3): one page, three shapes ---------------------------------------
+
+test("the role select is the FIRST disclosure, above the disk, reading exactly three names", async () => {
+  const { inst, restore } = await appOn([stateFor("installer", { disks: DISKS })]);
+  const out = renderToString(inst.render());
+  assert.ok(out.indexOf("What is this machine?") < out.indexOf("Install onto"));
+  assert.match(out, /Pithead \+ RigForge/);
+  assert.match(out, /"rig">RigForge</);
+  assert.match(out, /"pithead">Pithead</);
+  restore();
+});
+
+test("role Pithead + RigForge presets the local-miner switch and keeps the full form", async () => {
+  const { inst, restore } = await appOn([stateFor("setup")]);
+  inst.setRole({ target: { value: "both" } });
+  assert.equal(inst.state.cfg.local_miner.enabled, true);
+  const out = renderToString(inst.render());
+  assert.match(out, /Payout addresses/); // still Pithead's form — no new UI beyond the select
+  assert.match(out, /Nothing to install/); // the preset shows as the live switch's Yes note
+  // Back to plain Pithead: the documented default returns — today's config, byte for byte.
+  inst.setRole({ target: { value: "pithead" } });
+  assert.equal(inst.state.cfg.local_miner.enabled, false);
+  restore();
+});
+
+test("role RigForge collapses the form to pool, worker, password — none of the coordinator", async () => {
+  const { inst, restore } = await appOn([stateFor("setup")]);
+  inst.setRole({ target: { value: "rig" } });
+  const out = renderToString(inst.render());
+  assert.match(out, /Pool address/);
+  assert.match(out, /Worker name/);
+  assert.match(out, /Stratum password/);
+  assert.doesNotMatch(out, /Payout addresses/);
+  assert.doesNotMatch(out, /Dashboard login/);
+  assert.doesNotMatch(out, /Advanced/);
+  assert.doesNotMatch(out, /First sync/);
+  restore();
+});
+
+test("the rig fields open on the host's discovery, and say when nothing answered", async () => {
+  const found = await appOn([
+    stateFor("setup", { rig_defaults: { pool: "pithead.local:3333", worker: "hp-tower" } }),
+  ]);
+  found.inst.setRole({ target: { value: "rig" } });
+  assert.equal(found.inst.state.rigPool, "pithead.local:3333");
+  assert.equal(found.inst.state.rigWorker, "hp-tower");
+  assert.match(renderToString(found.inst.render()), /already filled in/);
+  found.restore();
+  const none = await appOn([stateFor("setup")]);
+  none.inst.setRole({ target: { value: "rig" } });
+  assert.match(renderToString(none.inst.render()), /No Pithead answered/);
+  none.restore();
+});
+
+test("run-from-this-stick appears beside the disks for the rig role ONLY", async () => {
+  const { inst, restore } = await appOn([stateFor("installer", { disks: DISKS })]);
+  assert.doesNotMatch(renderToString(inst.render()), /Run from this USB stick/);
+  inst.setRole({ target: { value: "rig" } });
+  const out = renderToString(inst.render());
+  assert.match(out, /Run from this USB stick — nothing is erased/);
+  // Picking it discloses the rig form with no retype gate — nothing is erased.
+  inst.setState({ chosen: "usb" });
+  const after = renderToString(inst.render());
+  assert.match(after, /Pool address/);
+  assert.doesNotMatch(after, /Type the disk name to confirm/);
+  assert.match(after, /Validate, then save to this stick/);
+  restore();
+});
+
+test("a rig submit carries the role and answers — never a config", async () => {
+  const { inst, restore } = await appOn([stateFor("installer", { disks: DISKS })]);
+  inst.setRole({ target: { value: "rig" } });
+  inst.setState({ chosen: "usb", rigPool: "10.0.0.5:3333", rigWorker: "shed-3" });
+  let sentBody = null;
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).includes("/submit")) {
+      sentBody = String(opts.body);
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+    return { ok: true, status: 200, json: async () => stateFor("handoff"), text: async () => "" };
+  };
+  await inst.submit({ preventDefault() {} });
+  globalThis.fetch = real;
+  assert.match(sentBody, /role=rig/);
+  assert.match(sentBody, /rig_pool=10.0.0.5%3A3333/);
+  assert.match(sentBody, /disk=usb/);
+  assert.doesNotMatch(sentBody, /config=/);
+  restore();
+});
+
+test("an empty pool address is stopped client-side with a named reason", async () => {
+  const { inst, restore } = await appOn([stateFor("setup")]);
+  inst.setRole({ target: { value: "rig" } });
+  let fetched = false;
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => {
+    fetched = true;
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  await inst.submit({ preventDefault() {} });
+  globalThis.fetch = real;
+  assert.equal(fetched, false);
+  assert.match(inst.state.error, /pool address/);
+  restore();
+});
+
+test("the rig card shows the worker and where it points — no credentials, no login", () => {
+  const handoff = { role: "rig", worker: "shed-3", stratum: "stratum+tcp://pithead.local:3333" };
+  const card = renderToString(
+    html`<${Done} status="" handoff=${handoff} installer=${true} stick=${false} onAck=${() => {}} />`,
+  );
+  assert.match(card, /shed-3/);
+  assert.match(card, /stratum\+tcp:\/\/pithead\.local:3333/);
+  assert.match(card, /erase the disk and install/); // the ack still releases the erase
+  assert.doesNotMatch(card, /Dashboard password/);
+  assert.doesNotMatch(card, /Save this before anything else/);
+  const stick = renderToString(
+    html`<${Done} status="" handoff=${handoff} installer=${true} stick=${true} onAck=${() => {}} />`,
+  );
+  assert.doesNotMatch(stick, /erase the disk/); // run-from-stick erases nothing
+});
+
+test("after the ack, the rig's done view is honest: saved, not mining yet", async () => {
+  const { inst, restore } = await appOn([stateFor("setup")]);
+  inst.setRole({ target: { value: "rig" } });
+  Object.assign(inst.state, { stage: "done", handoff: null });
+  const out = renderToString(inst.render());
+  assert.match(out, /nothing mines yet/);
+  assert.doesNotMatch(out, /pulling and starting the stack/);
+  restore();
+});
+
+test("keep on a preserved disk still collapses everything — the rig role included", async () => {
+  const { inst, restore } = await appOn([
+    stateFor("installer", {
+      disks: [{ name: "sda", size: "1T", model: "M", serial: "S", state: "pithead-with-data" }],
+    }),
+  ]);
+  inst.setRole({ target: { value: "rig" } });
+  inst.setState({ chosen: "sda", wipe: "keep" });
+  const out = renderToString(inst.render());
+  assert.doesNotMatch(out, /Pool address/);
+  assert.match(out, /keeps everything/);
+  restore();
+});
+
 test("before a disk is chosen, the page asks ONLY that", async () => {
   const { inst, restore } = await appOn([
     stateFor("installer", {

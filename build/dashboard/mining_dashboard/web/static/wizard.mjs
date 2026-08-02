@@ -87,7 +87,16 @@ export const Gate = ({ error, onSubmit }) => html`<div class="card">
 // right — bench screenshots cut off exactly the erase/keep words), and is restated in full
 // below the control, red when destructive. The server re-validates the choice against the
 // inventory the HOST published; a browser can never name a disk the host did not offer.
-export const InstallSection = ({ disks, chosen, confirm, wipe, onPick, onConfirm, onWipe }) => {
+export const InstallSection = ({
+  disks,
+  chosen,
+  confirm,
+  wipe,
+  allowStick,
+  onPick,
+  onConfirm,
+  onWipe,
+}) => {
   const picked = disks.find((d) => d.name === chosen);
   const verdictText = (d) =>
     d.state === "pithead-with-data"
@@ -100,6 +109,13 @@ export const InstallSection = ({ disks, chosen, confirm, wipe, onPick, onConfirm
     <${Field} label="Target disk">
         <select value=${chosen} onChange=${onPick}>
             <option value="" disabled selected=${!chosen}>Choose a disk…</option>
+            ${
+              // A rig holds almost no state, so for that role the stick itself is a
+              // first-class place to live — no erase, no commitment on machines whose
+              // disks belong to something else.
+              allowStick &&
+              html`<option value="usb">Run from this USB stick — nothing is erased</option>`
+            }
             ${disks.map(
               (d) =>
                 html`<option value=${d.name}>
@@ -108,6 +124,11 @@ export const InstallSection = ({ disks, chosen, confirm, wipe, onPick, onConfirm
             )}
         </select>
     <//>
+    ${
+      chosen === "usb" &&
+      html`<${Note}>The stick stays in the machine and is the system: the rig's settings ride
+        on it, no disk is touched, and pulling it out just stops the miner.<//>`
+    }
     ${
       picked &&
       picked.state === "pithead-with-data" &&
@@ -158,10 +179,19 @@ export const Installing = ({ status }) => html`<div class="card">
     }
 </div>`;
 
-export const Done = ({ status, handoff, installer, onAck }) => html`<div class="card">
+export const Done = ({ status, handoff, installer, stick, rig, onAck }) => html`<div class="card">
     ${
-      handoff
-        ? html`<h3>Save this before anything else</h3>
+      handoff && handoff.role === "rig"
+        ? html`<h3>Check this rig</h3>
+            <p>This is what the machine will be.</p>
+            <${Field} label="Worker name"><code class="wizard-mono">${handoff.worker}</code><//>
+            <${Field} label="Mines toward"><code class="wizard-mono">${handoff.stratum}</code><//>
+            <${Note}>A rig has no dashboard and no login — nothing to save. It appears by this
+            name in the Pithead's Workers view.<//>
+            <button type="button" onClick=${onAck}>
+                ${installer && !stick ? "Looks right — erase the disk and install" : "Looks right — save it"}</button>`
+        : handoff
+          ? html`<h3>Save this before anything else</h3>
             <p>This is shown once, here.</p>
             <${Field} label="Dashboard user"><code class="wizard-mono">${handoff.username}</code><//>
             <${Field} label="Dashboard password"><code class="wizard-mono">${handoff.password}</code><//>
@@ -177,7 +207,12 @@ export const Done = ({ status, handoff, installer, onAck }) => html`<div class="
                 : html`Provisioning waits for this confirmation (up to 10 minutes), because the
                   page goes dark while the machine builds itself.`
             }<//>`
-        : html`<p><strong>Provisioning.</strong> The machine is pulling and starting the stack —
+          : rig
+            ? html`<p><strong>Saved.</strong> This machine now carries the rig role — the worker
+            name and pool address are stored on it. Rig provisioning lands with the next phase
+            of the system; nothing mines yet, and the machine's console says the same.</p>
+            <p class="text-muted">${status || ""}</p>`
+            : html`<p><strong>Provisioning.</strong> The machine is pulling and starting the stack —
             10 to 30 minutes on a home connection. <strong>This page will stop responding</strong>
             while it happens; that is the machine working, not failing. Its console narrates, and
             when it finishes the dashboard is at
@@ -201,6 +236,14 @@ export class WizardApp extends Component {
     jsonText: "",
     jsonError: "",
     authMode: "auto", // auto | set | none — travels beside the config (see wizard.py submit)
+    // What this machine IS — the first disclosure, above the disk. pithead | both | rig.
+    // "both" rides the existing local_miner switch; "rig" collapses the form to three answers
+    // that travel beside the config exactly like authMode does.
+    role: "pithead",
+    rigPool: "",
+    rigWorker: "",
+    rigPassword: "",
+    rigDefaults: {},
     status: "",
     handoff: null,
   };
@@ -222,8 +265,15 @@ export class WizardApp extends Component {
       reference: s.reference,
       disks: s.disks,
       error: s.error || "",
+      rigDefaults: s.rig_defaults || {},
       handoff: s.handoff || null,
     };
+    // The host's discovery pre-fills the rig fields, but only while they are untouched — the
+    // form polls, and a half-typed pool address must survive it (same rule as cfg below).
+    if (!this.state.rigPool && !this.state.rigWorker) {
+      next.rigPool = (s.rig_defaults || {}).pool || "";
+      next.rigWorker = (s.rig_defaults || {}).worker || "";
+    }
     // The wait is over once the server either moved on or rejected: both end "Validating…".
     if (this.state.submitting && (next.stage !== "setup" || next.error)) next.submitting = false;
     // Do not clobber in-progress editing with the server's copy once the form is up.
@@ -272,6 +322,26 @@ export class WizardApp extends Component {
     this.setState({ cfg, jsonText: JSON.stringify(cfg, null, 2) });
   };
 
+  // The role reshapes the page the way the disk choice does. "Both" IS the existing
+  // local_miner switch — the role presets it and the switch below stays live; back to plain
+  // Pithead resets it to the documented default so the submitted config is byte-for-byte
+  // today's. The rig role never touches the config at all.
+  setRole = (e) => {
+    const role = e.target.value;
+    const cfg = this.state.cfg;
+    const next = { role, cfg };
+    if (role !== "rig") {
+      pathSet(cfg, "local_miner.enabled", role === "both");
+      // "usb" only exists for rigs — a coordinator switching back must re-pick a real disk.
+      if (this.state.chosen === "usb") {
+        next.chosen = "";
+        next.confirm = "";
+      }
+    }
+    next.jsonText = JSON.stringify(cfg, null, 2);
+    this.setState(next);
+  };
+
   // JSON pane edit → config → fields. Hand-edited JSON wins; shape errors show as typed.
   editJson = (e) => {
     const text = e.target.value;
@@ -285,31 +355,53 @@ export class WizardApp extends Component {
 
   submit = async (e) => {
     e.preventDefault();
+    const rig = this.state.role === "rig";
     const keepEverything =
       this.state.installer &&
       (this.state.disks.find((d) => d.name === this.state.chosen) || {}).state ===
         "pithead-with-data" &&
       this.state.wipe === "keep";
+    // keep means KEEP in every role: no config, no role — the survivor wins.
     const body = keepEverything
       ? {} // the preserved config wins — sending one would only mislead
-      : {
-          config: JSON.stringify(this.state.cfg),
-          auth_mode: this.state.authMode,
-        };
+      : rig
+        ? {
+            role: "rig",
+            rig_pool: this.state.rigPool.trim(),
+            rig_worker: this.state.rigWorker.trim(),
+            rig_password: this.state.rigPassword,
+          }
+        : {
+            config: JSON.stringify(this.state.cfg),
+            auth_mode: this.state.authMode,
+          };
+    if (rig && !keepEverything && !body.rig_pool) {
+      this.setState({ error: "Enter the pool address (host:port)." });
+      return;
+    }
     // One page, one submission: on the installation medium the disk choice rides beside the
-    // config, and the server gates both before anything is written.
+    // config, and the server gates both before anything is written. "usb" (rig role only) is
+    // not a disk: nothing is erased, so the retyped-name gate does not apply.
     if (this.state.installer) {
       if (!this.state.chosen) {
-        this.setState({ error: "Choose the disk to install onto." });
+        this.setState({
+          error: rig
+            ? "Choose a disk — or run from this USB stick."
+            : "Choose the disk to install onto.",
+        });
         return;
       }
-      if (this.state.confirm !== this.state.chosen) {
-        this.setState({ error: `Type ${this.state.chosen} exactly to confirm the erase.` });
-        return;
+      if (this.state.chosen === "usb") {
+        body.disk = "usb";
+      } else {
+        if (this.state.confirm !== this.state.chosen) {
+          this.setState({ error: `Type ${this.state.chosen} exactly to confirm the erase.` });
+          return;
+        }
+        body.disk = this.state.chosen;
+        body.confirm = this.state.confirm;
+        body.wipe = this.state.wipe;
       }
-      body.disk = this.state.chosen;
-      body.confirm = this.state.confirm;
-      body.wipe = this.state.wipe;
     }
     const res = await fetch("/submit", { method: "POST", body: new URLSearchParams(body) });
     if (!res.ok) {
@@ -332,6 +424,39 @@ export class WizardApp extends Component {
     await this.loadState(); // the server drops out of the handoff stage; the view follows
   };
 
+  // The rig role's whole form: where the pool is, what to call the machine, an optional
+  // stratum password. No payout addresses (the Pithead holds those), no nodes, no dashboard
+  // login — a rig has none of them.
+  renderRigFields() {
+    const { rigPool, rigWorker, rigPassword, rigDefaults } = this.state;
+    return html`<h3>Where it mines</h3>
+        <${Field} label="Pool address (host:port)">
+            <input class="wizard-mono" value=${rigPool}
+                onInput=${(e) => this.setState({ rigPool: e.target.value })}
+                autocomplete="off" autocapitalize="off" spellcheck=${false}
+                placeholder="pithead.local:3333" required />
+        <//>
+        <${Note}>${
+          rigDefaults.pool
+            ? html`A Pithead answered at ${" "}<code>${rigDefaults.pool}</code>${" "}on this
+              network — already filled in.`
+            : html`No Pithead answered on this network — enter the coordinator's address by
+              hand. Its own setup card names it, as ${" "}
+              <code>stratum+tcp://…</code>${" "}under "Point miners at".`
+        }<//>
+        <${Field} label="Worker name">
+            <input value=${rigWorker} onInput=${(e) => this.setState({ rigWorker: e.target.value })}
+                autocomplete="off" autocapitalize="off" spellcheck=${false} />
+        <//>
+        <${Field} label="Stratum password (leave blank unless the Pithead set one)">
+            <input type="password" value=${rigPassword}
+                onInput=${(e) => this.setState({ rigPassword: e.target.value })}
+                autocomplete="new-password" />
+        <//>
+        <${Note}>That is everything a rig needs. It has no dashboard and no login of its own —
+        it appears by this name in the Pithead's Workers view.<//>`;
+  }
+
   renderSetup() {
     const { cfg, error, jsonText, jsonError } = this.state;
     const v = (name) => pathGet(cfg, FIELDS[name].path);
@@ -341,44 +466,64 @@ export class WizardApp extends Component {
     const remoteMonero = v("moneroMode") === "remote";
     const remoteTari = v("tariMode") === "remote";
     const { installer, disks, chosen, confirm, wipe } = this.state;
+    const rig = this.state.role === "rig";
     // Keep-everything reinstall: the machine's settings, wallets, login and chains all survive,
     // so there is nothing to ask — the config half of the page would collect answers the
     // machine will ignore (its preserved config wins). Only the disk half renders.
     const pickedState = (disks.find((d) => d.name === chosen) || {}).state;
     // Progressive disclosure: the DISK decides what gets asked (keep = nothing, keep-chains =
     // a trimmed form, fresh = everything), so until one is chosen the page asks only that.
-    const diskPicked = !installer || Boolean(pickedState);
+    // The rig role's "usb" target counts as picked: running from the stick is a full answer.
+    const diskPicked = !installer || Boolean(pickedState) || chosen === "usb";
     const keepEverything = installer && pickedState === "pithead-with-data" && wipe === "keep";
     return html`<div class="card">
         <p>${
           installer && !diskPicked
-            ? html`Choose the disk to install onto — what happens next depends on what is
+            ? rig
+              ? html`Choose where this rig runs — one of the disks, or straight from this USB
+                stick. The rest of the page appears once you pick.`
+              : html`Choose the disk to install onto — what happens next depends on what is
               already on it, so the rest of the page appears once you pick.`
             : keepEverything
               ? html`This disk keeps everything — settings, wallets, dashboard login and the
               synced chains. Only the system is replaced, so there is nothing to configure:
               the machine comes back exactly as it was, on a fresh install.`
-              : installer
-                ? html`Choose the disk to install onto and answer the questions below — the
+              : rig
+                ? html`A rig needs almost nothing: where the pool is, and what to call this
+                machine. It mines toward a Pithead and appears in that machine's dashboard.`
+                : installer
+                  ? html`Choose the disk to install onto and answer the questions below — the
                 machine validates everything, shows you the login to save, and only then erases
                 the disk. After it switches itself off, remove the stick and power it on: it
                 provisions itself with exactly this configuration.`
-                : html`Only the answers that cannot be guessed for you. Everything else keeps its
-                documented default and stays editable from the dashboard.`
+                  : html`Only the answers that cannot be guessed for you. Everything else keeps
+                its documented default and stays editable from the dashboard.`
         }</p>
         <${Err}>${error}<//>
         <form onSubmit=${this.submit}>
+            <${Field} label="What is this machine?">
+                <select value=${this.state.role} onChange=${this.setRole}>
+                    <option value="pithead">Pithead</option>
+                    <option value="both">Pithead + RigForge</option>
+                    <option value="rig">RigForge</option>
+                </select>
+            <//>
+            <${Note}>A Pithead coordinates the mine — nodes, pool and dashboard. A RigForge rig
+            only mines, pointed at a Pithead. The middle choice is a Pithead that also mines
+            with its own CPU.<//>
             ${
               installer &&
               html`<${InstallSection} disks=${disks} chosen=${chosen} confirm=${confirm}
-                wipe=${wipe}
+                wipe=${wipe} allowStick=${rig}
                 onPick=${(e) => this.setState({ chosen: e.target.value, wipe: "keep" })}
                 onConfirm=${(e) => this.setState({ confirm: e.target.value })}
                 onWipe=${(e) => this.setState({ wipe: e.target.value })} />`
             }
+            ${diskPicked && !keepEverything && rig && this.renderRigFields()}
             ${
               diskPicked &&
               !keepEverything &&
+              !rig &&
               html`<h3>Payout addresses</h3>
             <${Note}>Paste these — they are far too long to type, and a typo pays a stranger.<//>
             <${Field} label="Monero payout address">
@@ -561,14 +706,16 @@ export class WizardApp extends Component {
 
             ${
               diskPicked &&
-              html`<button type="submit" disabled=${!!jsonError || this.state.submitting}>
+              html`<button type="submit" disabled=${(!rig && !!jsonError) || this.state.submitting}>
                 ${
                   this.state.submitting
                     ? "Validating…"
                     : keepEverything
                       ? "Reinstall the system — keep everything"
                       : installer
-                        ? "Validate, then install"
+                        ? chosen === "usb"
+                          ? "Validate, then save to this stick"
+                          : "Validate, then install"
                         : "Apply"
                 }</button>`
             }
@@ -583,7 +730,8 @@ export class WizardApp extends Component {
     else if (stage === "installing") view = html`<${Installing} status=${status} />`;
     else if (stage === "done")
       view = html`<${Done} status=${status} handoff=${this.state.handoff}
-        installer=${this.state.installer} onAck=${this.ack} />`;
+        installer=${this.state.installer} stick=${this.state.chosen === "usb"}
+        rig=${this.state.role === "rig"} onAck=${this.ack} />`;
     else view = this.renderSetup();
     return html`<h1>Pithead setup</h1>${view}`;
   }

@@ -121,6 +121,18 @@ def _last_attempt() -> dict:
         return {}
 
 
+def _rig_defaults() -> dict:
+    """The rig role's pre-fill, published by the HOST like the disk inventory: a Pithead pool
+    discovered on the LAN (when one answered) and this machine's own name for the worker
+    field. Fail open — absent or unparseable means the fields open empty, nothing blocked."""
+    raw = _spool_read("rig-defaults.json")
+    try:
+        d = json.loads(raw) if raw else {}
+    except ValueError:
+        d = {}
+    return d if isinstance(d, dict) else {}
+
+
 def wizard_stage() -> str:
     """Which step this machine is actually on, decided by the SPOOL — never by the client.
 
@@ -211,6 +223,7 @@ async def wizard_state(request: web.Request) -> web.Response:
             "reference": ref,
             "error": _spool_read("error.txt"),
             "disks": _disks(),
+            "rig_defaults": _rig_defaults(),
             "handoff": json.loads(raw_handoff) if raw_handoff else None,
         }
     )
@@ -305,6 +318,60 @@ def _spool_write_config(cfg: dict) -> None:
     os.replace(tmp, os.path.join(sd, "config.json"))
 
 
+def _gate_install_request(form: dict) -> str | None:
+    """Three independent gates before anything is written, because this leads to erasing a
+    disk — identical for every role: the target must be one the HOST offered (never a name the
+    browser invented), the operator must retype it exactly, and the wipe mode must be from the
+    fixed set — with anything other than "keep" allowed only on a disk that actually carries
+    data to wipe. Writes the install request and returns None, or returns the error text."""
+    disk = str(form.get("disk", "")).strip()
+    confirm = str(form.get("confirm", "")).strip()
+    wipe = str(form.get("wipe", "keep")).strip() or "keep"
+    by_name = {d["name"]: d for d in _disks()}
+    if disk not in by_name:
+        return "choose a disk from the list"
+    if confirm != disk:
+        return f"type {disk} exactly to confirm"
+    if wipe not in ("keep", "data", "all"):
+        return "unknown wipe mode"
+    if wipe != "keep" and by_name[disk]["state"] != "pithead-with-data":
+        wipe = "keep"  # nothing on the disk to keep or wipe — normalize silently
+    _spool_write_text("install-request", f"{disk}\t{wipe}")
+    return None
+
+
+def _submit_rig(form: dict) -> web.Response:
+    """The RigForge role's submission: no pithead config at all — a pool address, a worker
+    name, an optional stratum password, on their own spool channel. The coordinator flow stays
+    byte-for-byte untouched because nothing here goes near config.json; the HOST dials the
+    pool and owns everything after. On the installation medium the disk gates are the same as
+    every other role, with one extra first-class target: "usb" means run from this stick —
+    nothing is erased, so no gates apply to it."""
+    pool = str(form.get("rig_pool", "")).strip()
+    host, _, port = pool.rpartition(":")
+    if not host or not port.isdigit():
+        return web.json_response(
+            {"error": "enter the pool address as host:port — a Pithead answers on port 3333"},
+            status=400,
+        )
+    if installer_mode() and str(form.get("disk", "")).strip() != "usb":
+        err = _gate_install_request(form)
+        if err:
+            return web.json_response({"error": err}, status=400)
+    rig = {"pool": pool}
+    worker = str(form.get("rig_worker", "")).strip()
+    if worker:
+        rig["worker"] = worker
+    password = str(form.get("rig_password", "")).strip()
+    if password:
+        rig["stratum_password"] = password
+    _spool_clear_error()
+    # The role rides beside the request so /status can narrate honestly after it is consumed.
+    _spool_write_text("role", "rig")
+    _spool_write_text("rig-request.json", json.dumps(rig))
+    return web.json_response({"status": "accepted"})
+
+
 async def submit(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
@@ -336,6 +403,10 @@ async def submit(request: web.Request) -> web.Response:
         # through unconditionally. The no-JS path submits individual form FIELDS, not a config
         # blob, so "no config present" cannot distinguish a bare keep from a form submit; the
         # host's validation names what is missing either way.
+    # The rig role, AFTER the keep gate on purpose: keep means KEEP in every role — a rig
+    # submission against a preserved install must not smuggle a role change past the survivor.
+    if str(form.get("role", "")).strip() == "rig":
+        return _submit_rig(dict(form))
     # The JSON pane IS the configuration — what the operator can see is exactly what gets
     # applied. build_config remains the fallback for a client with no JavaScript.
     try:
@@ -350,25 +421,12 @@ async def submit(request: web.Request) -> web.Response:
     mode = str(form.get("auth_mode", "")).strip()
     if mode in ("auto", "set", "none"):
         _spool_write_text("auth-mode", mode)
-    # On the installation medium, config and disk arrive TOGETHER — one page, one submission.
-    # Three independent gates before anything is written, because this leads to erasing a disk:
-    # the target must be one the HOST offered (never a name the browser invented), the operator
-    # must retype it exactly, and the wipe mode must be from the fixed set — with anything
-    # other than "keep" allowed only on a disk that actually carries data to wipe.
+    # On the installation medium, config and disk arrive TOGETHER — one page, one submission,
+    # gated before anything is written (see _gate_install_request).
     if installer_mode():
-        disk = str(form.get("disk", "")).strip()
-        confirm = str(form.get("confirm", "")).strip()
-        wipe = str(form.get("wipe", "keep")).strip() or "keep"
-        by_name = {d["name"]: d for d in _disks()}
-        if disk not in by_name:
-            return web.json_response({"error": "choose a disk from the list"}, status=400)
-        if confirm != disk:
-            return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
-        if wipe not in ("keep", "data", "all"):
-            return web.json_response({"error": "unknown wipe mode"}, status=400)
-        if wipe != "keep" and by_name[disk]["state"] != "pithead-with-data":
-            wipe = "keep"  # nothing on the disk to keep or wipe — normalize silently
-        _spool_write_text("install-request", f"{disk}\t{wipe}")
+        err = _gate_install_request(dict(form))
+        if err:
+            return web.json_response({"error": err}, status=400)
     # Keep the full attempt for a retry, write only what differs from the defaults.
     _spool_write_text("last-attempt.json", json.dumps(cfg))
     _spool_write_config(strip_defaults(cfg, ref) if ref else cfg)
@@ -410,6 +468,12 @@ async def status(request: web.Request) -> web.Response:
             return web.Response(text=f"Install failed: {err}")
         return web.Response(text="Copying the system to the disk…")
     if _spool_read("applied") is not None:
+        if _spool_read("role") == "rig":
+            # Honest by design: the rig's boot leg arrives with the next phase of the system.
+            return web.Response(
+                text="Rig settings saved on this machine. Rig provisioning lands with the "
+                "next phase of the system — nothing mines yet."
+            )
         return web.Response(text="Provisioned — the dashboard is coming up now.")
     err = _spool_read("error.txt")
     if err is not None:

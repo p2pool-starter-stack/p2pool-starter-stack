@@ -634,6 +634,140 @@ async def test_ack_on_the_installer_means_installing_not_provisioning(client, in
     assert (await (await client.get("/api/wizard-state")).json())["stage"] == "installing"
 
 
+# --- the role select (#797 R3): the RigForge role travels on its own channel -----------------
+# Pithead is the default and the absence of a role field — every submit above this section IS
+# the regression bar for it. The rig role never touches config.json: three answers on their own
+# spool file, the HOST validates reachability and owns everything after.
+
+
+async def test_rig_submit_writes_the_request_and_role_and_no_config(client, seeded):
+    await _auth(client)
+    r = await client.post(
+        "/submit",
+        data={
+            "role": "rig",
+            "rig_pool": "pithead.local:3333",
+            "rig_worker": "shed-3",
+            "rig_password": "fixture-stratum-pw",
+        },
+    )
+    assert r.status == 200
+    req = json.loads((seeded / "rig-request.json").read_text())
+    assert req == {
+        "pool": "pithead.local:3333",
+        "worker": "shed-3",
+        "stratum_password": "fixture-stratum-pw",
+    }
+    assert (seeded / "role").read_text() == "rig"
+    # None of the coordinator machinery: no config candidate, no retry attempt.
+    assert not (seeded / "config.json").exists()
+    assert not (seeded / "last-attempt.json").exists()
+
+
+async def test_rig_pool_must_look_like_host_port(client, seeded):
+    await _auth(client)
+    for bad in ("", "pithead.local", "pithead.local:", ":3333", "pithead.local:zzz"):
+        r = await client.post("/submit", data={"role": "rig", "rig_pool": bad})
+        assert r.status == 400, bad
+        assert "host:port" in (await r.json())["error"]
+    assert not (seeded / "rig-request.json").exists()
+
+
+async def test_rig_empty_worker_and_password_are_omitted(client, seeded):
+    # The HOST fills the worker default (its own hostname); an empty password is no password.
+    await _auth(client)
+    await client.post("/submit", data={"role": "rig", "rig_pool": "10.0.0.5:3333"})
+    assert json.loads((seeded / "rig-request.json").read_text()) == {"pool": "10.0.0.5:3333"}
+
+
+async def test_rig_on_the_installer_takes_the_same_disk_gates(client, installer):
+    # Identical erase discipline in every role: offered target, exact retype, fixed wipe set.
+    await _auth(client)
+    base = {"role": "rig", "rig_pool": "10.0.0.5:3333"}
+    assert (
+        await client.post("/submit", data={**base, "disk": "sdz", "confirm": "sdz"})
+    ).status == 400
+    r = await client.post("/submit", data={**base, "disk": "nvme0n1", "confirm": "nvme0n"})
+    assert r.status == 400
+    # A rejected disk half-accepts nothing — one page, one atomic answer.
+    assert not (installer / "install-request").exists()
+    assert not (installer / "rig-request.json").exists()
+    r = await client.post("/submit", data={**base, "disk": "nvme0n1", "confirm": "nvme0n1"})
+    assert r.status == 200
+    assert (installer / "install-request").read_text() == "nvme0n1\tkeep"
+    assert (installer / "rig-request.json").exists()
+
+
+async def test_run_from_this_stick_is_first_class_for_the_rig_role_only(client, installer):
+    # "usb" is not a disk: nothing is erased, so NO install request — the answers still travel.
+    await _auth(client)
+    r = await client.post(
+        "/submit", data={"role": "rig", "rig_pool": "10.0.0.5:3333", "disk": "usb"}
+    )
+    assert r.status == 200
+    assert not (installer / "install-request").exists()
+    assert (installer / "rig-request.json").exists()
+    # Any other role naming "usb" hits the inventory gate: the host never offered it.
+    r = await client.post("/submit", data={"config": _CFG, "disk": "usb", "confirm": "usb"})
+    assert r.status == 400
+
+
+async def test_rig_keep_on_a_preserved_disk_stays_a_keep(client, installer):
+    # keep means KEEP in every role: the survivor config wins, no role change crosses.
+    await _auth(client)
+    r = await client.post(
+        "/submit",
+        data={
+            "role": "rig",
+            "rig_pool": "10.0.0.5:3333",
+            "disk": "sda",
+            "confirm": "sda",
+            "wipe": "keep",
+        },
+    )
+    assert r.status == 200
+    assert (installer / "install-request").read_text() == "sda\tkeep"
+    assert not (installer / "rig-request.json").exists()
+    assert not (installer / "role").exists()
+
+
+async def test_state_carries_the_hosts_rig_defaults_and_fails_open(client, seeded):
+    await _auth(client)
+    s = await (await client.get("/api/wizard-state")).json()
+    assert s["rig_defaults"] == {}  # nothing published — the fields open empty
+    seeded.joinpath("rig-defaults.json").write_text(
+        '{"pool": "pithead.local:3333", "worker": "hp"}'
+    )
+    s = await (await client.get("/api/wizard-state")).json()
+    assert s["rig_defaults"] == {"pool": "pithead.local:3333", "worker": "hp"}
+    seeded.joinpath("rig-defaults.json").write_text("{broken")
+    s = await (await client.get("/api/wizard-state")).json()
+    assert s["rig_defaults"] == {}
+
+
+async def test_status_narrates_the_rig_save_without_promising_a_dashboard(client, spool):
+    spool.joinpath("role").write_text("rig")
+    spool.joinpath("applied").write_text("1")
+    body = await (await client.get("/status")).text()
+    assert "Rig settings saved" in body
+    assert "dashboard" not in body.lower()
+
+
+async def test_rig_submit_clears_a_previous_error(client, seeded):
+    seeded.joinpath("error.txt").write_text("old error")
+    await _auth(client)
+    await client.post("/submit", data={"role": "rig", "rig_pool": "10.0.0.5:3333"})
+    assert not (seeded / "error.txt").exists()
+
+
+async def test_unauthed_rig_submit_writes_nothing(client, seeded):
+    r = await client.post(
+        "/submit", data={"role": "rig", "rig_pool": "10.0.0.5:3333"}, allow_redirects=False
+    )
+    assert r.status == 302
+    assert not (seeded / "rig-request.json").exists()
+
+
 # --- the dashboard-login choice -------------------------------------------------------------
 
 
