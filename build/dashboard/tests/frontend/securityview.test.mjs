@@ -12,10 +12,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  bucketKey,
   buildLogQuery,
   fmtEpoch,
-  groupAuditEntries,
+  pageFor,
   SecurityPanel,
 } from "../../mining_dashboard/web/static/securityview.mjs";
 import { renderToString } from "./helpers/render.mjs";
@@ -25,9 +24,11 @@ import { renderToString } from "./helpers/render.mjs";
 function renderPanel(state) {
   const panel = new SecurityPanel({});
   panel.state = {
-    access: null, audit: null, auditGroup: "flat", error: null,
+    access: null, audit: null, error: null,
     accessFilters: { preset: "all", fromDate: "", toDate: "", q: "" },
     auditFilters: { preset: "all", fromDate: "", toDate: "", q: "" },
+    accessPager: { page: 0, size: 20 },
+    auditPager: { page: 0, size: 20 },
     ...state,
   };
   return renderToString(panel.render());
@@ -112,93 +113,53 @@ test("fetch error surfaces as a message, not a blank panel", () => {
   assert.match(out, /fetch failed/);
 });
 
-// #530: hour/day/month grouping for the audit trail.
+// Pagination (#823 follow-up): the grouping dropdown became a rows-per-page control.
 
-test("bucketKey: hour/day/month slice the shared ts format; unknown granularity ignored by the caller", () => {
-  const ts = "2026-07-20T14:35:00Z";
-  assert.equal(bucketKey(ts, "hour"), "2026-07-20T14");
-  assert.equal(bucketKey(ts, "day"), "2026-07-20");
-  assert.equal(bucketKey(ts, "month"), "2026-07");
-  assert.equal(bucketKey(42, "day"), ""); // non-string ts never throws
+test("pageFor: slices, clamps past-the-end pages, and reports totals", () => {
+  const entries = Array.from({ length: 23 }, (_, i) => ({ n: i }));
+  const p0 = pageFor(entries, 0, 10);
+  assert.deepEqual([p0.page, p0.pages, p0.total, p0.slice.length], [0, 3, 23, 10]);
+  const last = pageFor(entries, 2, 10);
+  assert.equal(last.slice.length, 3); // the short final page
+  // A page past the end (result set shrank under a filter) clamps to the last real page.
+  const clamped = pageFor(entries, 9, 10);
+  assert.equal(clamped.page, 2);
+  // Empty set: one empty page, never NaN/negative.
+  const empty = pageFor([], 0, 10);
+  assert.deepEqual([empty.page, empty.pages, empty.total], [0, 1, 0]);
 });
 
-test("groupAuditEntries: flat/unknown granularity returns one ungrouped run", () => {
-  const entries = [{ ts: "2026-07-20T00:00:00Z" }, { ts: "2026-07-19T00:00:00Z" }];
-  assert.deepEqual(groupAuditEntries(entries, "flat"), [{ bucket: null, entries }]);
-  assert.deepEqual(groupAuditEntries(entries, undefined), [{ bucket: null, entries }]);
-});
-
-test("groupAuditEntries: contiguous same-day entries collapse into one bucket", () => {
-  const entries = [
-    { ts: "2026-07-20T14:00:00Z", actor: "a" },
-    { ts: "2026-07-20T09:00:00Z", actor: "b" },
-    { ts: "2026-07-19T23:00:00Z", actor: "c" },
-  ];
-  const groups = groupAuditEntries(entries, "day");
-  assert.equal(groups.length, 2);
-  assert.equal(groups[0].bucket, "2026-07-20");
-  assert.equal(groups[0].entries.length, 2);
-  assert.equal(groups[1].bucket, "2026-07-19");
-  assert.equal(groups[1].entries.length, 1);
-});
-
-test("groupAuditEntries: month grouping spans multiple days in one bucket", () => {
-  const entries = [
-    { ts: "2026-07-20T00:00:00Z" },
-    { ts: "2026-07-01T00:00:00Z" },
-    { ts: "2026-06-30T00:00:00Z" },
-  ];
-  const groups = groupAuditEntries(entries, "month");
-  assert.deepEqual(
-    groups.map((g) => [g.bucket, g.entries.length]),
-    [
-      ["2026-07", 2],
-      ["2026-06", 1],
-    ],
-  );
-});
-
-test("audit card: default flat grouping shows no group-header row (unchanged row output)", () => {
+test("cards render the pager: count, rows-per-page select, prev/next with edge disabling", () => {
   const out = renderPanel({
-    access: { available: true, entries: [] },
+    access: { available: true, entries: Array.from({ length: 23 }, (_, i) => ({
+      ts: 1000 + i, status: 200, method: "GET", uri: `/p/${i}`, user: "u" })) },
     audit: [{ ts: "2026-07-20T12:00:00Z", actor: "admin", action: "commit", status: "applied", keys: "XVB_ENABLED" }],
+    accessPager: { page: 1, size: 10 },
   });
-  assert.doesNotMatch(out, /audit-group-header/);
-  assert.match(out, /XVB_ENABLED/);
+  assert.match(out, /23 entries · page 2 of 3/);
+  assert.match(out, /aria-label="Access log: rows per page"/);
+  assert.match(out, /‹ Prev/);
+  assert.match(out, /Next ›/);
+  // Middle page: neither edge disabled on the access pager; the single-page audit pager
+  // disables both (vnode walker serializes boolean true as a bare attribute).
+  assert.match(out, /1 entry(?! · page)/); // audit count, no page suffix on one page
+  // Page 2 of 3 shows rows 10-19.
+  assert.match(out, /\/p\/10/);
+  assert.doesNotMatch(out, /\/p\/9</);
+  assert.doesNotMatch(out, /\/p\/20/);
 });
 
-test("audit card: grouping select appears once there are entries, with the current group selected", () => {
+test("audit card renders flat rows only — grouping artifacts are gone", () => {
   const out = renderPanel({
     access: { available: true, entries: [] },
-    audit: [{ ts: "2026-07-20T12:00:00Z", actor: "admin", action: "commit", status: "applied", keys: "XVB_ENABLED" }],
-    auditGroup: "day",
-  });
-  assert.match(out, /<select/);
-  assert.match(out, /Group by day/);
-  // Accessibility parity (#530 review): a bare <select> with no associated <label> has no
-  // accessible name for a screen reader — every other select/group control in this codebase
-  // carries one (role=group aria-label, or a <label for>, see xvb-tier-select).
-  assert.match(out, /aria-label="Group audit trail by"/);
-});
-
-test("audit card: day grouping renders one header row per distinct day, spanning the table", () => {
-  const out = renderPanel({
-    access: { available: true, entries: [] },
-    auditGroup: "day",
     audit: [
       { ts: "2026-07-20T12:00:00Z", actor: "admin", action: "commit", status: "applied", keys: "A" },
       { ts: "2026-07-19T08:00:00Z", actor: "admin", action: "commit", status: "applied", keys: "B" },
     ],
   });
-  assert.match(out, /class="audit-group-header"/);
-  assert.match(out, /colspan="5"/);
-  assert.match(out, /2026-07-20 \(1\)/);
-  assert.match(out, /2026-07-19 \(1\)/);
-});
-
-test("audit card: empty list shows no grouping select (nothing to group)", () => {
-  const out = renderPanel({ access: { available: true, entries: [] }, audit: [] });
-  assert.doesNotMatch(out, /<select/);
+  assert.doesNotMatch(out, /audit-group-header/);
+  assert.doesNotMatch(out, /Group audit trail by/);
+  assert.match(out, /XVB|A/);
 });
 
 // --- Log navigation (#823) -------------------------------------------------------------
@@ -235,17 +196,17 @@ test('both cards render the shared filter controls with the active preset marked
   assert.match(html, /type="search"/);
 });
 
-test('a filtered view shows every match and an honest empty message (#823)', () => {
-  // Filtered: the 20-row glance cap is lifted (server already bounded the read).
+test('filtered results page like everything else, with honest empty messages (#823)', () => {
+  // 30 matches at 20/page: page 1 shows rows 0-19, the pager owns the rest — no silent cap.
   const many = access({ entries: Array.from({ length: 30 }, (_, i) => ({
     ts: 1000 + i, status: 200, method: 'GET', uri: `/p/${i}`, user: 'u' })) });
   const filtered = renderPanel({
     access: many,
     accessFilters: { preset: '7d', fromDate: '', toDate: '', q: '' },
   });
-  assert.match(filtered, /\/p\/29/); // the 30th row renders under a filter
-  const glance = renderPanel({ access: many });
-  assert.doesNotMatch(glance, /\/p\/29/); // unfiltered keeps the glance cap
+  assert.match(filtered, /30 entries · page 1 of 2/);
+  assert.match(filtered, /\/p\/19/);
+  assert.doesNotMatch(filtered, /\/p\/29/); // page 2's rows wait behind Next
   // No matches under a filter says so, instead of the no-changes-yet copy.
   const empty = renderPanel({
     access: access({ entries: [] }),

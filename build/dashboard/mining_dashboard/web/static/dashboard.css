@@ -610,12 +610,21 @@ tr:last-child td {
   margin: 0;
 }
 
-/* Audit-trail time-bucket header row (#530), between groups when the operator picks
- * hour/day/month grouping. A raised, muted divider — readable, not another data row. */
-.audit-group-header td {
-  background: var(--elevated);
-  color: var(--text-muted);
-  font-weight: 600;
+/* Log pager (#823 follow-up): match count, rows-per-page select, prev/next — the grouping
+ * dropdown's replacement now that presets/dates/search own the time navigation. */
+.log-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.log-pager select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 0.8rem;
 }
 
 /* Components */
