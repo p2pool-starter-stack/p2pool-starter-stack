@@ -383,8 +383,8 @@ def _log_filters(request):
 
 async def handle_audit_log(request):
     """Config-change audit entries — the #33 control-channel log plus the out-of-band host-edit /
-    rig-edit detections (#530), merged and persisted so the Security panel can group by hour/day/
-    month deeper than the log's own trimmed tail. Registered only alongside the control channel —
+    rig-edit detections (#530), merged and persisted so the Security panel can filter and page
+    deeper than the log's own trimmed tail. Registered only alongside the control channel —
     the log is a #33 artifact and the out-of-band watchers only run when it's on.
     Accepts the #823 navigation params (``from``/``to`` epoch seconds, ``q`` substring)."""
     try:

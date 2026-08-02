@@ -817,8 +817,9 @@ the "to" date covers that whole day — and a search box that matches any field:
 a path fragment, a status, a settings name. Filters compose (a search inside a range searches only
 that range), the search narrows as you type, and filtering happens on the server, so a match
 deeper than the on-screen tail is still found — the access log's read stays size-bounded either
-way. A filter with no matches says so; the failed-login counter always describes the whole log,
-never the filtered slice.
+way. Below the row, a pager reports how many entries matched and walks them a page at a time —
+pick 5 to 100 rows per page, step with Prev/Next. A filter with no matches says so; the
+failed-login counter always describes the whole log, never the filtered slice.
 
 Both panels read host-written files through read-only mounts, and the dashboard treats every
 field in them as hostile input — a request path is attacker-chosen bytes — so each string is
