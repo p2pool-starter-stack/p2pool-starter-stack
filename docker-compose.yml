@@ -297,7 +297,7 @@ services:
   tari-wallet:
     profiles: ["tari_payout_confirm"]
     # Pinned by digest (#135), same registry/tag as the Tari node so the version-match holds.
-    image: quay.io/tarilabs/minotari_console_wallet:v5.3.1-mainnet@sha256:886ce60b1cf2a28bd01fb9ce21533bb3be834215e5bbe918533869e3d2a43622
+    image: quay.io/tarilabs/minotari_console_wallet:v5.3.1-mainnet@sha256:31b3cd7b2b390da33c279fd1a5cd457eb254aeea17a5a230ff4c7bfea79a47eb
     container_name: tari-wallet
     # Run non-root (#255). Pulled image, so set uid via compose to match the uid the wallet named
     # volume is created under; the wrapper only writes the base-path (the volume) and /tmp.
@@ -858,7 +858,7 @@ services:
   # Bridges the local 127.0.0.1 application binding to the LAN
   # Serves HTTPS or HTTP depending on configuration
   caddy:
-    image: caddy:2.11.4@sha256:cfeb0b281bc44a5a51fecde39e9e577c60d863c0b6196e6bbdf58fd00960887f
+    image: caddy:2.11.4@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
     container_name: caddy
     # Memory ceiling (#132 — see monerod). Reverse proxy + local TLS only (~13 MiB observed).
     mem_limit: 128m
