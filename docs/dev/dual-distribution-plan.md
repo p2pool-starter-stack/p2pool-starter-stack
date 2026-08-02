@@ -403,6 +403,14 @@ image per cut on the #54 matrix, same mandate as the targeted e2e.
 - Upgrade path: N→N+1 always; skip-version best-effort.
 - Two channels (stable/beta); appliance supported on the #54-validated matrix,
   best-effort elsewhere.
+- Security cadence (#833): the appliance's Debian userland has no apt at runtime, so
+  **bake cadence is patch cadence** — a merged fix does nothing for a fleet until an
+  os-image release ships it. The watchers: Dependabot tracks every base digest
+  (`build/*`, `docker-compose.yml`, `os/rootfs`), the weekly CI sweeps rebuild and
+  Trivy-scan the stack images (ci.yml) and the rootfs (os-rootfs.yml), and
+  pin-watch.yml files an issue when a hand-pinned binary (docker-compose, cosign)
+  falls behind upstream. A security-relevant bump landing on the integration branch
+  is a release trigger, not just a green check.
 
 ## Repo outline (target state)
 
@@ -723,7 +731,7 @@ not by argument. Rugix booting first is an accident of order, not a decision: it
 no default status, and no further updater-specific work lands until this runs.
 
 **Why a bake-off is affordable at all:** the rootfs is updater-agnostic by design
-(`os/rootfs/Containerfile` contains zero updater knowledge), so each candidate consumes
+(`os/rootfs/Dockerfile` contains zero updater knowledge), so each candidate consumes
 the *same* exported tarball. The candidate-specific surface is small — Rugix is ~150
 lines of TOML in `os/bakery/` plus ~30 lines of harness commands.
 

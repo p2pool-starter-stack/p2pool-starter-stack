@@ -1,0 +1,70 @@
+name: OS rootfs scan
+
+# Build the appliance rootfs (os/rootfs/Dockerfile) and Trivy-scan it (#833). The appliance's
+# Debian userland — podman, netavark, openssl, the kernel — is frozen at bake time and has no
+# apt at runtime, so this scan is the eye on the base OS between releases. Runs on PRs that
+# touch os/ and weekly on a schedule; a red scheduled run in the Actions tab is the alert, the
+# lychee.yml posture. It is its own workflow (not a build-images matrix entry in ci.yml)
+# because the xmrig prebuild makes this the slowest image in the repo — the paths filter keeps
+# it off stack-only PRs.
+on:
+  pull_request:
+    paths:
+      - "os/**"
+      - ".github/workflows/os-rootfs.yml"
+      - ".trivyignore"
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC, after ci.yml's 05:00 image sweep
+  workflow_dispatch:
+
+# Least privilege (#282): read-only, same as ci.yml.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rootfs-image:
+    name: Build + scan the appliance rootfs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the appliance tree exists
+        # Scheduled runs use the default branch; until the appliance tree merges there, skip
+        # quietly instead of going red every Monday for a directory that cannot exist yet.
+        id: tree
+        run: |
+          if [ -f os/rootfs/Dockerfile ]; then
+            echo "present=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "present=false" >>"$GITHUB_OUTPUT"
+            echo "os/rootfs/Dockerfile not on this branch; nothing to scan"
+          fi
+      - name: docker build os/rootfs
+        if: steps.tree.outputs.present == 'true'
+        # BUILD_COMMIT is a build artifact (os/build-image.sh stamps it; the Dockerfile COPYs
+        # it), so stamp it here too. PITHEAD_UPDATER=rauc matches build-image.sh's default so
+        # the scan covers the updater packages; the test args stay empty — release variant.
+        # images/ holds only .keep here: the staged wizard image is a separate scan target
+        # (ci.yml builds and scans the dashboard image directly).
+        run: |
+          git rev-parse HEAD > os/rootfs/BUILD_COMMIT
+          docker build -f os/rootfs/Dockerfile -t pithead-os-rootfs:ci \
+            --build-arg PITHEAD_UPDATER=rauc .
+      - name: Scan rootfs for CVEs (Trivy)
+        if: steps.tree.outputs.present == 'true'
+        # Same gate as ci.yml's image scan: actionable (fixable) HIGH/CRITICAL only; accepted
+        # findings live in .trivyignore with a rationale and how they clear.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: pithead-os-rootfs:ci
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore

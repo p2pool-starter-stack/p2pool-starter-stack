@@ -28,8 +28,12 @@ updates:
       - dependency-name: "grpcio"
         update-types: ["version-update:semver-major"]
 
-  # Base-image digests across every build/* Dockerfile (incl. the uv build image). This is the
-  # mechanism that clears base-distro CVEs — e.g. the openssl point-release accepted in .trivyignore.
+  # Base-image digests across every build/* Dockerfile (incl. the uv build image) and the
+  # appliance rootfs (#833). This is the mechanism that clears base-distro CVEs — e.g. the
+  # openssl point-release accepted in .trivyignore. For the appliance the stakes are higher:
+  # its Debian userland has no apt at runtime, so the digest bump + rebake IS its patch channel.
+  # Dependabot reads this file on the default branch only, so os/rootfs coverage starts when
+  # the appliance tree merges; until then os-rootfs.yml's scan on os/** PRs is the eye on it.
   - package-ecosystem: "docker"
     directories:
       - "/build/dashboard"
@@ -37,6 +41,7 @@ updates:
       - "/build/p2pool"
       - "/build/tor"
       - "/build/xmrig-proxy"
+      - "/os/rootfs"
     schedule:
       interval: "weekly"
     groups:

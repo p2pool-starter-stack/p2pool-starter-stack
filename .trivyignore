@@ -12,3 +12,18 @@ CVE-2026-45447
 # /app/.venv and never invoked at runtime (the entrypoint runs the venv's python). Cleared by a base bump.
 CVE-2026-23949
 CVE-2026-24049
+
+# Appliance rootfs pinned binaries (docker-compose v5.3.1, cosign v3.1.2 — BOTH already the
+# latest upstream releases, byte-verified): these three sit in Go modules VENDORED inside those
+# binaries, so no pin bump can clear them until upstream cuts releases on the fixed modules.
+# Cleared when pin-watch flags the next compose/cosign releases — bump the pins, drop these.
+# golang.org/x/text norm.Iter infinite loop (both binaries):
+CVE-2026-56852
+# github.com/docker/docker authz bypass, vendored in compose (server-side moby code, and the
+# appliance talks to podman's compat socket, not dockerd — no exposed authz plugin path here):
+CVE-2026-34040
+# Go stdlib (both binaries built with go1.26.4; clears with upstream rebuilds):
+CVE-2026-39822
+# google.golang.org/grpc vendored in both pinned binaries (GHSA id — Trivy gates on it like a
+# CVE; same clearing condition as the three above: upstream rebuilds on the fixed module):
+GHSA-hrxh-6v49-42gf

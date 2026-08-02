@@ -246,6 +246,15 @@ kind of update.
 Your data is never part of an update. Wallets, settings and the chain live on a separate
 partition that updates and rollbacks do not touch.
 
+Security fixes travel the same road. There is no package manager on the machine and
+nothing for you to patch by hand: every piece of the operating system — Debian itself,
+the container engine, the mining programs — is fixed at the moment the image is built,
+and a security fix reaches your machine as the next image, with the same
+install-then-fall-back protection as any other update. The practical consequence:
+**taking updates when they are offered is the security maintenance.** A machine left on
+an old image keeps running fine, but it keeps the old image's known holes too. The base
+system is Debian 13, which receives security support upstream into 2030.
+
 ## If something goes wrong
 
 **The machine will not boot from the stick.** Almost always Secure Boot — disable it in
