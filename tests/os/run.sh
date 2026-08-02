@@ -305,11 +305,27 @@ phase_boot() {
         [ -n "$ip" ] || sleep 3
         tries=$((tries + 1))
     done
-    if [ -n "$ip" ] && curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; then
-        ok "wizard serves the token gate on :80 ($ip)"
-    else
-        bad "wizard not reachable on :80 (guest-agent IP: ${ip:-none})"
-    fi
+    [ -n "$ip" ] || {
+        bad "wizard not reachable — the VM never took a DHCP lease"
+        return
+    }
+    # The console announcement fires when the wizard CONTAINER starts (`podman run -d` returns),
+    # not when the Python server inside has bound its sockets — so the gate answers a little
+    # after the token prints. Measured: zero on an idle host (two clean single-phase runs
+    # answered the first probe), but 2 of 3 full-battery runs on the same image flaked here —
+    # the gap only opens when the host is loaded, which is exactly when batteries run. A human
+    # operator never sees it because reading the token and typing the URL takes longer. Same
+    # retry shape as every other wizard probe in this file.
+    tries=0
+    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
+        sleep 5
+        tries=$((tries + 1))
+        [ "$tries" -lt 24 ] || {
+            bad "wizard never served the token gate ($ip)"
+            return
+        }
+    done
+    ok "wizard serves the token gate ($ip, ready after ~$((tries * 5))s)"
 }
 
 # Boot a raw appliance disk under OVMF and return once it has a lease. Sets the global `ip`.
