@@ -329,16 +329,16 @@ export class WizardApp extends Component {
   setRole = (e) => {
     const role = e.target.value;
     const cfg = this.state.cfg;
-    const next = { role, cfg, jsonText: JSON.stringify(cfg, null, 2) };
+    const next = { role, cfg };
     if (role !== "rig") {
       pathSet(cfg, "local_miner.enabled", role === "both");
-      next.jsonText = JSON.stringify(cfg, null, 2);
       // "usb" only exists for rigs — a coordinator switching back must re-pick a real disk.
       if (this.state.chosen === "usb") {
         next.chosen = "";
         next.confirm = "";
       }
     }
+    next.jsonText = JSON.stringify(cfg, null, 2);
     this.setState(next);
   };
 
