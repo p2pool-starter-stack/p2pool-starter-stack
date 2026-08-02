@@ -25,11 +25,25 @@ sync, then returns to Tor. It is off by default, loudly warned, and covered in f
 
 Every per-app Tor setting below is backed by a host firewall, so "behind Tor" is a property the
 stack enforces, not one it merely hopes each daemon is configured for. At `up`/`apply`, `pithead`
-installs rules in Docker's `DOCKER-USER` chain: the mining bridge (monerod, p2pool, tari,
+installs a fail-closed rule set on the mining subnet: the mining bridge (monerod, p2pool, tari,
 xmrig-proxy) may reach the LAN, the other containers, and the Tor SOCKS, but any direct dial to the
 public internet is DROPPED. Only the `tor` container reaches the internet. So if a daemon is
 misconfigured, buggy, or learns a clearnet peer address (as Tari's comms layer does), the connection
 fails closed instead of leaking your IP.
+
+The rules land where the running container engine actually filters forwarded traffic, which differs
+by channel:
+
+- **Docker (DIY channel):** the rules go in Docker's `DOCKER-USER` chain. Docker adds the
+  `FORWARD → DOCKER-USER` jump when it creates the network, so the chain is traversed on egress.
+- **podman + netavark (appliance):** netavark serves the forward hook from its own nftables table and
+  never adds a `DOCKER-USER` jump, so the same iptables rules would sit in a chain no packet reaches.
+  `pithead` instead installs an independent `inet pithead_egress` nftables table hooked at forward
+  priority −5 — ahead of netavark's blanket accept, owning no chain shared with netavark so it
+  survives netavark reprogramming its own table.
+
+`pithead doctor` reads whichever mechanism the running engine uses and checks the drop is in a chain
+that is actually hooked at forward, so it cannot report enforced while the rules are orphaned.
 
 - Needs root (the firewall rules), like the GRUB/HugePages steps; removed at `pithead down`.
 - Opt out with `network.tor_egress_firewall: false` (then routing falls back to per-app config only).
