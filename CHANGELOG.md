@@ -9,6 +9,25 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.17.0] - 2026-08-02
+
+### Added
+
+- **Log navigation for the Security panels (#823).** The access log and the config-change audit
+  trail share one control row: range presets (24 Hr / 1 Wk / 1 Mo / All, the chart's idiom) for
+  following a live log, two date fields for jumping to a specific day or span, and a search box
+  that matches any field and narrows as you type. Filters compose, and filtering happens on the
+  server, so a match deeper than the on-screen tail is still found — the access log's read stays
+  size-bounded either way. Below the row, a pager reports how many entries matched and walks
+  them a page at a time — 5 to 100 rows per page with Prev/Next — replacing the audit trail's
+  hour/day/month grouping dropdown, whose job the date controls now do better. A filter with no
+  matches says so; the failed-login counter always describes the whole log.
+
+### Dependencies
+
+- Compose-pinned third-party images, now under Dependabot's watch: refreshed digests for the
+  Tari console wallet (within v5.3.1-mainnet) and Caddy (within 2.11.4).
+
 ## [1.16.1] - 2026-08-01
 
 ### Fixed
