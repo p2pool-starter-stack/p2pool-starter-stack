@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 
 import {
   bucketKey,
+  buildLogQuery,
   fmtEpoch,
   groupAuditEntries,
   SecurityPanel,
@@ -23,7 +24,12 @@ import { renderToString } from "./helpers/render.mjs";
 // componentDidMount never fire — state is injected directly, like the configview tests).
 function renderPanel(state) {
   const panel = new SecurityPanel({});
-  panel.state = { access: null, audit: null, auditGroup: "flat", error: null, ...state };
+  panel.state = {
+    access: null, audit: null, auditGroup: "flat", error: null,
+    accessFilters: { preset: "all", fromDate: "", toDate: "", q: "" },
+    auditFilters: { preset: "all", fromDate: "", toDate: "", q: "" },
+    ...state,
+  };
   return renderToString(panel.render());
 }
 
@@ -193,4 +199,60 @@ test("audit card: day grouping renders one header row per distinct day, spanning
 test("audit card: empty list shows no grouping select (nothing to group)", () => {
   const out = renderPanel({ access: { available: true, entries: [] }, audit: [] });
   assert.doesNotMatch(out, /<select/);
+});
+
+// --- Log navigation (#823) -------------------------------------------------------------
+
+test('buildLogQuery maps presets, date jumps and search onto the endpoint params', () => {
+  const NOW = 1_760_000_000;
+  // Preset -> a trailing from-window; All -> no params at all.
+  assert.equal(buildLogQuery({ preset: '24h', fromDate: '', toDate: '', q: '' }, NOW),
+    `?from=${NOW - 86_400}`);
+  assert.equal(buildLogQuery({ preset: 'all', fromDate: '', toDate: '', q: '' }, NOW), '');
+  // Explicit dates OVERRIDE the preset, and "to" covers that whole day (next-midnight bound).
+  const from = Date.parse('2026-07-10') / 1000;
+  const to = Date.parse('2026-07-11') / 1000 + 86_400;
+  assert.equal(
+    buildLogQuery({ preset: '24h', fromDate: '2026-07-10', toDate: '2026-07-11', q: '' }, NOW),
+    `?from=${from}&to=${to}`);
+  // Search rides along URL-encoded; blank search adds nothing.
+  assert.equal(buildLogQuery({ preset: 'all', fromDate: '', toDate: '', q: 'api state' }, NOW),
+    '?q=api+state');
+  assert.equal(buildLogQuery({ preset: 'all', fromDate: '', toDate: '', q: '   ' }, NOW), '');
+});
+
+test('both cards render the shared filter controls with the active preset marked', () => {
+  const html = renderPanel({
+    access: access(),
+    audit: [{ ts: "2026-07-10T12:00:00Z", actor: "admin", action: "commit", status: "applied", keys: "X" }],
+    accessFilters: { preset: '24h', fromDate: '', toDate: '', q: '' },
+    auditFilters: { preset: 'all', fromDate: '', toDate: '', q: '' },
+  });
+  assert.match(html, /aria-label="Access log filter"/);
+  assert.match(html, /aria-label="Config-change filter"/);
+  assert.match(html, /class="btn-range active"[^>]*>24 Hr</); // access card's active preset
+  assert.match(html, /type="date"/);
+  assert.match(html, /type="search"/);
+});
+
+test('a filtered view shows every match and an honest empty message (#823)', () => {
+  // Filtered: the 20-row glance cap is lifted (server already bounded the read).
+  const many = access({ entries: Array.from({ length: 30 }, (_, i) => ({
+    ts: 1000 + i, status: 200, method: 'GET', uri: `/p/${i}`, user: 'u' })) });
+  const filtered = renderPanel({
+    access: many,
+    accessFilters: { preset: '7d', fromDate: '', toDate: '', q: '' },
+  });
+  assert.match(filtered, /\/p\/29/); // the 30th row renders under a filter
+  const glance = renderPanel({ access: many });
+  assert.doesNotMatch(glance, /\/p\/29/); // unfiltered keeps the glance cap
+  // No matches under a filter says so, instead of the no-changes-yet copy.
+  const empty = renderPanel({
+    access: access({ entries: [] }),
+    accessFilters: { preset: 'all', fromDate: '', toDate: '', q: 'zzz' },
+    audit: [],
+    auditFilters: { preset: 'all', fromDate: '', toDate: '', q: 'zzz' },
+  });
+  assert.match(empty, /No entries match this filter/);
+  assert.doesNotMatch(empty, /No config changes have gone through/);
 });

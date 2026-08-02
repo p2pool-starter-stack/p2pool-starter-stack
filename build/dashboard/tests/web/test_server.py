@@ -474,6 +474,75 @@ class TestSecurityLogRoutes:
         assert body["entries"][0]["keys"] == "XVB_ENABLED"
         assert "<" not in json.dumps(body) and ">" not in json.dumps(body)
 
+    async def test_access_route_navigation_params_filter_entries(
+        self, client, tmp_path, monkeypatch
+    ):
+        # #823: from/to (epoch seconds, half-open) and q narrow the served entries; the failure
+        # counters keep describing the whole tail; malformed bounds read as absent, never a 500.
+        log = tmp_path / "access.log"
+        rows = [
+            {
+                "ts": 100.0,
+                "status": 200,
+                "user_id": "admin",
+                "request": {"method": "GET", "uri": "/api/state"},
+            },
+            {
+                "ts": 200.0,
+                "status": 401,
+                "user_id": "guess",
+                "request": {"method": "GET", "uri": "/login"},
+            },
+        ]
+        log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        monkeypatch.setattr(audit_service.config, "ACCESS_LOG_PATH", str(log))
+        body = await (await client.get("/api/access?from=150")).json()
+        assert [e["ts"] for e in body["entries"]] == [200.0]
+        body = await (await client.get("/api/access?q=api/state")).json()
+        assert [e["ts"] for e in body["entries"]] == [100.0]
+        # to is exclusive; and the 401 counter is window-independent (whole-tail semantics).
+        body = await (await client.get("/api/access?from=100&to=200")).json()
+        assert [e["ts"] for e in body["entries"]] == [100.0]
+        assert "failures_24h" in body
+        # Malformed bounds degrade to unfiltered, HTTP 200 — including the float()-parseable
+        # non-finite spellings, which would otherwise warp the comparisons (nan is never <).
+        for bad in ("notanumber", "inf", "-inf", "nan", ""):
+            resp = await client.get(f"/api/access?from={bad}&to={bad}&q=")
+            assert resp.status == 200
+            assert len((await resp.json())["entries"]) == 2
+
+    async def test_audit_route_navigation_params_filter_entries(
+        self, control_client, tmp_path, monkeypatch
+    ):
+        # #823 on the audit side: ISO timestamps land on the same epoch axis, and q searches
+        # the sanitized fields.
+        log = tmp_path / "control.log"
+        rows = [
+            {
+                "ts": "2026-07-10T12:00:00Z",
+                "id": "11111111-1111-4111-8111-111111111111",
+                "actor": "admin",
+                "action": "commit",
+                "status": "applied",
+                "keys": "XVB_ENABLED",
+            },
+            {
+                "ts": "2026-07-20T12:00:00Z",
+                "id": "22222222-2222-4222-8222-222222222222",
+                "actor": "release-smoke",
+                "action": "upgrade",
+                "status": "upgraded",
+                "keys": "",
+            },
+        ]
+        log.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        monkeypatch.setattr(audit_service.config, "CONTROL_AUDIT_LOG", str(log))
+        cutoff = audit_service._entry_epoch("2026-07-15T00:00:00Z")
+        body = await (await control_client.get(f"/api/audit?from={cutoff}")).json()
+        assert [e["actor"] for e in body["entries"]] == ["release-smoke"]
+        body = await (await control_client.get("/api/audit?q=xvb_enabled")).json()
+        assert [e["actor"] for e in body["entries"]] == ["admin"]
+
     async def test_audit_route_missing_log_is_empty(self, control_client, monkeypatch):
         monkeypatch.setattr(audit_service.config, "CONTROL_AUDIT_LOG", "/nonexistent/control.log")
         resp = await control_client.get("/api/audit")

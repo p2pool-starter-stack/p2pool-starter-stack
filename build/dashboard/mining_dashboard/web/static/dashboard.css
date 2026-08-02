@@ -491,6 +491,26 @@ tr:last-child td {
 .est-scroll {
   overflow-x: auto;
 }
+/* Log navigation (#823): the Security cards' shared filter row — the chart-controls preset
+ * idiom plus native date inputs and a search box, left-aligned to read as part of its card. */
+.log-controls {
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+.log-controls input[type="date"],
+.log-controls input[type="search"] {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 0.8rem;
+}
+.log-controls input[type="search"] {
+  flex: 1;
+  min-width: 110px;
+}
+
 /* Expected-vs-actual card (#808/#817): three labelled rows, not a shared-precision numeric
  * grid — values wrap instead of panning (this card must never scroll in either view) and the
  * table fills the card. table-layout fixed, because in auto layout a cell's min-content width

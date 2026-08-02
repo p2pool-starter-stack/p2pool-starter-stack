@@ -1,4 +1,5 @@
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -359,24 +360,61 @@ def _merged_audit_entries(state_mgr):
     return sorted(merged.values(), key=lambda e: e.get("ts", ""), reverse=True)
 
 
+def _log_filters(request):
+    """The #823 navigation params, parsed defensively: ``from``/``to`` as epoch seconds (anything
+    non-numeric reads as absent — a malformed bound must never 500 a log view) and ``q`` trimmed
+    and length-capped (it's compared, never stored or echoed unsanitized)."""
+
+    def _num(name):
+        v = request.query.get(name)
+        if v in (None, ""):
+            return None
+        try:
+            f = float(v)
+        except ValueError:
+            return None
+        # float() happily parses "inf"/"nan", which would silently warp the window comparisons
+        # (nan compares False with everything) — a non-finite bound is malformed, so it's absent.
+        return f if math.isfinite(f) else None
+
+    q = (request.query.get("q") or "").strip()[:200]
+    return _num("from"), _num("to"), q or None
+
+
 async def handle_audit_log(request):
     """Config-change audit entries — the #33 control-channel log plus the out-of-band host-edit /
     rig-edit detections (#530), merged and persisted so the Security panel can group by hour/day/
     month deeper than the log's own trimmed tail. Registered only alongside the control channel —
-    the log is a #33 artifact and the out-of-band watchers only run when it's on."""
+    the log is a #33 artifact and the out-of-band watchers only run when it's on.
+    Accepts the #823 navigation params (``from``/``to`` epoch seconds, ``q`` substring)."""
     try:
         state_mgr = request.app["state_manager"]
-        return web.json_response({"entries": _merged_audit_entries(state_mgr)})
+        frm, to, q = _log_filters(request)
+        entries = audit_service.filter_log_entries(_merged_audit_entries(state_mgr), frm, to, q)
+        return web.json_response({"entries": entries})
     except Exception:
         logger.exception("Error reading the control audit log")
         return web.json_response({"error": "Failed to read the audit log."}, status=500)
 
 
+# How deep the access log is read when the operator is NAVIGATING it (#823) vs the default
+# glance. The tail read is byte-bounded either way (audit_service._TAIL_BYTES) — this only stops
+# a filtered view from being quietly truncated to the glance depth before the filter even runs.
+_ACCESS_NAV_LIMIT = 1000
+
+
 async def handle_access_log(request):
     """Recent dashboard accesses + failed-login count, from Caddy's JSON access log. Always
-    registered (Caddy always writes the log); behind the same Caddy basic_auth as every route."""
+    registered (Caddy always writes the log); behind the same Caddy basic_auth as every route.
+    Accepts the #823 navigation params; the failure counters always describe the whole tail,
+    never the filtered slice."""
     try:
-        return web.json_response(audit_service.access_summary())
+        frm, to, q = _log_filters(request)
+        filtering = frm is not None or to is not None or q is not None
+        summary = audit_service.access_summary(limit=_ACCESS_NAV_LIMIT if filtering else 50)
+        if filtering:
+            summary["entries"] = audit_service.filter_log_entries(summary["entries"], frm, to, q)
+        return web.json_response(summary)
     except Exception:
         logger.exception("Error reading the access log")
         return web.json_response({"error": "Failed to read the access log."}, status=500)
