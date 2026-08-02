@@ -1580,17 +1580,19 @@ def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
     itself (``metrics.p2pool_7d``/``p2pool_30d``), not the current 1h figure — a fleet that grew
     or shrank mid-window would otherwise be judged against the wrong baseline.
 
-    Per-stream windows match each stream's cadence. **Monero** compares XMR over 7d — P2Pool pays
-    whenever the pool finds blocks, so a week is long enough to mean something and short enough to
-    act on; ``pct`` is the actual as a percent of expected, and ``partial`` carries the confirmed
-    window's may-be-incomplete flag so a short history is never presented as a full week.
-    **Tari** compares BLOCK COUNTS over 30d: solo merge-mining pays whole blocks, so the honest
-    unit is blocks (expected = hashrate × window ÷ aux difficulty; actual = confirmed payout
-    count, each payout being a found block), with the XTM sum alongside — no percent, a count that
-    small is luck either way. **XvB** shows wins in the trailing 30d beside XvB's published
-    per-day estimate for the current tier — deliberately NO ratio: a win pays out through ordinary
-    small payouts the payout table cannot attribute, so actual XvB XMR is not separable from
-    P2Pool XMR, and the published figure is XvB's own raffle-wide expectation, not a promise.
+    Every stream shares ONE trailing 30d window (#817 — mixed windows read as inconsistent, and
+    30d is the shortest span that means something for all three). **Monero + XvB** is ONE
+    combined row: an XvB win pays out through ordinary small payouts the payout table cannot
+    attribute, so the confirmed actual already contains XvB XMR — comparing it against a
+    P2Pool-only expectation overshoots on a winning box (#817). Both sides count XvB instead:
+    expected = the P2Pool linear model + XvB's published per-day estimate × 30 (folded only when
+    fresh; ``includes_xvb`` tells the client which label to draw), actual = every confirmed
+    payout; ``pct`` compares like with like, and ``partial`` carries the confirmed window's
+    may-be-incomplete flag. **Tari** compares BLOCK COUNTS: solo merge-mining pays whole blocks,
+    so the honest unit is blocks (expected = hashrate × window ÷ aux difficulty; actual =
+    confirmed payout count, each payout being a found block), with the XTM sum alongside — no
+    percent, a count that small is luck either way. **XvB** keeps only its win count and last-win
+    recency — its XMR value lives in the combined row by construction.
 
     Raw numbers out; the client formats. ``actual``/``blocks``/``xtm`` are None while the matching
     payout-confirmation feature is off — the card then hints at the view key instead of showing a
@@ -1598,17 +1600,25 @@ def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
     now = now if now is not None else time.time()
     conf = earnings["confirmed"]
     tari_conf = earnings["tari_confirmed"]
-    expected_xmr = earnings["coeff_day"] * metrics.p2pool_7d * 7
+    expected_p2pool = earnings["coeff_day"] * metrics.p2pool_30d * 30
+    # Clamped: xvb_day is upstream-published (XvB's API); a hostile/corrupt negative would drag
+    # the combined expectation to <= 0 while `available` stays True — an inverted pct at best, a
+    # zero denominator at worst. A negative estimate is meaningless, so it folds as 0.
+    expected_xvb = max(0.0, earnings["xvb_day"] or 0.0) * 30 if metrics.xvb_enabled else 0.0
     xmr = {
-        "available": expected_xmr > 0,
-        "expected_7d": expected_xmr,
+        "available": expected_p2pool > 0,
+        "expected_30d": expected_p2pool + expected_xvb,
+        # True when XvB's published estimate is folded into expected — drives the row label. The
+        # actual ALWAYS contains any win payouts; when XvB is on but the published figure is
+        # stale, the tooltip owns the asymmetry rather than a fabricated estimate filling it.
+        "includes_xvb": expected_xvb > 0,
         "enabled": bool(conf.get("enabled")),
-        "actual_7d": conf.get("xmr_7d") if conf.get("enabled") else None,
-        "partial": bool((conf.get("partial") or {}).get("7d")),
+        "actual_30d": conf.get("xmr_30d") if conf.get("enabled") else None,
+        "partial": bool((conf.get("partial") or {}).get("30d")),
         "pct": None,
     }
     if xmr["available"] and xmr["enabled"]:
-        xmr["pct"] = round((xmr["actual_7d"] or 0.0) / expected_xmr * 100)
+        xmr["pct"] = round((xmr["actual_30d"] or 0.0) / xmr["expected_30d"] * 100)
     # Expected Tari blocks over the window: hashrate × seconds ÷ difficulty (hashes-per-block).
     # Gated on tari_mining like the calculator, so a dead merge-mine channel shows "—", not 0.
     expected_blocks = (
@@ -1629,8 +1639,6 @@ def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
         "enabled": metrics.xvb_enabled,
         "wins_30d": sum(1 for t in stamps if t >= now - 30 * SECONDS_PER_DAY),
         "last_win_ts": max(stamps, default=0),
-        # XvB's published per-day estimate for the current tier — None unless fresh (#712).
-        "published_day": earnings["xvb_day"],
     }
     return {"xmr": xmr, "tari": tari, "xvb": xvb}
 

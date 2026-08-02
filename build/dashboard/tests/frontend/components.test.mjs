@@ -1008,23 +1008,30 @@ test('ExpectedVsActualCard renders in BOTH views and yields to nothing when empt
     assert.match(renderApp({ state: s }), /Overview/);
 });
 
-test('ExpectedVsActualCard compares Monero with a percent and marks partial windows (#808)', () => {
+test('ExpectedVsActualCard compares combined Monero+XvB with a percent and partial marks (#817)', () => {
     const s = clone();
     s.earnings_summary.xmr = {
-        available: true, expected_7d: 0.0123, enabled: true,
-        actual_7d: 0.0101, partial: true, pct: 82,
+        available: true, expected_30d: 0.0123, includes_xvb: true, enabled: true,
+        actual_30d: 0.0101, partial: true, pct: 82,
     };
     const out = renderApp({ state: s });
-    assert.match(out, /Monero \(7d\)/);
+    assert.match(out, /Monero \+ XvB \(30d\)/);    // combined label when the estimate is folded
     assert.match(out, /0\.012300 XMR/);            // expected, formatXmr precision
     assert.match(out, /0\.010100 XMR \(82%\) \*/); // actual + pct + the partial asterisk
     assert.match(out, /covers only the payout history on record/); // the footnote appears
+    // The card never pans (#817): wrapping table, and the scroll wrapper must stay gone —
+    // scoped to this card's own markup, since other cards legitimately keep est-scroll.
+    assert.match(out, /eva-table/);
+    assert.doesNotMatch(cardSlice(out, 'card-expected-vs-actual'), /est-scroll/);
+    // Without a fresh published estimate the label honestly drops the "+ XvB".
+    s.earnings_summary.xmr.includes_xvb = false;
+    assert.match(renderApp({ state: s }), /Monero \(30d\)/);
 });
 
 test('ExpectedVsActualCard shows the config key when confirmation is off, never a zero (#808)', () => {
     const s = clone();
-    s.earnings_summary.xmr = { available: true, expected_7d: 0.0123, enabled: false,
-        actual_7d: null, partial: false, pct: null };
+    s.earnings_summary.xmr = { available: true, expected_30d: 0.0123, includes_xvb: false,
+        enabled: false, actual_30d: null, partial: false, pct: null };
     s.earnings_summary.tari = { available: true, expected_blocks_30d: 0.0052, enabled: false,
         blocks_30d: null, xtm_30d: null, partial: false };
     const out = renderApp({ state: s });
@@ -1039,14 +1046,14 @@ test('ExpectedVsActualCard counts Tari blocks and windows XvB wins (#808)', () =
     const s = clone();
     s.earnings_summary.tari = { available: true, expected_blocks_30d: 0.41, enabled: true,
         blocks_30d: 1, xtm_30d: 12345.0, partial: false };
-    s.earnings_summary.xvb = { enabled: true, wins_30d: 2, last_win_ts: 1735689000,
-        published_day: 0.06 };
+    s.earnings_summary.xvb = { enabled: true, wins_30d: 2, last_win_ts: 1735689000 };
     const out = renderApp({ state: s });
     assert.match(out, /≈ 0\.41 blocks/);
     assert.match(out, /1 block · 12345\.0000 XTM/); // singular block, XTM alongside
     assert.match(out, /2 wins · last /);
-    assert.match(out, /0\.060000 XMR\/day \(XvB est\.\)/);
+    // Since #817 the wins row carries NO XMR figure — its value lives in the combined row.
+    assert.doesNotMatch(out, /XMR\/day/);
     // XvB off → the row disappears (no invented raffle framing on a non-XvB box).
-    s.earnings_summary.xvb = { enabled: false, wins_30d: 0, last_win_ts: 0, published_day: null };
+    s.earnings_summary.xvb = { enabled: false, wins_30d: 0, last_win_ts: 0 };
     assert.doesNotMatch(renderApp({ state: s }), /XvB wins \(30d\)/);
 });

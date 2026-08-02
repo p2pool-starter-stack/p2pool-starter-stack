@@ -133,10 +133,10 @@ class TestHashrate:
         assert m.p2pool_1h == 900.0
         assert m.p2pool_24h == 900.0
 
-    def test_p2pool_window_averages_use_their_own_windows(self):
-        # The 7d/30d averages (#808) must reach past the 24h window — a sample 3 days old is
-        # invisible to 1h/24h but counted by both long windows; one 40 days old by neither.
-        # A wrong window constant (e.g. 7*3600) fails this: the 3-day sample would drop out.
+    def test_p2pool_30d_average_uses_its_own_window(self):
+        # The 30d average (#808) must reach past the 24h window — a sample 3 days old is
+        # invisible to 1h/24h but counted by the 30d window; one 40 days old by neither.
+        # A wrong window constant (e.g. 30*3600) fails this: the 3-day sample would drop out.
         now = time.time()
         history = [
             {"timestamp": now - 30, "v": 900, "v_p2pool": 900, "v_xvb": 0},
@@ -146,8 +146,7 @@ class TestHashrate:
         m = build_metrics(_data(), _mgr(history=history))
         assert m.p2pool_1h == 900.0
         assert m.p2pool_24h == 900.0
-        assert m.p2pool_7d == 600.0  # (900 + 300) / 2 — the 3-day sample is IN
-        assert m.p2pool_30d == 600.0  # the 40-day sample stays OUT
+        assert m.p2pool_30d == 600.0  # (900 + 300) / 2 — 3-day IN, 40-day OUT
 
     def test_xvb_credited_averages_from_stats(self):
         # Credited (XvB API avg_1h/24h) is kept independent — controller input + Advanced card (#156).

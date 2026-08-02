@@ -288,6 +288,24 @@ jq_assert "exactly 5 depends_on edges total (#565)" \
 # runs fine (#777). Asserted here because tari-wallet only renders under tari_payout_confirm.
 jq_assert "tari-wallet healthcheck pattern survives ps CMD truncation (#777)" \
     '(.services["tari-wallet"].healthcheck.test | tostring) | contains("[m]inotari_consol") and (contains("[m]inotari_console_wallet") | not)'
+# Profile-map drift guard (#822, same pattern as the depends_on count guard above): compose never
+# removes a profile-deactivated service's container (#795), so remove_deactivated_profile_containers
+# in the pithead script is the only thing that does — and it hardcodes the service↔profile map.
+# Enumerate every profile-gated service from the compose file itself (--profile '*' activates them
+# all, whatever their names) and diff against the map parsed out of the script's function body: a
+# new profile-gated service, a renamed profile, or a stale map entry fails here until both agree.
+COMPOSE_PROFILE_MAP="$(docker compose --env-file "$ENV_FILE" --profile '*' -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null |
+    jq -r '.services | to_entries[] | select(.value.profiles) | .value.profiles[] as $p | "\(.key)=\($p)"' | sort)"
+SCRIPT_PROFILE_MAP="$(sed -n '/^remove_deactivated_profile_containers()/,/^}/p' "$ROOT/pithead" |
+    sed -n 's/.*\*,\([a-z_]*\),\* ]] || gone+=(\([a-z-]*\)).*/\2=\1/p' | sort)"
+if [ -n "$COMPOSE_PROFILE_MAP" ] && [ "$COMPOSE_PROFILE_MAP" = "$SCRIPT_PROFILE_MAP" ]; then
+    echo "  ✓ removal map covers exactly the profile-gated services (#795/#822)"
+else
+    echo "  ✗ compose profiles and remove_deactivated_profile_containers disagree (#795/#822):"
+    echo "    compose file: $(printf '%s' "$COMPOSE_PROFILE_MAP" | tr '\n' ' ')"
+    echo "    pithead map:  $(printf '%s' "$SCRIPT_PROFILE_MAP" | tr '\n' ' ')"
+    fails=$((fails + 1))
+fi
 # Restore $JSON to the default-profile render for every check below this point.
 JSON="$(docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
 

@@ -1706,38 +1706,76 @@ def _summary_earnings(**over):
 class TestEarningsVsActual:
     NOW = 1_760_000_000
 
-    def test_xmr_expected_uses_the_window_average_and_pct_rounds(self):
-        # Expected = coeff_day × 7d-average hashrate × 7 — the WINDOW's average (p2pool_7d), not
-        # the current 1h figure, so a fleet that changed mid-window is judged against what ran.
+    def test_combined_expected_folds_xvb_and_uses_the_window_average(self):
+        # ONE combined row (#817): expected = P2Pool linear (coeff_day × 30d-average × 30 — the
+        # WINDOW's average, not the current 1h figure) + XvB's published per-day estimate × 30,
+        # because the confirmed actual inevitably contains XvB win payouts. pct compares the
+        # combined actual against the combined expectation.
         e = _summary_earnings(
             coeff_day=1e-8,
-            confirmed={"enabled": True, "xmr_7d": 0.28, "partial": {"7d": False}},
+            xvb_day=0.001,
+            confirmed={"enabled": True, "xmr_30d": 0.28, "partial": {"30d": False}},
         )
-        s = build_earnings_vs_actual(_metrics(p2pool_7d=8000.0), e, [], now=self.NOW)
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), e, [], now=self.NOW)
+        expected = 1e-8 * 8000.0 * 30 + 0.001 * 30
         assert s["xmr"]["available"] is True
-        assert s["xmr"]["expected_7d"] == pytest.approx(1e-8 * 8000.0 * 7)  # 0.00056·1000=0.56e-3
-        assert s["xmr"]["actual_7d"] == 0.28
-        assert s["xmr"]["pct"] == round(0.28 / (1e-8 * 8000.0 * 7) * 100)
+        assert s["xmr"]["includes_xvb"] is True
+        assert s["xmr"]["expected_30d"] == pytest.approx(expected)
+        assert s["xmr"]["actual_30d"] == 0.28
+        assert s["xmr"]["pct"] == round(0.28 / expected * 100)
         assert s["xmr"]["partial"] is False
+
+    def test_combined_row_without_a_fresh_xvb_estimate_stays_p2pool_only(self):
+        # XvB on but no fresh published figure (#712) -> nothing is fabricated: expected stays
+        # P2Pool-only and includes_xvb False (the client label drops "+ XvB"; the tooltip owns
+        # the fact that win payouts still land in the actual). XvB disabled behaves the same.
+        e = _summary_earnings(
+            coeff_day=1e-8,
+            confirmed={"enabled": True, "xmr_30d": 0.1, "partial": {}},
+        )
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), e, [], now=self.NOW)
+        assert s["xmr"]["includes_xvb"] is False
+        assert s["xmr"]["expected_30d"] == pytest.approx(1e-8 * 8000.0 * 30)
+        s = build_earnings_vs_actual(
+            _metrics(p2pool_30d=8000.0, xvb_enabled=False),
+            _summary_earnings(coeff_day=1e-8, xvb_day=0.001),
+            [],
+            now=self.NOW,
+        )
+        assert s["xmr"]["includes_xvb"] is False  # disabled XvB never folds its estimate in
+
+    def test_negative_published_estimate_never_folds(self):
+        # xvb_day is upstream-published — a hostile/corrupt negative must not drag the combined
+        # expectation toward (or past) zero while available stays True: it folds as 0, the label
+        # stays P2Pool-only, and pct keeps a positive denominator.
+        e = _summary_earnings(
+            coeff_day=1e-8,
+            xvb_day=-5.0,
+            confirmed={"enabled": True, "xmr_30d": 0.1, "partial": {}},
+        )
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), e, [], now=self.NOW)
+        assert s["xmr"]["includes_xvb"] is False
+        assert s["xmr"]["expected_30d"] == pytest.approx(1e-8 * 8000.0 * 30)
+        assert s["xmr"]["pct"] is not None and s["xmr"]["pct"] > 0
 
     def test_xmr_row_degrades_honestly(self):
         # Estimate unavailable (no network figures) -> not available, and no pct even with
         # confirmed payouts on; confirmation off -> actual/pct None, never a zero that would
         # read as "earned nothing".
-        on = _summary_earnings(confirmed={"enabled": True, "xmr_7d": 0.5, "partial": {}})
-        s = build_earnings_vs_actual(_metrics(p2pool_7d=8000.0), on, [], now=self.NOW)
+        on = _summary_earnings(confirmed={"enabled": True, "xmr_30d": 0.5, "partial": {}})
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), on, [], now=self.NOW)
         assert s["xmr"]["available"] is False and s["xmr"]["pct"] is None
         off = _summary_earnings(coeff_day=1e-8)
-        s = build_earnings_vs_actual(_metrics(p2pool_7d=8000.0), off, [], now=self.NOW)
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), off, [], now=self.NOW)
         assert s["xmr"]["enabled"] is False
-        assert s["xmr"]["actual_7d"] is None and s["xmr"]["pct"] is None
+        assert s["xmr"]["actual_30d"] is None and s["xmr"]["pct"] is None
 
     def test_xmr_partial_flag_rides_the_confirmed_window(self):
         e = _summary_earnings(
             coeff_day=1e-8,
-            confirmed={"enabled": True, "xmr_7d": 0.1, "partial": {"7d": True}},
+            confirmed={"enabled": True, "xmr_30d": 0.1, "partial": {"30d": True}},
         )
-        s = build_earnings_vs_actual(_metrics(p2pool_7d=8000.0), e, [], now=self.NOW)
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), e, [], now=self.NOW)
         assert s["xmr"]["partial"] is True
 
     def test_tari_compares_block_counts_over_30d(self):
@@ -1788,8 +1826,8 @@ class TestEarningsVsActual:
         assert s["xvb"]["enabled"] is True
         assert s["xvb"]["wins_30d"] == 2
         assert s["xvb"]["last_win_ts"] == self.NOW - 86_400
-        # XvB's published figure passes through untouched — and stays None when not fresh (#712).
-        assert s["xvb"]["published_day"] == 0.004
+        # No published_day here since #817 — the estimate lives in the combined row's expected.
+        assert "published_day" not in s["xvb"]
         s = build_earnings_vs_actual(
             _metrics(xvb_enabled=False), _summary_earnings(), [], now=self.NOW
         )
