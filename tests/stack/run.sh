@@ -198,6 +198,21 @@ cat >"$DRBIN/curl" <<'EOF'
 #!/usr/bin/env bash
 exit "${CURL_RC:-0}"
 EOF
+# nft for the podman/netavark doctor path: `list tables` always answers (the sudo-readable probe);
+# `list table inet pithead_egress` emits a forward-hooked, dropping ruleset only when NFT_HOOK=1,
+# else exits 1 (table absent). Lets a test distinguish "installed & traversed" from "missing".
+cat >"$DRBIN/nft" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+"list tables") echo "table inet netavark" ;;
+"list table inet pithead_egress")
+    [ "${NFT_HOOK:-0}" = "1" ] || exit 1
+    printf '%s\n' 'table inet pithead_egress {' '  chain forward {' \
+        '    type filter hook forward priority -5; policy accept;' \
+        '    ip saddr 172.28.0.0/24 drop' '  }' '}' ;;
+esac
+exit 0
+EOF
 chmod +x "$DRBIN"/*
 
 # container_is_running: filter answered vs not.
@@ -234,6 +249,20 @@ assert_contains "egress check: rules missing -> FAIL" "$out" "MISSING"
 # sudo -n denied -> info skip with the manual command, never a prompt or a false FAIL.
 out="$(RUNNING_CONTAINERS="tor" SUDO_DENY=1 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
 assert_contains "egress check: no passwordless sudo -> info" "$out" "passwordless sudo"
+
+# Podman/netavark doctor path (#855): the check must read the nft table it actually installs, and
+# probe the HOOK — the orphaned-chain failure (a DROP no packet reaches) is exactly what a
+# forward-hooked base chain can't be, so hook presence is the honest signal, not "a rule exists".
+out="$(PITHEAD_ENGINE=podman RUNNING_CONTAINERS="tor" NFT_HOOK=1 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check (podman): forward-hooked drop present -> OK" "$out" "installed"
+assert_contains "egress check (podman): OK verdict names nftables" "$out" "nftables"
+# Table absent (post-reboot on the appliance, or the old fail-open build) -> FAIL, not a false pass.
+out="$(PITHEAD_ENGINE=podman RUNNING_CONTAINERS="tor" NFT_HOOK=0 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check (podman): no nft table -> FAIL" "$out" "MISSING"
+# sudo -n denied on the podman path -> info skip (the `list tables` probe tells a sudo refusal apart
+# from a genuinely missing table, so it never false-FAILs).
+out="$(PITHEAD_ENGINE=podman RUNNING_CONTAINERS="tor" SUDO_DENY=1 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_egress_firewall_installed 2>&1)"
+assert_contains "egress check (podman): no passwordless sudo -> info" "$out" "passwordless sudo"
 
 # Stratum listening: proxy not running -> info (a sync hold must not FAIL).
 out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_stratum_listening 2>&1)"
@@ -605,16 +634,65 @@ assert_contains "192.168/16 LAN allowed" "$TER" "-s 172.28.0.0/24 -d 192.168.0.0
 assert_eq "the clearnet DROP is the FINAL rule (fail-closed)" "$(printf '%s\n' "$TER" | tail -1)" "-s 172.28.0.0/24 -j DROP"
 assert_contains "honours a custom subnet/prefix (#180)" "$(run_sourced "$SANDBOX" tor_egress_rules 172.30.5.0/24 172.30.5.25)" "-s 172.30.5.0/24 -j DROP"
 
-echo "== black-box: apply/remove_tor_egress_firewall via stubbed iptables (#270) =="
+echo "== unit: render_tor_egress_nft — same allow-set as nftables for the netavark path (#855) =="
+# The appliance runs podman+netavark, whose FORWARD hook is served by `table inet netavark`; nothing
+# jumps to the iptables DOCKER-USER chain, so the Docker-path rules install into a chain no packet
+# traverses (the fail-open bug). This backend puts the DROP in an independent nft table hooked at
+# forward, which forwarded packets DO pass through.
+NFTR=$(run_sourced "$SANDBOX" render_tor_egress_nft 172.28.0.0/24 172.28.0.25)
+assert_contains "hooks the chain at forward so packets actually traverse it" "$NFTR" "hook forward"
+assert_contains "priority -5 runs ahead of netavark's priority-0 blanket accept" "$NFTR" "priority -5"
+assert_contains "ESTABLISHED/RELATED accepted (return + ongoing flows)" "$NFTR" "ct state established,related accept"
+assert_contains "only Tor (.25) may egress to the internet" "$NFTR" "ip saddr 172.28.0.25 accept"
+assert_contains "inter-container + 172.16/12 LAN allowed" "$NFTR" "ip saddr 172.28.0.0/24 ip daddr 172.16.0.0/12 accept"
+assert_contains "100.64/10 CGNAT LAN allowed" "$NFTR" "ip saddr 172.28.0.0/24 ip daddr 100.64.0.0/10 accept"
+assert_eq "the clearnet DROP is the FINAL rule before the chain closes (fail-closed)" "$(printf '%s\n' "$NFTR" | grep -E 'accept|drop' | tail -1)" "    ip saddr 172.28.0.0/24 drop"
+# add+delete before the body is the atomic idempotent-replace — a re-apply can't stack duplicates.
+assert_contains "idempotent-replace: add table first" "$NFTR" "add table inet pithead_egress"
+assert_contains "idempotent-replace: delete before recreating" "$NFTR" "delete table inet pithead_egress"
+assert_contains "honours a custom subnet/prefix (#180)" "$(run_sourced "$SANDBOX" render_tor_egress_nft 172.30.5.0/24 172.30.5.25)" "ip saddr 172.30.5.0/24 drop"
+
+echo "== black-box: apply_tor_egress_firewall routes to nftables under podman (#855) =="
+# PITHEAD_ENGINE=podman must send apply down the nft path (loaded via `nft -f -`), NOT the orphaned
+# DOCKER-USER path. Capture what gets piped to nft and assert the fail-closed ruleset landed.
+NFW="$SANDBOX/nfw"
+mkdir -p "$NFW/bin"
+printf '#!/usr/bin/env bash\nexec "$@"\n' >"$NFW/bin/sudo"
+# nft -f -: record stdin (the ruleset). Any other invocation (e.g. remove's delete) just logs args.
+cat >"$NFW/bin/nft" <<NFT
+#!/usr/bin/env bash
+if [ "\$1" = "-f" ]; then cat >>"$NFW/nft.ruleset"; else printf '%s\n' "\$*" >>"$NFW/nft.log"; fi
+exit 0
+NFT
+# an iptables that FAILS loudly if apply ever calls it under podman — proves we took the nft branch.
+printf '#!/usr/bin/env bash\necho "ILLEGAL iptables call on podman path: $*" >>"%s/nft.log"\nexit 1\n' "$NFW" >"$NFW/bin/iptables"
+chmod +x "$NFW/bin/sudo" "$NFW/bin/nft" "$NFW/bin/iptables"
+printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=true\n' >"$NFW/.env"
+: >"$NFW/nft.ruleset"
+: >"$NFW/nft.log"
+PITHEAD_ENGINE=podman PATH="$NFW/bin:$PATH" run_sourced "$NFW" apply_tor_egress_firewall >/dev/null 2>&1
+assert_contains "podman path loads the nft table with the fail-closed DROP" "$(cat "$NFW/nft.ruleset")" "ip saddr 172.28.0.0/24 drop"
+assert_contains "podman path hooks the chain at forward" "$(cat "$NFW/nft.ruleset")" "hook forward"
+assert_not_contains "podman path never touches the orphaned DOCKER-USER chain" "$(cat "$NFW/nft.log")" "ILLEGAL iptables"
+# opt-out on the podman path installs no table either.
+printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=false\n' >"$NFW/.env"
+: >"$NFW/nft.ruleset"
+PITHEAD_ENGINE=podman PATH="$NFW/bin:$PATH" run_sourced "$NFW" apply_tor_egress_firewall >/dev/null 2>&1
+assert_eq "opt-out on the podman path loads no nft ruleset" "$(cat "$NFW/nft.ruleset")" ""
+
+echo "== black-box: apply/remove_tor_egress_firewall via stubbed iptables (Docker path, #270) =="
 FW="$SANDBOX/fw"
 mkdir -p "$FW/bin"
 printf '#!/usr/bin/env bash\nexec "$@"\n' >"$FW/bin/sudo"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/ipt.log"\n' "$FW" >"$FW/bin/iptables"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$FW/bin/iptables-save" # no pre-existing rules
-chmod +x "$FW/bin/sudo" "$FW/bin/iptables" "$FW/bin/iptables-save"
+# remove_tor_egress_firewall probes nft on every path (it clears BOTH backends); stub it inert so the
+# Docker-path black-box stays hermetic and never touches the host's real nftables.
+printf '#!/usr/bin/env bash\nexit 0\n' >"$FW/bin/nft"
+chmod +x "$FW/bin/sudo" "$FW/bin/iptables" "$FW/bin/iptables-save" "$FW/bin/nft"
 printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=true\n' >"$FW/.env"
 : >"$FW/ipt.log"
-PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
+PITHEAD_ENGINE=docker PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
 iptlog="$(cat "$FW/ipt.log" 2>/dev/null)"
 assert_contains "installs the fail-closed clearnet DROP, tagged" "$iptlog" "-I DOCKER-USER 7 -m comment --comment pithead-tor-egress -s 172.28.0.0/24 -j DROP"
 assert_contains "exempts the Tor container" "$iptlog" "-m comment --comment pithead-tor-egress -s 172.28.0.25 -j ACCEPT"
@@ -624,7 +702,7 @@ assert_contains "pre-creates the DOCKER-USER chain (idempotently)" "$iptlog" "-N
 # opt-out: TOR_EGRESS_FIREWALL=false installs nothing
 printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=false\n' >"$FW/.env"
 : >"$FW/ipt.log"
-PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
+PITHEAD_ENGINE=docker PATH="$FW/bin:$PATH" run_sourced "$FW" apply_tor_egress_firewall >/dev/null 2>&1
 assert_eq "opt-out (network.tor_egress_firewall=false) installs no DROP" "$(grep -c 'DROP' "$FW/ipt.log" 2>/dev/null)" "0"
 # install-failure rollback (#270): if an `iptables -I` insert fails partway, apply must NOT leave a
 # half-open firewall it believes is fail-closed — it warns and rolls back via remove_tor_egress_firewall.
@@ -640,10 +718,11 @@ case "$1" in -I) exit 1 ;; esac # every insert fails midway
 exit 0
 IPT
 printf '#!/usr/bin/env bash\nprintf "save\\n" >>"$IPT_LOG"\nexit 0\n' >"$FF/bin/iptables-save"
-chmod +x "$FF/bin/sudo" "$FF/bin/iptables" "$FF/bin/iptables-save"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$FF/bin/nft" # inert: remove probes nft on the Docker path too
+chmod +x "$FF/bin/sudo" "$FF/bin/iptables" "$FF/bin/iptables-save" "$FF/bin/nft"
 printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=true\n' >"$FF/.env"
 : >"$FF/ipt.log"
-fwfail_out="$(PATH="$FF/bin:$PATH" IPT_LOG="$FF/ipt.log" run_sourced "$FF" apply_tor_egress_firewall 2>&1)"
+fwfail_out="$(PITHEAD_ENGINE=docker PATH="$FF/bin:$PATH" IPT_LOG="$FF/ipt.log" run_sourced "$FF" apply_tor_egress_firewall 2>&1)"
 fwfail_rc=$?
 assert_rc "insert failure degrades gracefully (stack still runs, rc 0)" "$fwfail_rc" "0"
 assert_contains "insert failure warns clearnet is NOT fail-closed" "$fwfail_out" "NOT fail-closed"
@@ -663,13 +742,18 @@ cat <<'RULES'
 -A DOCKER-USER -j RETURN
 RULES
 SAVE
-chmod +x "$RM/bin/sudo" "$RM/bin/iptables" "$RM/bin/iptables-save"
+# remove is engine-agnostic: it drops the nft table AND strips the iptables tags, so a stale set can't
+# survive a re-apply or an engine change. Log nft calls to prove it tears down the netavark backend too.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/nft.log"\nexit 0\n' "$RM" >"$RM/bin/nft"
+chmod +x "$RM/bin/sudo" "$RM/bin/iptables" "$RM/bin/iptables-save" "$RM/bin/nft"
 : >"$RM/ipt.log"
+: >"$RM/nft.log"
 PATH="$RM/bin:$PATH" run_sourced "$RM" remove_tor_egress_firewall >/dev/null 2>&1
 rmlog="$(cat "$RM/ipt.log" 2>/dev/null)"
 assert_contains "down removes the tagged clearnet DROP" "$rmlog" "-D DOCKER-USER -m comment --comment pithead-tor-egress -s 172.28.0.0/24 -j DROP"
 assert_contains "down removes the tagged Tor-exempt ACCEPT" "$rmlog" "-D DOCKER-USER -m comment --comment pithead-tor-egress -s 172.28.0.25 -j ACCEPT"
 assert_not_contains "down leaves foreign DOCKER-USER rules untouched" "$rmlog" "RETURN"
+assert_contains "down also drops the nft egress table (netavark backend)" "$(cat "$RM/nft.log" 2>/dev/null)" "delete table inet pithead_egress"
 
 echo "== regression: every command installs the Tor-egress firewall BEFORE compose (#291) =="
 # The firewall must go in BEFORE any clearnet-capable container starts, on EVERY path that brings one

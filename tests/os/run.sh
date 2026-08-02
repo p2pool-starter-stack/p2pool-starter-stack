@@ -1189,6 +1189,34 @@ phase_provision() {
         return
     fi
 
+    # ---- Tor-only egress backstop (#855): the fail-closed firewall must actually DROP -------
+    # The whole product is Tor-first; the guarantee is that nothing CAN bypass Tor even if an app
+    # is misconfigured, compromised, or dials a raw public IP. On the appliance the engine is
+    # podman+netavark, and the old DOCKER-USER rules land in a chain no forwarded packet traverses
+    # — the firewall was fail-OPEN while doctor and the boot log called it enforced. This leg dials
+    # clearnet FROM a mining-net container by raw IP and asserts the drop. It is the check whose
+    # absence let a leaking appliance ship green: it FAILS against the orphaned-chain code and
+    # PASSES once the nft table is installed. monerod sits on mining_net (172.28.0.x) and syncs
+    # regardless of the mining hold, so it is the honest origin for the dial.
+    if _ssh "podman exec monerod sh -c 'command -v curl' >/dev/null 2>&1"; then
+        # NEGATIVE — a direct clearnet dial by IP must be DROPPED (curl times out, non-zero).
+        if _ssh "podman exec monerod curl -s -o /dev/null -m 8 http://1.1.1.1/" 2>/dev/null; then
+            bad "clearnet egress is FAIL-OPEN — monerod reached 1.1.1.1 directly, bypassing Tor (the firewall is not enforced)"
+        else
+            ok "direct clearnet dial from a mining container is dropped — Tor-only egress is enforced"
+        fi
+        # POSITIVE — the SAME container still reaches clearnet THROUGH Tor's SOCKS, proving the
+        # drop spares Tor and intra-subnet traffic (real mining keeps working). Tor's default
+        # SOCKS is 172.28.0.25:9050 on the appliance's mining_net.
+        if _ssh "podman exec monerod curl -s -o /dev/null -m 30 --socks5-hostname 172.28.0.25:9050 http://1.1.1.1/" 2>/dev/null; then
+            ok "egress through Tor's SOCKS still works — the drop did not break real mining"
+        else
+            bad "the mining container can no longer reach clearnet even through Tor — the firewall is too tight"
+        fi
+    else
+        bad "monerod lacks curl — cannot assert the Tor-only egress drop (the #855 backstop is unverified)"
+    fi
+
     # ---- local-miner leg (#796): enable -> xmrig up -> wired to the machine's own stratum ---
     # The submit above asked to mine on the box itself, so the built-in RigForge worker must
     # come up without any hands: setup renders its config, runs its appliance-mode setup, and

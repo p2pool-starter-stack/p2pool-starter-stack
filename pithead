@@ -291,7 +291,16 @@ stack_restart() { # [tor]
 # root (sudo), like the GRUB/HugePages steps; IPv4-only (mining_net is IPv4). Opt out with
 # network.tor_egress_firewall=false. Proven by tests/integration/benchmarks/bench-verify-egress.sh.
 # See docs/privacy.md.
+#
+# Two enforcement backends, one allow-set. Docker adds a `FORWARD -> DOCKER-USER` jump when it
+# creates a network, so on the DIY/Docker channel the rules live in DOCKER-USER (iptables). The
+# appliance runs podman + netavark, which never adds that jump — DOCKER-USER is orphaned there and
+# the DROP never fires. On the podman path we instead install an independent `inet pithead_egress`
+# nftables table hooked at forward priority -5 (ahead of netavark's priority-0 accept), owning no
+# chain shared with netavark so it survives netavark reprogramming its own table. apply/remove/doctor
+# all branch on container_engine.
 TOR_EGRESS_TAG="pithead-tor-egress"
+TOR_EGRESS_NFT_TABLE="pithead_egress"
 
 # Ordered iptables rule bodies (no chain/comment) for <subnet> <tor_ip>. Pure (args only) so it
 # unit-tests; ACCEPTs first, DROP last — the order is load-bearing.
@@ -307,8 +316,39 @@ tor_egress_rules() { # <subnet> <tor_ip>
         "-s $subnet -j DROP"
 }
 
-# Remove every rule we previously installed (matched by the comment tag) — idempotent, config-agnostic.
+# Full `nft -f` ruleset for the appliance/netavark path — same allow-set as tor_egress_rules, in
+# native nftables. Pure (args only) so it unit-tests. `add`+`delete` before the table body is the
+# canonical atomic idempotent-replace: `add table` no-ops if it already exists, `delete` then clears
+# it, and the block recreates it fresh — the whole file loads as one transaction. The base chain is
+# hooked at forward priority -5 so it evaluates before netavark's priority-0 blanket accept; a `drop`
+# there is terminal across the ruleset. accepts come first so LAN/Tor/established traffic skips the
+# final subnet-wide drop, mirroring the iptables order.
+render_tor_egress_nft() { # <subnet> <tor_ip>
+    local subnet="$1" tor_ip="$2"
+    printf '%s\n' \
+        "add table inet $TOR_EGRESS_NFT_TABLE" \
+        "delete table inet $TOR_EGRESS_NFT_TABLE" \
+        "table inet $TOR_EGRESS_NFT_TABLE {" \
+        "  chain forward {" \
+        "    type filter hook forward priority -5; policy accept;" \
+        "    ct state established,related accept" \
+        "    ip saddr $tor_ip accept" \
+        "    ip saddr $subnet ip daddr 10.0.0.0/8 accept" \
+        "    ip saddr $subnet ip daddr 172.16.0.0/12 accept" \
+        "    ip saddr $subnet ip daddr 192.168.0.0/16 accept" \
+        "    ip saddr $subnet ip daddr 100.64.0.0/10 accept" \
+        "    ip saddr $subnet drop" \
+        "  }" \
+        "}"
+}
+
+# Remove every rule we previously installed — idempotent, config-agnostic, engine-agnostic. Clears
+# BOTH backends so a re-apply (or an engine change) can't leave a stale set behind: drop the nft
+# table if present, then delete the tagged DOCKER-USER rules if present.
 remove_tor_egress_firewall() {
+    if command -v nft >/dev/null 2>&1; then
+        sudo nft delete table inet "$TOR_EGRESS_NFT_TABLE" 2>/dev/null || true
+    fi
     command -v iptables >/dev/null 2>&1 || return 0
     local saved match line
     saved=$(sudo iptables-save 2>/dev/null) || return 0
@@ -325,9 +365,10 @@ remove_tor_egress_firewall() {
 }
 
 # Install (or re-install, idempotently) the fail-closed Tor-only egress rules. Reads the toggle +
-# subnet from .env so it works in the `up` path (where config.json isn't re-parsed).
+# subnet from .env so it works in the `up` path (where config.json isn't re-parsed). Branches to the
+# engine's forward-hook mechanism: nftables under podman/netavark, DOCKER-USER under Docker.
 apply_tor_egress_firewall() {
-    local enabled subnet tor_ip pos=1 rule
+    local enabled subnet tor_ip
     enabled=$(env_get TOR_EGRESS_FIREWALL 2>/dev/null)
     [ -n "$enabled" ] || enabled=true
     remove_tor_egress_firewall # clear stale rules so a re-apply is idempotent
@@ -335,15 +376,39 @@ apply_tor_egress_firewall() {
         warn "Tor-only egress firewall is OFF (network.tor_egress_firewall=false) — a misconfigured app could reach clearnet."
         return 0
     fi
-    if ! command -v iptables >/dev/null 2>&1; then
-        warn "iptables not found — cannot enforce Tor-only egress. The stack runs, but clearnet egress is NOT fail-closed."
-        return 0
-    fi
     subnet=$(env_get NETWORK_SUBNET 2>/dev/null)
     [ -n "$subnet" ] || subnet="172.28.0.0/24"
     tor_ip=$(env_get NETWORK_PREFIX 2>/dev/null)
     [ -n "$tor_ip" ] || tor_ip="172.28.0"
     tor_ip="${tor_ip}.25"
+    if [ "$(container_engine)" = "podman" ]; then
+        apply_tor_egress_nft "$subnet" "$tor_ip"
+    else
+        apply_tor_egress_iptables "$subnet" "$tor_ip"
+    fi
+}
+
+# Appliance/netavark path: load the independent nft table (atomic, idempotent-replace).
+apply_tor_egress_nft() { # <subnet> <tor_ip>
+    local subnet="$1" tor_ip="$2"
+    if ! command -v nft >/dev/null 2>&1; then
+        warn "nftables not found — cannot enforce Tor-only egress. The stack runs, but clearnet egress is NOT fail-closed."
+        return 0
+    fi
+    if ! render_tor_egress_nft "$subnet" "$tor_ip" | sudo nft -f - 2>/dev/null; then
+        warn "Could not install the Tor-egress firewall (needs root + nftables). Stack runs, but clearnet egress is NOT fail-closed."
+        return 0
+    fi
+    log "Tor-only egress enforced: clearnet dials from $subnet dropped except via Tor ($tor_ip)."
+}
+
+# DIY/Docker path: insert the tagged rules into DOCKER-USER, which Docker jumps to from FORWARD.
+apply_tor_egress_iptables() { # <subnet> <tor_ip>
+    local subnet="$1" tor_ip="$2" pos=1 rule
+    if ! command -v iptables >/dev/null 2>&1; then
+        warn "iptables not found — cannot enforce Tor-only egress. The stack runs, but clearnet egress is NOT fail-closed."
+        return 0
+    fi
     # DOCKER-USER may not exist yet on a first-ever `up` (Docker creates it with its first network).
     # Pre-create it so installing here — before compose runs — succeeds; Docker adopts the existing
     # chain and adds the FORWARD jump. Harmless (-N fails with rc 1) once the chain is already there.
@@ -3062,7 +3127,7 @@ check_tor_running() {
 # brings every container back — that reboot gap is the state this catches. Read-only: `sudo -n`
 # never prompts; every can't-check path degrades to an info line, only a confirmed absence FAILs.
 check_egress_firewall_installed() {
-    local enabled rules
+    local enabled
     enabled=$(env_get TOR_EGRESS_FIREWALL 2>/dev/null)
     [ -n "$enabled" ] || enabled=true
     if [ "$(normalize_bool "$enabled")" != "true" ]; then
@@ -3076,6 +3141,42 @@ check_egress_firewall_installed() {
         dr_info "Tor-egress firewall check skipped — the tor container isn't running."
         return 0
     fi
+    if [ "$(container_engine)" = "podman" ]; then
+        check_egress_firewall_nft
+    else
+        check_egress_firewall_iptables
+    fi
+    return 0
+}
+
+# Appliance/netavark probe. The failure this whole fix is about — a DROP that exists in a chain no
+# packet traverses — is exactly what a base chain hooked at forward CANNOT be: if the table carries a
+# `hook forward` chain with a `drop`, forwarded packets DO pass through it. So we assert the hook and
+# the drop, not merely that some rule exists somewhere.
+check_egress_firewall_nft() {
+    local ruleset
+    if ! command -v nft >/dev/null 2>&1; then
+        dr_info "Tor-egress firewall check skipped — no nftables."
+        return 0
+    fi
+    # `nft list table` returns rc 1 both when the table is missing AND when sudo -n is refused; a
+    # cheap `list tables` probe (succeeds whether or not our table exists) tells the two apart, so a
+    # sudo refusal can't masquerade as a missing firewall (a false FAIL).
+    if ! sudo -n nft list tables >/dev/null 2>&1; then
+        dr_info "Tor-egress firewall check skipped — reading nftables needs passwordless sudo. Verify manually: 'sudo nft list table inet $TOR_EGRESS_NFT_TABLE'."
+        return 0
+    fi
+    ruleset=$(sudo -n nft list table inet "$TOR_EGRESS_NFT_TABLE" 2>/dev/null) || ruleset=""
+    if printf '%s\n' "$ruleset" | grep -q 'hook forward' && printf '%s\n' "$ruleset" | grep -qw drop; then
+        dr_ok "Tor-only egress firewall is installed (#270) — clearnet dials from the stack are fail-closed via nftables (inet $TOR_EGRESS_NFT_TABLE)."
+    else
+        dr_fail "Tor-only egress firewall is MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them (#270)."
+    fi
+}
+
+# DIY/Docker probe: the tagged rules in DOCKER-USER, which Docker's FORWARD jump traverses.
+check_egress_firewall_iptables() {
+    local rules
     if ! command -v iptables >/dev/null 2>&1; then
         dr_info "Tor-egress firewall check skipped — no iptables."
         return 0
@@ -3089,7 +3190,6 @@ check_egress_firewall_installed() {
     else
         dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them (#270)."
     fi
-    return 0
 }
 
 # doctor (#383): something must actually LISTEN on the stratum port while xmrig-proxy runs — the
