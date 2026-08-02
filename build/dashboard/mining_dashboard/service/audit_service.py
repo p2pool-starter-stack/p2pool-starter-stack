@@ -14,6 +14,7 @@ unfiltered. Growth is bounded by the writers, not here: the audit log is trimmed
 ``control_audit`` and Caddy rolls its own access log — this module only ever reads a tail.
 """
 
+import calendar
 import json
 import os
 import re
@@ -91,6 +92,47 @@ def recent_changes(limit=50):
         for e in raw
     ]
     return entries[::-1][:limit]
+
+
+# Log-navigation filters (#823). One helper serves BOTH log surfaces even though their timestamps
+# differ — access entries carry epoch seconds, audit entries the canonical "YYYY-MM-DDTHH:MM:SSZ"
+# string — by normalizing each entry's ts to epoch at the comparison. The window is half-open
+# [frm, to) so a "to" built from a date input's next midnight includes that whole day exactly
+# once; an entry whose ts cannot be read matches NO window (filtering means placing entries in
+# time — an undatable row has no place) but still matches a pure text search.
+
+
+def _entry_epoch(ts):
+    """``ts`` as epoch seconds, or None when unreadable. Accepts the two shapes the log surfaces
+    actually emit: a number (access log) or the canonical UTC ISO string (audit trail)."""
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    if isinstance(ts, str):
+        try:
+            return float(calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")))
+        except ValueError:
+            return None
+    return None
+
+
+def filter_log_entries(entries, frm=None, to=None, q=None):
+    """``entries`` narrowed to the [frm, to) epoch window and/or a case-insensitive substring
+    ``q`` across every field value. Filters compose; None means "don't filter on this axis"."""
+    ql = (q or "").lower()
+    out = []
+    for e in entries:
+        if frm is not None or to is not None:
+            ep = _entry_epoch(e.get("ts"))
+            if ep is None:
+                continue
+            if frm is not None and ep < frm:
+                continue
+            if to is not None and ep >= to:
+                continue
+        if ql and not any(ql in str(v).lower() for v in e.values()):
+            continue
+        out.append(e)
+    return out
 
 
 def access_summary(limit=50, now=None):

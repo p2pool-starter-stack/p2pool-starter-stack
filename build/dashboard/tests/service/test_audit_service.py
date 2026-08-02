@@ -170,3 +170,60 @@ class TestAccessSummary:
         entries = audit_service.access_summary(limit=50, now=100.0)["entries"]
         assert len(entries) == 50
         assert entries[0]["uri"] == "/p59"
+
+
+class TestFilterLogEntries:
+    # Log navigation (#823): one filter helper for BOTH surfaces — access entries carry epoch ts,
+    # audit entries the canonical UTC ISO string. Window is half-open [frm, to).
+
+    ENTRIES = [
+        {"ts": 100.0, "status": 401, "uri": "/api/state", "user": "admin"},
+        {"ts": 200.0, "status": 200, "uri": "/static/app.js", "user": "vijit"},
+        {"ts": "2026-08-01T12:00:00Z", "actor": "admin", "action": "commit", "status": "applied"},
+        {"ts": "garbage", "actor": "release-smoke", "action": "upgrade"},
+    ]
+
+    def test_no_filters_passes_everything_through(self):
+        assert audit_service.filter_log_entries(self.ENTRIES) == self.ENTRIES
+
+    def test_entry_epoch_reads_only_the_two_real_shapes(self):
+        # A ts that is neither a number nor a string (a missing key's None, a corrupt row's
+        # dict) is undatable — no exception, no guess.
+        assert audit_service._entry_epoch(None) is None
+        assert audit_service._entry_epoch({"nested": 1}) is None
+
+    def test_window_is_half_open_and_reads_both_ts_shapes(self):
+        # frm inclusive, to exclusive; the ISO entry's epoch (2026-08-01T12:00Z) sits far above
+        # the numeric ones, so a tight numeric window keeps only the 200.0 row...
+        assert audit_service.filter_log_entries(self.ENTRIES, frm=200.0, to=200.1) == [
+            self.ENTRIES[1]
+        ]
+        # ...and a window around the ISO instant keeps only the audit row — proof both shapes
+        # normalize onto one axis.
+        iso_epoch = audit_service._entry_epoch("2026-08-01T12:00:00Z")
+        got = audit_service.filter_log_entries(self.ENTRIES, frm=iso_epoch, to=iso_epoch + 1)
+        assert got == [self.ENTRIES[2]]
+        # to is exclusive: a window ENDING exactly on an entry's ts drops it.
+        assert audit_service.filter_log_entries(self.ENTRIES, frm=100.0, to=200.0) == [
+            self.ENTRIES[0]
+        ]
+
+    def test_undatable_ts_matches_no_window_but_still_searches(self):
+        # Filtering by time means placing entries in time — the "garbage"-ts row has no place in
+        # any window, but a pure text search still finds it.
+        assert audit_service.filter_log_entries(self.ENTRIES, frm=0.0) == self.ENTRIES[:3]
+        assert audit_service.filter_log_entries(self.ENTRIES, q="release-smoke") == [
+            self.ENTRIES[3]
+        ]
+
+    def test_search_is_case_insensitive_across_every_field(self):
+        assert audit_service.filter_log_entries(self.ENTRIES, q="ADMIN") == [
+            self.ENTRIES[0],
+            self.ENTRIES[2],
+        ]
+        # Numeric field values participate too (status 401 as text).
+        assert audit_service.filter_log_entries(self.ENTRIES, q="401") == [self.ENTRIES[0]]
+
+    def test_filters_compose(self):
+        got = audit_service.filter_log_entries(self.ENTRIES, frm=0.0, to=300.0, q="vijit")
+        assert got == [self.ENTRIES[1]]

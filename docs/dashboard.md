@@ -811,6 +811,16 @@ Below the form, the Configuration view shows two read-only security panels
   that changed. Values are never recorded (several are secrets). Shown only when
   `dashboard.control.enabled` is on.
 
+Each panel carries the same navigation row: range presets (**24 Hr / 1 Wk / 1 Mo / All**, the
+chart's idiom) for following a live log, two date fields for jumping to a specific day or span —
+the "to" date covers that whole day — and a search box that matches any field: a user, an action,
+a path fragment, a status, a settings name. Filters compose (a search inside a range searches only
+that range), the search narrows as you type, and filtering happens on the server, so a match
+deeper than the on-screen tail is still found — the access log's read stays size-bounded either
+way. Below the row, a pager reports how many entries matched and walks them a page at a time —
+pick 5 to 100 rows per page, step with Prev/Next. A filter with no matches says so; the
+failed-login counter always describes the whole log, never the filtered slice.
+
 Both panels read host-written files through read-only mounts, and the dashboard treats every
 field in them as hostile input — a request path is attacker-chosen bytes — so each string is
 stripped to a safe character set before it is served. See
