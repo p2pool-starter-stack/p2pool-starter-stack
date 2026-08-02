@@ -47,3 +47,20 @@ updates:
       # migrations, not security updates — keep Dependabot to digest + patch within the pinned tag.
       - dependency-name: "*"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  # Third-party image digests pinned directly in docker-compose.yml (Tari node + wallet,
+  # docker-socket-proxy, caddy) — outside build/*, so the `docker` entry above never sees them,
+  # and they feed both channels: pulled on the DIY stack, baked into the appliance image (#833).
+  # The pithead-* image lines interpolate env vars and carry no digest; Dependabot skips them.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      compose:
+        patterns: ["*"]
+    ignore:
+      # Same policy as the docker entry: digest + patch within the pinned tag. A Tari or Caddy
+      # major/minor is a deliberate migration (compose flags, config compatibility), not a CVE fix.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
