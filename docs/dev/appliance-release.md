@@ -62,8 +62,14 @@ Everything runs from the repo root on a Linux box with docker, KVM and libvirt. 
 bench is `gouda`; a laptop cannot run this (`/dev/kvm` is required).
 
 ```bash
-os/build-image.sh && sudo os/rauc/mkimage.sh
+os/build-image.sh --ssh && sudo os/rauc/mkimage.sh --dev
 ```
+
+`--dev` auto-generates a throwaway `CN=pithead-dev` signing key for the bench. A release build
+omits it and must name the real key instead (`PITHEAD_RAUC_CERT` + `PITHEAD_RAUC_KEY`) — see
+[Cutting a release](#cutting-a-release) and the key custody runbook in
+[`release-server.md`](release-server.md#the-rauc-update-signing-key). The guard is what stops a
+throwaway dev cert from becoming the fleet's update trust root.
 
 Two build variants, chosen by one flag:
 
@@ -195,10 +201,19 @@ the morning.
    bench.
 2. Bump `VERSION`. The tag is `v<VERSION>` and every artifact derives from it —
    `STACK_VERSION` is the single place the registry tag comes from.
-3. Build the image and bundle. **Sign the bundle with the release key**, never the
-   development chain `mkimage.sh` generates. Key custody is in
-   [`release-server.md`](release-server.md).
-   Then verify the artifact, pinning the commit you meant to build:
+3. Build the image and bundle with the **release key**, never the throwaway `--dev` chain. Point
+   both `mkimage.sh` and `mkbundle.sh` at it and omit `--dev` — a release build refuses to run
+   without an explicit key, so there is no silent-dev-cert path:
+
+   ```bash
+   export PITHEAD_RAUC_CERT=~/.config/pithead-release/rauc-signer.pem
+   export PITHEAD_RAUC_KEY=~/.config/pithead-release/rauc-signer.key
+   os/build-image.sh && sudo -E os/rauc/mkimage.sh && sudo -E os/rauc/mkbundle.sh
+   ```
+
+   Key generation, storage, the trust model and the rotation runbook are in
+   [`release-server.md`](release-server.md#the-rauc-update-signing-key), mirroring the cosign
+   section beside it. Then verify the artifact, pinning the commit you meant to build:
 
    ```bash
    PITHEAD_EXPECT_COMMIT=$(git rev-parse HEAD) sudo tests/os/verify-image.sh <image>

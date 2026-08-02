@@ -121,7 +121,7 @@ _build_image() {
     [ -f "$KEY" ] || ssh-keygen -t ed25519 -N "" -f "$KEY" -q
     PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
         os/build-image.sh >/tmp/os-fault-build.log 2>&1 || return 1
-    os/rauc/mkimage.sh >>/tmp/os-fault-build.log 2>&1 || return 1
+    os/rauc/mkimage.sh --dev >>/tmp/os-fault-build.log 2>&1 || return 1
     # Every image a phase boots gets the static verification first, in --test mode. The check
     # that matters most is the archive-vs-tree comparison: stale wizard images reached three
     # benches through caching bugs, and this layer catches the next one before a 25-minute
@@ -137,7 +137,7 @@ _build_image() {
 _build_bundle() {
     PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
         os/build-image.sh >/tmp/os-fault-bundle.log 2>&1 || return 1
-    os/rauc/mkbundle.sh >>/tmp/os-fault-bundle.log 2>&1 || return 1
+    os/rauc/mkbundle.sh --dev >>/tmp/os-fault-bundle.log 2>&1 || return 1
     find os/rauc/build -name '*.raucb' | head -1
 }
 

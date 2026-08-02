@@ -6,11 +6,25 @@
 # SAME rootfs tarball as the Rugix candidate (os/build-image.sh stages it), so the comparison is
 # updater-only.
 #
-#   os/rauc/mkimage.sh [--out PATH] [--size GiB]
+#   os/rauc/mkimage.sh [--dev] [OUT_PATH]
+#
+# Signing: a release build must name the key (PITHEAD_RAUC_CERT + PITHEAD_RAUC_KEY); --dev
+# auto-generates a throwaway CN=pithead-dev key for local/bench work. See resolve_signing_material
+# in populate-slot.sh and the custody runbook in docs/dev/release-server.md.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-OUT="${1:-os/rauc/build/system.img}"
+# --dev marks the build as throwaway (auto-gen allowed), mirroring build-image.sh --ssh for the
+# debug variant; the first non-flag arg is the output path.
+DEV=0
+OUT=""
+for arg in "$@"; do
+    case "$arg" in
+    --dev) DEV=1 ;;
+    *) [ -z "$OUT" ] && OUT="$arg" ;;
+    esac
+done
+OUT="${OUT:-os/rauc/build/system.img}"
 # Only the ESP + slot A ship. systemd-repart creates slot B and /data on the target machine's
 # real disk at first boot, so the image does not carry gigabytes of zeros and an /data sized
 # for the image rather than the disk. 5 GiB covers 256M ESP + a 4 GiB slot + alignment.
@@ -23,20 +37,16 @@ SIZE_GIB="${PITHEAD_IMAGE_GIB:-5}"
 TARBALL="os/build/pithead-root.tar"
 # shellcheck source=os/rauc/populate-slot.sh
 . os/rauc/populate-slot.sh
-CERT_DIR="os/rauc/certs"
 
 [ -s "$TARBALL" ] || {
     echo "missing $TARBALL — run os/build-image.sh first to stage the rootfs" >&2
     exit 2
 }
-mkdir -p "$(dirname "$OUT")" "$CERT_DIR"
 
-# Dev signing material. RAUC refuses unsigned bundles, so a keypair is mandatory even to spike.
-if [ ! -s "$CERT_DIR/cert.pem" ]; then
-    echo "==> generating a development signing keypair"
-    openssl req -x509 -newkey rsa:4096 -nodes -keyout "$CERT_DIR/key.pem" \
-        -out "$CERT_DIR/cert.pem" -days 3650 -subj "/CN=pithead-dev" 2>/dev/null
-fi
+# The keyring baked into slot A is the fleet's update trust root. Resolve it before anything heavy
+# so a release build with no key stops immediately, not after minutes of imaging.
+resolve_signing_material "$DEV" || exit $?
+mkdir -p "$(dirname "$OUT")"
 
 echo "==> creating a ${SIZE_GIB} GiB image with the A/B layout"
 rm -f "$OUT"
