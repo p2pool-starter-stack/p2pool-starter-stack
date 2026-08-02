@@ -253,18 +253,32 @@ export class SecurityPanel extends Component {
   }
 
   async refetch(which, filters) {
+    // Sequence guard: two quick filter changes can land responses out of order — only the
+    // NEWEST request for a surface may write state, or a slow stale response would overwrite
+    // the fresher view the operator is already looking at.
+    if (!this._seq) this._seq = {};
+    this._seq[which] = (this._seq[which] || 0) + 1;
+    const seq = this._seq;
+    const mine = seq[which];
     try {
       const qs = buildLogQuery(filters);
       if (which === "access") {
         const res = await fetch("/api/access" + qs);
-        if (res.ok) this.setState({ access: await res.json() });
+        if (res.ok && seq[which] === mine) this.setState({ access: await res.json() });
       } else {
         const res = await fetch("/api/audit" + qs);
-        if (res.ok) this.setState({ audit: (await res.json()).entries || [] });
+        if (res.ok && seq[which] === mine)
+          this.setState({ audit: (await res.json()).entries || [] });
       }
     } catch (e) {
-      this.setState({ error: String(e) });
+      if (seq[which] === mine) this.setState({ error: String(e) });
     }
+  }
+
+  componentWillUnmount() {
+    // A pending search debounce firing after unmount would setState on a dead component.
+    for (const t of Object.values(this._debounce || {})) clearTimeout(t);
+    this._debounce = {};
   }
 
   async componentDidMount() {

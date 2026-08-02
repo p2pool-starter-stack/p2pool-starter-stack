@@ -504,10 +504,12 @@ class TestSecurityLogRoutes:
         body = await (await client.get("/api/access?from=100&to=200")).json()
         assert [e["ts"] for e in body["entries"]] == [100.0]
         assert "failures_24h" in body
-        # Malformed bounds degrade to unfiltered, HTTP 200.
-        resp = await client.get("/api/access?from=notanumber&to=&q=")
-        assert resp.status == 200
-        assert len((await resp.json())["entries"]) == 2
+        # Malformed bounds degrade to unfiltered, HTTP 200 — including the float()-parseable
+        # non-finite spellings, which would otherwise warp the comparisons (nan is never <).
+        for bad in ("notanumber", "inf", "-inf", "nan", ""):
+            resp = await client.get(f"/api/access?from={bad}&to={bad}&q=")
+            assert resp.status == 200
+            assert len((await resp.json())["entries"]) == 2
 
     async def test_audit_route_navigation_params_filter_entries(
         self, control_client, tmp_path, monkeypatch

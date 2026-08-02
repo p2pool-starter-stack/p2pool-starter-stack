@@ -1,4 +1,5 @@
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -369,9 +370,12 @@ def _log_filters(request):
         if v in (None, ""):
             return None
         try:
-            return float(v)
+            f = float(v)
         except ValueError:
             return None
+        # float() happily parses "inf"/"nan", which would silently warp the window comparisons
+        # (nan compares False with everything) — a non-finite bound is malformed, so it's absent.
+        return f if math.isfinite(f) else None
 
     q = (request.query.get("q") or "").strip()[:200]
     return _num("from"), _num("to"), q or None
