@@ -3,7 +3,14 @@
 # Debian 13 + systemd + rootful Podman; pithead is the provisioning brain, Quadlet the runtime.
 # Deliberately updater-agnostic: nothing in here knows about Rugix — the RAUC escape hatch
 # stays open (docs/dev/dual-distribution-plan.md § appliance architecture).
-FROM debian:trixie-slim
+#
+# This file is named Dockerfile, not Containerfile, so Dependabot's docker ecosystem tracks the
+# base digest below (it only reads Dockerfile-named files — dependabot-core#6067); nothing else
+# cares about the name, build-image.sh passes the path with -f.
+# Pinned by digest (#135) so the debian:trixie-slim tag can't be silently re-pointed. The digest
+# bump is how base-distro CVE fixes reach the appliance (#833): there is no apt on the running
+# box — every Debian package here is frozen until the next bake.
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
 
 ENV DEBIAN_FRONTEND=noninteractive
 

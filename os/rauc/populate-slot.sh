@@ -27,7 +27,7 @@ populate_slot() { # $1 = mounted rootfs
     } >"$root/etc/hosts"
     ln -sf ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
     # /etc/hostname is the FOURTH bind-mount artefact: docker overlays it per container, so the
-    # Containerfile's write never left the build. The machine then calls itself "localhost",
+    # rootfs Dockerfile's write never left the build. The machine then calls itself "localhost",
     # avahi publishes localhost.local, and caddy renders a site nobody can reach.
     echo 'pithead' >"$root/etc/hostname"
 

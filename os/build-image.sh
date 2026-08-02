@@ -90,7 +90,7 @@ echo "==> building from commit ${BUILD_COMMIT}${BUILD_DIRTY}"
 ROOTFS_TAG="${PITHEAD_ROOTFS_TAG:-pithead-os-rootfs}"
 
 echo "==> rootfs: container build + export"
-docker build -f os/rootfs/Containerfile -t "$ROOTFS_TAG" \
+docker build -f os/rootfs/Dockerfile -t "$ROOTFS_TAG" \
     --build-arg PITHEAD_TEST_SSH_PUBKEY="${PITHEAD_TEST_SSH_PUBKEY:-}" \
     --build-arg PITHEAD_TEST_MARKER="${PITHEAD_TEST_MARKER:-}" \
     --build-arg PITHEAD_UPDATER="${PITHEAD_UPDATER:-rauc}" .
