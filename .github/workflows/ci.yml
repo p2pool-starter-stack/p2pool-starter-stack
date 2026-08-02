@@ -4,6 +4,14 @@ on:
   push:
     branches: [main, develop]
   pull_request:
+  # Weekly CVE sweep (#833): rebuild + Trivy-scan every image even when no PR is open, so a CVE
+  # disclosed during a quiet week — or fixed in the apt archive without a new base digest, which
+  # Dependabot never sees — surfaces here instead of reddening the next unrelated PR. Only
+  # `build-images` runs on the schedule (every other job gates on the event); the run going red
+  # in the Actions tab is the alert, the lychee.yml posture. Scheduled runs use the default
+  # branch (develop).
+  schedule:
+    - cron: "0 5 * * 1" # Mondays 05:00 UTC
 
 # Least privilege (#282): every job here only reads the repo — none push commits, comment, or
 # publish packages. Narrowing the default GITHUB_TOKEN limits the blast radius of a compromised step.
@@ -19,6 +27,7 @@ concurrency:
 jobs:
   dashboard:
     name: Dashboard tests (pytest + coverage)
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -53,6 +62,7 @@ jobs:
 
   frontend:
     name: Frontend logic tests (node --test)
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -70,6 +80,7 @@ jobs:
 
   dashboard-image:
     name: Dashboard image (Docker test stage)
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -112,6 +123,7 @@ jobs:
 
   hadolint:
     name: Dockerfile lint (hadolint)
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -129,6 +141,7 @@ jobs:
 
   python-lint:
     name: Python lint + format (ruff)
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -152,6 +165,7 @@ jobs:
 
   gitleaks:
     name: Secret scan (gitleaks)
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -169,6 +183,7 @@ jobs:
 
   zizmor:
     name: Workflow audit (zizmor)
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -190,6 +205,7 @@ jobs:
 
   shell:
     name: Shell tests (shellcheck + pithead suite)
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -227,6 +243,7 @@ jobs:
 
   compose:
     name: Compose config + security hardening
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -238,6 +255,7 @@ jobs:
 
   lint-surfaces:
     name: Lint per-surface (biome, yaml, markdown, proto, toml)
+    if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

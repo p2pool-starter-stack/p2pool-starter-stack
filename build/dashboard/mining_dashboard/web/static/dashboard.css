@@ -491,6 +491,26 @@ tr:last-child td {
 .est-scroll {
   overflow-x: auto;
 }
+/* Log navigation (#823): the Security cards' shared filter row — the chart-controls preset
+ * idiom plus native date inputs and a search box, left-aligned to read as part of its card. */
+.log-controls {
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+.log-controls input[type="date"],
+.log-controls input[type="search"] {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 0.8rem;
+}
+.log-controls input[type="search"] {
+  flex: 1;
+  min-width: 110px;
+}
+
 /* Expected-vs-actual card (#808/#817): three labelled rows, not a shared-precision numeric
  * grid — values wrap instead of panning (this card must never scroll in either view) and the
  * table fills the card. table-layout fixed, because in auto layout a cell's min-content width
@@ -590,12 +610,21 @@ tr:last-child td {
   margin: 0;
 }
 
-/* Audit-trail time-bucket header row (#530), between groups when the operator picks
- * hour/day/month grouping. A raised, muted divider — readable, not another data row. */
-.audit-group-header td {
-  background: var(--elevated);
-  color: var(--text-muted);
-  font-weight: 600;
+/* Log pager (#823 follow-up): match count, rows-per-page select, prev/next — the grouping
+ * dropdown's replacement now that presets/dates/search own the time navigation. */
+.log-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.log-pager select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 0.8rem;
 }
 
 /* Components */
