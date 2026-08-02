@@ -24,3 +24,6 @@ CVE-2026-56852
 CVE-2026-34040
 # Go stdlib (both binaries built with go1.26.4; clears with upstream rebuilds):
 CVE-2026-39822
+# google.golang.org/grpc vendored in both pinned binaries (GHSA id — Trivy gates on it like a
+# CVE; same clearing condition as the three above: upstream rebuilds on the fixed module):
+GHSA-hrxh-6v49-42gf
