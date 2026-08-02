@@ -277,6 +277,8 @@ current one from the console. After five wrong attempts it mints a new one on pu
 
 **The address was rejected.** You most likely pasted a subaddress (starts with `8`) or an
 integrated address. Use your primary address, which starts with `4` and is 95 characters.
+If the message says the checksum failed, at least one character of the address is wrong —
+re-copy it from your wallet rather than fixing it by eye.
 
 **It came back on the old version after an update.** That is the safety mechanism working:
 the new version did not come up healthy, so the machine reverted. Nothing is lost. Check

@@ -901,6 +901,7 @@ doctor() {
             primary) dr_ok "Monero payout address is a primary address (p2pool/XvB can pay it)." ;;
             subaddress) dr_fail "Monero payout address is a SUBADDRESS (8…) — p2pool CANNOT pay it, so you are NOT being paid. Set monero.wallet_address to your PRIMARY address (4…) and run './pithead apply'." ;;
             integrated) dr_fail "Monero payout address is an INTEGRATED address — p2pool can't pay it. Use your plain PRIMARY address (4…)." ;;
+            checksum) dr_fail "Monero payout address FAILS its checksum — at least one character is mistyped, and p2pool crashes on it at startup. Re-copy the address from your wallet into monero.wallet_address and run './pithead apply'." ;;
             *) dr_warn "Monero payout address doesn't look like a primary address (expected 95 chars starting with 4)." ;;
             esac
         fi
@@ -3276,6 +3277,7 @@ wizard_ask_core() {
         primary) break ;;
         subaddress) echo "  ✗ That's a subaddress (8…) — p2pool can't pay it. Use your PRIMARY address (starts with 4)." >&2 ;;
         integrated) echo "  ✗ That's an integrated address — use your plain primary address." >&2 ;;
+        checksum) echo "  ✗ Checksum failed — at least one character is mistyped. Re-copy the address from your wallet." >&2 ;;
         *) echo "  ✗ Not a valid Monero primary address (95 chars, starts with 4). Try again." >&2 ;;
         esac
     done
@@ -3447,17 +3449,138 @@ wizard_print_pointer() {
     echo "$CONFIG_FILE and run '$0 apply' — see docs/configuration.md, or use the dashboard's config editor."
 }
 
-# Classify a Monero MAINNET address by its network byte (the base58 prefix) + length:
+# Classify a Monero MAINNET address:
 #   primary/standard  "4…" 95   — the ONLY kind p2pool can pay (coinbase) and XvB credits by.
 #   integrated        "4…" 106  — embeds a payment id; p2pool rejects it.
 #   subaddress        "8…" 95   — p2pool cannot pay a subaddress.
-# Echoes: primary | integrated | subaddress | invalid  (#250)
+# Echoes: primary | integrated | subaddress | checksum | invalid  (#250, #829)
+#
+# Shape (prefix + length) alone is not enough: a well-shaped address with one mistyped character
+# passes it, and p2pool then dies on the address at startup (SIGABRT/SIGSEGV) — a crash-looping
+# stack that looks healthy from outside (#829). So after the shape gate, verify the address the
+# way a wallet does: block-wise base58 decode, the network byte, and the 4-byte checksum — the
+# first 4 bytes of the LEGACY Keccak-256 of the payload (Monero predates NIST SHA3; the padding
+# differs, so sha3 tools give wrong digests and the hash is vendored below). "checksum" means
+# exactly one thing: a character in the address is wrong.
+#
+# python3 does the math (bash has no 64-bit rotate worth writing): baked into the appliance
+# rootfs, present on effectively every host that can run docker. Without it the shape verdict
+# stands alone — the pre-#829 behaviour, degraded, not broken. Every config path routes through
+# here (setup/apply, the appliance wizard spool, the dashboard control runner), so this is the
+# one checksum gate for all of them.
 monero_address_type() {
+    local shape
     case "$1" in
-    4*) case "${#1}" in 95) echo primary ;; 106) echo integrated ;; *) echo invalid ;; esac ;;
-    8*) case "${#1}" in 95) echo subaddress ;; *) echo invalid ;; esac ;;
-    *) echo invalid ;;
+    4*) case "${#1}" in 95) shape=primary ;; 106) shape=integrated ;; *) shape=invalid ;; esac ;;
+    8*) case "${#1}" in 95) shape=subaddress ;; *) shape=invalid ;; esac ;;
+    *) shape=invalid ;;
     esac
+    if [ "$shape" == "invalid" ] || ! command -v python3 >/dev/null 2>&1; then
+        echo "$shape"
+        return
+    fi
+    python3 - "$1" <<'PYEOF' 2>/dev/null || echo "$shape"
+import sys
+
+# Monero base58: 8-byte blocks encoded independently to 11 chars (a shorter last block maps by
+# this table) — NOT Bitcoin's whole-string base58.
+_ALPHA = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+_BLOCK = {11: 8, 10: 7, 9: 6, 7: 5, 6: 4, 5: 3, 3: 2, 2: 1}
+
+
+def b58_decode(s):
+    out = b""
+    for i in range(0, len(s), 11):
+        blk = s[i : i + 11]
+        size = _BLOCK.get(len(blk))
+        if size is None:
+            return None
+        n = 0
+        for ch in blk:
+            d = _ALPHA.find(ch)
+            if d < 0:
+                return None
+            n = n * 58 + d
+        try:
+            out += n.to_bytes(size, "big")
+        except OverflowError:
+            return None
+    return out
+
+
+# Legacy Keccak-256 (pad byte 0x01), not NIST SHA3-256 (0x06) — hashlib.sha3_256 is WRONG here.
+# Proven in the stack suite against well-known public addresses (XMRig's and the Monero
+# project's donation addresses): a wrong digest fails their checksums.
+_RC = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808A, 0x8000000080008000,
+    0x000000000000808B, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+    0x000000000000008A, 0x0000000000000088, 0x0000000080008009, 0x000000008000000A,
+    0x000000008000808B, 0x800000000000008B, 0x8000000000008089, 0x8000000000008003,
+    0x8000000000008002, 0x8000000000000080, 0x000000000000800A, 0x800000008000000A,
+    0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
+]
+_ROT = [
+    [0, 36, 3, 41, 18],
+    [1, 44, 10, 45, 2],
+    [62, 6, 43, 15, 61],
+    [28, 55, 25, 21, 56],
+    [27, 20, 39, 8, 14],
+]
+_M = (1 << 64) - 1
+
+
+def _rol(v, r):
+    return ((v << r) | (v >> (64 - r))) & _M if r else v
+
+
+def _keccak_f(st):
+    for rc in _RC:
+        c = [st[x][0] ^ st[x][1] ^ st[x][2] ^ st[x][3] ^ st[x][4] for x in range(5)]
+        d = [c[(x - 1) % 5] ^ _rol(c[(x + 1) % 5], 1) for x in range(5)]
+        st = [[st[x][y] ^ d[x] for y in range(5)] for x in range(5)]
+        b = [[0] * 5 for _ in range(5)]
+        for x in range(5):
+            for y in range(5):
+                b[y][(2 * x + 3 * y) % 5] = _rol(st[x][y], _ROT[x][y])
+        st = [
+            [b[x][y] ^ ((~b[(x + 1) % 5][y]) & b[(x + 2) % 5][y]) for y in range(5)]
+            for x in range(5)
+        ]
+        st[0][0] ^= rc
+    return st
+
+
+def keccak256(data):
+    rate = 136  # bytes absorbed per permutation at 256-bit output
+    st = [[0] * 5 for _ in range(5)]
+    pad = bytearray(data)
+    pad.append(0x01)
+    while len(pad) % rate:
+        pad.append(0)
+    pad[-1] |= 0x80
+    for off in range(0, len(pad), rate):
+        for i in range(rate // 8):
+            st[i % 5][i // 5] ^= int.from_bytes(pad[off + 8 * i : off + 8 * i + 8], "little")
+        st = _keccak_f(st)
+    return b"".join(st[i % 5][i // 5].to_bytes(8, "little") for i in range(4))
+
+
+raw = b58_decode(sys.argv[1])
+if raw is None or len(raw) < 5:
+    print("invalid")
+    sys.exit(0)
+body, want = raw[:-4], raw[-4:]
+if keccak256(body)[:4] != want:
+    print("checksum")
+    sys.exit(0)
+# Mainnet network bytes, each with its one valid payload length (tag + spend key + view key,
+# integrated adds an 8-byte payment id). Any other tag is another network (testnet/stagenet).
+kind = {18: ("primary", 65), 19: ("integrated", 73), 42: ("subaddress", 65)}.get(body[0])
+if kind is None or len(body) != kind[1]:
+    print("invalid")
+    sys.exit(0)
+print(kind[0])
+PYEOF
 }
 
 # When the dashboard onion is enabled but no password is set, generate a strong one and save it to
@@ -3830,7 +3953,7 @@ parse_and_validate_config() {
     # combined check just below; also reject embedded whitespace here — no Tari address of either form
     # has an ASCII space, and a space isn't a control char so the central guard above misses it, yet it
     # would silently mine to a wrong address (the #250 failure mode). A subtler typo is the node's to
-    # reject at merge-mine time. [TODO: verify upstream — exact accepted form, to gate fully.]
+    # reject at merge-mine time — the DammSum checksum gate that would catch it here is #845.
     case "$TARI_WALLET" in
     *[[:space:]]*) error "tari.wallet_address contains whitespace — a Tari address (base58 or emoji) has none. Check for a stray space or line break in $CONFIG_FILE." ;;
     esac
@@ -3844,6 +3967,7 @@ parse_and_validate_config() {
     primary) ;;
     subaddress) error "monero.wallet_address is a SUBADDRESS (starts with 8). p2pool cannot pay subaddresses — use your PRIMARY/standard Monero address (starts with 4)." ;;
     integrated) error "monero.wallet_address is an INTEGRATED address. p2pool needs your plain PRIMARY address (95 chars, starts with 4)." ;;
+    checksum) error "monero.wallet_address ('${MONERO_WALLET:0:6}…') fails its checksum — at least one character is mistyped, and p2pool crashes on a mistyped address instead of mining. Re-copy the address from your wallet and try again." ;;
     *) error "monero.wallet_address ('${MONERO_WALLET:0:6}…', ${#MONERO_WALLET} chars) is not a valid Monero primary address (expected 95 chars starting with 4)." ;;
     esac
 
