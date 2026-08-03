@@ -678,7 +678,7 @@ function ExpectedVsActualCard({ summary }) {
       // the held tier. Two significant digits, same honesty rule as the Tari row. "—" while the
       // aggregate is missing or stale — never a guess.
       expected:
-        xvb.expected_wins_30d !== null && xvb.expected_wins_30d !== undefined
+        xvb.expected_wins_30d != null
           ? `≈ ${Number(xvb.expected_wins_30d.toPrecision(2))} wins`
           : "—",
       actual:

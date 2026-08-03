@@ -1555,9 +1555,8 @@ def xvb_realization(payouts, raffle_wins, xvb_day, expected_wins_day, now=None):
     average rode the round minimum; the published figures assume 1.0. Returns
     ``(fraction clamped to [0, 1], wins measured)``, or None (callers fall back to the published
     number, labeled face value) when either side is missing or fewer than
-    ``_XVB_REALIZATION_MIN_WINS`` wins are measurable.
+    ``_XVB_REALIZATION_MIN_WINS`` wins are measurable."""
     # ponytail: one factor across tiers and eras — per-tier factors if a tier change muddies it.
-    """
     if not payouts or not raffle_wins or not xvb_day or not expected_wins_day:
         return None
     now = now if now is not None else time.time()
