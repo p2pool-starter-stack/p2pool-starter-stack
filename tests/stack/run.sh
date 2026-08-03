@@ -8959,6 +8959,117 @@ rm -rf "$RSMTMP"
 unset RSM RSMTMP
 unset -f rsm rsm_field
 
+echo "== black-box: config-reset clears config, keeps the chains (appliance two-tier reset) =="
+# A throwaway deployment: config.json + rendered files + data dirs. docker is a noop; the reboot is
+# a stub that just records that it fired, so we assert the reboot without rebooting the runner.
+CR="$SANDBOX/config-reset"
+mkdir -p "$CR/bin" "$CR/data/monero" "$CR/data/tor"
+cp "$STACK" "$CR/pithead"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$CR/bin/docker"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$CR/bin/sudo"
+chmod +x "$CR/bin/docker" "$CR/bin/sudo"
+seed_cr() {
+    printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"T"} }\n' "$WALLET" >"$CR/config.json"
+    printf 'DEPLOYMENT_COMPLETED=true\nHOST_IP=box.lan\n' >"$CR/.env"
+    : >"$CR/Caddyfile"
+    : >"$CR/data/monero/blockchain" # stand-in for the synced chain
+    : >"$CR/data/tor/hostname"      # stand-in for the onion key material
+}
+# Wrong confirmation word: aborts, changes nothing.
+seed_cr
+out=$(cd "$CR" && printf 'nope\n' | PITHEAD_APPLIANCE=0 PATH="$CR/bin:$PATH" ./pithead config-reset 2>&1) || true
+assert_contains "config-reset aborts on the wrong confirm word" "$out" "Aborted"
+assert_eq "aborted config-reset keeps config.json" "$([ -f "$CR/config.json" ] && echo yes)" "yes"
+# -y off the appliance: config + rendered files go, data dirs stay, no reboot — just the hint.
+seed_cr
+rebooted="$CR/.rebooted"
+rm -f "$rebooted"
+out=$(cd "$CR" && PITHEAD_APPLIANCE=0 PITHEAD_REBOOT_CMD="touch $rebooted" PATH="$CR/bin:$PATH" ./pithead config-reset -y 2>&1)
+assert_rc "config-reset succeeds" "$?" "0"
+assert_eq "config-reset removes config.json" "$([ -f "$CR/config.json" ] || echo gone)" "gone"
+assert_eq "config-reset removes .env" "$([ -f "$CR/.env" ] || echo gone)" "gone"
+assert_eq "config-reset removes Caddyfile" "$([ -f "$CR/Caddyfile" ] || echo gone)" "gone"
+assert_eq "config-reset KEEPS the monero chain" "$([ -f "$CR/data/monero/blockchain" ] && echo kept)" "kept"
+assert_eq "config-reset KEEPS the Tor onion key" "$([ -f "$CR/data/tor/hostname" ] && echo kept)" "kept"
+assert_eq "config-reset off the appliance does not reboot" "$([ -f "$rebooted" ] || echo no)" "no"
+assert_contains "config-reset hints how to reconfigure" "$out" "firstboot-wizard"
+# On the appliance: same wipe, but it reboots into first-boot setup.
+seed_cr
+rm -f "$rebooted"
+out=$(cd "$CR" && PITHEAD_APPLIANCE=1 PITHEAD_REBOOT_CMD="touch $rebooted" PATH="$CR/bin:$PATH" ./pithead config-reset -y 2>&1)
+assert_eq "config-reset on the appliance reboots into firstboot" "$([ -f "$rebooted" ] && echo yes)" "yes"
+# Already unprovisioned: nothing to reset.
+out=$(cd "$CR" && PITHEAD_APPLIANCE=1 PATH="$CR/bin:$PATH" ./pithead config-reset -y 2>&1) || true
+assert_contains "config-reset refuses when config.json is absent" "$out" "already unprovisioned"
+out=$(cd "$CR" && PATH="$CR/bin:$PATH" ./pithead config-reset --bogus 2>&1) || true
+assert_contains "config-reset rejects unknown options" "$out" "Unknown option"
+
+echo "== black-box: factory-reset arms the boot-time wipe, appliance-only (two-tier reset) =="
+FR="$SANDBOX/factory-reset"
+mkdir -p "$FR/bin" "$FR/esp"
+cp "$STACK" "$FR/pithead"
+marker="$FR/esp/pithead-reset"
+rebooted="$FR/.rebooted"
+# Off the appliance: refuse, arm nothing, point at uninstall.
+rm -f "$marker" "$rebooted"
+out=$(cd "$FR" && PITHEAD_APPLIANCE=0 PITHEAD_PRESEED_DIR="$FR/esp" PITHEAD_REBOOT_CMD="touch $rebooted" PATH="$FR/bin:$PATH" ./pithead factory-reset -y 2>&1) || true
+assert_contains "factory-reset off the appliance refuses" "$out" "only runs on the appliance"
+assert_eq "refused factory-reset arms no marker" "$([ -f "$marker" ] || echo none)" "none"
+# Wrong confirmation word on the appliance: aborts, arms nothing.
+out=$(cd "$FR" && printf 'nope\n' | PITHEAD_APPLIANCE=1 PITHEAD_PRESEED_DIR="$FR/esp" PITHEAD_REBOOT_CMD="touch $rebooted" PATH="$FR/bin:$PATH" ./pithead factory-reset 2>&1) || true
+assert_contains "factory-reset aborts on the wrong confirm word" "$out" "Aborted"
+assert_eq "aborted factory-reset arms no marker" "$([ -f "$marker" ] || echo none)" "none"
+# -y on the appliance: BATTERY — the marker is written AND the reboot fires (both, or the wipe
+# either never runs or never reaches the boot that runs it).
+rm -f "$marker" "$rebooted"
+out=$(cd "$FR" && PITHEAD_APPLIANCE=1 PITHEAD_PRESEED_DIR="$FR/esp" PITHEAD_REBOOT_CMD="touch $rebooted" PATH="$FR/bin:$PATH" ./pithead factory-reset -y 2>&1)
+assert_rc "factory-reset succeeds" "$?" "0"
+assert_eq "factory-reset arms the ESP marker AND reboots" \
+    "$([ -f "$marker" ] && [ -f "$rebooted" ] && echo armed-and-rebooting)" "armed-and-rebooting"
+# ESP not writable: refuse loudly, reboot nothing (a box that quietly did nothing is the trap).
+rm -f "$rebooted"
+out=$(cd "$FR" && PITHEAD_APPLIANCE=1 PITHEAD_PRESEED_DIR="$FR/no-such-esp" PITHEAD_REBOOT_CMD="touch $rebooted" PATH="$FR/bin:$PATH" ./pithead factory-reset -y 2>&1) || true
+assert_contains "factory-reset refuses when the ESP marker cannot be written" "$out" "Could not arm"
+assert_eq "unarmable factory-reset does not reboot" "$([ -f "$rebooted" ] || echo no)" "no"
+
+echo "== unit: pithead-data-reset decides reformat-vs-skip fail-safe (wedged-/data recovery) =="
+# Source the boot script (functions only — its main is guarded) and drive data_reset_decision with
+# a stubbed mount/fsck, in a subshell so its set -u / defs never leak into the suite.
+DR="$SANDBOX/data-reset"
+mkdir -p "$DR/bin"
+# mount: MOUNT_MODE=ok always mounts; fail never; repair fails the first call then mounts (fsck fixed
+# it). A counter file makes 'repair' stateful across the two calls in data_mountable.
+cat >"$DR/bin/mount" <<'EOF'
+#!/usr/bin/env bash
+case "${MOUNT_MODE:-ok}" in
+  ok) exit 0 ;;
+  fail) exit 1 ;;
+  repair)
+    n=$(cat "${MOUNT_COUNTER:-/dev/null}" 2>/dev/null || echo 0)
+    echo $((n + 1)) >"${MOUNT_COUNTER:-/dev/null}" 2>/dev/null || true
+    [ "$n" -ge 1 ] && exit 0 || exit 1 ;;
+esac
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' >"$DR/bin/umount"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$DR/bin/fsck"
+chmod +x "$DR/bin/mount" "$DR/bin/umount" "$DR/bin/fsck"
+decide() { # $1 marker-file, $2 mount-mode
+    (
+        export PATH="$DR/bin:$PATH"
+        export MOUNT_MODE="$2" # exported: the stubbed mount runs as a child process
+        export MOUNT_COUNTER="$DR/counter"
+        : >"$MOUNT_COUNTER"
+        # shellcheck disable=SC1090
+        source "$ROOT/os/overlay/pithead-data-reset"
+        data_reset_decision "/dev/fake-data" "$1"
+    )
+}
+touch "$DR/marker-present"
+assert_eq "marker present -> reformat-requested (even if /data would mount)" "$(decide "$DR/marker-present" ok)" "reformat-requested"
+assert_eq "no marker + /data mounts clean -> skip (fail-safe: never touch a healthy partition)" "$(decide "$DR/no-marker" ok)" "skip"
+assert_eq "no marker + /data wedged after fsck -> reformat-wedged (recovery)" "$(decide "$DR/no-marker" fail)" "reformat-wedged"
+assert_eq "no marker + fsck repairs the mount -> skip (recoverable /data is never wiped)" "$(decide "$DR/no-marker" repair)" "skip"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

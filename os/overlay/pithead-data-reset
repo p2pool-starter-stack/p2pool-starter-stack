@@ -1,0 +1,142 @@
+#!/bin/bash
+# Reformat /data BEFORE it mounts — the executor for `pithead factory-reset` and the recovery path
+# for a wedged data partition. Runs one layer under the running system precisely because a mounted
+# /data (holding the container store and the /var overlay's upper/work dirs) cannot be reformatted.
+#
+# Two triggers, both fail-safe:
+#   1. Factory reset requested — a `pithead-reset` marker sits on the ESP. The host CLI writes it
+#      (the marker lives on the ESP, not /data, so it survives the wipe) and reboots here.
+#   2. Wedged /data — the partition exists but will not mount even after an fsck. A shell-less
+#      release image with root locked has no other way back; the alternative is a bricked box.
+#
+# The guard that matters: a data partition that mounts cleanly and carries no marker is NEVER
+# touched. We only ever reformat on an explicit request or a genuinely unmountable partition, and
+# a fsck pass runs first so a transient/dirty filesystem is repaired rather than erased. Fail safe
+# — never wipe a recoverable /data.
+set -uo pipefail
+
+MARKER_NAME="pithead-reset"
+# The dirs systemd-repart seeds at format time (os/rootfs/repart.d/40-data.conf). repart only runs
+# MakeDirectories when IT formats a partition, so when we reformat we reseed them ourselves — the
+# /var overlay's upperdir/workdir must exist before /var mounts, or the box boots with no writable
+# /var. Keep this list in lockstep with 40-data.conf.
+SEED_DIRS="/overlay/var /overlay/var-work /pithead"
+
+# stderr, not stdout: data_reset_decision's STDOUT is its verdict and the caller captures it with
+# $(...). A progress line on stdout would ride along inside the captured value, match no `case`
+# branch, and silently skip the recovery reformat — the wedged box would stay wedged. The journal
+# gets stderr from a unit exactly as it gets stdout, so nothing is lost by moving it.
+log() { echo "pithead-data-reset: $*" >&2; }
+
+# The data and ESP partitions on the disk the system booted from — the same derivation
+# pithead-mount-generator uses (never by label: every pithead disk carries the same labels, so a
+# stick + an installed disk present together make LABEL=data ambiguous). Partition numbers are
+# fixed by the layout: 1 = ESP, 4 = data.
+boot_disk_part() { # $1: partition number -> prints /dev/node, or nothing
+    local rootsrc disk sep
+    rootsrc=$(findmnt -no SOURCE / 2>/dev/null) || return 1
+    case "$rootsrc" in /dev/*) ;; *) return 1 ;; esac
+    disk=$(printf '%s' "$rootsrc" | sed -E 's/[0-9]+$//; s/(^.*[0-9])p$/\1/')
+    case "$disk" in *[0-9]) sep="p" ;; *) sep="" ;; esac
+    printf '%s%s%s' "$disk" "$sep" "$1"
+}
+
+# Read-only probe mount (so it never dirties the fs), cleaned up either way. rc mirrors the mount.
+try_mount_ro() { # $1: partition
+    local mnt
+    mnt=$(mktemp -d) || return 1
+    if mount -o ro "$1" "$mnt" 2>/dev/null; then
+        umount "$mnt" 2>/dev/null || true
+        rmdir "$mnt" 2>/dev/null || true
+        return 0
+    fi
+    rmdir "$mnt" 2>/dev/null || true
+    return 1
+}
+
+# Can the data partition be mounted? Tries once, runs a non-interactive fsck repair, tries again.
+# rc 0 = mountable (healthy or repaired), rc 1 = wedged.
+data_mountable() { # $1: data partition
+    try_mount_ro "$1" && return 0
+    log "$1 did not mount — attempting fsck repair before deciding anything"
+    fsck -p -t ext4 "$1" >/dev/null 2>&1 || true
+    try_mount_ro "$1"
+}
+
+# The whole decision, isolated so it is testable with stubbed mount/fsck. Echoes exactly one of:
+#   skip                 healthy partition, no request — touch nothing (the fail-safe default)
+#   reformat-requested   the factory-reset marker is present
+#   reformat-wedged      the partition will not mount even after fsck
+data_reset_decision() { # $1: data partition, $2: marker file path
+    if [ -f "$2" ]; then
+        echo reformat-requested
+        return 0
+    fi
+    if data_mountable "$1"; then
+        echo skip
+        return 0
+    fi
+    echo reformat-wedged
+}
+
+# Reformat the data partition and reseed the dirs repart would have. DESTRUCTIVE — only ever
+# reached from data_reset_decision's reformat verdicts.
+reformat_data() { # $1: data partition
+    local part="$1" mnt d
+    log "reformatting $part (ext4, label 'data')"
+    mkfs.ext4 -q -F -L data "$part" || {
+        log "mkfs failed on $part — leaving it as-is"
+        return 1
+    }
+    mnt=$(mktemp -d) || return 1
+    if mount "$part" "$mnt" 2>/dev/null; then
+        for d in $SEED_DIRS; do mkdir -p "$mnt$d"; done
+        umount "$mnt" 2>/dev/null || true
+    fi
+    rmdir "$mnt" 2>/dev/null || true
+}
+
+main() {
+    local data_part esp_part esp_mnt marker verdict
+    data_part=$(boot_disk_part 4) || {
+        log "could not resolve the data partition from the boot disk — doing nothing"
+        return 0
+    }
+    [ -b "$data_part" ] || {
+        log "$data_part is not a block device yet (first boot?) — doing nothing"
+        return 0
+    }
+
+    # Read (and later clear) the factory-reset marker on the ESP. The ESP is not mounted this early,
+    # so mount it ourselves; if it will not mount we simply have no marker to act on.
+    esp_part=$(boot_disk_part 1) || esp_part=""
+    esp_mnt=$(mktemp -d)
+    marker=""
+    if [ -n "$esp_part" ] && [ -b "$esp_part" ] && mount "$esp_part" "$esp_mnt" 2>/dev/null; then
+        marker="$esp_mnt/$MARKER_NAME"
+    fi
+
+    verdict=$(data_reset_decision "$data_part" "${marker:-/nonexistent}")
+    case "$verdict" in
+    skip)
+        log "$data_part is healthy and no reset was requested — leaving it untouched"
+        ;;
+    reformat-requested)
+        log "factory-reset requested — wiping $data_part"
+        reformat_data "$data_part"
+        # Consume the marker so the wipe is one-shot, never a reboot loop.
+        [ -n "$marker" ] && rm -f "$marker" 2>/dev/null || true
+        ;;
+    reformat-wedged)
+        log "$data_part is unmountable even after fsck — reinitializing it so the box can recover"
+        reformat_data "$data_part"
+        ;;
+    esac
+
+    if mountpoint -q "$esp_mnt" 2>/dev/null; then umount "$esp_mnt" 2>/dev/null || true; fi
+    rmdir "$esp_mnt" 2>/dev/null || true
+    return 0
+}
+
+# Sourceable for the test suite (functions only); runs main only when executed directly.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi

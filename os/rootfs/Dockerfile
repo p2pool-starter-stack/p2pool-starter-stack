@@ -172,10 +172,16 @@ COPY os/overlay/pithead-sync /usr/local/sbin/pithead-sync
 COPY os/overlay/pithead-mount-generator /usr/lib/systemd/system-generators/pithead-mount-generator
 COPY os/overlay/pithead-boot.service /etc/systemd/system/pithead-boot.service
 COPY os/overlay/pithead-boot /usr/local/sbin/pithead-boot
+# The two-tier reset's deep tier and the wedged-/data recovery path: reformats /data before it
+# mounts, either on a `pithead factory-reset` request (ESP marker) or when the partition is
+# genuinely unmountable. Ordered before data.mount by its unit — the wipe cannot run once /data is
+# in use — and fail-safe: a healthy, unmarked partition is never touched.
+COPY os/overlay/pithead-data-reset.service /etc/systemd/system/pithead-data-reset.service
+COPY os/overlay/pithead-data-reset /usr/local/sbin/pithead-data-reset
 # CPU governor: hold the cores at performance every boot (mining appliance tuning). Oneshot, and
 # a no-op on a box with no cpufreq — see the unit for the RigForge co-location note.
 COPY os/overlay/pithead-cpu-governor.service /etc/systemd/system/pithead-cpu-governor.service
-RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/lib/systemd/system-generators/pithead-mount-generator
+RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-data-reset /usr/lib/systemd/system-generators/pithead-mount-generator
 # The updater is chosen per image (bake-off candidates). rugix-ctrl arrives via the bakery layer's
 # core recipe; RAUC is a Debian package, so it is installed here when selected.
 ARG PITHEAD_UPDATER=""
@@ -208,6 +214,7 @@ RUN sed -i 's/^#\?use-ipv6=.*/use-ipv6=no/' /etc/avahi/avahi-daemon.conf
 RUN systemctl enable podman.socket pithead-boot.service pithead-cpu-governor.service avahi-daemon \
         systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
+        pithead-data-reset.service \
     && systemctl disable ssh
 # systemd-repart.service is static — it is pulled in by sysinit.target, and `systemctl enable` on a
 # static unit is an error that would fail the build. Assert it is present instead.
