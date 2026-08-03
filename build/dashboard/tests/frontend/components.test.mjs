@@ -1103,6 +1103,26 @@ test('ExpectedVsActualCard counts Tari blocks and windows XvB wins (#808)', () =
     assert.doesNotMatch(renderApp({ state: s }), /XvB wins \(30d\)/);
 });
 
+test('disabled XvB de-emphasizes: no stats card, no header split line, no hero raffle slots', () => {
+    // One mention — the mode badge — is enough on a non-donating box. The stats card, the
+    // header's routed-split line, and the two hero raffle KPIs all stand down with it.
+    const s = clone();
+    assert.match(renderApp({ state: s }), /XvB Donation Stats/); // fixture has XvB on
+    assert.match(renderApp({ state: s }), /XvB \(routed\):/);
+    s.xvb_calc = { enabled: false };
+    const off = renderApp({ state: s });
+    assert.doesNotMatch(off, /XvB Donation Stats/);
+    assert.doesNotMatch(off, /XvB \(routed\):/);
+    assert.doesNotMatch(off, /Raffle Eligible/);
+    assert.doesNotMatch(off, /XvB Tier</);
+});
+
+test('raffle wins render inside the scroll-capped list wrapper', () => {
+    // The wins log is what made the XvB card the tallest in its grid row (whitespace under every
+    // neighbour) — the wrapper carries the max-height cap.
+    assert.match(renderApp({ state: clone() }), /class="raffle-wins-list"/);
+});
+
 test('ExpectedVsActualCard forecasts XvB wins from the winners feed, dash when unmeasured (#866)', () => {
     const s = clone();
     s.earnings_summary.xvb = {

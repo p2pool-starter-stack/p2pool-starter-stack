@@ -545,6 +545,14 @@ tr:last-child td {
   padding: 24px 12px;
   text-align: center;
 }
+/* The wins log is capped at 20 rows of data, but even a dozen rows made the XvB card the tallest
+ * thing in its grid row — and grid rows are as tall as their tallest card, so every neighbour
+ * trailed white space (#817's align-items:start stops the stretch, not the row height). Cap the
+ * list at roughly six rows and scroll the rest. */
+.raffle-wins-list {
+  max-height: 120px;
+  overflow-y: auto;
+}
 .workers-empty code {
   font-family: monospace;
 }

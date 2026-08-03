@@ -131,10 +131,13 @@ A strip of headline KPIs sits below the top bar:
 |---|---|
 | **Total Hashrate** | Your combined hashrate across all workers. |
 | **Shares in Window** | Shares you currently hold in the P2Pool PPLNS window (green when above zero). |
-| **Raffle Eligible** | Whether you'd actually win **and** collect an XvB raffle payout: green **Yes**, red **No**, or muted **N/A** when XvB is off. (Full definition in [Overview](#overview).) |
+| **Raffle Eligible** | Whether you'd actually win **and** collect an XvB raffle payout: green **Yes**, red **No**. (Full definition in [Overview](#overview).) |
 | **Blocks Found** | P2Pool sidechain blocks your node has found. |
 | **XvB Tier** | The donation tier you're currently holding. |
 | **Mining Mode** | What your hashrate is routed to right now: P2Pool, XvB, or a split. |
+
+While XvB is disabled the two raffle KPIs stand down entirely — the mode badge already says XvB
+is off, and a strip of **N/A** and **None** would just repeat it.
 
 ### Mine cart train
 
@@ -259,6 +262,10 @@ The summary panel pulls the key numbers together:
 | **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
 | **Wallet XMR / Wallet TARI** | Your configured Monero and Tari payout addresses, one card each. |
 
+While XvB is disabled the five raffle/split tiles (Current Tier, Raffle Eligible, Target Tier,
+XvB routed averages) drop out of the card, along with the header's XvB routed line and the whole
+*XvB Donation Stats* card — one mode badge says XvB is off; nothing else repeats it.
+
 ### Earnings — Expected vs Actual
 
 One compact table, shown in **both** views, that answers "am I earning what this hashrate should?"
@@ -269,7 +276,7 @@ trailing **30-day** window:
 |---|---|---|
 | **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** the XvB share for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). Once enough of your wins have confirmed payouts to measure, the XvB share is XvB's published figure **scaled to what your wins actually paid** — the tooltip names the measured percentage and sample. Until then the published face value stands, and the tooltip says it is an upper bound. | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
 | **Tari (30d)** | Expected **blocks** (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
-| **XvB wins (30d)** | Forecast wins for your tier, from XvB's own winners file: how often your tier's rounds are drawn ÷ how many qualifiers they have (summed with the lower donor rounds you also qualify for). `—` while the file hasn't been read or has gone stale. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
+| **XvB wins (30d)** | Forecast wins for your tier, from XvB's own winners file: how often your tier's rounds are drawn ÷ how many qualifiers they have (summed with the lower donor rounds you also qualify for). While no tier is held yet — a fleet still ramping, or an operator weighing whether donating is worth it — the forecast uses your **target** tier instead. `—` while the file hasn't been read or has gone stale. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
 
 Monero and XvB share one row **on both sides** deliberately: an XvB win pays out through ordinary
 small payouts that can't be told apart from P2Pool payouts, so the confirmed actual always
