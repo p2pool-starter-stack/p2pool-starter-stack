@@ -1,0 +1,21 @@
+[Unit]
+Description=Reformat /data on factory-reset request or when it is wedged — before it mounts
+# Runs in the early-boot local-fs transaction, with no default ordering, so it can act on the data
+# partition BEFORE anything mounts it: a mounted /data (container store + the /var overlay's
+# upper/work dirs) cannot be reformatted. systemd-repart creates the partition on first boot, so we
+# wait for it; then we go strictly before /data (and therefore before the /var overlay, which has
+# x-systemd.requires-mounts-for=/data) so a reformat + reseed lands before any consumer.
+DefaultDependencies=no
+After=systemd-repart.service
+Before=data.mount local-fs.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/pithead-data-reset
+
+[Install]
+# Pulled into the same transaction that mounts /data, so it is scheduled (and ordered before) it.
+WantedBy=local-fs.target

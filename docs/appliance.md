@@ -255,6 +255,34 @@ install-then-fall-back protection as any other update. The practical consequence
 an old image keeps running fine, but it keeps the old image's known holes too. The base
 system is Debian 13, which receives security support upstream into 2030.
 
+## Starting over: the two resets
+
+There are two ways to reset the machine, and the difference between them is days of your
+time. Both run from a shell — log in at the console as `root` with the dashboard password
+(the appliance has no uninstall; these resets are its equivalents).
+
+**Config reset** clears your settings and reopens the setup wizard, and keeps everything
+else. The synced chain, your wallet, the Tor onion keys and your dashboard history all
+stay on the machine, so the wizard opens on a box that is still fully synced — you re-enter
+your answers and it is running again in minutes, at the same onion address. Reach for this
+when you want to change a setting the wizard owns, or hand the machine to someone else
+without a resync.
+
+```
+pithead config-reset
+```
+
+**Factory reset** erases the whole data area — chain, wallet, Tor keys, settings, all of
+it — and reboots to a blank setup wizard, exactly as the machine shipped. The resync that
+follows takes days, so use config reset first unless you truly want nothing kept.
+
+```
+pithead factory-reset
+```
+
+Both ask you to type the reset name before they do anything. The machine reboots itself
+into setup when the reset is done.
+
 ## If something goes wrong
 
 **The machine will not boot from the stick.** Almost always Secure Boot — disable it in

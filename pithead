@@ -2381,6 +2381,98 @@ reset_dashboard() {
     fi
 }
 
+# --- Two-tier reset (config / factory) -----------------------------------------------------------
+# The appliance has no uninstall — its equivalents are these two reset tiers. A full wipe costs
+# days of chain resync, so config-reset is the cheap tier: clear the configuration, keep every
+# data directory. factory-reset is the deep one: wipe /data back to a blank machine.
+
+# On the appliance, reboot into the first-boot path; elsewhere, just say what to run by hand. The
+# reboot command is overridable so the test suite can assert it fires without rebooting the runner.
+reset_reboot_or_hint() {
+    if is_appliance; then
+        _console "Rebooting into first-boot setup..."
+        ${PITHEAD_REBOOT_CMD:-systemctl reboot} ||
+            warn "Reboot command failed — reboot the machine by hand to reach the setup wizard."
+    else
+        log "Reconfigure with '$0 firstboot-wizard' (or '$0 setup') when you're ready."
+    fi
+}
+
+# config-reset: back to unprovisioned, chains kept. Removing config.json is the whole mechanism —
+# pithead-firstboot's ConditionPathExists=!config.json re-arms the wizard, and pithead-boot's
+# opposite condition stands down. Every data directory (chains, Tor onion keys, wallets, dashboard
+# history) stays: only config.json and the files rendered from it go, so reconfiguring costs no
+# resync and the onion address survives.
+config_reset() {
+    local assume_yes=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+        -y | --yes) assume_yes=1 ;;
+        *) error "Unknown option for config-reset: $arg. Run '$0 help'." ;;
+        esac
+    done
+    [ -f "$CONFIG_FILE" ] ||
+        error "No $CONFIG_FILE here — already unprovisioned. The setup wizard opens on its own when config.json is absent."
+
+    echo -e "${C_RED}[WARNING] This is a DESTRUCTIVE action.${C_RESET}"
+    echo "It clears your configuration and reopens the setup wizard."
+    log "Kept: chains, wallets, Tor onion keys, dashboard history — every data directory stays. Only config.json and the files rendered from it go."
+    if [ "$assume_yes" -eq 0 ]; then
+        printf "Type 'config-reset' to continue: "
+        read -r arg || true
+        [ "$arg" = "config-reset" ] || {
+            log "Aborted — nothing changed."
+            return 1
+        }
+    fi
+
+    detect_os 2>/dev/null || true
+    docker compose down --remove-orphans 2>/dev/null ||
+        warn "compose down failed (engine not running?) — continuing with the config wipe."
+    remove_tor_egress_firewall 2>/dev/null || true
+    rm -f "$CONFIG_FILE" "$ENV_FILE" Caddyfile
+    log "Configuration cleared — the first-boot wizard owns the next boot."
+    reset_reboot_or_hint
+}
+
+# factory-reset: the deep wipe. /data cannot be reformatted while it is mounted and holding the
+# container store and the /var overlay, so the wipe runs one layer down: a marker on the ESP (which
+# survives the wipe) arms pithead-data-reset, which reformats /data before it mounts on the next
+# boot, then the box comes up blank into the wizard. Appliance-only — a normal install's clean exit
+# is 'uninstall', where the operator owns the data dirs and can remove them deliberately.
+factory_reset() {
+    local assume_yes=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+        -y | --yes) assume_yes=1 ;;
+        *) error "Unknown option for factory-reset: $arg. Run '$0 help'." ;;
+        esac
+    done
+    is_appliance ||
+        error "factory-reset wipes the appliance data partition and only runs on the appliance. On a normal install, 'uninstall' is the clean exit — it keeps your data dirs for you to remove yourself."
+
+    echo -e "${C_RED}[WARNING] This ERASES EVERYTHING on the data partition.${C_RESET}"
+    echo "Chains, wallets, Tor onion keys, dashboard history, and all settings go. The box reboots"
+    echo "to a blank setup wizard, and the chain resync that follows costs days."
+    if [ "$assume_yes" -eq 0 ]; then
+        printf "Type 'factory-reset' to continue: "
+        read -r arg || true
+        [ "$arg" = "factory-reset" ] || {
+            log "Aborted — nothing changed."
+            return 1
+        }
+    fi
+
+    # Arm the boot-time wipe. The marker lives on the ESP, not /data, precisely because /data is
+    # what gets erased. If the ESP is not writable the wipe cannot be armed, so refuse loudly
+    # rather than reboot into a box that quietly did nothing.
+    local marker="$PRESEED_DIR/pithead-reset"
+    : >"$marker" 2>/dev/null ||
+        error "Could not arm the reset marker at $marker (ESP not mounted?) — nothing was wiped."
+    log "Reset armed. Rebooting to reformat /data and reopen the wizard..."
+    reset_reboot_or_hint
+}
+
 # --- Backup / Restore ---
 # Protect the irreplaceable bits: config.json, .env (secrets), the Caddyfile, and the Tor
 # data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
@@ -2724,6 +2816,18 @@ Inspection:
 Maintenance:
   reset-dashboard [-y|--yes]
                             DESTRUCTIVE: wipe and recreate dashboard/p2pool data.
+                              -y, --yes        skip the confirmation prompt.
+  config-reset [-y|--yes]   DESTRUCTIVE: clear the configuration and reopen the setup wizard,
+                            keeping every data directory — chains, wallets, Tor onion keys, and
+                            dashboard history all stay, so reconfiguring costs no resync. Removes
+                            config.json and the files rendered from it, then (on the appliance)
+                            reboots into first-boot setup. Type-to-confirm unless -y.
+                              -y, --yes        skip the confirmation prompt.
+  factory-reset [-y|--yes]  DESTRUCTIVE (appliance only): erase the whole data partition back to
+                            a blank machine — chains, wallets, Tor keys, and settings all go — then
+                            reboot into the setup wizard. The chain resync that follows costs days;
+                            reach for config-reset first. On a normal install, 'uninstall' is the
+                            clean exit instead. Type-to-confirm unless -y.
                               -y, --yes        skip the confirmation prompt.
   backup [--with-chains] [--no-encrypt] [-y|--yes]
                             Write a timestamped, chmod-600 archive under backups/ holding the
@@ -7377,7 +7481,7 @@ apply() {
 # Every dispatchable subcommand, in help order. main's dispatch, the chain validator, and the
 # tab-completion script (pithead-completion.bash) key off this one list; tests/stack/run.sh fails
 # if any of the three drift apart.
-readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard backup restore uninstall firstboot-wizard load-images local-miner os-update control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
+readonly PITHEAD_COMMANDS="setup apply render up down restart upgrade logs status doctor support-bundle reset-dashboard config-reset factory-reset backup restore uninstall firstboot-wizard load-images local-miner os-update control-run-pending onion-client-key rotate-dashboard-onion rotate-secrets render-quadlet version help"
 # The subset allowed in a chain: commands that take no positional argument and terminate on their
 # own. Excluded: setup (interactive first-run), logs (follows until Ctrl+C), restore (needs an
 # archive path), reset-dashboard (destructive — run it deliberately, alone), and the one-shot
@@ -8831,6 +8935,8 @@ main() {
         require_deployed
         reset_dashboard "$@"
         ;;
+    config-reset) config_reset "$@" ;;
+    factory-reset) factory_reset "$@" ;;
     backup) stack_backup "$@" ;;
     restore) stack_restore "$@" ;;
     uninstall) stack_uninstall "$@" ;;
