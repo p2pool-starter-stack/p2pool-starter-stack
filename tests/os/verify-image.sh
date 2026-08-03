@@ -97,6 +97,18 @@ chk "pithead-boot script present and executable" 'test -x "$ROOT/usr/local/sbin/
 chk "podman-restart retired (it killed the stack it started)" '[ ! -e "$ROOT/etc/systemd/system/multi-user.target.wants/podman-restart.service" ] && [ ! -e "$ROOT/etc/systemd/system/podman-restart.service.d" ]'
 chk "kernel + initrd in the slot" '[ -s "$ROOT/vmlinuz" ] || [ -L "$ROOT/vmlinuz" ]'
 
+echo "==> unattended auto-heal (soft hang the container/panic paths cannot catch)"
+# systemd watchdog: a wedged kernel/init on a headless box is what /dev/watchdog exists for. We
+# assert the CONFIG is baked, not that a hang reboots — no CI/KVM watchdog device to prove that.
+chk "watchdog drop-in baked" '[ -s "$ROOT/etc/systemd/system.conf.d/pithead-watchdog.conf" ]'
+chk "RuntimeWatchdogSec set" 'grep -q "^RuntimeWatchdogSec=" "$ROOT/etc/systemd/system.conf.d/pithead-watchdog.conf"'
+chk "RebootWatchdogSec set (reboot itself is watched)" 'grep -q "^RebootWatchdogSec=" "$ROOT/etc/systemd/system.conf.d/pithead-watchdog.conf"'
+# CPU governor: performance held every boot; a no-op where there is no cpufreq, so this asserts
+# the unit is present and enabled, not the runtime governor value.
+chk "cpu-governor unit present" '[ -s "$ROOT/etc/systemd/system/pithead-cpu-governor.service" ]'
+chk "cpu-governor unit enabled" 'test -L "$ROOT/etc/systemd/system/multi-user.target.wants/pithead-cpu-governor.service"'
+chk "cpu-governor asks for performance" 'grep -q "frequency-set -g performance" "$ROOT/etc/systemd/system/pithead-cpu-governor.service"'
+
 echo "==> docker-export artefacts (all six members)"
 chk "no /.dockerenv" '[ ! -e "$ROOT/.dockerenv" ]'
 chk "pseudo-fs mount points exist" '[ -d "$ROOT/proc" ] && [ -d "$ROOT/sys" ] && [ -d "$ROOT/dev" ] && [ -d "$ROOT/run" ]'
