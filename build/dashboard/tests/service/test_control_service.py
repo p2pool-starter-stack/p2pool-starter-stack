@@ -24,6 +24,15 @@ CONFIG = {
     "telegram": {"bot_token": "123:abc"},
     "workers": {"api_token": ""},
     "healthchecks": {"ping_url": "https://hc-ping.com/SECRET-UUID"},
+    "notifications": {
+        "webhooks": [
+            "https://hooks.example/SECRET-HOOKA",
+            "",
+            "https://hooks.example/SECRET-HOOKB",
+        ],
+        "ntfy": {"url": "https://ntfy.example/SECRET-NTFYURL", "token": "SECRET-NTFYTOKEN"},
+        "tor": True,
+    },
 }
 
 
@@ -60,6 +69,23 @@ class TestSecretMasking:
         assert "hunter2" not in json.dumps(cfg)
         assert "correct horse" not in json.dumps(cfg)
         assert "SECRET-UUID" not in json.dumps(cfg)
+
+    def test_notification_secrets_masked(self, spool):
+        # ntfy url/token and each set notifications.webhooks[] entry are bearer credentials (#848):
+        # the whole webhook URL is the secret (query strings carry tokens), so mask entry by entry.
+        cfg = control_service.read_config()
+        assert cfg["notifications"]["ntfy"]["url"] == {"__secret__": True}
+        assert cfg["notifications"]["ntfy"]["token"] == {"__secret__": True}
+        assert cfg["notifications"]["webhooks"][0] == {"__secret__": True}
+        assert cfg["notifications"]["webhooks"][2] == {"__secret__": True}
+        # A blank webhook entry stays blank; the non-secret tor flag survives.
+        assert cfg["notifications"]["webhooks"][1] == ""
+        assert cfg["notifications"]["tor"] is True
+        # No raw notification secret survives anywhere in the served payload.
+        assert "SECRET-HOOKA" not in json.dumps(cfg)
+        assert "SECRET-HOOKB" not in json.dumps(cfg)
+        assert "SECRET-NTFYURL" not in json.dumps(cfg)
+        assert "SECRET-NTFYTOKEN" not in json.dumps(cfg)
 
     def test_empty_secret_stays_empty(self, spool):
         # An UNSET secret is served as-is so the UI can tell "set" from "not set".

@@ -28,6 +28,28 @@ The image also carries no installer payload. `pithead-install` rebuilds the layo
 target and copies the running slot, so the artifact never contains a compressed copy of
 itself.
 
+### Host tuning baked in
+
+An unattended headless box has to heal itself, and two of the guards live below the container
+layer where `restart:` policies and `panic=60` cannot reach:
+
+- **systemd watchdog.** `/etc/systemd/system.conf.d/pithead-watchdog.conf` sets
+  `RuntimeWatchdogSec=20s`, so systemd feeds `/dev/watchdog` and the platform watchdog
+  hard-resets the machine if PID 1 stops pinging — the soft-hang case, where nothing panicked and
+  no container died but the box is wedged. `RebootWatchdogSec=2min` keeps the watchdog armed
+  through shutdown, so a reboot that itself hangs still resets. 20 s is chosen to survive a
+  RandomX-loaded stall without a false reset while still self-healing in under a minute. On
+  hardware with no watchdog device — a KVM guest, most bench boxes — the setting is a safe no-op;
+  real appliance boards expose one and this is where it earns its keep.
+- **CPU governor.** `pithead-cpu-governor.service` sets the `performance` governor every boot, so
+  the node, wallet, and any built-in miner run at full clock. A co-located RigForge miner sets the
+  same `performance` value from its own service; the two agree, and this only establishes the
+  baseline earlier and covers the miner-disabled box. It is a no-op where there is no cpufreq to
+  steer.
+
+Both are asserted by `tests/os/verify-image.sh` — the config is checked into the built rootfs, not
+the runtime effect (CI has no real watchdog device to trip).
+
 ## Build variants and the variant stamp
 
 Every build is one of two variants, decided by whether the rootfs bakes an SSH key

@@ -125,6 +125,19 @@ RUN printf 'PITHEAD_ENGINE=podman\n' >> /etc/environment \
     && mkdir -p /etc/systemd/journald.conf.d \
     && printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/pithead.conf
 
+# Hardware/systemd watchdog: catch a soft-hung kernel or wedged init on an unattended headless
+# box — the case panic=60 (grub.cfg) and container restart policies cannot see, because nothing
+# panicked and PID 1 is the thing that stopped pinging. systemd feeds /dev/watchdog every
+# RuntimeWatchdogSec/2; miss the full interval and the platform watchdog hard-resets the machine.
+# 20s is the balance point: long enough that a RandomX-loaded box under a GC or IO stall is not
+# falsely reset, short enough that a real hang self-heals in well under a minute. RebootWatchdogSec
+# arms the watchdog across a shutdown too, so a reboot that itself wedges still resets rather than
+# hanging forever. No /dev/watchdog (a KVM guest or bench box with no virtual watchdog device) is a
+# safe no-op — systemd logs the missing device and carries on; real appliance hardware exposes one
+# (iTCO_wdt and friends auto-probe), which is where this earns its keep.
+RUN mkdir -p /etc/systemd/system.conf.d \
+    && printf '[Manager]\nRuntimeWatchdogSec=20s\nRebootWatchdogSec=2min\n' > /etc/systemd/system.conf.d/pithead-watchdog.conf
+
 # Container storage lives on the DATA partition, never on the root overlay. Two reasons, both
 # load-bearing: podman's overlay driver cannot stack on Rugix's overlayfs root ("'overlay' is not
 # supported over overlayfs"), and images/containers must survive A/B updates and reboots — the
@@ -165,6 +178,9 @@ COPY os/overlay/pithead-boot /usr/local/sbin/pithead-boot
 # in use — and fail-safe: a healthy, unmarked partition is never touched.
 COPY os/overlay/pithead-data-reset.service /etc/systemd/system/pithead-data-reset.service
 COPY os/overlay/pithead-data-reset /usr/local/sbin/pithead-data-reset
+# CPU governor: hold the cores at performance every boot (mining appliance tuning). Oneshot, and
+# a no-op on a box with no cpufreq — see the unit for the RigForge co-location note.
+COPY os/overlay/pithead-cpu-governor.service /etc/systemd/system/pithead-cpu-governor.service
 RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-data-reset /usr/lib/systemd/system-generators/pithead-mount-generator
 # The updater is chosen per image (bake-off candidates). rugix-ctrl arrives via the bakery layer's
 # core recipe; RAUC is a Debian package, so it is installed here when selected.
@@ -195,7 +211,8 @@ COPY os/rootfs/repart.d/ /usr/lib/repart.d/
 # on ERR_ADDRESS_UNREACHABLE before falling back — pithead.local "took forever" on a healthy
 # LAN. The console prints the v4 address; the name should resolve to the same thing.
 RUN sed -i 's/^#\?use-ipv6=.*/use-ipv6=no/' /etc/avahi/avahi-daemon.conf
-RUN systemctl enable podman.socket pithead-boot.service avahi-daemon systemd-timesyncd systemd-resolved \
+RUN systemctl enable podman.socket pithead-boot.service pithead-cpu-governor.service avahi-daemon \
+        systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
         pithead-data-reset.service \
     && systemctl disable ssh
