@@ -40,7 +40,8 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
   disqualifying. Opt-in: `all` runs the four phases above, not this one.
 
 `--keep` leaves the VM and disks for inspection; `--phase boot|update|install|provision|fault|all`
-scopes the run. The run exits non-zero on the first failed assertion.
+scopes the run. A failed assertion is recorded and the run carries on, so one bench boot collects
+the whole battery; the run exits non-zero if anything failed.
 
 ## Static verification
 

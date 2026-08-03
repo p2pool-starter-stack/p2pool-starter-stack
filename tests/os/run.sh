@@ -23,7 +23,9 @@
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
 #   all     all four (default)
 #
-# Exit non-zero on the first failed assertion. --keep leaves the VM + disks for inspection.
+# A failed assertion is recorded and the run continues, so one bench boot collects the whole
+# battery rather than stopping at the first fault; the run exits non-zero if any assertion failed.
+# --keep leaves the VM + disks for inspection.
 set -uo pipefail
 
 IMAGE=""
