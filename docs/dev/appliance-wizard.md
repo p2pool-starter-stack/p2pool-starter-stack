@@ -172,11 +172,20 @@ a hardware-validated failure:
    an image behind a constant tag changed identity. Its predecessor, `podman-restart`,
    started the stack into its own oneshot cgroup, and systemd SIGKILLed the containers it
    had just spawned.
-4. **Health-gated slot commit** — `rauc status mark-good` only once the dashboard answers
-   through caddy on a *listed* vhost (`localhost`; bare `127.0.0.1` hits Caddy's empty default
-   site and proves nothing). A slot that boots but cannot serve stays uncommitted on purpose:
-   that is the state A/B fallback exists for. Unprovisioned machines never commit — GRUB's
-   clear-and-retry keeps them booting, and a bad update before provisioning reverts.
+4. **Health-gated slot commit** — `rauc status mark-good` only once the slot passes two gates.
+   First the dashboard must answer through caddy on a *listed* vhost (`localhost`; bare
+   `127.0.0.1` hits Caddy's empty default site and proves nothing) — the end of the
+   derived-config → caddy → dashboard chain. Second `pithead doctor --json` must exit clean: it
+   FAILs on a crashed revenue container (monerod/p2pool/tari), a dead Tor backbone, or a missing
+   egress firewall, so a slot that serves a dashboard while mining is dead does not commit. "The
+   dashboard answers" is a subset of "the stack is alive", and the second gate closes that gap.
+   The gate is deliberately sync-tolerant: a node's healthcheck is a liveness probe that passes
+   from early in a days-long initial sync, and the sync-held miners (p2pool/xmrig-proxy, stopped
+   by the dashboard until the node catches up) never count as crashed — so a still-syncing box
+   commits while a genuinely broken one does not. A slot that boots but is not healthy stays
+   uncommitted on purpose: that is the state A/B fallback exists for. Unprovisioned machines never
+   commit — GRUB's clear-and-retry keeps them booting, and a bad update before provisioning
+   reverts.
 5. **`pithead local-miner`** — converge the built-in RigForge worker to `local_miner.enabled`,
    deliberately LAST: the miner needs the stack's stratum listening, and it must never delay
    or block the slot commit — the stack serving is the product's health, the miner is a

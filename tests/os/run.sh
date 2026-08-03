@@ -1410,6 +1410,35 @@ phase_provision() {
     else
         bad "the miner did not return after the reboot — its runtime unit was never re-rendered"
     fi
+
+    # ---- commit-gate honesty (#852): the gate must REFUSE a mining-dead slot ----------------
+    # The slot self-committed above off a HEALTHY stack. But "the dashboard answers" is a subset
+    # of "the stack is alive": a slot whose monerod/p2pool crashed while caddy+dashboard keep
+    # serving is exactly the healthy-looking-but-dead slot a curl-only gate committed. The real
+    # gate is `pithead doctor --json` (os/overlay/pithead-boot); assert its DECISION both ways on
+    # this running stack. Reboot/fallback can't show it here — RAUC's commit is sticky, so the
+    # already-committed slot won't re-arm — so we drive the gate command the boot path runs and
+    # check its exit code. This is the assertion whose absence let the curl-only gate ship green.
+    _gate() { _ssh "cd /data/pithead && PITHEAD_ENGINE=podman ./pithead doctor --json >/dev/null 2>&1"; }
+    # Healthy, mid initial sync with mining held (#35): the gate must COMMIT. A gate that rejected
+    # this would never commit a fresh box — the over-tightening the sync-tolerant rule guards.
+    if _gate; then
+        ok "commit gate PASSES on the healthy stack (dashboard serving, node up, mining held for sync)"
+    else
+        bad "commit gate rejected a healthy still-syncing stack — a fresh box would never commit (over-tightened)"
+    fi
+    # Crash a revenue service: stop monerod. It stays down (restart:unless-stopped won't revive a
+    # manual stop), so podman reports it exited — a chain node down. The gate must now REFUSE, so
+    # pithead-boot would leave the slot uncommitted and A/B fallback would revert. A curl-only gate
+    # PASSES here (the dashboard still answers) — that is the regression this leg catches.
+    _ssh "podman stop -t 5 monerod >/dev/null 2>&1" || true
+    if _gate; then
+        bad "commit gate PASSED with monerod stopped — a mining-dead slot would self-commit (the curl-only gap)"
+    else
+        ok "commit gate REFUSES a slot whose monerod is down — left uncommitted, A/B fallback stays armed"
+    fi
+    _ssh "podman start monerod >/dev/null 2>&1" || true
+    unset -f _gate
 }
 
 phase_fault() {
