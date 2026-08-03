@@ -255,7 +255,13 @@ function Header({ state }) {
         <div class="text-right">
             <div class="text-muted text-xs">Last Update: ${state.last_update}</div>
             <div class=${"text-xs mt-1 " + cVar(hr.p2p_variant)}>P2Pool (routed): ${hr.p2p_1h} (1h) / ${hr.p2p_24h} (24h)</div>
-            <div class=${"text-xs mt-xs " + cVar(hr.xvb_variant)}>XvB (routed): ${hr.xvb_routed_1h} (1h) / ${hr.xvb_routed_24h} (24h)</div>
+            ${
+              // The XvB split line earns its header slot only while donation is on — off, it's a
+              // permanent row of zeros advertising a feature the operator turned off.
+              state.xvb_calc && state.xvb_calc.enabled
+                ? html`<div class=${"text-xs mt-xs " + cVar(hr.xvb_variant)}>XvB (routed): ${hr.xvb_routed_1h} (1h) / ${hr.xvb_routed_24h} (24h)</div>`
+                : null
+            }
         </div>
     </div>`;
 }
@@ -324,7 +330,8 @@ function SyncView({ sync }) {
 function Overview({ state }) {
   const hr = state.hashrate,
     st = state.stratum,
-    t = state.tari;
+    t = state.tari,
+    xvbOn = !!(state.xvb_calc && state.xvb_calc.enabled);
   // Stat order (#159): fleet headline (total / mode / workers) → raffle status (tier / VIP /
   // shares / target) → routed split → reference (last share / Tari / wallets).
   return html`
@@ -334,14 +341,27 @@ function Overview({ state }) {
             <${StatCard} label="Total Hashrate" value=${hr.total} cls="text-accent" />
             <${StatCard} label="Mining Mode" value=${hr.mode_name} cls=${cVar(hr.mode_variant)} />
             <${StatCard} label="Workers Alive" value=${state.proxy_workers} />
+            ${
+              // Five of these tiles are raffle/split state — on a non-donating box they'd all
+              // read None / N/A / zeros, a third of the Overview spent saying "off" five ways.
+              // The mode tile already says it once.
+              xvbOn
+                ? html`
             <${StatCard} label="Current Tier" value=${hr.tier} />
-            <${StatCard} label="Raffle Eligible" value=${state.raffle_eligible.label} cls=${raffleCls(state.raffle_eligible)} />
+            <${StatCard} label="Raffle Eligible" value=${state.raffle_eligible.label} cls=${raffleCls(state.raffle_eligible)} />`
+                : null
+            }
             <${SharesStat} sw=${state.shares_window} />
-            <${StatCard} label="Target Tier" value=${hr.target_tier} />
+            ${xvbOn ? html`<${StatCard} label="Target Tier" value=${hr.target_tier} />` : null}
             <${StatCard} label="P2Pool 1h (routed)" value=${hr.p2p_1h} cls=${cVar(hr.p2p_variant)} />
             <${StatCard} label="P2Pool 24h (routed)" value=${hr.p2p_24h} cls=${cVar(hr.p2p_variant)} />
+            ${
+              xvbOn
+                ? html`
             <${StatCard} label="XvB 1h (routed)" value=${hr.xvb_routed_1h} cls=${cVar(hr.xvb_variant)} />
-            <${StatCard} label="XvB 24h (routed)" value=${hr.xvb_routed_24h} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label="XvB 24h (routed)" value=${hr.xvb_routed_24h} cls=${cVar(hr.xvb_variant)} />`
+                : null
+            }
             <${StatCard} label="Last Share" value=${st.last_share} />
             <div class="stat-card"><h5>Tari Mining</h5><${TariStatus} tari=${t} /></div>
             <${StatCard} label="Wallet XMR" value=${st.wallet_short} cls="font-mono text-xs" />
@@ -408,6 +428,9 @@ function GlobalStats({ state }) {
 
 function XvBStats({ state }) {
   const hr = state.hashrate;
+  // A non-donating box gets no XvB stats card at all — every figure in it would be a zero or a
+  // "None", and the tier calculator alongside already hides itself the same way.
+  if (!(state.xvb_calc && state.xvb_calc.enabled)) return null;
   // When the xmrvsbeast.com fetch is stale (#311) the CREDITED figures are frozen —
   // grey them and tag the label so they don't read as live. Routed (our own proxy
   // history) is unaffected. Tooltip explains why.
@@ -431,6 +454,7 @@ function XvBStats({ state }) {
         </div>
         <div class="mt-2">
             <div class="text-small text-muted">Raffle Wins</div>
+            <div class="raffle-wins-list">
             ${
               (state.raffle_wins || []).length
                 ? state.raffle_wins.map(
@@ -439,6 +463,7 @@ function XvBStats({ state }) {
                   )
                 : html`<div class="text-xs text-muted">No wins recorded yet — a win lands here and as a gold star on the chart.</div>`
             }
+            </div>
         </div>
         <div class=${"text-xs mt-2 " + (hr.xvb_stale ? "status-warn" : "text-muted")} title=${credTitle}>
             ${hr.xvb_stale ? "⚠ Stale — last successful fetch from xmrvsbeast.com: " : "Stats fetched from xmrvsbeast.com (Updated: "}${hr.xvb_updated}${hr.xvb_stale ? "" : ")"}
@@ -688,7 +713,8 @@ function ExpectedVsActualCard({ summary }) {
       title:
         "Raffle wins recorded in the last 30 days (last-win recency can predate the window). " +
         "Expected is computed from XvB's public winners file: how often your tier's rounds are " +
-        "drawn ÷ how many qualifiers they have. A win's XMR arrives through ordinary payouts, " +
+        "drawn ÷ how many qualifiers they have — for the tier you hold, or the tier you're " +
+        "targeting while none is held yet. A win's XMR arrives through ordinary payouts, " +
         "so its value is counted in the Monero + XvB row above — this row tracks the draw.",
     });
   }

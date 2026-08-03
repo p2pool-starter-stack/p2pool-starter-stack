@@ -51,15 +51,19 @@ export function heroKpis(state) {
   const hr = state.hashrate,
     sw = state.shares_window,
     p = state.pool,
-    raffle = state.raffle_eligible || {};
+    raffle = state.raffle_eligible || {},
+    // On a box that isn't donating, two raffle KPI slots ("Raffle Eligible: N/A", "XvB Tier:
+    // None") are dead weight in the most prominent strip on the page — the mode badge already
+    // says XvB is off, once. Dropped entirely; they return the moment XvB is enabled.
+    xvbOn = !!(state.xvb_calc && state.xvb_calc.enabled);
   return [
     { label: "Total Hashrate", value: hr.total, cls: "text-accent" },
     { label: "Shares in Window", value: sw.count, cls: sw.ok ? "status-ok" : "status-bad" },
     // Raffle Eligible (#158): Yes only when you'd WIN and COLLECT — in a donor tier AND holding a
-    // PPLNS share. Muted "N/A" when XvB is off; red "No" when donating but a gate is unmet.
-    { label: "Raffle Eligible", value: raffle.label, cls: raffleCls(raffle) },
+    // PPLNS share. Red "No" when donating but a gate is unmet.
+    ...(xvbOn ? [{ label: "Raffle Eligible", value: raffle.label, cls: raffleCls(raffle) }] : []),
     { label: "Blocks Found", value: p.blocks, cls: "" },
-    { label: "XvB Tier", value: hr.tier, cls: "" },
+    ...(xvbOn ? [{ label: "XvB Tier", value: hr.tier, cls: "" }] : []),
     { label: "Mining Mode", value: hr.mode_name, cls: "c-" + hr.mode_variant },
   ];
 }

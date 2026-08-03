@@ -427,6 +427,7 @@ const _heroState = (over = {}) => ({
     shares_window: { count: 5, ok: true, ...over.shares_window },
     raffle_eligible: { applies: true, eligible: true, label: 'Yes', ...over.raffle_eligible },
     pool: { blocks: 42, ...over.pool },
+    xvb_calc: 'xvb_calc' in over ? over.xvb_calc : { enabled: true },
 });
 const _byLabel = (state) => Object.fromEntries(heroKpis(state).map((k) => [k.label, k]));
 
@@ -434,6 +435,19 @@ test('heroKpis: surfaces the six headline numbers under stable labels, in order'
     assert.deepEqual(
         heroKpis(_heroState()).map((k) => k.label),
         ['Total Hashrate', 'Shares in Window', 'Raffle Eligible', 'Blocks Found', 'XvB Tier', 'Mining Mode'],
+    );
+});
+
+test('heroKpis: the raffle slots vanish while XvB is disabled — no N/A dead weight', () => {
+    // The mode badge says XvB is off, once; the band should not repeat it as two empty KPIs.
+    assert.deepEqual(
+        heroKpis(_heroState({ xvb_calc: { enabled: false } })).map((k) => k.label),
+        ['Total Hashrate', 'Shares in Window', 'Blocks Found', 'Mining Mode'],
+    );
+    // A payload without the section at all (old server) behaves like disabled — never a crash.
+    assert.deepEqual(
+        heroKpis(_heroState({ xvb_calc: undefined })).map((k) => k.label),
+        ['Total Hashrate', 'Shares in Window', 'Blocks Found', 'Mining Mode'],
     );
 });
 

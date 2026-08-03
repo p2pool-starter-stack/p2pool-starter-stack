@@ -1521,6 +1521,18 @@ _XVB_REALIZATION_MIN_WINS = 5
 _XVB_REALIZATION_WINDOW_S = 45 * SECONDS_PER_DAY
 
 
+def xvb_forecast_tier_key(metrics, tiers):
+    """The tier the expected-wins forecast should speak to: held, else targeted (#866).
+
+    Before any tier is held — a fleet still ramping its credited average, or an operator weighing
+    whether donating is worth enabling at all — the honest forecast is for the TARGET tier: "what
+    would this buy", rather than a dash that reads as unknowable."""
+    key = xvb_current_tier_key(metrics, tiers)
+    if key is None and metrics.target_threshold > 0:
+        key = next((k for k, t in tiers.items() if t == metrics.target_threshold), None)
+    return key
+
+
 def xvb_expected_wins_day(round_stats_state, tier_key, tiers):
     """Expected raffle wins per day for the held tier (#866), from XvB's own winners file.
 
@@ -1988,7 +2000,7 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     if metrics.xvb_enabled:
         xvb_tiers = state_mgr.get_tiers()
         xvb_wins_day = xvb_expected_wins_day(
-            state_mgr.get_xvb_round_stats(), xvb_current_tier_key(metrics, xvb_tiers), xvb_tiers
+            state_mgr.get_xvb_round_stats(), xvb_forecast_tier_key(metrics, xvb_tiers), xvb_tiers
         )
         xvb_realized = xvb_realization(
             monero_payouts, raffle_wins, earnings["xvb_day"], xvb_wins_day
