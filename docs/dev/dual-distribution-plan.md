@@ -11,7 +11,7 @@ the #394 tracker; decision comments are on #77 and #78.
 
 | Question | Decision |
 |---|---|
-| Appliance foundation | **Debian 13 + Rugix A/B images** (v2 decision, stands). Peer-proven pattern: umbrelOS (Debian + Rugix, crypto-node appliance), HAOS (Buildroot + RAUC). bootc + CentOS Stream rejected — no third-party shipping appliance found on it, rolling base, manual rollback + greenboot bolt-on; full evidence table in the v2 section below. |
+| Appliance foundation | **Debian 13 + A/B images, updater RAUC** (bake-off verdict 2026-07-25 — see [Verdict](#verdict-2026-07-25-rauc-on-stability-grounds--conditional-on-fault-injection); the v2 decision named Rugix, and the bake-off replaced it on stability grounds). Peer-proven pattern: umbrelOS (Debian + Rugix, crypto-node appliance), HAOS (Buildroot + RAUC). bootc + CentOS Stream rejected — no third-party shipping appliance found on it, rolling base, manual rollback + greenboot bolt-on; full evidence table in the v2 section below. |
 | Container runtime | **Quadlet on the appliance, Compose on the DIY channel — #78 outcome (A)** (operator decision, v4; supersedes v3's Podman-everywhere). Appliance: daemonless, each container a systemd service supervised and restarted independently — the idiomatic fit where we own the OS (Debian 13, Podman 5.4.2). DIY: Compose stays — the reach argument is concrete: Quadlet's `Notify=healthy` needs Podman ≥ 5.0, and Ubuntu 24.04 LTS ships 4.9, so Podman-everywhere would exclude the largest current LTS until 2029. Compose runs wherever Docker runs; existing deployments (gouda, prod) never migrate. Cost accepted: two runtime renders, mitigated by generation + parity (below). |
 | Runtime definitions | `docker-compose.yml` stays the maintained reference (as today, `.env`-rendered by `pithead`). The appliance adds `pithead render-quadlet`: units generated from `config.json`, never hand-maintained. A parity test derives expectations from the compose file itself and **fails on any compose key it does not recognize** — new compose features cannot silently skip the appliance. |
 | Distribution channels | **(1) curl installer (Docker/Compose), (2) flashable appliance image (Podman/Quadlet), (3) git clone (developers).** Package-manager/apt-repo channel dropped. |
@@ -27,7 +27,7 @@ infrastructure.
 | Channel | Artifact | Runtime | Audience |
 |---|---|---|---|
 | **curl installer** | `curl -fsSL <url>/install.sh \| bash` — installs/uses Docker CE, fetches the signed release bundle, runs `pithead setup` | Docker Compose (today's stack, unchanged) | homelabs, VPS, existing Docker users |
-| **Appliance image** | `pithead-os-vX.Y.Z.img` + Rugix delta update bundles | Podman/Quadlet | zero-Linux-setup users, fleets |
+| **Appliance image** | `pithead-os-vX.Y.Z.img` + RAUC update bundles | Podman/Quadlet | zero-Linux-setup users, fleets |
 | **git clone** | the repo | Docker Compose | developers, contributors |
 
 Flash target: the image is written to the machine's **internal SSD/NVMe** — running
@@ -35,7 +35,7 @@ the stack host from a USB stick is not supported (250+ GB chain, constant writes
 USB flash is too slow and wears out). Two supported paths: write the raw image
 directly to the target disk, or boot a USB installer that copies it to an internal
 disk after an explicit, destructive disk-selection confirmation (the installer flow is
-our tooling — Rugix produces the raw image only). Raw writes are for factory-new
+our tooling — the image build produces the raw image only). Raw writes are for factory-new
 drives only and the docs say so loudly: `dd` replaces the partition table and
 destroys an existing `/data` (250+ GB of synced chain). Reinstall on an existing box
 goes through the installer, which detects the labeled `/data` partition, preserves
@@ -173,7 +173,7 @@ cut, and the installer smoke rides the same checklist.
 ## Appliance architecture (unchanged from v2, runtime swapped)
 
 - Minimal Debian 13, read-only root, overlay discarded each boot.
-- Rugix A/B slots; new slot boots provisionally; **the commit gate is a `localhost` curl plus
+- RAUC A/B slots; new slot boots provisionally; **the commit gate is a `localhost` curl plus
   `pithead doctor --json`** (`os/overlay/pithead-boot`). The curl proves the derived-config →
   caddy → dashboard chain answers; doctor exits non-zero on critical failures and checks the
   revenue containers (monerod/p2pool/tari), Tor, and the egress firewall. Both must pass before
@@ -218,8 +218,13 @@ cut, and the installer smoke rides the same checklist.
   against shared state); images kept, units re-rendered.
 - **Two-tier reset**, because a full wipe costs days of chain resync: (1) config
   reset — delete `config.json` + secrets, re-enter the first-boot wizard, chain data
-  kept; (2) factory reset — `rugix-ctrl state reset`, everything wiped. Reflash keeps
-  data; the wizard offers tier 1 before tier 2.
+  kept; (2) factory reset — everything wiped. RAUC has no integrated state reset, so both
+  tiers are ours: `pithead config-reset` and `pithead factory-reset`. The deep tier cannot
+  run against a mounted `/data`, so it drops a marker on the ESP (which survives the wipe)
+  and reboots into `os/overlay/pithead-data-reset`, which reformats the partition one layer
+  under the running system. That executor doubles as the recovery path for a `/data` that
+  will not mount — the only way back on a shell-less release image. Reflash keeps data; the
+  wizard offers tier 1 before tier 2.
 - Hugepage reservation baked in at boot — **load-bearing, not perf polish** (spike
   finding): the RandomX dataset (~2.1 GiB) lives in hugetlbfs outside the memory
   cgroup only when pages are reserved; unreserved, it falls to anon memory and
@@ -420,17 +425,20 @@ pithead/
 ├── pithead                     # brain for all channels
 │                               #   + render-quadlet (phase 1)
 │                               #   + unprovisioned mode (phase 3)
-│                               #   + support-bundle, rugix commit glue (phase 2)
+│                               #   + support-bundle, rauc commit glue (phase 2)
 ├── docker-compose.yml          # DIY runtime definition + the parity reference (stays)
 ├── build/                      # service images — unchanged
 │   └── dashboard/              #   + first-boot wizard mode for the #33 form (phase 3)
 ├── install.sh                  # NEW — the curl channel (phase 1)
 ├── os/                         # NEW — the appliance (phases 0, 2, 3)
-│   ├── bakery/                 # Rugix Bakery project: layers, recipes, x86 EFI target
+│   ├── build-image.sh          # exports the OS rootfs tarball from os/rootfs
 │   ├── rootfs/                 # Dockerfile assembling the OS rootfs tarball
-│   │                           #   (updater-agnostic — the RAUC escape hatch)
+│   │                           #   (updater-agnostic — the updater sits on top)
+│   │   └── repart.d/           # systemd-repart: slot B + /data built on the target disk
+│   ├── rauc/                   # image + bundle build, slot population, GRUB boot state
+│   ├── installer/              # pithead-install: copy the running system to a disk
 │   ├── quadlet/                # phase 0 hand-written reference units → renderer fixtures
-│   ├── overlay/                # fstab, mount guards, watchdog, firstboot units
+│   ├── overlay/                # mount generator, watchdog, governor, boot/sync/firstboot units
 │   └── README.md
 ├── scripts/
 │   └── release.sh              # + os-image lane, cosign mandatory

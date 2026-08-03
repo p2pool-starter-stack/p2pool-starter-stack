@@ -107,9 +107,10 @@ install -m 644 os/rauc/grub.cfg /mnt/rauc-esp/grub/grub.cfg
 grub-editenv /mnt/rauc-esp/grub/grubenv create
 grub-editenv /mnt/rauc-esp/grub/grubenv set ORDER="A B" A_OK=1 A_TRY=0 B_OK=0 B_TRY=0
 
-# The /var overlay directories cannot be seeded here any more — /data does not exist until
-# systemd-repart creates it. pithead-dataprep.service makes them on first boot, before anything
-# that needs a writable /var.
+# The /var overlay directories cannot be seeded here — /data does not exist until systemd-repart
+# creates it on the target machine's real disk. repart makes them itself at format time, via the
+# MakeDirectories lines in os/rootfs/repart.d/40-data.conf, so they exist before anything mounts
+# the overlay that needs a writable /var.
 
 sync
 echo "==> image: $OUT ($(du -h "$OUT" | cut -f1))"
