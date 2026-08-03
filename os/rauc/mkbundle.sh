@@ -21,6 +21,31 @@ for arg in "$@"; do
 done
 OUT="${OUT:-os/rauc/build/update.raucb}"
 TARBALL="os/build/pithead-root.tar"
+
+# Compatibility metadata — the channel contract the update path reads back (docs/dev/appliance-release.md).
+# Validated up front so a bad release input fails before the multi-minute image build, not after.
+#   PITHEAD_DATA_MIGRATION=true  — this release runs a forward-only /data (lmdb) migration.
+#   PITHEAD_MIN_OS_VERSION=X.Y.Z — the lowest OS version that can still read /data once it has.
+# A migrating release MUST name that floor: without it a later rollback silently strands the
+# migrated chain data (os-update reads the floor back to refuse exactly that).
+OS_VERSION=$(tr -d ' \t\r\n' <VERSION)
+DATA_MIGRATION=${PITHEAD_DATA_MIGRATION:-false}
+case "$DATA_MIGRATION" in
+true | false) ;;
+*)
+    echo "PITHEAD_DATA_MIGRATION must be 'true' or 'false', got '$DATA_MIGRATION'" >&2
+    exit 2
+    ;;
+esac
+MIN_OS_VERSION=${PITHEAD_MIN_OS_VERSION:-}
+if [ -n "$MIN_OS_VERSION" ] && ! printf '%s' "$MIN_OS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "PITHEAD_MIN_OS_VERSION must be X.Y.Z, got '$MIN_OS_VERSION'" >&2
+    exit 2
+fi
+if [ "$DATA_MIGRATION" = true ] && [ -z "$MIN_OS_VERSION" ]; then
+    echo "PITHEAD_DATA_MIGRATION=true needs PITHEAD_MIN_OS_VERSION=X.Y.Z — the floor below which the migrated /data cannot be read" >&2
+    exit 2
+fi
 # shellcheck source=os/rauc/populate-slot.sh
 . os/rauc/populate-slot.sh
 WORK=$(mktemp -d)
@@ -54,10 +79,13 @@ mv "$WORK/rootfs.ext4" "$WORK/bundle/rootfs.ext4"
 cat >"$WORK/bundle/manifest.raucm" <<EOF
 [update]
 compatible=pithead-amd64
-version=$(tr -d ' \t\r\n' <VERSION)
+version=$OS_VERSION
 
 [meta.pithead]
 variant=$VARIANT
+version=$OS_VERSION
+data_migration=$DATA_MIGRATION
+minimum_os_version=$MIN_OS_VERSION
 
 [image.rootfs]
 filename=rootfs.ext4
