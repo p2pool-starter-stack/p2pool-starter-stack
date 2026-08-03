@@ -1,8 +1,10 @@
 # pithead-os rootfs (#77 phase 2) — the appliance operating system as a container build,
-# exported to a tarball and fed to Rugix Bakery (the Umbrel pattern; os/build-image.sh).
+# exported to a tarball by os/build-image.sh (the Umbrel pattern) and turned into a bootable
+# image or an update bundle by os/rauc/mkimage.sh / os/rauc/mkbundle.sh.
 # Debian 13 + systemd + rootful Podman; pithead is the provisioning brain, Quadlet the runtime.
-# Deliberately updater-agnostic: nothing in here knows about Rugix — the RAUC escape hatch
-# stays open (docs/dev/dual-distribution-plan.md § appliance architecture).
+# Deliberately updater-agnostic: the updater sits on top and is selected by PITHEAD_UPDATER
+# below, so swapping it does not touch this file (docs/dev/dual-distribution-plan.md
+# § appliance architecture).
 #
 # This file is named Dockerfile, not Containerfile, so Dependabot's docker ecosystem tracks the
 # base digest below (it only reads Dockerfile-named files — dependabot-core#6067); nothing else
@@ -139,7 +141,7 @@ RUN mkdir -p /etc/systemd/system.conf.d \
     && printf '[Manager]\nRuntimeWatchdogSec=20s\nRebootWatchdogSec=2min\n' > /etc/systemd/system.conf.d/pithead-watchdog.conf
 
 # Container storage lives on the DATA partition, never on the root overlay. Two reasons, both
-# load-bearing: podman's overlay driver cannot stack on Rugix's overlayfs root ("'overlay' is not
+# load-bearing: podman's overlay driver cannot stack on the appliance's overlayfs root ("'overlay' is not
 # supported over overlayfs"), and images/containers must survive A/B updates and reboots — the
 # root overlay is discarded. This is the plan's "/var/lib/containers on the labeled data
 # partition" rule; the mount guard lives on the units that use it.
@@ -182,8 +184,8 @@ COPY os/overlay/pithead-data-reset /usr/local/sbin/pithead-data-reset
 # a no-op on a box with no cpufreq — see the unit for the RigForge co-location note.
 COPY os/overlay/pithead-cpu-governor.service /etc/systemd/system/pithead-cpu-governor.service
 RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-data-reset /usr/lib/systemd/system-generators/pithead-mount-generator
-# The updater is chosen per image (bake-off candidates). rugix-ctrl arrives via the bakery layer's
-# core recipe; RAUC is a Debian package, so it is installed here when selected.
+# The updater is chosen per image. RAUC is a Debian package, so it is installed here when
+# selected; leaving PITHEAD_UPDATER empty builds the same rootfs with no updater at all.
 ARG PITHEAD_UPDATER=""
 # NB: `rauc` is the CLI ONLY. Debian splits the D-Bus daemon into `rauc-service`, which is not even
 # a Recommends of `rauc` — so --no-install-recommends is not what drops it, the package simply has
@@ -221,7 +223,7 @@ RUN systemctl enable podman.socket pithead-boot.service pithead-cpu-governor.ser
 RUN test -f /usr/lib/systemd/system/systemd-repart.service
 
 # TEST-ONLY hooks (tests/os/run.sh --phase update): both default EMPTY and change nothing in a
-# release build. A pubkey enables root-key SSH so the harness can drive rugix-ctrl in the guest;
+# release build. A pubkey enables root-key SSH so the harness can drive `rauc` in the guest;
 # the marker distinguishes v1/v2 slots across the A/B cycle.
 #
 # The SSH bake is also what DEFINES the build variant, so it is stamped here (#819): a baked key
@@ -243,5 +245,3 @@ RUN if [ -n "$PITHEAD_TEST_SSH_PUBKEY" ]; then \
     && if [ -n "$PITHEAD_TEST_MARKER" ]; then \
         printf '%s\n' "$PITHEAD_TEST_MARKER" > /etc/pithead-test-marker; \
     fi
-
-# Rugix Ctrl lands via the bakery layer's core recipes, not here — rootfs stays updater-agnostic.

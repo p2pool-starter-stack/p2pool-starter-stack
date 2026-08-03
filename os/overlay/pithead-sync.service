@@ -4,7 +4,7 @@ Description=Sync the pithead program tree onto the data partition
 # slot, all state lives on /data. pithead itself assumes both share a directory — it cd's to
 # its own location and writes config.json/.env there — so the program is copied onto /data and
 # run from there. Without this, an A/B update destroys the operator's configuration: RAUC
-# replaces the whole slot, and Rugix's root overlay is discarded.
+# replaces the whole slot, and the root overlay is discarded on every boot.
 ConditionPathIsMountPoint=/data
 After=local-fs.target
 Before=pithead-firstboot.service
