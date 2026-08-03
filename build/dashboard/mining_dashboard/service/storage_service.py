@@ -105,6 +105,9 @@ class StateManager:
         # losing it on restart just costs one refetch. ``last_update`` bumps only on a genuine fetch,
         # so the same staleness check as the stats (``xvb_stats_are_stale``) applies to it (#311).
         self._xvb_rewards = {"estimates": {}, "last_update": 0.0}
+        # All-rounds aggregate from the same winners file (#866/#872): round-type frequencies +
+        # qualifier counts. Same memory-only, refetch-on-restart, staleness-by-last_update rules.
+        self._xvb_round_stats = {"stats": {}, "last_update": 0.0}
 
         # Initialize persistent DB connection
         # check_same_thread=False allows the connection to be used by multiple threads
@@ -1373,6 +1376,20 @@ class StateManager:
         """Replace the cached reward estimates and stamp ``last_update`` (only on a genuine fetch, #118)."""
         with self._lock:
             self._xvb_rewards = {"estimates": dict(estimates or {}), "last_update": time.time()}
+
+    def get_xvb_round_stats(self) -> dict[str, Any]:
+        """The cached all-rounds raffle aggregate (#866/#872):
+        ``{"stats": {"types": {...}, "span_days": d}, "last_update": ts}``."""
+        with self._lock:
+            return {
+                "stats": dict(self._xvb_round_stats["stats"]),
+                "last_update": self._xvb_round_stats["last_update"],
+            }
+
+    def set_xvb_round_stats(self, stats: dict[str, Any]):
+        """Replace the cached round aggregate and stamp ``last_update`` (only on a genuine fetch)."""
+        with self._lock:
+            self._xvb_round_stats = {"stats": dict(stats or {}), "last_update": time.time()}
 
     def update_xvb_stats(
         self,

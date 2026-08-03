@@ -662,6 +662,51 @@ test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a st
     assert.doesNotMatch(uHtml, /2\.5200 XMR/); // but no reachable-looking Net
 });
 
+test('XvB tier comparison prefers the measured net and shows the draw behind it (#872)', () => {
+    const base = clone();
+    base.earnings.available = true;
+    base.earnings.coeff_day = 1e-7;
+    base.earnings.p2pool_hr = 200000; // what-if default: Whale sustainable (200k × 0.85 > 100k)
+    base.xvb_calc = {
+        enabled: true,
+        estimates_available: true,
+        estimates_stale: false,
+        max_fraction: 0.85,
+        current_tier: 'Whale (100.00 kH/s+)',
+        target_tier: 'Whale (100.00 kH/s+)',
+        target_threshold: 100000,
+        sustainable: true,
+        note: 'An XvB tier is raffle status, not an XMR payout.',
+        mode_note: null,
+        realization_pct: 19,
+        realization_wins: 15,
+        tiers: [
+            { name: 'Whale (100.00 kH/s+)', threshold: 100000, expected_reward_year: 6.17,
+              realized_reward_year: 6.17 * 0.19, win_odds_day: 0.84, players_avg: 8.2 },
+        ],
+    };
+    const up = renderApp({ state: base });
+    // Measured: the label says so, the value is realized − cost (1.1723 − 3.65 = −2.4777) —
+    // the face-value +2.52 must NOT render as the net (#872: it had the wrong sign).
+    assert.match(up, /Net \/ yr \(measured\)/);
+    assert.match(up, /-2\.4777\d* XMR/);
+    assert.doesNotMatch(up, /2\.5200 XMR/);
+    assert.match(up, /19% of face value over the last 15 wins/);
+    // The draw line: odds over 30d and the qualifier count.
+    assert.match(up, /≈ 25 wins \/ 30d/);
+    assert.match(up, /~8\.2 qualifiers/);
+
+    // Unmeasured: face value stands but is LABELED face value, and no draw line without odds.
+    base.xvb_calc.realization_pct = null;
+    base.xvb_calc.realization_wins = null;
+    base.xvb_calc.tiers[0].realized_reward_year = null;
+    base.xvb_calc.tiers[0].win_odds_day = null;
+    const fv = renderApp({ state: base });
+    assert.match(fv, /Net \/ yr \(face value\)/);
+    assert.match(fv, /2\.5200 XMR/);
+    assert.doesNotMatch(fv, /id="xvb-draw-line"/);
+});
+
 test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
     // The base fixture has no pool difficulty → cadence.available === false → server-sent dashes.
     const cold = renderApp();
@@ -1056,4 +1101,26 @@ test('ExpectedVsActualCard counts Tari blocks and windows XvB wins (#808)', () =
     // XvB off → the row disappears (no invented raffle framing on a non-XvB box).
     s.earnings_summary.xvb = { enabled: false, wins_30d: 0, last_win_ts: 0 };
     assert.doesNotMatch(renderApp({ state: s }), /XvB wins \(30d\)/);
+});
+
+test('ExpectedVsActualCard forecasts XvB wins from the winners feed, dash when unmeasured (#866)', () => {
+    const s = clone();
+    s.earnings_summary.xvb = {
+        enabled: true, wins_30d: 13, last_win_ts: 1735689000, expected_wins_30d: 25.2,
+    };
+    assert.match(renderApp({ state: s }), /≈ 25 wins/); // two significant digits
+    // No aggregate (missing/stale) → the dash, never a guess.
+    s.earnings_summary.xvb.expected_wins_30d = null;
+    assert.doesNotMatch(renderApp({ state: s }), /≈ .* wins<\/td>/);
+});
+
+test('ExpectedVsActualCard tooltip owns the tempered vs face-value XvB share (#866)', () => {
+    const s = clone();
+    s.earnings_summary.xmr.includes_xvb = true;
+    s.earnings_summary.xmr.xvb_realization_pct = 19;
+    s.earnings_summary.xmr.xvb_wins_measured = 15;
+    assert.match(renderApp({ state: s }), /19% of XvB(?:'|&#39;)s published face value/);
+    s.earnings_summary.xmr.xvb_realization_pct = null;
+    s.earnings_summary.xmr.xvb_wins_measured = null;
+    assert.match(renderApp({ state: s }), /face-value estimate — an upper bound/);
 });

@@ -491,6 +491,9 @@ class XvbComparison extends Component {
       tiers.find((t) => t.name === calc.target_tier) ||
       tiers[0];
     const cmp = xvbTierComparison(sel, coeffDay);
+    // The actionable net: measured realization when the wallet has one, face value otherwise —
+    // the label always says which (#872: the face-value net once had the wrong SIGN).
+    const netShown = cmp.realizedNet !== null ? cmp.realizedNet : cmp.net;
     // The same sustains rule the tier block states: donating the threshold must fit inside the
     // donateable share of the what-if hashrate. An unsustainable tier's Net is "—" — showing,
     // say, Mega's +56 XMR/yr to a 269 kH/s fleet would imply an unreachable payout.
@@ -510,14 +513,32 @@ class XvbComparison extends Component {
                              title="XvB's own published expected reward for this tier per year (their reward_calc figures, fetched over Tor). This is the raffle expectation across all qualifiers — donating above the tier threshold does NOT raise it." />
                 <${StatCard} label="Cost / yr" value=${cmp.cost !== null ? formatXmr(cmp.cost) : "—"}
                              title="P2Pool earnings foregone by donating the tier threshold for a year (threshold × the P2Pool daily rate × 365)." />
-                <${StatCard} label="Net / yr" value=${sustainable && cmp.net !== null ? formatXmr(cmp.net) : "—"}
-                             cls=${sustainable && cmp.net !== null ? netCls(cmp.net) : ""}
+                <${StatCard} label=${cmp.realizedNet !== null ? "Net / yr (measured)" : "Net / yr (face value)"}
+                             value=${sustainable && netShown !== null ? formatXmr(netShown) : "—"}
+                             cls=${sustainable && netShown !== null ? netCls(netShown) : ""}
                              title=${
-                               sustainable
-                                 ? "Expected XvB reward minus the P2Pool earnings given up. Shown only when XvB's estimate is available."
-                                 : "Not shown — this tier isn't sustainable at your hashrate, so its payout isn't reachable."
+                               !sustainable
+                                 ? "Not shown — this tier isn't sustainable at your hashrate, so its payout isn't reachable."
+                                 : cmp.realizedNet !== null
+                                   ? `XvB's published reward scaled to what this wallet's wins actually paid — ` +
+                                     `${calc.realization_pct}% of face value over the last ${calc.realization_wins} wins — ` +
+                                     `minus the P2Pool earnings given up.`
+                                   : "XvB's published FACE-VALUE reward minus the P2Pool earnings given up. The face " +
+                                     "value prices every bonus hash at full block reward and assumes every won round " +
+                                     "runs to completion — wallets collect less; this net is an upper bound. Once " +
+                                     "enough wins land, this figure switches to your measured payout realization."
 } />
             </div>
+            ${
+              // The draw behind the XMR figure (#872): how often this round type comes up and
+              // against how many qualifiers — which also makes a single-qualifier tier (whose
+              // headline reward evaporates the moment a second donor qualifies) self-evident.
+              sel.win_odds_day > 0
+                ? html`<p class="text-muted text-xs mt-1" id="xvb-draw-line">
+                    Draw: ≈ ${Number((sel.win_odds_day * 30).toPrecision(2))} wins / 30d
+                    among ~${Number(sel.players_avg.toPrecision(2))} qualifiers</p>`
+                : null
+            }
             ${
               // Fiat mirror of the XMR/yr figures (#520): same visibility guards as the cards
               // above (never a fiat number whose XMR figure is hidden), at the XMR price in use.
@@ -525,7 +546,7 @@ class XvbComparison extends Component {
                 ? html`<p class="text-muted text-xs mt-1" id="xvb-fiat-line">
                     ≈ ${calc.estimates_available ? formatFiat(coinFiat(cmp.expected, energy.xmr_price), energy.currency) : "—"} expected ·
                     ${formatFiat(coinFiat(cmp.cost, energy.xmr_price), energy.currency)} cost ·
-                    ${sustainable ? formatFiat(coinFiat(cmp.net, energy.xmr_price), energy.currency) : "—"} net, per year
+                    ${sustainable ? formatFiat(coinFiat(netShown, energy.xmr_price), energy.currency) : "—"} net, per year
                 </p>`
                 : null
             }
@@ -548,9 +569,10 @@ class XvbComparison extends Component {
 // XvB tier / raffle block (#118), inside the earnings card and driven by the same what-if
 // hashrate: the highest XMRvsBeast tier that hashrate sustains (computeXvbTier — the server's
 // own auto rule), what holding it costs, and the current vs target tier for context. Labelled
-// raffle status, never a payout; deliberately no entry counts or win odds — the draw is random
-// above the threshold. Hidden entirely while XvB is disabled. `coeffDay` (earnings.coeff_day)
-// feeds the per-tier payout comparison dropdown below.
+// raffle status, never a payout. The draw is random above the threshold — donating more within
+// a tier buys nothing — but the odds themselves ARE knowable (#872: qualifier counts from XvB's
+// winners file), so the comparison dropdown shows them. Hidden entirely while XvB is disabled.
+// `coeffDay` (earnings.coeff_day) feeds the per-tier payout comparison dropdown below.
 function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
   if (!calc || !calc.enabled) return null;
   const t = computeXvbTier(hr, calc);
@@ -615,10 +637,17 @@ function ExpectedVsActualCard({ summary }) {
     dim: !xmr.enabled,
     title: xmr.includes_xvb
       ? "Confirmed on-chain payouts over the trailing 30 days vs the P2Pool linear expectation " +
-        "at your 30-day average hashrate PLUS XvB's published estimate for your tier — combined " +
+        "at your 30-day average hashrate PLUS XvB's estimate for your tier — combined " +
         "on both sides, because an XvB win pays out through ordinary payouts that cannot be " +
-        "told apart from P2Pool payouts. Payouts swing with luck; a sustained gap is the " +
-        "signal worth checking, not one window."
+        "told apart from P2Pool payouts. " +
+        (xmr.xvb_realization_pct !== null
+          ? `The XvB share is tempered to this wallet's measured win payouts — ` +
+            `${xmr.xvb_realization_pct}% of XvB's published face value over the last ` +
+            `${xmr.xvb_wins_measured} wins. `
+          : "The XvB share is XvB's published face-value estimate — an upper bound: it prices " +
+            "every bonus hash at full block reward and assumes every won round runs to " +
+            "completion. ") +
+        "Payouts swing with luck; a sustained gap is the signal worth checking, not one window."
       : "Confirmed on-chain payouts over the trailing 30 days vs the linear expectation at " +
         "your 30-day average P2Pool hashrate. Any XvB win payouts land in the actual too — " +
         "they cannot be told apart from P2Pool payouts. Payouts swing with luck; a sustained " +
@@ -645,15 +674,22 @@ function ExpectedVsActualCard({ summary }) {
   if (xvb.enabled) {
     rows.push({
       label: "XvB wins (30d)",
-      expected: "—",
+      // Forecast from XvB's own winners file (#866): round-type frequency ÷ qualifier count for
+      // the held tier. Two significant digits, same honesty rule as the Tari row. "—" while the
+      // aggregate is missing or stale — never a guess.
+      expected:
+        xvb.expected_wins_30d !== null && xvb.expected_wins_30d !== undefined
+          ? `≈ ${Number(xvb.expected_wins_30d.toPrecision(2))} wins`
+          : "—",
       actual:
         `${xvb.wins_30d} win${xvb.wins_30d === 1 ? "" : "s"}` +
         (xvb.last_win_ts ? ` · last ${formatAgo(xvb.last_win_ts)}` : ""),
       dim: false,
       title:
         "Raffle wins recorded in the last 30 days (last-win recency can predate the window). " +
-        "A win's XMR arrives through ordinary payouts, so its value is counted in the " +
-        "Monero + XvB row above — this row tracks only that wins keep landing.",
+        "Expected is computed from XvB's public winners file: how often your tier's rounds are " +
+        "drawn ÷ how many qualifiers they have. A win's XMR arrives through ordinary payouts, " +
+        "so its value is counted in the Monero + XvB row above — this row tracks the draw.",
     });
   }
   return html`

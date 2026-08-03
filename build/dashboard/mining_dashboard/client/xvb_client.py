@@ -101,6 +101,47 @@ def parse_winners(text, wallet_address):
     return wins
 
 
+def parse_round_stats(text):
+    """Aggregate EVERY round in ``winners_recent_full_pub.txt`` — not just ours (#866/#872).
+
+    The file's ``players`` column is the qualifier count for each round, which makes two honest
+    figures computable that XvB's published estimates gloss over: how often a tier is drawn
+    (rounds of that type per day) and against how many qualifiers (players average). Returns
+    ``{"types": {round_type: {"rounds": n, "players_avg": x}}, "span_days": d}`` — an empty
+    ``types`` dict for a garbage/empty file, never a raise (same tolerance and input bounds as
+    ``parse_winners``; the two parse the SAME fetched body, one request)."""
+    types = {}
+    first_ts = last_ts = None
+    for line in (text or "").splitlines()[:_WINNERS_MAX_LINES]:
+        fields = line.split()
+        if len(fields) != _WINNERS_FIELD_COUNT:
+            continue
+        try:
+            ts = (
+                datetime.strptime(f"{fields[1]} {fields[2]}", "%Y-%m-%d %H:%M:%S")
+                .replace(tzinfo=UTC)
+                .timestamp()
+            )
+            players = int(fields[7])
+        except ValueError:
+            continue
+        if players <= 0:
+            continue
+        first_ts = ts if first_ts is None else max(first_ts, ts)
+        last_ts = ts if last_ts is None else min(last_ts, ts)
+        agg = types.setdefault(fields[8], {"rounds": 0, "players_sum": 0})
+        agg["rounds"] += 1
+        agg["players_sum"] += players
+    span_days = (first_ts - last_ts) / 86400.0 if first_ts is not None else 0.0
+    return {
+        "types": {
+            t: {"rounds": a["rounds"], "players_avg": a["players_sum"] / a["rounds"]}
+            for t, a in types.items()
+        },
+        "span_days": span_days,
+    }
+
+
 # register() outcomes (#263). The endpoint returns plaintext "ERROR: ..." with a 422 for the error
 # cases (not a 200/JSON contract), so success/failure is classified from status + body, not status
 # alone. The caller maps these to dashboard state + retry behaviour.
@@ -206,10 +247,11 @@ class XvbClient:
             return None
 
     def get_recent_wins(self):
-        """Fetch XvB's public raffle-winners log over Tor and return THIS wallet's wins,
-        oldest first.
+        """Fetch XvB's public raffle-winners log over Tor — ONE request, both parses.
 
-        An empty list is a normal, successful read (no wins in the file's ~4-day window);
+        Returns ``{"wins": [...], "round_stats": {...}}``: ``wins`` is THIS wallet's wins oldest
+        first (``parse_winners``; an empty list is a normal read — no wins in the file's ~4-day
+        window), ``round_stats`` the all-rounds aggregate (``parse_round_stats``, #866/#872).
         ``None`` means the fetch failed — same "None means keep what you have" contract as
         ``get_stats``, so the caller writes nothing and retries later. The file carries only
         masked wallets and the request carries none, so there's no IP<->wallet correlation
@@ -228,7 +270,10 @@ class XvbClient:
                     f"XvB winners fetch failed with status code: {response.status_code}"
                 )
                 return None
-            return parse_winners(response.text, self.wallet_address)
+            return {
+                "wins": parse_winners(response.text, self.wallet_address),
+                "round_stats": parse_round_stats(response.text),
+            }
         except requests.RequestException as e:
             self.logger.error(f"Network error while fetching XvB winners: {e}")
             return None

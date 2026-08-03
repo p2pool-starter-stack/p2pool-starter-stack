@@ -373,6 +373,27 @@ test('xvbTierComparison: no coeff_day (network stats down) → cost and net null
     assert.equal(c.expected, 6.17);
 });
 
+test('xvbTierComparison: measured realization yields realizedNet — the sign the face value got wrong (#872)', () => {
+    // Face value nets positive (6.17 − 3.65) while the measured figure nets NEGATIVE — the
+    // production case that motivated #872. Both are returned; the panel prefers realized.
+    const tier = {
+        name: 'Whale', threshold: 100_000,
+        expected_reward_year: 6.17, realized_reward_year: 6.17 * 0.19,
+    };
+    const c = xvbTierComparison(tier, 1e-7);
+    assert.ok(c.net > 0);
+    assert.ok(Math.abs(c.realized - 1.1723) < 1e-9);
+    assert.ok(c.realizedNet < 0);
+});
+
+test('xvbTierComparison: unmeasured realization stays null — never fabricated (#872)', () => {
+    const tier = { name: 'Whale', threshold: 100_000, expected_reward_year: 6.17, realized_reward_year: null };
+    const c = xvbTierComparison(tier, 1e-7);
+    assert.equal(c.realized, null);
+    assert.equal(c.realizedNet, null);
+    assert.ok(c.net !== null); // face-value net still stands, labeled as such by the panel
+});
+
 test('formatXmr: precision scales with magnitude; "—" for null/invalid', () => {
     assert.equal(formatXmr(2.5), '2.5000 XMR');        // >= 1 -> 4 dp
     assert.equal(formatXmr(0.1234567), '0.123457 XMR'); // >= 0.001 -> 6 dp

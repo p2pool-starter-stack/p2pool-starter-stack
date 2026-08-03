@@ -888,11 +888,16 @@ class DataService:
         now = time.time()
         if now - self._last_xvb_winners_sync < _XVB_WINNERS_SYNC_SEC:
             return
-        wins = await asyncio.to_thread(self.xvb_client.get_recent_wins)
-        if wins is None:
+        result = await asyncio.to_thread(self.xvb_client.get_recent_wins)
+        if result is None:
             return  # fetch failed — retry next eligible poll; don't stamp the gate
         self._last_xvb_winners_sync = now
-        new_wins = await asyncio.to_thread(self.state_manager.add_raffle_wins, wins)
+        # Same fetched body, second parse (#866/#872): the all-rounds aggregate that makes win
+        # odds and realized-reward figures computable. Written only when it parsed to something,
+        # so a format change degrades to stale (detectable) rather than an empty-implied-fresh.
+        if (result.get("round_stats") or {}).get("types"):
+            await asyncio.to_thread(self.state_manager.set_xvb_round_stats, result["round_stats"])
+        new_wins = await asyncio.to_thread(self.state_manager.add_raffle_wins, result["wins"])
         for win in new_wins:
             logger.info(
                 f"XvB raffle WIN: {win['tier']} round won at "
