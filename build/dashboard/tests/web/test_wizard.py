@@ -750,7 +750,11 @@ async def test_status_narrates_the_rig_save_without_promising_a_dashboard(client
     spool.joinpath("applied").write_text("1")
     body = await (await client.get("/status")).text()
     assert "Rig settings saved" in body
-    assert "dashboard" not in body.lower()
+    assert "dashboard" not in body.lower()  # a rig serves none — never point at one
+    # The boot leg is real: the last page this machine ever shows says the miner is starting,
+    # and names where the operator will actually see it.
+    assert "miner is starting" in body
+    assert "Workers view" in body
 
 
 async def test_rig_submit_clears_a_previous_error(client, seeded):

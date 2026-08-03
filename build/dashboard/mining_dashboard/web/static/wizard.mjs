@@ -208,9 +208,9 @@ export const Done = ({ status, handoff, installer, stick, rig, onAck }) => html`
                   page goes dark while the machine builds itself.`
             }<//>`
           : rig
-            ? html`<p><strong>Saved.</strong> This machine now carries the rig role — the worker
-            name and pool address are stored on it. Rig provisioning lands with the next phase
-            of the system; nothing mines yet, and the machine's console says the same.</p>
+            ? html`<p><strong>Saved.</strong> The miner is starting on this machine now. It has no
+            dashboard of its own, so this page is the last one it shows — the rig appears in your
+            Pithead's Workers view once it connects, and its console narrates until then.</p>
             <p class="text-muted">${status || ""}</p>`
             : html`<p><strong>Provisioning.</strong> The machine is pulling and starting the stack —
             10 to 30 minutes on a home connection. <strong>This page will stop responding</strong>

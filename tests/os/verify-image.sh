@@ -150,6 +150,38 @@ chk "prebuilt sha record present (integrity check input)" '[ -s "$ROOT/opt/rigfo
 chk "miner toolchain baked (compiler chain)" '[ -e "$ROOT/usr/bin/gcc" ] && [ -e "$ROOT/usr/bin/cmake" ] && [ -e "$ROOT/usr/bin/make" ] && [ -e "$ROOT/usr/bin/git" ]'
 chk "miner runtime tools baked (envsubst/cpupower/rdmsr)" '[ -e "$ROOT/usr/bin/envsubst" ] && [ -e "$ROOT/usr/bin/cpupower" ] && [ -e "$ROOT/usr/sbin/rdmsr" ]'
 
+echo "==> both role paths (a rig boots differently, updates identically)"
+# One image installs two machines, and which one a box becomes is decided by a marker on /data
+# that no static check can see. What CAN be checked here is that the shipped artifact carries
+# both legs — because the failure mode is silent on the machine that has no dashboard to say so:
+# a rig whose boot unit never fires just sits there, dark, mining nothing.
+# shellcheck disable=SC2034  # read inside chk's eval'd conditions
+RIGB="$ROOT/usr/local/sbin/pithead-boot"
+# The guard, not just the mention: `<machine-role` where there is none is a redirection failure
+# the shell reports itself, so an unguarded read prints an error into every COORDINATOR boot.
+chk "pithead-boot forks on the role marker, existence-tested before it is read" 'grep -q "^if \[ -f machine-role \]" "$RIGB"'
+chk "the rig leg runs the miner instead of the stack" 'grep -qE "local-miner" "$RIGB"'
+# The rig leg must reach the SAME commit the coordinator's does, or every A/B update to a rig
+# rolls back at the next boot — the whole one-image, one-update-pipeline promise.
+chk "the rig leg commits its A/B slot too (two mark-good sites)" '[ "$(grep -c "mark-good" "$RIGB")" -ge 2 ]'
+chk "the rig leg starts nothing container-shaped" '! sed -n "/machine-role/,/^fi$/p" "$RIGB" | grep -qE "pithead (up|load-images|render)"'
+# Unit conditions are the actual fork: without the triggering condition a rig never runs the
+# boot unit at all, and without the firstboot exclusion it runs the WIZARD on every boot.
+# shellcheck disable=SC2034  # read inside chk's eval'd conditions
+BOOTU="$ROOT/etc/systemd/system/pithead-boot.service"
+# shellcheck disable=SC2034  # read inside chk's eval'd conditions
+FBU="$ROOT/etc/systemd/system/pithead-firstboot.service"
+chk "boot unit triggers on a coordinator's config.json" 'grep -q "^ConditionPathExists=|/data/pithead/config.json" "$BOOTU"'
+chk "boot unit triggers on an accepted role marker (a rig has no config.json)" 'grep -q "^ConditionPathExists=|/data/pithead/machine-role" "$BOOTU"'
+chk "firstboot is closed by config.json" 'grep -q "^ConditionPathExists=!/data/pithead/config.json" "$FBU"'
+chk "firstboot is closed by the role marker (no wizard on a provisioned rig)" 'grep -q "^ConditionPathExists=!/data/pithead/machine-role" "$FBU"'
+# Prebuilt-first for the rig role: the baked binary is asserted above, and the seeding that puts
+# it in the rig's workspace is pithead-sync's, shared with the Both role.
+chk "sync seeds the prebuilt into the miner workspace" 'grep -q "prebuilt/xmrig" "$ROOT/usr/local/sbin/pithead-sync"'
+# Removable-root tolerance: a rig can run FROM the stick, and the image's journald is persistent.
+chk "the rig leg makes the journal volatile" 'grep -q "Storage=volatile" "$ROOT/opt/pithead/pithead"'
+chk "no swap in any role (no partition declared, none mounted)" '! grep -rqi "swap" "$ROOT"/usr/lib/repart.d/ && ! grep -qi "swap" "$ROOT/etc/fstab"'
+
 echo "==> provenance"
 BUILT=$(cat "$ROOT/opt/pithead/BUILD_COMMIT" 2>/dev/null || echo missing)
 echo "  image built from: $BUILT"

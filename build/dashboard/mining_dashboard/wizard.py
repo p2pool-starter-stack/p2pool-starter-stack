@@ -469,10 +469,11 @@ async def status(request: web.Request) -> web.Response:
         return web.Response(text="Copying the system to the disk…")
     if _spool_read("applied") is not None:
         if _spool_read("role") == "rig":
-            # Honest by design: the rig's boot leg arrives with the next phase of the system.
+            # A rig serves no dashboard, so this page is the last thing it will ever show:
+            # say where the machine went rather than promising a link that does not exist.
             return web.Response(
-                text="Rig settings saved on this machine. Rig provisioning lands with the "
-                "next phase of the system — nothing mines yet."
+                text="Rig settings saved. The miner is starting on this machine now — "
+                "it appears in your Pithead's Workers view once it connects."
             )
         return web.Response(text="Provisioned — the dashboard is coming up now.")
     err = _spool_read("error.txt")

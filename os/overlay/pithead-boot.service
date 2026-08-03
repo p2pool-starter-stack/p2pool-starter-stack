@@ -1,7 +1,16 @@
 [Unit]
 Description=Pithead stack at boot — render, up, health-gated A/B commit
-# Provisioned machines only: before config.json exists, pithead-firstboot owns the boot.
-ConditionPathExists=/data/pithead/config.json
+# Provisioned machines only: before either file exists, pithead-firstboot owns the boot. Two
+# TRIGGERING conditions (the `|` prefix — any one satisfied is enough, while the non-triggering
+# mount check below must still hold), because "provisioned" has two shapes. A coordinator states
+# it with config.json, and every machine provisioned before the role contract existed has only
+# that. A rig has no config.json and never will, so it states it with machine-role — written at
+# the moment a role is ACCEPTED, which is what makes it safe here: a fleet stick holds a rig's
+# answers only in flight and never writes the marker for a machine it is merely installing.
+# Existence is all a systemd condition can test; the script reads the marker's VALUE to pick the
+# leg.
+ConditionPathExists=|/data/pithead/config.json
+ConditionPathExists=|/data/pithead/machine-role
 # Same guard as firstboot: container storage lives on /data — a missing mount must refuse, not
 # silently rebuild storage on the discarded root overlay.
 ConditionPathIsMountPoint=/data
