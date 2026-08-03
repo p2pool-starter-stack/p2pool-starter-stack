@@ -76,20 +76,8 @@ VARIANT=$(tr -d ' \t\r\n' 2>/dev/null <"$WORK/mnt/etc/pithead-variant" || echo r
 umount "$WORK/mnt"
 mv "$WORK/rootfs.ext4" "$WORK/bundle/rootfs.ext4"
 
-cat >"$WORK/bundle/manifest.raucm" <<EOF
-[update]
-compatible=pithead-amd64
-version=$OS_VERSION
-
-[meta.pithead]
-variant=$VARIANT
-version=$OS_VERSION
-data_migration=$DATA_MIGRATION
-minimum_os_version=$MIN_OS_VERSION
-
-[image.rootfs]
-filename=rootfs.ext4
-EOF
+render_bundle_manifest "$OS_VERSION" "$VARIANT" "$DATA_MIGRATION" "$MIN_OS_VERSION" \
+    >"$WORK/bundle/manifest.raucm"
 
 echo "==> signing the bundle"
 rm -f "$OUT"

@@ -70,6 +70,17 @@ resolve_signing_material() { # $1 = dev(1/0); sets RAUC_CERT, RAUC_KEY, RAUC_KEY
     return 0
 }
 
+# The bundle manifest, rendered from the compatibility inputs so it can be tested without a
+# multi-minute image build. RAUC refuses a key with an empty value ("Missing value for key
+# 'minimum_os_version'"), so the migration floor is emitted ONLY when the release declares one —
+# emitting it unconditionally broke every ordinary, non-migrating build.
+render_bundle_manifest() { # $1 os_version, $2 variant, $3 data_migration, $4 minimum_os_version
+    printf '[update]\ncompatible=pithead-amd64\nversion=%s\n\n' "$1"
+    printf '[meta.pithead]\nvariant=%s\nversion=%s\ndata_migration=%s\n' "$2" "$1" "$3"
+    [ -n "$4" ] && printf 'minimum_os_version=%s\n' "$4"
+    printf '\n[image.rootfs]\nfilename=rootfs.ext4\n'
+}
+
 populate_slot() { # $1 = mounted rootfs
     local root="$1"
 

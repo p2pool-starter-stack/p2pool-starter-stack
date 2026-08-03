@@ -8777,6 +8777,25 @@ printf '{"manifest":{"meta":{"pithead":{"variant":"release","version":"1.17.0","
 
 # os_bundle_meta: the manifest fields read back out of `rauc info` JSON.
 ometa() { cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="$1" run_sourced "$OUSB" os_bundle_meta bundle.raucb "$2"; }
+# render_bundle_manifest: the WRITE side of the manifest (the read side is os_bundle_meta below).
+# RAUC refuses a key with an empty value, so an ordinary non-migrating build must omit the floor
+# entirely — emitting `minimum_os_version=` unconditionally broke every plain bundle build, and
+# the stubbed rauc in these tests never saw it. Assert the rendered text directly.
+plain_manifest="$(cd "$ROOT" && . os/rauc/populate-slot.sh && render_bundle_manifest 1.17.0 release false "")"
+assert_not_contains "plain build omits the migration floor entirely (no empty-valued key)" \
+    "$plain_manifest" "minimum_os_version"
+assert_contains "plain build still carries the version" "$plain_manifest" "version=1.17.0"
+assert_contains "plain build still carries the variant" "$plain_manifest" "variant=release"
+assert_contains "plain build declares no migration" "$plain_manifest" "data_migration=false"
+mig_manifest="$(cd "$ROOT" && . os/rauc/populate-slot.sh && render_bundle_manifest 1.18.0 release true 1.18.0)"
+assert_contains "a migrating build names its floor" "$mig_manifest" "minimum_os_version=1.18.0"
+# No key may ever render with an empty value — that is the exact shape rauc rejects.
+if printf '%s\n' "$plain_manifest" "$mig_manifest" | grep -qE '^[a-z_]+=$'; then
+    bad "no manifest key renders with an empty value" "found one"
+else
+    ok "no manifest key renders with an empty value"
+fi
+
 assert_eq "os_bundle_meta reads version" "$(ometa "$OUSB/info-mig.json" version)" "1.17.0"
 assert_eq "os_bundle_meta reads data_migration" "$(ometa "$OUSB/info-mig.json" data_migration)" "true"
 assert_eq "os_bundle_meta reads minimum_os_version" "$(ometa "$OUSB/info-mig.json" minimum_os_version)" "1.17.0"
