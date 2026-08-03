@@ -1,0 +1,19 @@
+[Unit]
+Description=Set CPU frequency governor to performance (appliance tuning)
+# Skip cleanly where there is no cpufreq to steer — a KVM guest or a bench box with no
+# scaling driver has no scaling_governor node, and the appliance should boot the same there.
+ConditionPathExists=/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+After=sysinit.target
+Before=pithead-boot.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The baseline for a mining appliance: hold the cores at full clock so the node, the wallet,
+# and any built-in miner are not scheduled onto a throttled-down CPU. A co-located RigForge
+# miner sets the same performance governor from its own service; both write the identical
+# value, so this only establishes the baseline earlier and covers the miner-disabled box.
+ExecStart=/usr/bin/cpupower frequency-set -g performance
+
+[Install]
+WantedBy=multi-user.target
