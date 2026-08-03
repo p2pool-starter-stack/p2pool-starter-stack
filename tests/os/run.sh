@@ -1213,6 +1213,19 @@ phase_provision() {
         else
             bad "the mining container can no longer reach clearnet even through Tor — the firewall is too tight"
         fi
+        # IPv6 backstop (#858): mining_net is IPv4-only by design, so monerod has no global v6 and
+        # this leg self-skips on the stock appliance. If mining_net ever gains a v6 subnet, the
+        # container CAN originate v6 clearnet — assert that dial is DROPPED too (the fail-open the
+        # v4-only rules left behind). Guarded on the container actually holding a global v6 address.
+        if _ssh "podman exec monerod sh -c 'ip -6 addr show scope global 2>/dev/null | grep -q inet6'" 2>/dev/null; then
+            if _ssh "podman exec monerod curl -s -o /dev/null -m 8 -g 'http://[2606:4700:4700::1111]/'" 2>/dev/null; then
+                bad "IPv6 clearnet egress is FAIL-OPEN — monerod reached a v6 address directly, bypassing Tor"
+            else
+                ok "direct IPv6 clearnet dial from a mining container is dropped — the v6 backstop holds"
+            fi
+        else
+            ok "mining_net is IPv4-only (no global v6 in the container) — v6 clearnet dial not possible, backstop not exercised"
+        fi
     else
         bad "monerod lacks curl — cannot assert the Tor-only egress drop (the #855 backstop is unverified)"
     fi
