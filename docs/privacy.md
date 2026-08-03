@@ -45,6 +45,14 @@ by channel:
 `pithead doctor` reads whichever mechanism the running engine uses and checks the drop is in a chain
 that is actually hooked at forward, so it cannot report enforced while the rules are orphaned.
 
+The allow-set matches on IPv4 addresses because the mining bridge is IPv4-only by design. On the
+appliance path the firewall also fences IPv6: if the mining network ever gains an IPv6 subnet, an
+address match has nothing to key on (there is no assigned v6 range), so the drop is scoped to the
+mining bridge interface instead — the v6 LAN (ULA `fc00::/7` and link-local `fe80::/10`) is allowed
+and everything else the bridge originates is dropped, leaving the host's own IPv6 forwarding on every
+other interface untouched. If a v6 subnet is present but the bridge interface can't be resolved,
+`pithead` refuses to install a v4-only firewall it would otherwise report as fail-closed.
+
 - Needs root (the firewall rules), like the GRUB/HugePages steps; removed at `pithead down`.
 - Opt out with `network.tor_egress_firewall: false` (then routing falls back to per-app config only).
 - The host-networked dashboard and caddy aren't on the bridge; the dashboard's only external calls

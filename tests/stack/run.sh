@@ -652,6 +652,51 @@ assert_contains "idempotent-replace: add table first" "$NFTR" "add table inet pi
 assert_contains "idempotent-replace: delete before recreating" "$NFTR" "delete table inet pithead_egress"
 assert_contains "honours a custom subnet/prefix (#180)" "$(run_sourced "$SANDBOX" render_tor_egress_nft 172.30.5.0/24 172.30.5.25)" "ip saddr 172.30.5.0/24 drop"
 
+echo "== unit: render_tor_egress_nft — IPv6 backstop only when the mining bridge is passed (#858) =="
+# mining_net is IPv4-only by design, so a bare render (no bridge arg) must stay v4-only — no ip6
+# rule can appear, or it would fence traffic that doesn't exist and risk the host's own v6.
+assert_not_contains "no bridge arg → no IPv6 rule at all (v4-only, the normal case)" "$NFTR" "ip6"
+# When mining_net gains v6 the caller resolves the bridge and passes it; the v6 fail-closed drop is
+# keyed on that interface (there's no v6 range to source-match) and mirrors the v4 LAN allow-set.
+NFTR6=$(run_sourced "$SANDBOX" render_tor_egress_nft 172.28.0.0/24 172.28.0.25 podman1)
+assert_contains "v6 drop is scoped to the mining bridge, never the whole forward path" "$NFTR6" 'iifname "podman1" meta nfproto ipv6 drop'
+assert_contains "v6 LAN ULA (fc00::/7) allowed off the bridge" "$NFTR6" 'iifname "podman1" ip6 daddr fc00::/7 accept'
+assert_contains "v6 link-local (fe80::/10) allowed off the bridge" "$NFTR6" 'iifname "podman1" ip6 daddr fe80::/10 accept'
+assert_eq "the IPv6 drop is the FINAL rule before the chain closes (fail-closed)" "$(printf '%s\n' "$NFTR6" | grep -E 'accept|drop' | tail -1)" '    iifname "podman1" meta nfproto ipv6 drop'
+assert_contains "the v4 allow-set is unchanged when v6 is added" "$NFTR6" "ip saddr 172.28.0.0/24 drop"
+
+echo "== unit: mining_net_ipv6_bridge — resolve bridge only when mining_net has a v6 subnet (#858) =="
+# Both the v6 subnet and the interface name come from the SAME `podman network inspect`, so whenever
+# v6 is present the bridge is too. Stub podman to answer network inspect; jq is real.
+NB="$SANDBOX/netbr"
+mkdir -p "$NB/bin"
+# v4-only mining_net → no bridge emitted, rc 0 (the normal appliance state).
+cat >"$NB/bin/podman" <<'PM'
+#!/usr/bin/env bash
+[ "$1" = "network" ] && [ "$2" = "inspect" ] || { echo "[]"; exit 0; }
+echo '[{"name":"mining_net","network_interface":"podman1","subnets":[{"subnet":"172.28.0.0/24"}]}]'
+PM
+chmod +x "$NB/bin/podman"
+assert_eq "v4-only mining_net → no bridge (stays v4-only), rc 0" "$(
+    PATH="$NB/bin:$PATH" run_sourced "$NB" mining_net_ipv6_bridge
+    echo " rc=$?"
+)" " rc=0"
+# dual-stack mining_net → the bridge name is emitted for the v6 backstop.
+cat >"$NB/bin/podman" <<'PM'
+#!/usr/bin/env bash
+echo '[{"name":"mining_net","network_interface":"podman4","subnets":[{"subnet":"172.28.0.0/24"},{"subnet":"fd00:dead:beef::/64"}]}]'
+PM
+assert_eq "dual-stack mining_net → emits the resolved bridge name" "$(PATH="$NB/bin:$PATH" run_sourced "$NB" mining_net_ipv6_bridge)" "podman4"
+# pathological: v6 subnet present but no resolvable interface → rc 3, so apply refuses (fail-closed).
+cat >"$NB/bin/podman" <<'PM'
+#!/usr/bin/env bash
+echo '[{"name":"mining_net","subnets":[{"subnet":"fd00:dead:beef::/64"}]}]'
+PM
+assert_eq "v6 present but no interface → rc 3 (caller refuses, never installs a v4-only firewall)" "$(
+    PATH="$NB/bin:$PATH" run_sourced "$NB" mining_net_ipv6_bridge >/dev/null
+    echo $?
+)" "3"
+
 echo "== black-box: apply_tor_egress_firewall routes to nftables under podman (#855) =="
 # PITHEAD_ENGINE=podman must send apply down the nft path (loaded via `nft -f -`), NOT the orphaned
 # DOCKER-USER path. Capture what gets piped to nft and assert the fail-closed ruleset landed.
@@ -679,6 +724,36 @@ printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWA
 : >"$NFW/nft.ruleset"
 PITHEAD_ENGINE=podman PATH="$NFW/bin:$PATH" run_sourced "$NFW" apply_tor_egress_firewall >/dev/null 2>&1
 assert_eq "opt-out on the podman path loads no nft ruleset" "$(cat "$NFW/nft.ruleset")" ""
+# The two blocks above never stub podman, so mining_net_ipv6_bridge finds no v6 → the loaded ruleset
+# stays strictly v4 (no over-block of IPv6 that doesn't exist yet).
+assert_not_contains "v4-only mining_net → the loaded ruleset carries no IPv6 rule" "$(
+    printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=true\n' >"$NFW/.env"
+    : >"$NFW/nft.ruleset"
+    PITHEAD_ENGINE=podman PATH="$NFW/bin:$PATH" run_sourced "$NFW" apply_tor_egress_firewall >/dev/null 2>&1
+    cat "$NFW/nft.ruleset"
+)" "ip6"
+
+echo "== black-box: apply on a dual-stack mining_net loads the IPv6 backstop (#858) =="
+# Same harness, now with a podman that reports mining_net carrying a v6 subnet. apply must resolve
+# the bridge and pipe an interface-scoped v6 drop into nft alongside the v4 rules.
+printf '#!/usr/bin/env bash\necho '"'"'[{"name":"mining_net","network_interface":"podman4","subnets":[{"subnet":"172.28.0.0/24"},{"subnet":"fd00:dead:beef::/64"}]}]'"'"'\n' >"$NFW/bin/podman"
+chmod +x "$NFW/bin/podman"
+printf 'NETWORK_SUBNET=172.28.0.0/24\nNETWORK_PREFIX=172.28.0\nTOR_EGRESS_FIREWALL=true\n' >"$NFW/.env"
+: >"$NFW/nft.ruleset"
+PITHEAD_ENGINE=podman PATH="$NFW/bin:$PATH" run_sourced "$NFW" apply_tor_egress_firewall >/dev/null 2>&1
+dsrules="$(cat "$NFW/nft.ruleset")"
+assert_contains "dual-stack apply keeps the v4 fail-closed DROP" "$dsrules" "ip saddr 172.28.0.0/24 drop"
+assert_contains "dual-stack apply adds the bridge-scoped IPv6 DROP" "$dsrules" 'iifname "podman4" meta nfproto ipv6 drop'
+
+echo "== black-box: apply REFUSES a v4-only firewall when mining_net has un-resolvable v6 (#858) =="
+# v6 subnet present but no interface name → mining_net_ipv6_bridge returns rc 3. apply must warn and
+# load NOTHING rather than install a v4-only table it would wrongly report as fail-closed.
+printf '#!/usr/bin/env bash\necho '"'"'[{"name":"mining_net","subnets":[{"subnet":"fd00:dead:beef::/64"}]}]'"'"'\n' >"$NFW/bin/podman"
+: >"$NFW/nft.ruleset"
+refuse_out="$(PITHEAD_ENGINE=podman PATH="$NFW/bin:$PATH" run_sourced "$NFW" apply_tor_egress_firewall 2>&1)"
+assert_contains "warns loudly that it is REFUSING (fail-closed by refusal)" "$refuse_out" "REFUSING"
+assert_eq "refusal loads no nft ruleset at all (no half-open v4-only firewall)" "$(cat "$NFW/nft.ruleset")" ""
+rm -f "$NFW/bin/podman" # restore the v4-only harness for anything downstream
 
 echo "== black-box: apply/remove_tor_egress_firewall via stubbed iptables (Docker path, #270) =="
 FW="$SANDBOX/fw"
