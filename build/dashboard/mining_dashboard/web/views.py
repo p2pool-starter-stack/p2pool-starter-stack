@@ -1482,14 +1482,7 @@ def xvb_current_tier_reward_day(metrics, state_mgr):
     if not metrics.xvb_enabled:
         return None
     tiers = state_mgr.get_tiers()
-    # Round-type key of the current tier: the highest-threshold key the credited average clears —
-    # the same selection get_tier_info makes, but we need the key (not the display name) to look up
-    # the estimate. None => below the lowest donor tier (nothing published to credit).
-    hr = min(metrics.xvb_1h, metrics.xvb_24h)
-    key, best = None, 0.0
-    for k, threshold in tiers.items():
-        if threshold > 0 and hr >= threshold and threshold > best:
-            key, best = k, threshold
+    key = xvb_current_tier_key(metrics, tiers)
     if key is None:
         return None
     est_state = state_mgr.get_xvb_reward_estimates()
@@ -1500,6 +1493,93 @@ def xvb_current_tier_reward_day(metrics, state_mgr):
     # 365-day year, matching logic.mjs DAYS_PER_YEAR. Guard non-positive so a zero/garbage estimate
     # degrades to None rather than folding a bogus 0 into gross.
     return float(reward_year) / 365 if reward_year and reward_year > 0 else None
+
+
+def xvb_current_tier_key(metrics, tiers):
+    """Round-type key of the tier the fleet is CURRENTLY credited for, or None below the lowest.
+
+    The highest-threshold key that ``min(xvb_1h, xvb_24h)`` clears — the same lower-of-two rule as
+    ``metrics.current_tier``, but yielding the KEY (``donor``/``donor_vip``/…) the estimate and
+    round-stats tables are indexed by."""
+    hr = min(metrics.xvb_1h, metrics.xvb_24h)
+    key, best = None, 0.0
+    for k, threshold in tiers.items():
+        if threshold > 0 and hr >= threshold and threshold > best:
+            key, best = k, threshold
+    return key
+
+
+# Measuring what a raffle win actually pays (#866/#872). A win's bonus round mines for up to an
+# hour and lands as ordinary small P2Pool payouts shortly after; production measurement put the
+# attributable payout mass inside 2h of the win timestamp. A win younger than the settle window
+# may still have payouts in flight, so it is left out of the sample rather than dragging the
+# factor down. Below the minimum sample the factor is noise — callers fall back to the published
+# figure and the UI labels it face value.
+_XVB_WIN_PAYOUT_WINDOW_S = 2 * 3600
+_XVB_WIN_SETTLE_S = 12 * 3600
+_XVB_REALIZATION_MIN_WINS = 5
+_XVB_REALIZATION_WINDOW_S = 45 * SECONDS_PER_DAY
+
+
+def xvb_expected_wins_day(round_stats_state, tier_key, tiers):
+    """Expected raffle wins per day for the held tier (#866), from XvB's own winners file.
+
+    The file's players column is the qualifier count per round, so the honest forecast is
+    mechanical: for each donor round type the fleet qualifies for (threshold at or under the held
+    tier's), rounds-per-day ÷ average qualifiers, summed. Verified against production: predicted
+    0.84 whale wins/day, measured 0.84/day over the same stretch. None when the aggregate is
+    missing, stale (#311 rule), or spans no measurable time — the card shows "—", never a guess."""
+    if not tier_key:
+        return None
+    stats = (round_stats_state or {}).get("stats") or {}
+    types = stats.get("types") or {}
+    span_days = stats.get("span_days") or 0.0
+    if xvb_stats_are_stale(round_stats_state) or not types or span_days <= 0:
+        return None
+    held = tiers.get(tier_key, 0.0)
+    total = 0.0
+    for key, threshold in tiers.items():
+        if 0 < threshold <= held:
+            agg = types.get(key)
+            if agg and agg.get("players_avg", 0) > 0 and agg.get("rounds", 0) > 0:
+                total += (agg["rounds"] / span_days) / agg["players_avg"]
+    return total if total > 0 else None
+
+
+def xvb_realization(payouts, raffle_wins, xvb_day, expected_wins_day, now=None):
+    """Measured fraction of XvB's published expectation this wallet actually collects (#866/#872).
+
+    Numerator: mean confirmed XMR landing within the attribution window after each settled win in
+    the trailing measurement window. Denominator: face value per win — the published per-day figure
+    spread over the expected win rate. Production measured ~0.19 on a Whale-tier box whose credited
+    average rode the round minimum; the published figures assume 1.0. Returns
+    ``(fraction clamped to [0, 1], wins measured)``, or None (callers fall back to the published
+    number, labeled face value) when either side is missing or fewer than
+    ``_XVB_REALIZATION_MIN_WINS`` wins are measurable."""
+    # ponytail: one factor across tiers and eras — per-tier factors if a tier change muddies it.
+    if not payouts or not raffle_wins or not xvb_day or not expected_wins_day:
+        return None
+    now = now if now is not None else time.time()
+    lo = now - _XVB_REALIZATION_WINDOW_S
+    stamps = [
+        t for t in ((w.get("ts") or 0) for w in raffle_wins) if lo <= t <= now - _XVB_WIN_SETTLE_S
+    ]
+    if len(stamps) < _XVB_REALIZATION_MIN_WINS:
+        return None
+    face_per_win = xvb_day / expected_wins_day
+    if face_per_win <= 0:
+        return None
+    # Each payout counts once even when two win windows overlap (back-to-back wins).
+    realized = (
+        sum(
+            (p.get("amount_atomic") or 0)
+            for p in payouts
+            if any(0 <= (p.get("ts") or 0) - t <= _XVB_WIN_PAYOUT_WINDOW_S for t in stamps)
+        )
+        / ATOMIC_PER_XMR
+    )
+    frac = (realized / len(stamps)) / face_per_win
+    return (max(0.0, min(1.0, frac)), len(stamps))
 
 
 def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None):
@@ -1571,7 +1651,9 @@ def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None)
     }
 
 
-def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
+def build_earnings_vs_actual(
+    metrics, earnings, raffle_wins, now=None, expected_wins_day=None, realization=None
+):
     """Expected-vs-actual summary — one row per income stream, for both views (#808).
 
     The comparison the operator otherwise assembles by hand across the Earnings tabs: the linear
@@ -1588,7 +1670,9 @@ def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
     expected = the P2Pool linear model + XvB's published per-day estimate × 30 (folded only when
     fresh; ``includes_xvb`` tells the client which label to draw), actual = every confirmed
     payout; ``pct`` compares like with like, and ``partial`` carries the confirmed window's
-    may-be-incomplete flag. **Tari** compares BLOCK COUNTS: solo merge-mining pays whole blocks,
+    may-be-incomplete flag. The XvB addend is TEMPERED by this wallet's measured win realization
+    when enough wins exist to measure it (#866 — see ``xvb_realization``); the published face
+    value stays in the tooltip via ``xvb_realization_pct``/``xvb_wins_measured``. **Tari** compares BLOCK COUNTS: solo merge-mining pays whole blocks,
     so the honest unit is blocks (expected = hashrate × window ÷ aux difficulty; actual =
     confirmed payout count, each payout being a found block), with the XTM sum alongside — no
     percent, a count that small is luck either way. **XvB** keeps only its win count and last-win
@@ -1605,6 +1689,16 @@ def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
     # the combined expectation to <= 0 while `available` stays True — an inverted pct at best, a
     # zero denominator at worst. A negative estimate is meaningless, so it folds as 0.
     expected_xvb = max(0.0, earnings["xvb_day"] or 0.0) * 30 if metrics.xvb_enabled else 0.0
+    # Temper the XvB leg by what THIS wallet's wins measurably paid (#866): the published figure
+    # prices bonus hashes at face value, which a production wallet realized ~19% of — folding it
+    # untempered made the combined pct blame the P2Pool leg for XvB's optimism. With enough
+    # measured wins (``realization``, computed once in build_state via ``xvb_realization``) the
+    # leg scales down to the measured fraction; without them the published figure stands and the
+    # client labels it face value.
+    if realization and expected_xvb > 0:
+        expected_xvb *= realization[0]
+    else:
+        realization = None
     xmr = {
         "available": expected_p2pool > 0,
         "expected_30d": expected_p2pool + expected_xvb,
@@ -1612,6 +1706,10 @@ def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
         # actual ALWAYS contains any win payouts; when XvB is on but the published figure is
         # stale, the tooltip owns the asymmetry rather than a fabricated estimate filling it.
         "includes_xvb": expected_xvb > 0,
+        # Tempering context for the tooltip: the measured fraction and its sample size, or None
+        # when the leg is the untempered published figure (or XvB is off).
+        "xvb_realization_pct": round(realization[0] * 100) if realization else None,
+        "xvb_wins_measured": realization[1] if realization else None,
         "enabled": bool(conf.get("enabled")),
         "actual_30d": conf.get("xmr_30d") if conf.get("enabled") else None,
         "partial": bool((conf.get("partial") or {}).get("30d")),
@@ -1639,6 +1737,10 @@ def build_earnings_vs_actual(metrics, earnings, raffle_wins, now=None):
         "enabled": metrics.xvb_enabled,
         "wins_30d": sum(1 for t in stamps if t >= now - 30 * SECONDS_PER_DAY),
         "last_win_ts": max(stamps, default=0),
+        # The forecast the "—" used to stand in for (#866): win odds are computable from XvB's
+        # own winners file (round-type frequency ÷ qualifier count), so publish them. None while
+        # the aggregate is missing/stale — the client keeps the dash.
+        "expected_wins_30d": expected_wins_day * 30 if expected_wins_day else None,
     }
     return {"xmr": xmr, "tari": tari, "xvb": xvb}
 
@@ -1659,7 +1761,7 @@ _XVB_SIDECHAIN_NOTE = (
 )
 
 
-def build_xvb_calc(metrics, state_mgr):
+def build_xvb_calc(metrics, state_mgr, realization=None):
     """XvB tier/raffle calculator inputs for the Advanced view (Issue #118).
 
     Same pattern as ``build_earnings``'s ``coeff_day``: the server publishes the tier table and
@@ -1669,12 +1771,31 @@ def build_xvb_calc(metrics, state_mgr):
     ``resolve_target_threshold``'s auto rule). Current/target tier state comes straight off
     ``Metrics`` — no tier math is re-derived here.
 
-    Deliberately carries NO raffle-entry or win-probability figures: the raffle draw is random
-    among qualifiers, so tier + threshold + cost is everything the operator can act on. Returns
-    ``{"enabled": False}`` alone when XvB is off — there is no tier to calculate."""
+    The draw is random among qualifiers, but the winners file publishes the qualifier count per
+    round (#872), so each tier carries its measurable draw context: ``win_odds_day`` (that round
+    type's frequency ÷ its average qualifiers — per-round-type, unlike the earnings card's
+    cumulative forecast) and ``players_avg`` (which also makes a single-qualifier artifact like
+    Mega's self-evident). ``realized_reward_year`` scales the published figure by this wallet's
+    measured win realization (``realization``, from ``xvb_realization``) — None when unmeasured,
+    so the client falls back to face value and says so. Returns ``{"enabled": False}`` alone when
+    XvB is off — there is no tier to calculate."""
     if not metrics.xvb_enabled:
         return {"enabled": False}
     tiers = state_mgr.get_tiers()
+    round_state = state_mgr.get_xvb_round_stats()
+    round_types = (
+        {}
+        if xvb_stats_are_stale(round_state)
+        else ((round_state.get("stats") or {}).get("types") or {})
+    )
+    span_days = ((round_state.get("stats") or {}).get("span_days") or 0.0) if round_types else 0.0
+
+    def _odds_day(key):
+        agg = round_types.get(key)
+        if not agg or span_days <= 0 or agg.get("players_avg", 0) <= 0:
+            return None
+        return (agg["rounds"] / span_days) / agg["players_avg"]
+
     # XvB's published per-tier expected reward (XMR/year), fetched over Tor and cached (#118). The
     # tier KEY is exactly the round-type in the file (donor / donor_vip / donor_whale / donor_mega),
     # so a tier maps to its estimate by key. A stale or empty cache degrades to None per tier +
@@ -1697,6 +1818,15 @@ def build_xvb_calc(metrics, state_mgr):
                     "expected_reward_year": (
                         float(estimates[key]) if estimates_available and key in estimates else None
                     ),
+                    # Published figure × measured realization (#872) — the net the panel can
+                    # honestly act on. None until enough wins measure the factor.
+                    "realized_reward_year": (
+                        float(estimates[key]) * realization[0]
+                        if estimates_available and key in estimates and realization
+                        else None
+                    ),
+                    "win_odds_day": _odds_day(key),
+                    "players_avg": (round_types.get(key) or {}).get("players_avg"),
                 }
                 for key, t in tiers.items()
                 if t > 0
@@ -1705,6 +1835,10 @@ def build_xvb_calc(metrics, state_mgr):
         ),
         "estimates_available": estimates_available,
         "estimates_stale": estimates_stale,
+        # Measurement context for the realized figures: the factor and its sample size, or None
+        # while unmeasured (the client then labels the published number face value).
+        "realization_pct": round(realization[0] * 100) if realization else None,
+        "realization_wins": realization[1] if realization else None,
         "max_fraction": XVB_MAX_DONATION_FRACTION,  # donation headroom rule (sustainability)
         "current_tier": metrics.current_tier,
         "target_tier": metrics.target_tier,
@@ -1847,6 +1981,19 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         xvb_day=xvb_current_tier_reward_day(metrics, state_mgr),
     )
 
+    # XvB honesty figures (#866/#872), computed once and shared by the earnings summary and the
+    # tier calculator so the two can never disagree: the forecast win rate from XvB's own winners
+    # file, and the measured fraction of the published reward this wallet's wins actually paid.
+    xvb_wins_day = xvb_realized = None
+    if metrics.xvb_enabled:
+        xvb_tiers = state_mgr.get_tiers()
+        xvb_wins_day = xvb_expected_wins_day(
+            state_mgr.get_xvb_round_stats(), xvb_current_tier_key(metrics, xvb_tiers), xvb_tiers
+        )
+        xvb_realized = xvb_realization(
+            monero_payouts, raffle_wins, earnings["xvb_day"], xvb_wins_day
+        )
+
     egress = egress_posture_from_config()  # per-component egress route + privacy roll-up (#170)
     topology = (
         topology_from_config()
@@ -1898,8 +2045,14 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         # (feature off → earnings shows only the estimate). Built above, before the payload.
         "earnings": earnings,
         # Expected vs actual, one row per stream (#808) — the Simple view's earnings figure.
-        "earnings_summary": build_earnings_vs_actual(metrics, earnings, raffle_wins),
-        "xvb_calc": build_xvb_calc(metrics, state_mgr),
+        "earnings_summary": build_earnings_vs_actual(
+            metrics,
+            earnings,
+            raffle_wins,
+            expected_wins_day=xvb_wins_day,
+            realization=xvb_realized,
+        ),
+        "xvb_calc": build_xvb_calc(metrics, state_mgr, realization=xvb_realized),
         # On a backup stack, the XvB controller state last pulled from the primary (#249) — held as
         # standby, adopted only at failover. None on a single stack (nothing pulls). Inspectable so
         # an operator can confirm the backup is warm before it takes over.
