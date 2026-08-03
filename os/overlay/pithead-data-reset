@@ -22,7 +22,11 @@ MARKER_NAME="pithead-reset"
 # /var. Keep this list in lockstep with 40-data.conf.
 SEED_DIRS="/overlay/var /overlay/var-work /pithead"
 
-log() { echo "pithead-data-reset: $*"; }
+# stderr, not stdout: data_reset_decision's STDOUT is its verdict and the caller captures it with
+# $(...). A progress line on stdout would ride along inside the captured value, match no `case`
+# branch, and silently skip the recovery reformat — the wedged box would stay wedged. The journal
+# gets stderr from a unit exactly as it gets stdout, so nothing is lost by moving it.
+log() { echo "pithead-data-reset: $*" >&2; }
 
 # The data and ESP partitions on the disk the system booted from — the same derivation
 # pithead-mount-generator uses (never by label: every pithead disk carries the same labels, so a
