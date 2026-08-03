@@ -80,6 +80,19 @@ def _state_mgr():
         "estimates": {"donor": 0.06, "donor_vip": 0.81, "donor_whale": 6.17, "donor_mega": 56.9},
         "last_update": NOW,
     }
+    # All-rounds raffle aggregate (#866/#872): enough for draw odds + the expected-wins cell.
+    sm.get_xvb_round_stats.return_value = {
+        "stats": {
+            "types": {
+                "donor": {"rounds": 7, "players_avg": 70.0},
+                "donor_vip": {"rounds": 28, "players_avg": 28.0},
+                "donor_whale": {"rounds": 56, "players_avg": 8.0},
+                "donor_mega": {"rounds": 63, "players_avg": 1.0},
+            },
+            "span_days": 7.0,
+        },
+        "last_update": NOW,
+    }
     # One recorded XvB raffle win (inside the chart window) so the fixture carries both the
     # chart's gold-star marker and the XvB card's wins-log row.
     sm.get_raffle_wins.return_value = [

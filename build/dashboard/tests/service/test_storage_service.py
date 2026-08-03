@@ -117,6 +117,17 @@ class TestXvbStats:
         got["estimates"]["donor"] = 99
         assert state_manager.get_xvb_reward_estimates()["estimates"]["donor"] == 0.06
 
+    def test_round_stats_default_empty_then_set_stamps_and_copies(self, state_manager):
+        # #866: same memory-only, stamp-on-genuine-fetch, copy-out contract as the estimates.
+        assert state_manager.get_xvb_round_stats() == {"stats": {}, "last_update": 0.0}
+        stats = {"types": {"donor_whale": {"rounds": 62, "players_avg": 9.8}}, "span_days": 7.0}
+        state_manager.set_xvb_round_stats(stats)
+        got = state_manager.get_xvb_round_stats()
+        assert got["stats"] == stats
+        assert got["last_update"] > 0.0
+        got["stats"]["span_days"] = 99
+        assert state_manager.get_xvb_round_stats()["stats"]["span_days"] == 7.0
+
     def test_local_only_writes_do_not_set_last_update(self, state_manager):
         # The algo controller writes mode / donation_fraction / fail_count every cycle; none is an
         # xmrvsbeast.com fetch, so the "Updated" freshness timestamp must NOT bump on them (#136) —

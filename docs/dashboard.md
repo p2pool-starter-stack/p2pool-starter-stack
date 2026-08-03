@@ -268,9 +268,9 @@ trailing **30-day** window:
 
 | Row | Expected | Actual |
 |---|---|---|
-| **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** XvB's published per-day estimate for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
+| **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** the XvB share for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). Once enough of your wins have confirmed payouts to measure, the XvB share is XvB's published figure **scaled to what your wins actually paid** — the tooltip names the measured percentage and sample. Until then the published face value stands, and the tooltip says it is an upper bound. | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
 | **Tari (30d)** | Expected **blocks** (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
-| **XvB wins (30d)** | — | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
+| **XvB wins (30d)** | Forecast wins for your tier, from XvB's own winners file: how often your tier's rounds are drawn ÷ how many qualifiers they have (summed with the lower donor rounds you also qualify for). `—` while the file hasn't been read or has gone stale. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
 
 Monero and XvB share one row **on both sides** deliberately: an XvB win pays out through ordinary
 small payouts that can't be told apart from P2Pool payouts, so the confirmed actual always
@@ -620,9 +620,10 @@ Set the keys in `config.json` and run `./pithead apply`. Key reference: the `mon
 
 A block inside the earnings card, driven by the same what-if hashrate input, that answers "which
 XMRvsBeast tier could this hashrate hold, and what would it cost?". Hidden entirely while XvB is
-disabled (`xvb.enabled: false`). It shows tier status only — deliberately no raffle entries or win
-odds, because there are none to show: the raffle winner is drawn at random among everyone above
-the threshold, so donating more than the threshold buys zero extra win chance.
+disabled (`xvb.enabled: false`). The raffle winner is drawn at random among everyone above the
+threshold, so donating more than the threshold buys zero extra win chance — but the odds
+themselves are knowable: XvB's winners file publishes the qualifier count for every round, and
+the comparison below shows them.
 
 | Field | Meaning |
 |---|---|
@@ -635,13 +636,19 @@ Below the tier figures, a **per-tier payout comparison** dropdown weighs each do
 
 | Field | Meaning |
 |---|---|
-| **Expected (XvB)** | XvB's own published expected reward for the tier, in XMR per year. This is XvB's pre-computed `reward_calc` figure for the tier's donor round, fetched over Tor from `reward_estimate_pub.txt` — the dashboard does not re-derive it. It is the raffle expectation across all qualifiers, so donating **above** the tier threshold does not raise it. `estimate unavailable` when the fetch is stale or failed — never a stale figure implied fresh. |
+| **Expected (XvB)** | XvB's own published expected reward for the tier, in XMR per year. This is XvB's pre-computed `reward_calc` figure for the tier's donor round, fetched over Tor from `reward_estimate_pub.txt` — the dashboard does not re-derive it. It is the raffle expectation across all qualifiers, so donating **above** the tier threshold does not raise it. It is also **face value**: it prices every bonus hash at full block reward and assumes every won round runs to completion — wallets collect less. `estimate unavailable` when the fetch is stale or failed — never a stale figure implied fresh. |
 | **Cost / yr** | The P2Pool earnings given up by donating the tier threshold for a year: `threshold × the P2Pool daily rate × 365`, using the same rate the Monero tab shows. |
-| **Net / yr** | Expected minus Cost. Shown only when XvB's estimate is available; otherwise the cost stands alone. |
+| **Net / yr** | The reward minus the P2Pool earnings given up — the number to act on. Labeled **(measured)** when enough of your wins have confirmed payouts to measure what they actually paid: the published reward is scaled to that measured fraction first, because the face-value net can carry the wrong **sign** (a production Whale box showed +2.97 XMR/yr while the measured net was about −1.8). Labeled **(face value)** until then — read it as an upper bound. |
 
-The estimate is fetched over Tor on the same cadence and staleness rules as the XvB stats card, so
-a quiet feed degrades to `estimate unavailable` rather than showing an old number. Pick a tier to
-compare, e.g. Whale against VIP Donor, at a glance.
+Below the figures, a **draw line** shows the selected tier's raffle odds from the winners file:
+about how many wins per 30 days its rounds pay out and among how many qualifiers the draw runs. A
+tier with one qualifier (it happens) is winner-take-all: its headline reward assumes that one
+donor stays alone, and evaporates the moment a second qualifies.
+
+The estimate and the winners file are fetched over Tor on the same cadence and staleness rules as
+the XvB stats card, so a quiet feed degrades to `estimate unavailable` (and the draw line
+disappears) rather than showing an old number. Pick a tier to compare, e.g. Whale against VIP
+Donor, at a glance.
 
 Raffle mechanics, flat: the winner of a donor round is drawn at random among wallets above the
 tier threshold on both credited averages; a win terminates if the 1h average then drops below the
