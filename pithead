@@ -2259,16 +2259,47 @@ os_running_variant() { # echoes debug|release|unknown
     case "$v" in debug | release) echo "$v" ;; *) echo unknown ;; esac
 }
 
+os_bundle_meta() { # $1: bundle, $2: [meta.pithead] key — echoes its value or empty, never fails
+    # `rauc info --output-format=json` exposes the manifest meta. Parsed defensively: find any
+    # object carrying a `pithead` child (so a RAUC that nests the manifest differently still
+    # resolves) and read the key out of it. Anything unparseable degrades to empty.
+    rauc info --output-format=json "$1" 2>/dev/null |
+        jq -r --arg k "$2" '[.. | objects | select(has("pithead")) | .pithead | objects | .[$k]? // empty] | map(select(. != "")) | first // empty' 2>/dev/null
+}
+
 os_bundle_variant() { # $1: bundle path — echoes debug|release|unknown, never fails
-    # The stamp lives under [meta.pithead] in the bundle manifest; `rauc info` exposes manifest
-    # meta in its JSON output. Parsed defensively (any object carrying a `variant` key), so a
-    # RAUC that nests the manifest differently still yields the stamp rather than a false
-    # "unknown" — and anything unparseable degrades to unknown, which the gate treats as
-    # shell-less.
+    # Unknown covers both an unstamped bundle and any garbage: the gate treats unknown as
+    # shell-less, so a debug box is warned before an install that might drop SSH.
     local v
-    v=$(rauc info --output-format=json "$1" 2>/dev/null |
-        jq -r '[.. | objects | .variant? // empty] | map(select(. == "debug" or . == "release")) | first // empty' 2>/dev/null)
+    v=$(os_bundle_meta "$1" variant)
     case "$v" in debug | release) echo "$v" ;; *) echo unknown ;; esac
+}
+
+os_semver_ok() { printf '%s' "${1:-}" | grep -qE '^v?[0-9]+\.[0-9]+\.[0-9]+$'; }
+
+os_running_version() { # the OS version this checkout/slot IS — PITHEAD_VERSION, else the VERSION file
+    printf '%s' "${PITHEAD_VERSION:-$(tr -d ' \t\r\n' <VERSION 2>/dev/null || true)}"
+}
+
+# The /data-resident floor: the lowest OS version that can still read the current on-disk chain
+# data. Raised when a data_migration bundle installs; read back to refuse an unsafe rollback below
+# it. Overridable for tests; absent means no migration has raised a floor yet (today's reality).
+os_data_floor_file() { printf '%s' "${PITHEAD_DATA_FLOOR_FILE:-/data/pithead/.os-data-floor}"; }
+
+os_data_floor() { # echoes the floor version, or empty
+    local f
+    f=$(os_data_floor_file)
+    [ -f "$f" ] && tr -d ' \t\r\n' <"$f" 2>/dev/null || true
+}
+
+os_raise_data_floor() { # $1: new floor — raise it, never lower (a migration only ever tightens)
+    local f cur
+    f=$(os_data_floor_file)
+    cur=$(os_data_floor)
+    if [ -z "$cur" ] || { os_semver_ok "$cur" && semver_newer "$1" "$cur"; }; then
+        mkdir -p "$(dirname "$f")" 2>/dev/null || true
+        printf '%s\n' "$1" >"$f"
+    fi
 }
 
 os_update_needs_confirmation() { # $1: running variant, $2: bundle variant — rc 0 = confirm first
@@ -2278,10 +2309,11 @@ os_update_needs_confirmation() { # $1: running variant, $2: bundle variant — r
 }
 
 os_update() {
-    local bundle="" assume_yes=0 arg
+    local bundle="" assume_yes=0 allow_downgrade=0 arg
     for arg in "$@"; do
         case "$arg" in
         -y | --yes) assume_yes=1 ;;
+        --allow-downgrade) allow_downgrade=1 ;;
         -*) error "Unknown option for os-update: $arg. Run '$0 help'." ;;
         *)
             [ -z "$bundle" ] || error "os-update takes exactly one bundle path. Run '$0 help'."
@@ -2293,6 +2325,46 @@ os_update() {
     command -v rauc >/dev/null 2>&1 ||
         error "rauc is not available here — OS updates apply to the appliance image, not a checkout install."
     [ -f "$bundle" ] || error "No such bundle: $bundle"
+
+    # Version floor + data-migration guards. A correctly-signed bundle is not automatically a safe
+    # one: an OLDER image re-introduces the holes the newer one fixed under our own signature, and
+    # an image below the /data migration floor cannot read the chain data a newer release migrated.
+    # Both guards fail CLOSED: a version the comparator cannot parse (a pre-release/-prep suffix,
+    # garbage, or an absent stamp) is not proof of safety, so it refuses rather than skips.
+    # semver_newer only understands clean X.Y.Z, so os_semver_ok gates every comparison.
+    local bundle_version bundle_min bundle_migrates running_version floor_file floor
+    bundle_version=$(os_bundle_meta "$bundle" version)
+    bundle_min=$(os_bundle_meta "$bundle" minimum_os_version)
+    bundle_migrates=$(os_bundle_meta "$bundle" data_migration)
+    running_version=$(os_running_version)
+
+    # The data floor is not a policy knob — installing below it strands the migrated chain data, so
+    # it hard-refuses with no --allow-downgrade override. A floor FILE that exists is authoritative:
+    # a corrupt/unparseable floor, or a bundle we cannot prove is at or above it, refuses. The escape
+    # is a factory reset or restoring a matching backup.
+    floor_file=$(os_data_floor_file)
+    if [ -f "$floor_file" ]; then
+        floor=$(os_data_floor)
+        if ! os_semver_ok "$floor"; then
+            error "Refusing: the /data migration floor is unreadable ('${floor:-empty}'). A corrupt floor is not permission to install over migrated chain data — restore it, or recover with a factory reset (loses the chain) or a matching backup."
+        fi
+        if ! os_semver_ok "$bundle_version" || semver_newer "$floor" "$bundle_version"; then
+            error "Refusing: /data was migrated forward and now needs OS >= $floor to read; this bundle is '${bundle_version:-unstamped}'. Installing it would strand the chain data. Recover with a factory reset (loses the chain) or by restoring a backup taken on $floor or newer."
+        fi
+    fi
+
+    # Downgrade guard: install without --allow-downgrade ONLY when the bundle is a clean release
+    # semver provably newer than or equal to the running one. An older, pre-release, or unstamped
+    # bundle re-opens fixed holes under a valid signature — it needs the explicit flag. Skipped only
+    # when we cannot read our OWN version (a source checkout; os-update is appliance-only in practice,
+    # where the running version is always the baked release stamp).
+    if os_semver_ok "$running_version" &&
+        { ! os_semver_ok "$bundle_version" || semver_newer "$running_version" "$bundle_version"; }; then
+        if [ "$allow_downgrade" -eq 0 ]; then
+            error "Refusing a possible downgrade: bundle version '${bundle_version:-unstamped}', running $running_version. Only a clean X.Y.Z release at or newer than the running one installs without confirmation. Pass --allow-downgrade to install an older, pre-release, or unstamped bundle on purpose."
+        fi
+        warn "Installing a bundle that is not a verified upgrade (version '${bundle_version:-unstamped}', running $running_version) — downgrade explicitly allowed."
+    fi
 
     local running target
     running=$(os_running_variant)
@@ -2314,6 +2386,16 @@ os_update() {
     fi
     log "Installing OS update bundle: $bundle (running: $running, bundle: $target)"
     rauc install "$bundle"
+
+    # A data_migration bundle raises the /data floor so a later rollback below it is refused. Armed
+    # at install (conservative: before the migration actually runs on the new slot's next boot) —
+    # the safe direction, and the only floor pithead can guarantee without executing the migration
+    # itself. Executing the forward-only migration + withholding chain services until the slot
+    # commits is the remaining half of the deadlock rule, tracked as follow-up (see appliance-release.md).
+    if [ "$bundle_migrates" = "true" ] && os_semver_ok "$bundle_min"; then
+        os_raise_data_floor "$bundle_min"
+        log "Recorded /data migration floor: OS >= $bundle_min required to read chain data after this update commits."
+    fi
 }
 
 reset_dashboard() {
@@ -2775,12 +2857,16 @@ Maintenance:
                             stop the miner when it is off. The boot path runs this after the
                             stack is up; a no-op outside the appliance.
 
-  os-update BUNDLE [-y|--yes]
+  os-update BUNDLE [-y|--yes] [--allow-downgrade]
                             Install an OS update bundle into the spare A/B slot (appliance
-                            only — runs 'rauc install'). When this system is a debug build
-                            (SSH baked in) and the bundle is not, it warns and asks first:
-                            that install removes the SSH channel driving it.
-                              -y, --yes        skip the confirmation prompt.
+                            only — runs 'rauc install'). Refuses a bundle older than the
+                            running OS (a signed downgrade re-opens fixed holes), and refuses
+                            one below the /data migration floor outright. When this system is a
+                            debug build (SSH baked in) and the bundle is not, it warns and asks
+                            first: that install removes the SSH channel driving it.
+                              -y, --yes          skip the confirmation prompt.
+                              --allow-downgrade  install an older bundle on purpose (does not
+                                                 override the /data migration floor).
 
   onion-client-key          Print the Tor client-auth line for the dashboard onion —
                             the client PRIVATE key, kept out of 'status'. Add it to your Tor

@@ -189,6 +189,16 @@ a hardware-validated failure:
    `hugepages_reserve_extra_mb` — RigForge's grow-only sysctl then sizes the shared pool as
    the single writer, and pithead's own HugePages write never shrinks a grown pool back.
 
+**Known gap at step 4 — forward-only data migrations.** Today `up` (step 3) starts the whole
+stack, monerod and tari included, *before* the commit at step 4. A release that runs a
+forward-only lmdb migration would therefore migrate `/data` before the slot commits, so a
+failed health check could leave the box unable to commit *or* fall back cleanly. The
+migration-deadlock rule (`dual-distribution-plan.md` risk #6) closes this by withholding the
+chain services until the slot commits on a `data_migration`-flagged update; that boot-path
+change is scoped follow-up. Until it lands, `pithead os-update` already refuses a *manual*
+rollback below the `/data` migration floor — see
+[`appliance-release.md`](appliance-release.md#compatibility-metadata-and-the-data-migration-floor).
+
 **Rule for changes:** anything generated from `config.json` or the program is derived and must
 be rebuilt by `render` — adding one anywhere else recreates the staleness bug. The container
 images are derived in the same sense: functions of the running slot, converged every boot by

@@ -56,6 +56,57 @@ warns before making that transition, requiring a y/N confirmation (or `--yes`). 
 `rauc install` bypasses the guard; use it only when you have already decided the SSH loss
 is acceptable.
 
+## Compatibility metadata and the data-migration floor
+
+The bundle manifest's `[meta.pithead]` section carries the compatibility contract the
+update path reads back before it installs:
+
+| Field | Meaning |
+|---|---|
+| `version` | the OS version this bundle carries (from `VERSION`) |
+| `data_migration` | `true` if this release runs a forward-only `/data` (lmdb) migration |
+| `minimum_os_version` | the lowest OS version that can still read `/data` once it has migrated |
+
+Two guards consume them, because a correctly-signed bundle is not automatically a safe one:
+
+- **No signed downgrade.** `os-update` installs without confirmation only a clean `X.Y.Z`
+  release whose `version` is at or newer than the running OS. It fails **closed**: an older
+  bundle, a pre-release/`-prep` version, garbage, or an absent stamp is not proof of safety
+  (an older image re-introduces the holes the newer one fixed, carrying our own valid
+  signature), so any of them is refused unless `--allow-downgrade` is passed on purpose.
+  The check is skipped only when the box cannot read its *own* version — a source checkout,
+  never a provisioned appliance. (Deliberate A/B rollback is unaffected — `rauc status
+  mark-bad booted` boots the spare slot already present; it does not re-install an old bundle.)
+- **No rollback below the migration floor.** When a `data_migration` bundle installs,
+  `os-update` records its `minimum_os_version` as a floor on `/data` (`.os-data-floor`). Once
+  a floor file exists it is authoritative and fails **closed**: an OS below it, a bundle whose
+  version can't be parsed, *or a corrupt floor file itself* is refused **outright** —
+  `--allow-downgrade` does not override any of these, because the migrated chain data is
+  unreadable there and the failure is silent data loss, not a policy preference. The escape is
+  a factory reset (loses the chain) or restoring a backup taken on a version at or above the
+  floor.
+
+**The data-migration contract for release authors:** a release that ships a forward-only
+schema bump MUST declare it, or a later rollback silently strands the migrated chain data.
+Build the bundle with both fields set:
+
+```bash
+PITHEAD_DATA_MIGRATION=true PITHEAD_MIN_OS_VERSION=X.Y.Z os/rauc/mkbundle.sh ...
+```
+
+`X.Y.Z` is the lowest OS version whose monerod/tari can still read `/data` after the
+migration — normally this release's own version. `mkbundle.sh` refuses to build a
+migrating bundle without it.
+
+**Scoped follow-up — the migration runner.** Recording and enforcing the floor is done;
+*executing* the forward-only migration is not. The remaining half of the deadlock rule
+(`dual-distribution-plan.md` risk #6) is `pithead-boot` withholding the chain services
+(monerod/tari) until the slot commits on a `data_migration` update, so automatic A/B
+fallback stays pre-migration. Until that lands, the floor guard above prevents the *manual*
+rollback path from stranding data; the automatic-fallback ordering is bench (tier-4) work,
+asserted by `tests/os/run.sh --phase update`. The `db_schema` field the plan also lists
+lands with that runner — nothing reads it yet.
+
 ## Development loop
 
 Everything runs from the repo root on a Linux box with docker, KVM and libvirt. The
