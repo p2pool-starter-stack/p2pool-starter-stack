@@ -1949,6 +1949,8 @@ class TestXvbRealization:
         assert xvb_realization(self._payouts(1), self.WINS, None, 1.0, now=self.NOW) is None
         assert xvb_realization(self._payouts(1), self.WINS, 0.016, None, now=self.NOW) is None
         assert xvb_realization(self._payouts(1), self.WINS, 0.016, 0.0, now=self.NOW) is None
+        # A hostile/corrupt negative published figure gives a negative face value — no factor.
+        assert xvb_realization(self._payouts(1), self.WINS, -0.016, 1.0, now=self.NOW) is None
 
 
 class TestEarningsVsActualTempering:
