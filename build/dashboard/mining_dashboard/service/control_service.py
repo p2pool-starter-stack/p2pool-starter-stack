@@ -38,11 +38,18 @@ SECRET_PATHS = [
     # A capability secret: pithead's describe_change already refuses to echo it, but read_config
     # was serving it in cleartext to the browser. Mask it too (#33 hardening).
     ("healthchecks", "ping_url"),
+    # ntfy topic URL + access token (#848): the URL can carry a topic token in its path/query and
+    # the token is a Bearer credential — both masked like the ping URL above.
+    ("notifications", "ntfy", "url"),
+    ("notifications", "ntfy", "token"),
     # The backup's primary-dashboard URL (#249) can carry the primary's dashboard basic-auth as
     # userinfo — a capability secret, masked like the ping URL above.
     ("xvb", "standby", "source"),
 ]
 SECRET_SENTINEL = {"__secret__": True}
+# notifications.webhooks[] (#848): a list of bare URL strings, each one a bearer secret (query
+# strings carry tokens). No fixed leaf path reaches an array element, so it is masked separately.
+WEBHOOKS_PATH = ("notifications", "webhooks")
 
 _RESULT_POLL_S = 0.5
 
@@ -70,6 +77,21 @@ def _set(cfg, path, value):
     for key in path[:-1]:
         node = node[key]
     node[path[-1]] = value
+
+
+def mask_secrets(cfg):
+    """Replace every set secret leaf (``SECRET_PATHS``) and each set ``notifications.webhooks[]``
+    entry with the sentinel, in place. Mirrors pithead's ``render_masked_config``; shared by
+    ``read_config`` and ``data_service`` so the fixed-path walk and the webhooks array mask (#848)
+    never drift between the two defense-in-depth passes. An empty secret stays empty."""
+    for path in SECRET_PATHS:
+        found, value = _get(cfg, path)
+        if found and value:
+            _set(cfg, path, dict(SECRET_SENTINEL))
+    found, hooks = _get(cfg, WEBHOOKS_PATH)
+    if found and isinstance(hooks, list):
+        _set(cfg, WEBHOOKS_PATH, [dict(SECRET_SENTINEL) if h else h for h in hooks])
+    return cfg
 
 
 def _deep_merge(base, override):
@@ -251,10 +273,7 @@ def read_config():
         cfg = _deep_merge(reference, cfg)
     except (OSError, ValueError):
         logger.warning("config.reference.json unavailable — serving the host config alone.")
-    for path in SECRET_PATHS:
-        found, value = _get(cfg, path)
-        if found and value:
-            _set(cfg, path, dict(SECRET_SENTINEL))
+    mask_secrets(cfg)
     cfg["_core_keys"] = _load_core_keys()
     cfg["_editable_keys"] = _editable_paths()
     cfg["_confirm_keys"] = _confirm_paths()

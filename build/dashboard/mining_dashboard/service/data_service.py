@@ -78,11 +78,9 @@ from mining_dashboard.service import audit_service
 from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.service.control_service import (
-    SECRET_PATHS,
     SECRET_SENTINEL,
-    _get,
-    _set,
     env_key_config_paths,
+    mask_secrets,
 )
 from mining_dashboard.service.degradation import DegradationMonitor
 from mining_dashboard.service.healthchecks import HealthchecksClient
@@ -426,7 +424,7 @@ def _read_host_config():
 
     The mount is the host's PRE-MASKED copy already (docker-compose bind-mounts
     ``control/masked/config.json``; the raw config.json never enters the container). We still
-    re-apply the SECRET_PATHS mask here — exactly the defense-in-depth pass ``control_service.
+    re-apply ``mask_secrets`` here — exactly the defense-in-depth pass ``control_service.
     read_config`` runs — so a host-side masking regression can never leave a raw secret VALUE
     resident in ``self._last_host_config`` across polls. The diff only ever compares/names keys,
     but this keeps the one long-lived config dict secret-free regardless."""
@@ -435,11 +433,7 @@ def _read_host_config():
             cfg = json.load(f)
     except (OSError, ValueError):
         return None
-    for path in SECRET_PATHS:
-        found, value = _get(cfg, path)
-        if found and value:
-            _set(cfg, path, dict(SECRET_SENTINEL))
-    return cfg
+    return mask_secrets(cfg)
 
 
 class WorkerLifecycle:

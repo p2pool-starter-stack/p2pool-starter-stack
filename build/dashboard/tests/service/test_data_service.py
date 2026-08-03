@@ -2855,6 +2855,28 @@ class TestReadHostConfig:
         out = _read_host_config()
         assert out["dashboard"]["auth"]["password"] == {"__secret__": True}
 
+    def test_notification_secrets_are_remasked(self, tmp_path, monkeypatch):
+        # Same shared mask_secrets pass covers ntfy + the webhooks array here (#848), so a host-side
+        # regression can't leave a raw notification credential resident in the config snapshot.
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "notifications": {
+                        "webhooks": ["https://hooks.example/leaked", ""],
+                        "ntfy": {"url": "https://ntfy.example/leaked", "token": "leaked"},
+                    }
+                }
+            )
+        )
+        monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", str(cfg))
+        out = _read_host_config()
+        assert out["notifications"]["ntfy"]["url"] == {"__secret__": True}
+        assert out["notifications"]["ntfy"]["token"] == {"__secret__": True}
+        assert out["notifications"]["webhooks"][0] == {"__secret__": True}
+        assert out["notifications"]["webhooks"][1] == ""
+        assert "leaked" not in json.dumps(out)
+
     def test_missing_or_bad_file_is_none(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ds_mod.config, "HOST_CONFIG_PATH", "/nonexistent/config.json")
         assert _read_host_config() is None
