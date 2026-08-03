@@ -8430,6 +8430,45 @@ grep -qE "timeout [0-9]+ \./pithead local-miner" "$BOOTSCRIPT" &&
         "no 'timeout N ./pithead local-miner' in pithead-boot"
 unset BOOTSCRIPT mg_line lm_line
 
+echo "== unit: the A/B commit gate consumes doctor --json, not just the curl (#852) =="
+# The gate that used to be a bare curl to https://localhost/ committed any slot whose dashboard
+# answered — even one whose mining services had crashed. The fix pairs the curl with doctor's
+# exit code. Assert the wiring: both signals gate the same mark-good, curl first (cheap).
+BOOTSCRIPT="$ROOT/os/overlay/pithead-boot"
+# The curl fills $code from https://localhost/; the commit condition then requires BOTH a non-000
+# code AND a clean 'doctor --json' before mark-good runs.
+grep -qE 'curl.*https://localhost/' "$BOOTSCRIPT" &&
+    grep -qE '\$\{?code[:}].*!=.*000.*&&.*pithead doctor --json' "$BOOTSCRIPT" &&
+    ok "pithead-boot gates mark-good on the localhost curl AND 'pithead doctor --json'" ||
+    bad "pithead-boot gates mark-good on the localhost curl AND 'pithead doctor --json'" \
+        "the commit condition does not pair the curl result with 'doctor --json'"
+unset BOOTSCRIPT
+
+echo "== unit: revenue_container_verdict — commit-gate honesty, syncing vs crashed (#852) =="
+# The pure classifier behind check_revenue_containers, so the commit gate's central judgement is
+# tested without a running stack. Two rules it must hold:
+#   1. a crashed/unhealthy CHAIN node (monerod/tari/wallets) is a fault — the slot must not commit;
+#   2. a DOWN sync-gated miner (p2pool/xmrig-proxy) is the deliberate #35 hold, not a fault — so a
+#      days-long initial sync still commits. Only a running-but-unhealthy miner is a fault.
+rcv() { run_sourced "$SANDBOX" revenue_container_verdict "$@"; }
+# Chain nodes: healthy commits, everything short of running-and-healthy holds.
+assert_eq "monerod up+healthy -> ok" "$(rcv monerod running 'Up 5 minutes (healthy)')" "ok"
+assert_contains "monerod exited -> fail" "$(rcv monerod exited 'Exited (0) 1 minute ago')" "fail:monerod"
+assert_contains "monerod running+unhealthy -> fail" "$(rcv monerod running 'Up 2 minutes (unhealthy)')" "fail:monerod"
+assert_contains "monerod still starting -> fail (loop retries, never commits early)" "$(rcv monerod running 'Up 8 seconds (starting)')" "fail:monerod"
+assert_eq "tari up+healthy -> ok" "$(rcv tari running 'Up 3 minutes (healthy)')" "ok"
+assert_contains "wallet-rpc down -> fail (chain-side must be up)" "$(rcv wallet-rpc created 'Created')" "fail:wallet-rpc"
+# Sync-gated miners: down is the #35 hold (ok); only running-but-unhealthy is a fault.
+assert_eq "p2pool exited (sync hold) -> ok" "$(rcv p2pool exited 'Exited (0) 4 minutes ago')" "ok"
+assert_eq "p2pool created (never started, held) -> ok" "$(rcv p2pool created 'Created')" "ok"
+assert_eq "p2pool up+healthy -> ok" "$(rcv p2pool running 'Up 6 minutes (healthy)')" "ok"
+assert_contains "p2pool running+unhealthy -> fail" "$(rcv p2pool running 'Up 30 seconds (unhealthy)')" "fail:p2pool"
+assert_eq "xmrig-proxy down (sync hold) -> ok" "$(rcv xmrig-proxy exited 'Exited (0) 4 minutes ago')" "ok"
+# Non-revenue containers are out of scope — the rest of doctor covers them.
+assert_eq "caddy (not revenue) -> ok" "$(rcv caddy running 'Up 5 minutes')" "ok"
+assert_eq "dashboard (not revenue) -> ok" "$(rcv dashboard running 'Up 5 minutes (healthy)')" "ok"
+unset -f rcv
+
 echo "== unit: pithead-sync's rigforge leg — program replaced, state preserved, prebuilt seeded =="
 # The baked tree is program; config.json (pithead-rendered) and the data/ workspace (the XMRig
 # build cache) are state. The prebuilt binary seeds the workspace so the appliance never needs

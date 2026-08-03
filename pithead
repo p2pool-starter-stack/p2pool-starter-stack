@@ -1174,6 +1174,7 @@ doctor() {
         else
             dr_warn "No containers reported by 'docker compose ps' — the stack may be stopped (run './pithead up') or run from a different directory."
         fi
+        check_revenue_containers
         check_dashboard_answers
     fi
 
@@ -3240,6 +3241,100 @@ check_dashboard_answers() {
     else
         dr_warn "Dashboard container is running but the app isn't answering on 127.0.0.1:8000 — check './pithead logs dashboard'."
     fi
+    return 0
+}
+
+# The revenue-path containers, split by how they behave during a fresh node's DAYS-LONG initial
+# sync (#35). This split is the whole reason the commit gate can tell "still syncing" (fine, commit)
+# from "crashed" (revert):
+#   chain nodes  — monerod/tari and their payout wallets. They RUN throughout the initial sync (they
+#                  ARE what is syncing), and their healthchecks are liveness probes (RPC answers /
+#                  process alive / #718 scan-grace), so they report healthy from early on regardless
+#                  of sync height. A chain node that is down or unhealthy is a real crash, never
+#                  "just syncing".
+#   sync-gated miners — p2pool/xmrig-proxy. The dashboard deliberately STOPS these until the node
+#                  finishes syncing (#35), so a DOWN miner is the expected steady state on a fresh
+#                  box, not a fault. Only a miner that is running yet failing its healthcheck is one.
+REVENUE_CHAIN_CONTAINERS="monerod tari wallet-rpc tari-wallet"
+REVENUE_MINER_CONTAINERS="p2pool xmrig-proxy"
+
+# Pure verdict for one revenue container, given its run state and status string exactly as
+# podman/docker `ps` report them (state = running/exited/created/…, status = "Up 3m (healthy)").
+# Prints "ok" or "fail:<reason>". Kept pure — no engine calls — so the commit gate's honesty is
+# unit-testable without a running stack (tests/stack/run.sh). A non-revenue name is always "ok":
+# the rest of doctor covers those, and this must not judge containers outside its remit.
+revenue_container_verdict() { # <name> <state> <status>
+    local name="$1" state="$2" status="$3" running=0
+    # "running" from EITHER signal: podman and docker both print an "Up …" status for a live
+    # container, and `.State` is "running". Reading both is belt-and-suspenders — some docker CLI
+    # versions leave the `.State` ps field empty, and a chain node judged down on that alone would
+    # wrongly block the commit.
+    if [ "$state" = running ]; then
+        running=1
+    else
+        case "$status" in Up*) running=1 ;; esac
+    fi
+    case " $REVENUE_CHAIN_CONTAINERS " in
+    *" $name "*)
+        # Chain node: it must be running and PAST its healthcheck. "starting"/"unhealthy" and any
+        # stopped/exited/created state all mean not-ready-or-crashed. The boot gate loops, so a node
+        # that is only starting simply gets retried rather than committed early.
+        case "$status" in
+        *'(unhealthy)'* | *'(starting)'*)
+            printf 'fail:%s is not ready (%s) — a chain node must be up and healthy to commit\n' "$name" "$status"
+            ;;
+        *)
+            if [ "$running" = 1 ]; then
+                printf 'ok\n'
+            else printf 'fail:%s is down (%s) — a chain node down means the slot is not healthy to commit\n' "$name" "${status:-$state}"; fi
+            ;;
+        esac
+        ;;
+    *)
+        case " $REVENUE_MINER_CONTAINERS " in
+        *" $name "*)
+            # Sync-gated miner: down is the normal sync hold, so only a RUNNING-but-unhealthy miner
+            # is a fault. This is the rule that keeps a days-long initial sync from blocking commit.
+            case "$status" in
+            *'(unhealthy)'*)
+                if [ "$running" = 1 ]; then
+                    printf 'fail:%s is running but unhealthy (%s)\n' "$name" "$status"
+                else printf 'ok\n'; fi
+                ;;
+            *) printf 'ok\n' ;;
+            esac
+            ;;
+        *) printf 'ok\n' ;;
+        esac
+        ;;
+    esac
+}
+
+# doctor (#852): the commit-gate-critical container check the plan always assumed doctor did. The
+# blanket "read the ps table" line in the Containers section proves nothing about WHETHER the
+# revenue path is alive — a slot whose monerod/p2pool crashed while caddy+dashboard keep serving
+# still read "OK", and the appliance A/B commit gate (os/overlay/pithead-boot) would mark-good a
+# mining-dead slot. This FAILs on a crashed revenue container so `doctor --json`'s exit code is an
+# honest gate: it rejects the healthy-looking-but-dead slot while staying quiet on the sync hold and
+# the long initial sync. Engine-aware (docker on DIY, podman on the appliance) and read-only.
+check_revenue_containers() {
+    local engine rows name state status verdict failed=0
+    engine=$(container_engine)
+    command -v "$engine" >/dev/null 2>&1 || return 0
+    rows=$("$engine" ps -a --format '{{.Names}}\t{{.State}}\t{{.Status}}' 2>/dev/null) || return 0
+    [ -n "$rows" ] || return 0
+    # A here-string (not a pipe) keeps the loop in this shell, so `failed` survives it.
+    while IFS=$'\t' read -r name state status; do
+        [ -n "$name" ] || continue
+        verdict=$(revenue_container_verdict "$name" "$state" "$status")
+        case "$verdict" in
+        fail:*)
+            dr_fail "${verdict#fail:}"
+            failed=1
+            ;;
+        esac
+    done <<<"$rows"
+    [ "$failed" -eq 0 ] && dr_ok "Revenue containers are healthy or holding for sync — none crashed."
     return 0
 }
 

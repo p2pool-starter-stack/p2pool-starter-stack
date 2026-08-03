@@ -173,13 +173,14 @@ cut, and the installer smoke rides the same checklist.
 ## Appliance architecture (unchanged from v2, runtime swapped)
 
 - Minimal Debian 13, read-only root, overlay discarded each boot.
-- Rugix A/B slots; new slot boots provisionally; **the commit gate is `pithead
-  doctor --json`** — it already exits non-zero only on critical failures and checks
-  containers, Tor, NTP sync, disk, hugepages (`pithead:1010`). One rule
-  the gate must hold: commit on "services up and progressing", never "chain synced" —
-  initial sync takes days, and the #718 scan-grace lesson (healthy-during-long-scan
-  markers) applies to the commit window too. No commit or failed boot → automatic
-  fallback.
+- Rugix A/B slots; new slot boots provisionally; **the commit gate is a `localhost` curl plus
+  `pithead doctor --json`** (`os/overlay/pithead-boot`). The curl proves the derived-config →
+  caddy → dashboard chain answers; doctor exits non-zero on critical failures and checks the
+  revenue containers (monerod/p2pool/tari), Tor, and the egress firewall. Both must pass before
+  `rauc status mark-good`. One rule the gate must hold: commit on "services up and progressing",
+  never "chain synced" — initial sync takes days, so the check is liveness-only, and the sync-held
+  miners (#35) never count as crashed. The #718 scan-grace lesson (healthy-during-long-scan
+  markers) applies to the commit window too. No commit or failed boot → automatic fallback.
 - **Migration-deadlock rule** (closes a flaw in earlier drafts: if forward-only DB
   migrations ran before the commit decision, a failed doctor check would leave the
   box unable to commit *or* fall back). Releases carry a `data_migration` manifest
