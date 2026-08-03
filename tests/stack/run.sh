@@ -6142,6 +6142,27 @@ assert_eq "workers.list-sentinel commit applies" "$(jq -r '.status' "$RESULTS/$U
 assert_eq "committed config keeps the live workers.list token" "$(jq -r '.workers.list[0].token' "$C/config.json")" "tok_rig1secret"
 assert_eq "committed config carries no sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
 
+echo "== black-box: notification secrets masked in the prefill copy (#848) =="
+# The ntfy topic URL + token are bearer credentials, and each notifications.webhooks[] entry IS a
+# bearer URL (query strings carry tokens). All must be sentineled in the world-readable masked copy
+# — one LEAK- marker across every set secret proves the whole set at once; a blank webhook entry and
+# the non-secret notifications.tor flag must survive so the editor can still render the form.
+jq '.notifications = {
+    webhooks: ["https://hooks.example/LEAK-hookA", "", "https://hooks.example/LEAK-hookB"],
+    ntfy: {url: "https://ntfy.example/LEAK-ntfyurl", token: "LEAK-ntfytoken"},
+    tor: true}' "$C/config.json" >"$C/config.json.tmp" && mv "$C/config.json.tmp" "$C/config.json"
+run_sourced "$C" render_masked_config "$C/data/control" >/dev/null 2>&1
+assert_eq "ntfy url masked to the sentinel" "$(jq -c '.notifications.ntfy.url' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "ntfy token masked to the sentinel" "$(jq -c '.notifications.ntfy.token' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "first webhook entry masked to the sentinel" "$(jq -c '.notifications.webhooks[0]' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "third webhook entry masked to the sentinel" "$(jq -c '.notifications.webhooks[2]' "$MASKED" 2>/dev/null)" '{"__secret__":true}'
+assert_eq "a blank webhook entry stays blank in the masked copy" "$(jq -r '.notifications.webhooks[1]' "$MASKED" 2>/dev/null)" ""
+assert_eq "the non-secret notifications.tor flag survives" "$(jq -r '.notifications.tor' "$MASKED" 2>/dev/null)" "true"
+case "$(cat "$MASKED")" in
+*LEAK-*) bad "masked copy holds no notification secret" "a notification secret leaked into $MASKED" ;;
+*) ok "masked copy holds no notification secret" ;;
+esac
+
 echo "== black-box: audit log growth is bounded (#349) =="
 # Seed the log past the 512 KiB cap, then let the runner audit one more event: the writer trims
 # to the newest 2000 lines BEFORE appending, so the file shrinks instead of growing forever and
@@ -8601,20 +8622,33 @@ unset -f okrun
 rm -rf "$OKSB"
 unset OKSB
 
-echo "== unit: os-update variant gate — a debug box never silently loses its SSH =="
-# The trap this guards: a debug image's SSH key is often the only management channel, and a
-# release bundle removes it BY DESIGN. The gate must fire on debug->release, on debug->unstamped
-# (an old bundle without the stamp is shell-less too), and nowhere else.
+echo "== unit: os-update variant gate — SSH posture flips in EITHER direction need consent =="
+# The trap this guards, both ways: a debug image's SSH key is often the only management channel and
+# a release bundle removes it BY DESIGN (losing a shell); a debug bundle onto a hardened release box
+# bakes a standing root authorized_keys + sshd (GAINING a shell, #854). Either flip, and any bundle
+# whose stamp can't be verified, must confirm; a same-variant install must not.
+# Losing the shell (a KNOWN debug box installing something non-debug):
 run_sourced "$SANDBOX" os_update_needs_confirmation debug release
 assert_rc "debug system + release bundle -> confirmation required" "$?" "0"
 run_sourced "$SANDBOX" os_update_needs_confirmation debug unknown
 assert_rc "debug system + unstamped bundle -> confirmation required" "$?" "0"
+# Gaining a shell (a non-debug box installing a debug bundle) — the #854 direction:
+run_sourced "$SANDBOX" os_update_needs_confirmation release debug
+assert_rc "release system + debug bundle -> confirmation required (gains root SSH)" "$?" "0"
+run_sourced "$SANDBOX" os_update_needs_confirmation unknown debug
+assert_rc "unstamped system + debug bundle -> confirmation required (gains root SSH)" "$?" "0"
+# Unverified bundle onto a non-debug box: the stamp could hide a debug build, so confirm.
+run_sourced "$SANDBOX" os_update_needs_confirmation release unknown
+assert_rc "release system + unstamped bundle -> confirmation required (posture unverifiable)" "$?" "0"
+run_sourced "$SANDBOX" os_update_needs_confirmation unknown unknown
+assert_rc "unstamped system + unstamped bundle -> confirmation required (posture unverifiable)" "$?" "0"
+# Same-posture installs pass without ceremony:
 run_sourced "$SANDBOX" os_update_needs_confirmation debug debug
 assert_rc "debug -> debug passes without ceremony" "$?" "1"
 run_sourced "$SANDBOX" os_update_needs_confirmation release release
 assert_rc "release -> release passes (the fleet's normal update)" "$?" "1"
 run_sourced "$SANDBOX" os_update_needs_confirmation unknown release
-assert_rc "unstamped running system passes — only a KNOWN debug box has a channel to lose" "$?" "1"
+assert_rc "unstamped system + release bundle passes — stays shell-less, no channel flips" "$?" "1"
 
 OUSB=$(mktemp -d)
 mkdir -p "$OUSB/bin"
@@ -8675,6 +8709,19 @@ assert_not_contains "rauc install was NOT reached" "$(cat "$RAUC_LOG")" "install
 ourun "$OUSB/variant-debug" "$OUSB/info-release.json" bundle.raucb --yes >/dev/null 2>&1
 assert_rc "--yes acknowledges the warning and proceeds" "$?" "0"
 assert_contains "rauc install ran with the bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
+# The #854 direction: a hardened release box taking a debug bundle GAINS a root SSH backdoor. Non-
+# interactive stdin reads EOF -> refused, and rauc install must never be reached — the silent
+# install is exactly the backdoor this guards.
+: >"$RAUC_LOG"
+out=$(ourun "$OUSB/variant-release" "$OUSB/info-debug.json" bundle.raucb 2>&1)
+rc=$?
+assert_rc "release box + debug bundle, no --yes -> refused" "$rc" "1"
+assert_contains "the refusal names the root SSH it would gain" "$out" "root SSH"
+assert_not_contains "rauc install was NOT reached on the gain-a-shell refusal" "$(cat "$RAUC_LOG")" "install"
+: >"$RAUC_LOG"
+ourun "$OUSB/variant-release" "$OUSB/info-debug.json" bundle.raucb --yes >/dev/null 2>&1
+assert_rc "--yes acknowledges the backdoor warning and proceeds" "$?" "0"
+assert_contains "rauc install ran with the debug bundle after --yes" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 : >"$RAUC_LOG"
 ourun "$OUSB/variant-release" "$OUSB/info-release.json" bundle.raucb >/dev/null 2>&1
 assert_rc "release -> release installs with no prompt" "$?" "0"

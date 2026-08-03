@@ -2317,9 +2317,20 @@ os_bundle_variant() { # $1: bundle path — echoes debug|release|unknown, never 
 }
 
 os_update_needs_confirmation() { # $1: running variant, $2: bundle variant — rc 0 = confirm first
-    # Only the debug->non-debug transition loses the management channel. An unstamped bundle is
-    # treated as release: assuming "debug" here is how a box gets stranded.
-    [ "$1" = "debug" ] && [ "$2" != "debug" ]
+    # Consent is needed whenever an install flips the box's shell/SSH posture, in EITHER direction,
+    # or when the bundle's posture can't be verified. A debug image bakes a standing root
+    # authorized_keys + sshd; a release image is shell-less by design.
+    #   - GAIN a shell (#854): a debug bundle onto a box that isn't already debug enables root SSH.
+    #     "About to gain a management channel" needs consent as much as losing one — more so.
+    #   - LOSE the shell (#819): a release/unstamped bundle onto a debug box removes the channel
+    #     that is probably driving this very update; recovery then needs a console on the box.
+    #   - UNVERIFIED: an unstamped bundle degrades to "unknown" and could silently BE a debug build
+    #     (unparseable stamp), so never wave one through unprompted.
+    local running="$1" bundle="$2"
+    [ "$bundle" = "debug" ] && [ "$running" != "debug" ] && return 0 # gaining a shell
+    [ "$running" = "debug" ] && [ "$bundle" != "debug" ] && return 0 # losing the shell
+    [ "$bundle" = "unknown" ] && return 0                            # unverified bundle
+    return 1
 }
 
 os_update() {
@@ -2343,11 +2354,21 @@ os_update() {
     running=$(os_running_variant)
     target=$(os_bundle_variant "$bundle")
     if os_update_needs_confirmation "$running" "$target"; then
-        warn "This system is a debug build: SSH is baked in, and it is probably the channel driving this update."
-        if [ "$target" = "release" ]; then
-            warn "The bundle is a release build — shell-less by design. Installing it removes SSH; recovery then needs a console on the box."
+        if [ "$target" = "debug" ]; then
+            # Gaining a shell — only reached when the running variant is not already debug (#854).
+            warn "This bundle is a DEBUG build: it bakes in a standing root SSH key and enables sshd."
+            warn "Installing it turns this shell-less box into one with a permanent root SSH backdoor."
+        elif [ "$running" = "debug" ]; then
+            # Losing the shell (#819): a release/unstamped bundle onto a debug box.
+            warn "This system is a debug build: SSH is baked in, and it is probably the channel driving this update."
+            if [ "$target" = "release" ]; then
+                warn "The bundle is a release build — shell-less by design. Installing it removes SSH; recovery then needs a console on the box."
+            else
+                warn "The bundle carries no variant stamp — treat it as a shell-less release build. Installing it can remove SSH; recovery then needs a console on the box."
+            fi
         else
-            warn "The bundle carries no variant stamp — treat it as a shell-less release build. Installing it can remove SSH; recovery then needs a console on the box."
+            # Unverified bundle onto a non-debug box: an unparseable stamp could hide a debug build.
+            warn "The bundle carries no variant stamp — its shell/SSH posture can't be verified, and it may enable root SSH. Recovery may need a console on the box."
         fi
         if [ "$assume_yes" -eq 0 ]; then
             read -r -p "Install it anyway? (y/N): " CONFIRM || true
@@ -4772,6 +4793,8 @@ readonly CONTROL_SECRET_PATHS='[
     ["tari","view_key"],
     ["p2pool","stratum_password"],
     ["healthchecks","ping_url"],
+    ["notifications","ntfy","url"],
+    ["notifications","ntfy","token"],
     ["xvb","standby","source"]]'
 
 # #690: bound every host-runner curl so a hostile/MITM'd rig or release response can't stream an
@@ -4813,6 +4836,12 @@ render_masked_config() { # <control-dir>
         | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
           then .dashboard.workers |= map(
               if (.token // "") == "" then . else .token = {"__secret__": true} end)
+          else . end
+        # notifications.webhooks[] (#848): the whole URL is the bearer secret (query strings carry
+        # tokens), and there is no fixed leaf path — mask each set entry, like the worker tokens.
+        | if (.notifications | type) == "object" and (.notifications.webhooks | type) == "array"
+          then .notifications.webhooks |= map(
+              if (. // "") == "" then . else {"__secret__": true} end)
           else . end' "$CONFIG_FILE" >"$tmp" 2>/dev/null; then
         chmod 644 "$tmp" 2>/dev/null || true
         mv "$tmp" "$mdir/config.json" 2>/dev/null ||
