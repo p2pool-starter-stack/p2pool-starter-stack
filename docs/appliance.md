@@ -227,6 +227,21 @@ survive.
 Keys still at their default are not written to disk, so this machine keeps picking up improved
 defaults from future updates. The configuration it runs is identical either way.
 
+## What the machine does on its own
+
+Two things the appliance sets for itself, that a machine you installed the stack on yourself
+would not:
+
+- **It resets itself if it hangs.** The image arms the hardware watchdog built into the
+  motherboard: systemd pets it every 10 seconds, and if the kernel stops answering for 20
+  seconds the board cuts power and the machine reboots. An appliance in a cupboard has nobody
+  to press the button, so a hang that would otherwise cost you days of downtime costs a reboot.
+  A shutdown that stalls is bounded the same way, at two minutes.
+- **It holds the CPU at full clock.** The governor is set to `performance` at every boot, so the
+  node, the wallet and any built-in miner are never scheduled onto a CPU that has clocked itself
+  down. This applies whether or not you mine on the machine — a dedicated appliance has no other
+  workload to save power for. On hardware with no frequency scaling the step is skipped.
+
 ## Updates
 
 The appliance keeps **two copies of the system**, and only one runs at a time. An update

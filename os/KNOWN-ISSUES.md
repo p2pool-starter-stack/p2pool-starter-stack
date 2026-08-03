@@ -2,8 +2,11 @@
 
 ## Status: RAUC appliance, installs to disk, all batteries green (2026-07-25)
 
-`tests/os/run.sh` passes boot 3/3, update 11/11 and fault 11/11 on the RAUC appliance,
-with no brick in any run. The image ships the ESP and slot A only (636 MB);
+`tests/os/run.sh` passes all five phases on the RAUC appliance — boot 3/3, update 13/13,
+provision 21/21, install 33/33 and fault 11/11 — with no brick in any run. The per-phase
+assertion list is in
+[the release doc's battery table](../docs/dev/appliance-release.md#the-automated-battery).
+The image ships the ESP and slot A only (636 MB);
 systemd-repart builds slot B and /data on the target's own disk, and `/data` measured
 24 GiB of a 40 GiB disk while the system slot stayed at 8.
 
@@ -194,14 +197,6 @@ dashboard answers through caddy (#793). On the read-only root, host units render
   time, so the plan's "first boot works offline" property is partial: the setup page
   works without a network, provisioning does not. Baking the full set roughly triples
   the image and inflates every update bundle — sized deliberately, not forgotten.
-- **The stick and an installed disk carry identical partition labels.** The DANGEROUS half
-  is fixed: the kernel root is the PARTUUID of the partition GRUB actually chose (`probe
-  --part-uuid` at boot), so the machine can no longer boot one disk's kernel against the
-  other disk's system. What remains is `/data` and the ESP, mounted by LABEL from a static
-  fstab — with both disks present, which `data` wins is udev's choice. The installer powers
-  the machine off after installing (remove the stick while it is off) and the docs say
-  never to boot with both; the residual exposure is a confusing but non-destructive mount,
-  not a wrong system.
 - **Every direct-flashed stick shares the image's identity material.** `/etc/machine-id`
   and the SSH host keys are baked at image build, so two sticks flashed from one release
   are identical until something regenerates them. The installer resets machine-id for
