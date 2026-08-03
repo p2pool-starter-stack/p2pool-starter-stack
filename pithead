@@ -1409,6 +1409,16 @@ record_machine_role() { # <pithead|both|rig>
     printf '%s\n' "$1" >"$PWD/machine-role" 2>/dev/null || true
 }
 
+# The marker, read back. Anything unrecognised (or absent) is a coordinator: every machine
+# provisioned before this contract existed had no marker and was one.
+machine_role() { # echoes pithead|both|rig
+    local r=""
+    if [ -f "$PWD/machine-role" ]; then
+        r=$(tr -d '[:space:]' <"$PWD/machine-role" 2>/dev/null) || r=""
+    fi
+    case "$r" in rig | both | pithead) printf '%s' "$r" ;; *) printf 'pithead' ;; esac
+}
+
 machine_role_from_config() { # <config-file>
     if [ "$(jq -r '.local_miner.enabled // false' "$1" 2>/dev/null)" = "true" ]; then
         printf 'both'
@@ -1735,19 +1745,11 @@ firstboot_wizard() {
         *) error "Unknown option for firstboot-wizard: $arg. Run '$0 help'." ;;
         esac
     done
-    # A machine already carrying the rig role: state it and stop — even on a stick that could
-    # offer the installer, because a run-from-USB rig's stick IS that rig's system, not a
-    # fleet tool. The rig boot leg lands with the next phase; until it does, an honest console
-    # line beats a coordinator's setup page collecting answers a rig can never use.
-    if [ "$(tr -d '[:space:]' <"$PWD/machine-role" 2>/dev/null)" = "rig" ]; then
-        _console "This machine carries the RigForge rig role ($(jq -r '.worker // "unnamed"' "$PWD/rig.json" 2>/dev/null) -> $(jq -r '.pool // "no pool recorded"' "$PWD/rig.json" 2>/dev/null))." \
-            "Rig provisioning lands with the next phase of the system — nothing mines yet."
-        return 0
-    fi
     # A rig install staged its answers on this ESP (the disk-install leg below): land them on
-    # /data and stop, the same one-move consumption as the config pre-seed — never on the
-    # installation medium, where staged files are cleaned up by the installer itself.
-    if [ -f "$PRESEED_DIR/pithead-rig.json" ] && ! installer_mode_available; then
+    # /data, the same one-move consumption as the config pre-seed — never on the installation
+    # medium, where staged files are cleaned up by the installer itself. Then fall through to
+    # the rig leg below, exactly as a pre-seeded coordinator falls through to setup.
+    if [ -f "$PRESEED_DIR/pithead-rig.json" ] && ! installer_mode_available && [ ! -f "$PWD/rig.json" ]; then
         if jq -e 'type == "object" and ((.pool // "") | length > 0)' "$PRESEED_DIR/pithead-rig.json" >/dev/null 2>&1 &&
             install -m 600 "$PRESEED_DIR/pithead-rig.json" "$PWD/rig.json" 2>/dev/null; then
             record_machine_role rig
@@ -1757,11 +1759,21 @@ firstboot_wizard() {
                 rm -f "$PRESEED_DIR/pithead-rig.json" 2>/dev/null ||
                     warn "Could not remove the consumed rig settings from $PRESEED_DIR — they may hold a password; delete the file."
             fi
-            _console "This machine is now a RigForge rig ($(jq -r '.worker // "unnamed"' "$PWD/rig.json" 2>/dev/null))." \
-                "Rig provisioning lands with the next phase of the system — nothing mines yet."
-            return 0
+            _console "This machine is now a RigForge rig ($(jq -r '.worker // "unnamed"' "$PWD/rig.json" 2>/dev/null))."
+        else
+            warn "The staged rig settings at $PRESEED_DIR/pithead-rig.json are unusable — opening the setup page."
         fi
-        warn "The staged rig settings at $PRESEED_DIR/pithead-rig.json are unusable — opening the setup page."
+    fi
+    # A machine already carrying the rig role mines, and asks nothing — not even on a stick that
+    # could offer the installer, because a run-from-USB rig's stick IS that rig's system, not a
+    # fleet tool. Reached only on the boot that ACCEPTS the role (a disk install's first boot,
+    # just above): once the marker exists, pithead-boot owns every later boot and this unit's
+    # own condition skips it. The miner is best-effort here for the same reason it is in pithead-boot
+    # — a rig whose pool moved must still come up and keep retrying, not brick its own boot.
+    if [ "$(machine_role)" = "rig" ]; then
+        _console "This machine is a RigForge rig ($(jq -r '.worker // "unnamed"' "$PWD/rig.json" 2>/dev/null) -> $(jq -r '.pool // "no pool recorded"' "$PWD/rig.json" 2>/dev/null))."
+        provision_rig_miner || true
+        return 0
     fi
     # A configuration dropped on the medium beats opening a browser at all — but never on the
     # INSTALLATION medium: pre-seeding covers configuration, not the erase decision (the docs'
@@ -2008,8 +2020,11 @@ firstboot_wizard() {
                 chown 1000:1000 "$spool/applied" 2>/dev/null || true
                 sleep 8 # long enough for the page's poll to show the saved state
                 "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
-                _console "Rig settings saved: $rig_worker -> stratum+tcp://$rig_pool." \
-                    "Rig provisioning lands with the next phase of the system — nothing mines yet."
+                _console "Rig settings saved: $rig_worker -> stratum+tcp://$rig_pool."
+                # Mine now, on this boot. Every later boot goes through pithead-boot, whose own
+                # condition now covers the marker just written — there is no second wizard and no
+                # reboot to wait for, the same way an accepted coordinator config runs setup here.
+                provision_rig_miner || true
                 return 0
             fi
             if firstboot_consume_spool "$spool"; then
@@ -2235,6 +2250,10 @@ rigforge_dir() { printf '%s' "${PITHEAD_RIGFORGE_DIR:-/data/rigforge}"; }
 # sum survives one side growing into its own reservation.
 render_local_miner_config() {
     is_appliance || return 0
+    # Not on a rig, ever. This function's "switched off" branch DELETES the miner's config, and
+    # a rig with no config.json reads as switched off — so a stray render there would take out
+    # the very file the rig mines from. render_rig_miner_config owns that machine's copy.
+    if [ "$(machine_role)" = "rig" ]; then return 0; fi
     local dir
     dir=$(rigforge_dir)
     if [ "$(config_bool '.local_miner.enabled' false 2>/dev/null || echo false)" != "true" ]; then
@@ -2256,13 +2275,43 @@ render_local_miner_config() {
     log "Local miner config rendered to $dir/config.json (pool 127.0.0.1:$port)."
 }
 
-# The run leg: converge the on-box miner to what config.json says. Runs after the stack is up
-# (the miner needs the stratum listening; RigForge's setup restarts the service it installs),
-# from pithead-boot on every boot and from setup on first provisioning. RigForge's appliance
-# mode makes the whole run idempotent on the read-only root: units in /run with --runtime
-# enablement, no package installs, GRUB untouched, grow-only HugePages.
+# The one place RigForge's setup is ever invoked, shared by both roles that run a miner. Same
+# appliance flag, same tree on /data, same first-run narration — a rig and a coordinator that
+# also mines differ in where the miner's config came from, never in how it is started.
+#
+# Prebuilt-first is the whole reason this is instant: pithead-sync seeds the image's baked XMRig
+# into the workspace, so the binary already exists and RigForge's setup re-renders rather than
+# compiles. A build here means the operator's own native rebuild replaced it or the cached one
+# failed its integrity check — minutes of silence on a console with nothing else to look at, so
+# say what the machine is doing. Nothing on this path clones: a Tor-only box could not.
+rigforge_setup_run() {
+    local dir
+    dir=$(rigforge_dir)
+    if [ ! -x "$dir/rigforge.sh" ]; then
+        warn "There is no RigForge tree at $dir — this image does not carry the built-in miner."
+        return 1
+    fi
+    if [ ! -x "$dir/data/worker/xmrig/build/xmrig" ]; then
+        _console "Preparing the miner — building it once. This can take several minutes."
+    fi
+    (cd "$dir" && RIGFORGE_APPLIANCE=1 ./rigforge.sh setup)
+}
+
+# The run leg: converge the on-box miner to what this machine says it is. Runs after the stack
+# is up (the miner needs the stratum listening; RigForge's setup restarts the service it
+# installs), from pithead-boot on every boot and from setup on first provisioning. RigForge's
+# appliance mode makes the whole run idempotent on the read-only root: units in /run with
+# --runtime enablement, no package installs, GRUB untouched, grow-only HugePages.
+#
+# The role forks here rather than in the boot path, so both boot owners — pithead-boot on a
+# provisioned machine, the first-boot wizard on the boot that accepts a role — get the right leg
+# from the one command.
 provision_local_miner() {
     is_appliance || return 0
+    if [ "$(machine_role)" = "rig" ]; then
+        provision_rig_miner
+        return
+    fi
     local dir
     dir=$(rigforge_dir)
     if [ "$(config_bool '.local_miner.enabled' false 2>/dev/null || echo false)" != "true" ]; then
@@ -2272,23 +2321,78 @@ provision_local_miner() {
         systemctl stop xmrig.service >/dev/null 2>&1 || true
         return 0
     fi
-    if [ ! -x "$dir/rigforge.sh" ]; then
-        warn "Local mining is on, but there is no RigForge tree at $dir — this image does not carry the built-in miner."
-        return 1
-    fi
     [ -f "$dir/config.json" ] || render_local_miner_config
-    # The prebuilt XMRig baked into the image normally makes this instant; a compile only
-    # happens when the cached build is missing or fails its integrity check. That is minutes of
-    # silence on the console, so say what the machine is doing.
-    if [ ! -x "$dir/data/worker/xmrig/build/xmrig" ]; then
-        _console "Preparing the on-box miner — building it once. This can take several minutes."
-    fi
-    if (cd "$dir" && RIGFORGE_APPLIANCE=1 ./rigforge.sh setup); then
+    if rigforge_setup_run; then
         log "Local miner is up — it appears in the dashboard's Workers view."
     else
         warn "Local miner setup failed — the stack itself is unaffected. Details are in the log above."
         return 1
     fi
+}
+
+# --- the rig role's boot leg (one stick, three machines) -------------------------------------
+# A rig has no config.json, no containers, no dashboard and no chains: its entire product is the
+# miner. So it rides the SAME leg the Both role rides, sourced from rig.json instead of
+# config.json — one invocation contract, one prebuilt, one appliance mode.
+
+# RigForge's config for a rig, derived from rig.json exactly the way the Both role's is derived
+# from config.json — rebuilt every boot, never repaired. Three values and no more: the pool the
+# operator gave, the worker name that labels this rig at that pool (RigForge's pools[].user,
+# which falls back to the hostname when empty), and the stratum password when one was set.
+# No hugepages_reserve_extra_mb: there is no stack on this machine to leave headroom for, so
+# RigForge sizes the HugePages pool for the miner alone.
+render_rig_miner_config() {
+    local dir
+    dir=$(rigforge_dir)
+    if [ ! -d "$dir" ]; then
+        warn "This machine is a rig, but there is no RigForge tree at $dir — this image does not carry the miner."
+        return 1
+    fi
+    jq '{pools: [({url: .pool, user: (.worker // "")}
+        + (if (.stratum_password // "") == "" then {} else {pass: .stratum_password} end))]}' \
+        "$PWD/rig.json" >"$dir/config.json" 2>/dev/null || return 1
+    chmod 600 "$dir/config.json" 2>/dev/null || true
+}
+
+# Write minimization for a removable root. The rig role's stick can BE the system it runs from —
+# that is the point of the run-from-USB choice — and the image's journald ships
+# Storage=persistent with a 200 MB cap, whose files land on the /var overlay, whose upper lives
+# on that same medium. A rig holds almost no state and its logs are read within the boot that
+# produced them, so volatile is the honest setting: the journal lives in RAM and the stick sees
+# no rotating writes at all.
+#
+# Converged every boot rather than baked, because it cannot be baked: /etc and /run are BOTH
+# volatile on this appliance, so no drop-in survives a reboot and journald always starts
+# persistent again. The existing-directory guard makes this one restart per boot, not a loop.
+# Swap needs no code at all: the appliance declares no swap partition and creates none, so
+# "no swap" is already true in every role — see os/rootfs/repart.d.
+rig_minimize_writes() {
+    is_appliance || return 0
+    local dropin="${PITHEAD_JOURNALD_DROPIN_DIR:-/run/systemd/journald.conf.d}"
+    local journal="${PITHEAD_JOURNAL_DIR:-/var/log/journal}"
+    mkdir -p "$dropin" 2>/dev/null || return 0
+    # Sorts after the image's own pithead.conf, and later file wins: that is how a drop-in
+    # overrides a drop-in.
+    printf '[Journal]\nStorage=volatile\nRuntimeMaxUse=32M\n' >"$dropin/zz-rig-volatile.conf" 2>/dev/null || return 0
+    [ -d "$journal" ] || return 0
+    rm -rf "${journal:?}"
+    systemctl restart systemd-journald >/dev/null 2>&1 || true
+    log "Rig write minimization: the journal is in memory for this boot — the root may be the stick the miner runs from."
+}
+
+provision_rig_miner() {
+    if [ ! -f "$PWD/rig.json" ]; then
+        warn "This machine is marked as a rig, but its settings are missing — install it again from the stick to choose a role."
+        return 1
+    fi
+    rig_minimize_writes
+    render_rig_miner_config || return 1
+    if rigforge_setup_run; then
+        log "The rig is mining: $(jq -r '.worker // "this machine"' "$PWD/rig.json" 2>/dev/null) -> $(jq -r '.pool // "no pool recorded"' "$PWD/rig.json" 2>/dev/null)."
+        return 0
+    fi
+    warn "The rig's miner did not start. Details are in the log above."
+    return 1
 }
 
 # --- OS update (appliance A/B slots) ---
@@ -3022,11 +3126,13 @@ Maintenance:
                             The boot path runs this on every boot — a reinstall or update
                             that ships new images converges without any wizard involvement.
 
-  local-miner               Converge the appliance's built-in RigForge worker to what
-                            local_miner.enabled says: run RigForge's setup in appliance mode
-                            when it is on (the miner points at this machine's own stratum),
-                            stop the miner when it is off. The boot path runs this after the
-                            stack is up; a no-op outside the appliance.
+  local-miner               Converge this machine's RigForge worker to what the machine is.
+                            On a coordinator that follows local_miner.enabled: RigForge's
+                            setup in appliance mode when it is on (the miner points at this
+                            machine's own stratum), the miner stopped when it is off. On a rig
+                            it follows rig.json instead — that machine has no stack, and the
+                            miner is the whole of it. The boot path runs this on every boot;
+                            a no-op outside the appliance.
 
   os-update BUNDLE [-y|--yes] [--allow-downgrade]
                             Install an OS update bundle into the spare A/B slot (appliance
@@ -9202,7 +9308,8 @@ main() {
         ;;
     local-miner)
         _reject_options local-miner "$@"
-        require_env
+        # A rig has no .env and never will — there is no stack on it to render one.
+        [ "$(machine_role)" = "rig" ] || require_env
         provision_local_miner
         ;;
     os-update) os_update "$@" ;;

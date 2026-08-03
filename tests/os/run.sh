@@ -5,7 +5,7 @@
 # os-image sibling of tests/integration/run.sh; it needs a Linux host with KVM + libvirt + the
 # built image, so it runs on the bench, not in CI.
 #
-#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|install|provision|fault|all]
+#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|install|provision|rig|fault|all]
 #
 # Phases:
 #   boot    flash the image to a scratch disk, boot it, assert EFI boot + firstboot wizard up
@@ -20,8 +20,11 @@
 #           dashboard served. This is the phase that catches an appliance whose engine cannot
 #           actually run the product (it happened: pithead speaks docker, the image had only
 #           podman, and every other phase was green).
+#   rig     answer "RigForge" on the same page and prove the OTHER machine this image installs:
+#           mines from the baked binary with no compile and no stack at all, and takes an A/B
+#           update — install, uncommitted rollback, self-commit — exactly like a coordinator.
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
-#   all     all four (default)
+#   all     all five (default)
 #
 # A failed assertion is recorded and the run continues, so one bench boot collects the whole
 # battery rather than stopping at the first fault; the run exits non-zero if any assertion failed.
@@ -1423,6 +1426,279 @@ phase_provision() {
     unset -f _gate
 }
 
+phase_rig() {
+    info "phase: rig (the OTHER machine this image installs — mines instead of coordinating)"
+    # One image, two machines. Every other phase proves the coordinator; this one proves that
+    # answering "RigForge" on the same page produces a box with no stack at all, that it mines
+    # from the baked binary without compiling or reaching the network, and — the part that makes
+    # it a fleet member rather than a toy — that it takes an A/B update exactly like a
+    # coordinator does. A rig has no dashboard to complain through, so a rig that silently never
+    # starts is invisible to everything except an assertion like this one.
+    local img token jar body scode marker
+
+    img=$(_build_image v1) || {
+        bad "image build failed (/tmp/os-fault-build.log)"
+        return
+    }
+    _vm_boot_disk "$img" && _wait_ssh 240 || {
+        bad "guest never answered SSH (ip: ${ip:-none})"
+        return
+    }
+    ok "image boots ($ip)"
+
+    local tries=0
+    token=""
+    while [ -z "$token" ] && [ "$tries" -lt 40 ]; do
+        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$token" ] || sleep 3
+        tries=$((tries + 1))
+    done
+    [ -n "$token" ] || {
+        bad "no one-time token ever appeared on the console"
+        return
+    }
+    tries=0
+    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
+        sleep 5
+        tries=$((tries + 1))
+        [ "$tries" -lt 24 ] || {
+            bad "wizard gate never served"
+            return
+        }
+    done
+    jar=$(mktemp)
+    curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null || {
+        bad "token was not accepted"
+        rm -f "$jar"
+        return
+    }
+    grep -q "wizard_session" "$jar" || {
+        bad "auth returned no session cookie — the submit below would be unauthenticated"
+        rm -f "$jar"
+        return
+    }
+
+    # The pool: the guest's OWN sshd. The host-side gate dials the address before it commits
+    # anything, and a KVM guest has no Pithead on its LAN to dial — so this stands in for one.
+    # It is a real TCP listener and nothing more, which is exactly what the gate checks; what it
+    # deliberately does NOT prove is an accepted share, the same limit the coordinator's
+    # local-miner leg documents. XMRig will dial it, get no stratum and retry forever, and that
+    # is the point: the miner must come up and STAY up on a pool that does not answer, or a rig
+    # whose coordinator is late would fail its own boot and roll its slot back.
+    body="role=rig&rig_pool=127.0.0.1:22&rig_worker=kvm-rig"
+    scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    [ "$scode" = "200" ] || {
+        bad "rig submit did not return 200 (got ${scode:-none})"
+        rm -f "$jar"
+        return
+    }
+    ok "rig role submitted through the wizard"
+    tries=0
+    while [ "$tries" -lt 24 ]; do
+        if curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"worker"'; then
+            break
+        fi
+        sleep 5
+        tries=$((tries + 1))
+    done
+    [ "$tries" -lt 24 ] || {
+        bad "no rig card appeared on the page"
+        rm -f "$jar"
+        return
+    }
+    # A rig's card carries the worker and where it points — and NO login, because a rig has none.
+    if curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"'; then
+        bad "the rig card published a dashboard password — a rig serves no dashboard"
+    else
+        ok "the rig card is worker + pool, with no login (a rig has none)"
+    fi
+    curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null || true
+    rm -f "$jar"
+
+    # ---- the machine that came out: a rig, not a small coordinator ------------------------
+    local mtries=0 miner_up=0
+    while [ "$mtries" -lt 36 ]; do
+        if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
+            miner_up=1
+            break
+        fi
+        sleep 10
+        mtries=$((mtries + 1))
+    done
+    if [ "$miner_up" -eq 1 ]; then
+        ok "the rig mines (xmrig unit active, process running) with no reboot in between"
+    else
+        bad "the rig never started mining (unit: $(_ssh 'systemctl is-active xmrig' 2>/dev/null || echo unknown))"
+        info "  firstboot journal tail: $(_ssh "journalctl -u pithead-firstboot -n 8 --no-pager -o cat" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+    fi
+    [ "$(_ssh 'cat /data/pithead/machine-role' | tr -d '\r\n')" = "rig" ] &&
+        ok "the role marker says rig" || bad "the role marker is not rig"
+    [ -z "$(_ssh 'ls /data/pithead/config.json 2>/dev/null')" ] &&
+        ok "no coordinator config was ever written (a rig has none)" ||
+        bad "a config.json appeared on a rig — the coordinator contract leaked into the rig role"
+    if _ssh "jq -e '.pools[0].url == \"127.0.0.1:22\" and .pools[0].user == \"kvm-rig\"' /data/rigforge/config.json >/dev/null"; then
+        ok "the miner's config is derived from rig.json (pool + worker name)"
+    else
+        bad "the rig's miner config does not match its answers ($(_ssh "jq -c '.pools' /data/rigforge/config.json 2>/dev/null" | cut -c1-100))"
+    fi
+    # THE assertion of this phase: no stack. Not a stopped stack, not a held one — none started.
+    local names
+    names=$(_ssh "podman ps -a --format '{{.Names}}'" 2>/dev/null | tr -d '\r' | tr '\n' ' ')
+    if [ -z "${names// /}" ]; then
+        ok "no compose stack was started — no containers exist at all on a rig"
+    else
+        bad "a rig started containers: '$names'"
+    fi
+    # Prebuilt-first, proven by identity: a native recompile produces a DIFFERENT binary, and a
+    # clone could not have happened at all (this guest has no path to github).
+    if _ssh "cmp -s /data/rigforge/data/worker/xmrig/build/xmrig /opt/rigforge/prebuilt/xmrig/build/xmrig"; then
+        ok "the rig mines the BAKED binary byte for byte — no compile, no clone, no clearnet"
+    else
+        bad "the running miner is not the baked prebuilt — something compiled or fetched on first boot"
+    fi
+    # Removable-root tolerance: the journal is in memory, so a stick root takes no rotating
+    # writes. (This guest's root is virtual, but the setting is the role's, not the medium's.)
+    [ "$(_ssh 'systemd-analyze cat-config systemd/journald.conf 2>/dev/null | grep -c "^Storage=volatile"')" != "0" ] &&
+        ok "journald is volatile on a rig (a rig's root may be the stick it mines from)" ||
+        bad "journald is still persistent on a rig — a USB root would take rotating writes"
+
+    # ---- reboot: pithead-boot owns a rig now, and commits its slot -------------------------
+    info "reboot leg — the rig must come back mining, and commit its own slot"
+    _ssh reboot 2>/dev/null || true
+    sleep 10
+    _wait_ssh 300 || {
+        bad "the rig never returned from the reboot"
+        return
+    }
+    local mtries2=0 miner_back=0
+    while [ "$mtries2" -lt 24 ]; do
+        if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
+            miner_back=1
+            break
+        fi
+        sleep 10
+        mtries2=$((mtries2 + 1))
+    done
+    [ "$miner_back" -eq 1 ] &&
+        ok "the rig returned mining with no hands on it (its unit lives in /run and died with the reboot)" ||
+        bad "the rig did not return after the reboot — its runtime unit was never re-rendered"
+    # WHICH unit owns the boot is the whole R4 fork: the wizard's window is closed by rig.json,
+    # and pithead-boot — skipped on a rig before this phase existed — is what runs.
+    [ "$(_ssh 'systemctl is-active pithead-boot' | tr -d '\r\n')" = "active" ] &&
+        ok "pithead-boot owns a provisioned rig's boot" ||
+        bad "pithead-boot did not run on the rig (its condition still excludes a machine with no config.json)"
+    _ssh "systemctl is-active --quiet pithead-firstboot" &&
+        bad "the first-boot wizard ran again on a provisioned rig" ||
+        ok "the wizard window is closed on a provisioned rig (no setup page on every boot)"
+    local failed_units
+    failed_units=$(_ssh "systemctl --failed --no-legend --no-pager --plain" 2>/dev/null |
+        awk '$1 !~ /^[0-9a-f]{64}-[0-9a-f]+\.service$/' | tr -s ' ' | tr '\n' ';')
+    [ -z "${failed_units//[; ]/}" ] && ok "no failed systemd units on the rig after the reboot" ||
+        bad "failed units on the rig after the reboot: $failed_units"
+    # The commit gate, rig-shaped: a rig that could not commit would roll back every A/B update
+    # it ever received. Note the pool here answers nothing — the commit must not depend on it.
+    local genv tries3=0
+    while [ "$tries3" -lt 18 ]; do
+        genv=$(_ssh "grub-editenv /boot/efi/grub/grubenv list" 2>/dev/null | tr '\n' ' ')
+        case "$genv" in *A_OK=1*A_TRY=0* | *A_TRY=0*A_OK=1*) break ;; esac
+        sleep 10
+        tries3=$((tries3 + 1))
+    done
+    case "$genv" in
+    *A_OK=1*A_TRY=0* | *A_TRY=0*A_OK=1*)
+        ok "the rig committed its own slot on the miner running (A_OK=1 A_TRY=0), pool unanswered"
+        ;;
+    *) bad "the rig never self-committed — grubenv: ${genv:-unreadable}" ;;
+    esac
+
+    # ---- A/B update: identical pipeline, identical outcome --------------------------------
+    info "update leg — a rig takes a bundle exactly like a coordinator"
+    local bundle
+    bundle=$(_build_bundle v2) || {
+        bad "v2 bundle build failed (/tmp/os-fault-bundle.log)"
+        return
+    }
+    _stage_bundle "$bundle" || {
+        bad "staging the bundle on the rig failed"
+        return
+    }
+    _ssh "$(_install_cmd /data/update.bundle)" || {
+        bad "the v2 install failed on the rig"
+        return
+    }
+    ok "v2 installed into the rig's spare slot"
+    _ssh "$(_boot_spare_cmd)" || true
+    sleep 10
+    _wait_ssh 300 || {
+        bad "the rig never returned after booting the spare slot"
+        return
+    }
+    marker=$(_ssh cat /etc/pithead-test-marker | tr -d '\r\n')
+    [ "$marker" = "v2" ] && ok "the rig's spare slot booted with v2" || {
+        bad "expected v2 in the rig's spare slot, got '$marker'"
+        return
+    }
+    # The state that must survive a whole-slot replacement: the role and its answers live on
+    # /data, so the new slot has to come up as the SAME rig.
+    [ "$(_ssh 'cat /data/pithead/machine-role' | tr -d '\r\n')" = "rig" ] &&
+        ok "the role survived the slot swap (it lives on /data, not in the image)" ||
+        bad "the updated slot lost the rig role"
+    local mtries3=0 miner_v2=0
+    while [ "$mtries3" -lt 24 ]; do
+        if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
+            miner_v2=1
+            break
+        fi
+        sleep 10
+        mtries3=$((mtries3 + 1))
+    done
+    [ "$miner_v2" -eq 1 ] && ok "the rig mines again on the updated slot" ||
+        bad "the rig stopped mining after the A/B update"
+    # An uncommitted update must revert here for the same reason it does on a coordinator.
+    _ssh reboot || true
+    sleep 10
+    _wait_ssh 300 || {
+        bad "the rig never returned after the no-commit reboot"
+        return
+    }
+    marker=$(_ssh cat /etc/pithead-test-marker | tr -d '\r\n')
+    [ "$marker" = "v1" ] && ok "ROLLBACK: an uncommitted update reverts on a rig too" ||
+        bad "expected v1 after the rig's uncommitted reboot, got '$marker'"
+    _ssh "$(_install_cmd /data/update.bundle)" || {
+        bad "the second v2 install failed on the rig"
+        return
+    }
+    _ssh "$(_boot_spare_cmd)" || true
+    sleep 10
+    _wait_ssh 300 || {
+        bad "the rig never returned after the second install"
+        return
+    }
+    # No harness mark-good: the rig's own boot path must commit, the same way it did on v1.
+    local genv2 tries4=0
+    while [ "$tries4" -lt 24 ]; do
+        genv2=$(_ssh "grub-editenv /boot/efi/grub/grubenv list" 2>/dev/null | tr '\n' ' ')
+        case "$genv2" in *B_OK=1*B_TRY=0* | *B_TRY=0*B_OK=1*) break ;; esac
+        sleep 10
+        tries4=$((tries4 + 1))
+    done
+    case "$genv2" in
+    *B_OK=1*B_TRY=0* | *B_TRY=0*B_OK=1*)
+        ok "the rig self-committed the UPDATED slot (B_OK=1 B_TRY=0) — no harness hands"
+        ;;
+    *) bad "the rig never self-committed the updated slot — grubenv: ${genv2:-unreadable}" ;;
+    esac
+    _ssh reboot || true
+    sleep 10
+    _wait_ssh 300 || {
+        bad "the rig never returned after the post-commit reboot"
+        return
+    }
+    marker=$(_ssh cat /etc/pithead-test-marker | tr -d '\r\n')
+    [ "$marker" = "v2" ] && ok "COMMIT: the update persists on the rig across reboot" ||
+        bad "expected v2 on the rig after commit, got '$marker'"
+}
+
 phase_fault() {
     info "phase: fault injection — a brick is disqualifying, not deducted"
     local img bundle marker i out
@@ -1566,12 +1842,14 @@ boot) phase_boot ;;
 update) phase_update ;;
 install) phase_install ;;
 provision) phase_provision ;;
+rig) phase_rig ;;
 fault) phase_fault ;;
 all)
     phase_boot
     phase_update
     phase_install
     phase_provision
+    phase_rig
     ;;
 *)
     echo "unknown phase: $PHASE" >&2

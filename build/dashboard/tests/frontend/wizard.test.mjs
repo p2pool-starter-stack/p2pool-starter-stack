@@ -526,12 +526,14 @@ test("the rig card shows the worker and where it points — no credentials, no l
   assert.doesNotMatch(stick, /erase the disk/); // run-from-stick erases nothing
 });
 
-test("after the ack, the rig's done view is honest: saved, not mining yet", async () => {
+test("after the ack, the rig's done view sends the operator to the coordinator, not a link here", async () => {
   const { inst, restore } = await appOn([stateFor("setup")]);
   inst.setRole({ target: { value: "rig" } });
   Object.assign(inst.state, { stage: "done", handoff: null });
   const out = renderToString(inst.render());
-  assert.match(out, /nothing mines yet/);
+  assert.match(out, /miner is starting/);
+  assert.match(out, /Workers view/); // a rig has no dashboard of its own to point at
+  assert.doesNotMatch(out, /nothing mines yet/); // the boot leg is real now
   assert.doesNotMatch(out, /pulling and starting the stack/);
   restore();
 });

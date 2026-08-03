@@ -1,7 +1,13 @@
 [Unit]
 Description=Pithead first-boot setup wizard (#77 phase 3)
-# Only while unprovisioned — the wizard window closes permanently at handoff.
+# Only while unprovisioned — the wizard window closes permanently at handoff. Both shapes of
+# provisioned close it: a coordinator's config.json and a rig's accepted role marker. Without
+# the second, a rig would re-open a setup page on every boot forever (it has no config.json to
+# close the window) while pithead-boot, which owns its miner and its A/B commit, sat skipped
+# beside it. The marker, not rig.json: a fleet stick holds a rig's answers in flight while
+# installing one, and must stay an installer through it.
 ConditionPathExists=!/data/pithead/config.json
+ConditionPathExists=!/data/pithead/machine-role
 # Guard: container storage lives on /data. If it is not a real mount, podman would silently build
 # storage on the discarded root overlay and fill it — refuse to start instead.
 ConditionPathIsMountPoint=/data

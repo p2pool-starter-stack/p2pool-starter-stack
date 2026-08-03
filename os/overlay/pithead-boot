@@ -22,6 +22,36 @@
 set -uo pipefail
 cd /data/pithead || exit 1
 
+# Role fork (#797): a rig is not a small coordinator, it is a different machine. No compose
+# stack, no nodes, no dashboard — and no container images worth loading, which is why this comes
+# before the loader. Its whole boot is the miner, and its slot commits on the miner running, the
+# same shape the coordinator's commit takes on the stack serving.
+#
+# The gate is deliberately pool-INDEPENDENT: a rig whose pool is unreachable still starts, still
+# retries, and must still commit. Rolling a slot back cannot fix a switch nobody plugged in, and
+# a gate that punished it would flap the A/B pair every boot the LAN was late.
+# Existence first, deliberately: `<machine-role` on a machine that has none is a REDIRECTION
+# failure, and the shell prints that itself — `2>/dev/null` on the inner command cannot suppress
+# it. Harmless (this script runs without errexit, and the coordinator path is still reached),
+# but it would put a "No such file or directory" line in the journal of every coordinator boot,
+# which is the most common boot there is. An error nobody should read is an error nobody will.
+if [ -f machine-role ] && [ "$(tr -d '[:space:]' <machine-role)" = "rig" ]; then
+    # Same bounded clock as the coordinator's miner leg, for the same reason: the boot unit runs
+    # with TimeoutStartSec=infinity, so a stalled native rebuild would leave it activating
+    # forever. The prebuilt path finishes in seconds.
+    timeout 1800 ./pithead local-miner || exit 1
+    for _ in $(seq 12); do
+        if systemctl is-active --quiet xmrig.service; then
+            command -v rauc >/dev/null 2>&1 && rauc status mark-good
+            echo "pithead-boot: the rig's miner is running — booted slot committed"
+            exit 0
+        fi
+        sleep 5
+    done
+    echo "pithead-boot: the rig's miner never came up — slot left uncommitted so A/B fallback stays armed" >&2
+    exit 1
+fi
+
 # Containers are DERIVED too (#798): the baked archives ship in the slot, but podman's store
 # lives on /data and the image tag is constant across releases — a keep-reinstall or A/B
 # update ran RC-old containers under an RC-new OS until this loaded them. ONE loader, shared

@@ -107,10 +107,10 @@ way the config pre-seed is scrubbed. The stick keeps neither copy after a disk i
 stick whose own `/data` carries the rig marker IS a rig (run-from-USB), and that marker
 outranks installer mode on every later boot.
 
-**The rig boot leg belongs to the next phase.** Today a machine carrying `machine-role: rig`
-states its role on the console and stops — nothing mines yet, and the message says exactly
-that. The Both role is fully live end to end: the boot contract's step 5 already honours
-`local_miner.enabled`.
+**Getting a machine back out of the rig role** is the installer, not a setting: a rig serves no
+dashboard and answers on no port, so there is nothing to log into and change. Boot the stick
+beside it and install with the wipe, and it is a blank machine that can pick any role again. A
+*keep* reinstall deliberately leaves it a rig — keep means keep whatever the role says.
 
 ## The certificate lifecycle
 
@@ -151,8 +151,52 @@ certificate beats no dashboard.
 
 ## The boot contract (provisioned machines)
 
-After provisioning, every boot runs one unit — `pithead-boot` — whose five steps each answer
-a hardware-validated failure:
+After provisioning, every boot runs one unit — `pithead-boot`. **Provisioned has two shapes**,
+and the unit's condition names both: a coordinator states it with `config.json` (every machine
+provisioned before the role contract has only that), a rig with `machine-role` — it has no
+`config.json` and never will. Both are *triggering* conditions — the `|` prefix — so either one
+admits the unit while the `/data` mount check still has to hold. The mirror image guards the
+wizard: `pithead-firstboot` is excluded by **either** file, or a rig would re-open a setup page
+on every boot while the unit that owns its miner sat skipped beside it.
+
+The marker and not `rig.json`, deliberately: a fleet stick holds a rig's answers *in flight*
+while installing that rig onto a disk, and must stay an installer through it. Only an accepted
+role writes the marker, and only onto the machine that IS that role.
+
+The condition only decides *whether* the unit runs — existence is all a systemd condition can
+test. Which leg runs is the marker's VALUE, read by the script.
+
+### The rig leg
+
+A rig is not a small coordinator. It runs no containers, so the image loader is skipped before
+it costs anything; it has no `config.json` to render from and no stack to bring up. `pithead-boot`
+forks first thing and does two steps:
+
+1. **`pithead local-miner`**, which reads the marker and takes the rig branch: `rig.json` →
+   RigForge's `config.json` (pool, worker name as `pools[].user`, stratum password when one was
+   set, and *no* HugePages headroom — there is no stack here to leave room for) → the same
+   appliance-mode setup the Both role runs, from the same tree on `/data`, against the same
+   prebuilt XMRig the image baked. Nothing on this path clones or compiles; a Tor-only box could
+   not. A native rebuild is the operator's option, cached on `/data`, never a requirement.
+2. **The same health-gated slot commit**, on the miner running. The gate is deliberately
+   *pool-independent*: a rig whose coordinator is late still starts, still retries, and still
+   commits. Rolling a slot back cannot fix a switch nobody plugged in, and a gate that punished
+   it would flap the A/B pair every boot the LAN was slow.
+
+The leg also does the removable-root minimization the run-from-USB rig needs, because that
+machine's root IS the stick it mines from. The image ships journald persistent with a 200 MB
+cap, whose files land on that same medium; the rig leg flips it to volatile — logs in memory,
+no rotating writes on the stick — and converges it on every boot, since `/etc` and `/run` are
+both volatile here and no drop-in survives a reboot. Swap needs no code at all: the appliance
+declares no swap partition and creates none, in any role. And `/data` needs no rig-sized repart
+rule, because it is sized to the **medium** rather than to the role — a 16 GB stick leaves a rig
+roughly 6 GiB after the ESP and both slots, which is plenty with no chains. It could not be
+role-conditional in any case: `systemd-repart` runs at first boot, before the wizard has asked
+what the machine is (`os/rootfs/repart.d/40-data.conf` carries the full reasoning).
+
+### The coordinator leg
+
+Five steps, each answering a hardware-validated failure:
 
 1. **`pithead load-images`** — load the baked container-image archives when their content
    changed. The archives ship in the read-only slot, the engine's storage lives on `/data`,
@@ -228,8 +272,10 @@ had a gap between it and the next one.
 | pure logic | `tests/frontend/configsync.test.mjs` | path access, typed coercion, address/pair guidance |
 | view rendering | `tests/frontend/wizard.test.mjs` (probes) | each view given its props |
 | **app orchestration** | `tests/frontend/wizard.test.mjs` (stubbed server) | **stage mapping, the handoff arriving through the poll, refresh-mid-provision, rejection round-trip, request bodies** |
-| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, the digest-keyed image loader, reinstall pre-fill (secret strip + fail-open), the local-miner legs (derived config, sync seeding, boot-leg wiring), the rig-role legs (pool discovery publisher, rig request consumption, the role marker + boot stub) |
+| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, the digest-keyed image loader, reinstall pre-fill (secret strip + fail-open), the local-miner legs (derived config, sync seeding, boot-leg wiring), the rig-role legs (pool discovery publisher, rig request consumption, the role marker, the rig boot leg's derived config + prebuilt-first + volatile journal + refusals, and both unit conditions) |
+| the artifact | `tests/os/verify-image.sh` | both role paths present in the shipped image: the boot script's fork, the unit conditions that admit each role, the baked prebuilt, no swap anywhere |
 | the real thing | `tests/os/run.sh --phase provision` | token from the console → submit → handoff → ack → running stack → built-in miner up and its shares accepted → reboot through a corrupted Caddyfile → no failed units → slot self-commit → miner back |
+| the other real thing | `tests/os/run.sh --phase rig` | the same page answered `RigForge` → rig card with no login → mining from the byte-identical baked binary → **no containers at all** → reboot owned by `pithead-boot`, wizard closed → slot self-commit on an unanswered pool → A/B install, uncommitted rollback, self-commit, persistence |
 
 The orchestration row is the one that was missing. pytest proved the endpoint published the
 credentials; a render probe proved the card renders given them; nothing proved the app *asked*.
