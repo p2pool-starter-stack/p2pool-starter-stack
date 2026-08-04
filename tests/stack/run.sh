@@ -3826,6 +3826,107 @@ printf '#!/bin/bash\ncase "$1" in -s) echo Darwin ;; -m) echo x86_64 ;; esac\n' 
 out=$(PATH="$IBIN:$PATH" bash "$ROOT/install.sh" 2>&1) || true
 assert_contains "install.sh refuses non-Linux" "$out" "runs on Linux"
 
+echo "== unit: install.sh download verification fails CLOSED (#868) =="
+# The two security-critical branches of the public curl installer: the bundle sha256 against the
+# release manifest, and the cosign signature against the repo-pinned key. This is the path a new
+# operator runs BEFORE any of the bundle's own defenses exist — a tampered bundle that gets
+# extracted has already won — so a mismatch must install NOTHING. The stubs model each remote
+# artifact as a file served by basename; absent file = curl -f failure, exactly the shape the
+# script distinguishes (absent degrades politely, present-but-wrong is fatal).
+ISB=$(mktemp -d)
+mkdir -p "$ISB/bin" "$ISB/srv" "$ISB/work"
+printf '#!/bin/bash\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n' >"$ISB/bin/uname"
+cat >"$ISB/bin/curl" <<'EOF'
+#!/bin/bash
+out="" url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -o)
+        out="$2"
+        shift 2
+        ;;
+    http*)
+        url="$1"
+        shift
+        ;;
+    *) shift ;;
+    esac
+done
+src="$CURL_SRV/$(basename "$url")"
+[ -f "$src" ] || exit 22
+[ -n "$out" ] && cp "$src" "$out"
+exit 0
+EOF
+# macOS has no sha256sum; shasum -a 256 prints the identical "hash  file" shape.
+printf '#!/bin/bash\nif command -v /usr/bin/sha256sum >/dev/null; then exec /usr/bin/sha256sum "$@"; fi\nexec shasum -a 256 "$@"\n' >"$ISB/bin/sha256sum"
+printf '#!/bin/bash\nexit "${COSIGN_RC:-0}"\n' >"$ISB/bin/cosign"
+chmod +x "$ISB/bin/"*
+# A canned release bundle whose pithead stub proves the handoff (install.sh exec's it).
+mkdir -p "$ISB/bundle-src/pithead-x"
+printf '#!/bin/bash\necho "SETUP-REACHED $*"\n' >"$ISB/bundle-src/pithead-x/pithead"
+chmod +x "$ISB/bundle-src/pithead-x/pithead"
+tar -czf "$ISB/srv/pithead.tar.gz" -C "$ISB/bundle-src" pithead-x
+BUNDLE_SHA=$(cd "$ISB" && PATH="$ISB/bin:$PATH" sha256sum srv/pithead.tar.gz | cut -d' ' -f1)
+# One invocation per scenario; PATH keeps the stubs first, cosign joins only where a test wants it.
+irun() { # <dest-subdir> [env overrides via preceding assignments]
+    (
+        cd "$ISB/work" || exit
+        CURL_SRV="$ISB/srv" PITHEAD_VERSION=v9.9.9 PITHEAD_ALLOW_ANY_DISTRO=1 \
+            PITHEAD_DIR="$ISB/work/$1" PATH="$ISB/bin:$PATH" bash "$ROOT/install.sh" 2>&1
+    )
+}
+
+# sha256 verified against the manifest: match proceeds to the handoff, mismatch installs NOTHING.
+printf 'bundle sha256: `%s`\n' "$BUNDLE_SHA" >"$ISB/srv/ingredients-v9.9.9.md"
+out=$(irun ok-sha)
+assert_rc "verified install runs to the setup handoff" "$?" "0"
+assert_contains "sha256 match is announced" "$out" "sha256 verified"
+assert_contains "the extracted pithead was exec'd" "$out" "SETUP-REACHED"
+printf 'bundle sha256: `%s`\n' "$(printf 'a%.0s' $(seq 64))" >"$ISB/srv/ingredients-v9.9.9.md"
+out=$(irun bad-sha) && rc=0 || rc=$?
+assert_rc "sha256 mismatch refuses to install" "$rc" "1"
+assert_contains "the mismatch names both digests' verdict" "$out" "sha256 mismatch"
+assert_eq "nothing was installed on a sha256 mismatch" "$([ -e "$ISB/work/bad-sha" ] && echo present || echo absent)" "absent"
+# A manifest with no sha line (pre-v1.15) and a missing manifest both degrade politely.
+printf 'no digest here\n' >"$ISB/srv/ingredients-v9.9.9.md"
+out=$(irun no-sha-line)
+assert_contains "manifest without a sha degrades to HTTPS trust" "$out" "carries no bundle sha256"
+rm -f "$ISB/srv/ingredients-v9.9.9.md"
+out=$(irun no-manifest)
+assert_contains "missing manifest degrades to HTTPS trust" "$out" "No release manifest"
+
+# cosign: a present-but-bad signature is FATAL; an absent one is a note; a signature whose
+# pinned key cannot be fetched is fatal too (the cross-channel check cannot be half-done).
+touch "$ISB/srv/pithead.tar.gz.sig" "$ISB/srv/cosign.pub"
+out=$(irun sig-ok)
+assert_rc "good signature installs" "$?" "0"
+assert_contains "signature verification is announced" "$out" "signature verified"
+out=$(COSIGN_RC=1 irun sig-bad) && rc=0 || rc=$?
+assert_rc "bad signature refuses to install" "$rc" "1"
+assert_contains "the failure names the signature" "$out" "signature verification FAILED"
+assert_eq "nothing was installed on a bad signature" "$([ -e "$ISB/work/sig-bad" ] && echo present || echo absent)" "absent"
+rm -f "$ISB/srv/cosign.pub"
+out=$(irun sig-nokey) && rc=0 || rc=$?
+assert_rc "signature without a fetchable pinned key refuses" "$rc" "1"
+assert_contains "the failure names the pinned key" "$out" "pinned key could not be fetched"
+rm -f "$ISB/srv/pithead.tar.gz.sig"
+out=$(irun sig-absent)
+assert_contains "absent signature is noted, not fatal" "$out" "No bundle signature"
+
+# The remaining guards on the same path: an occupied target refuses before downloading, and a
+# bundle with no pithead executable refuses after extraction.
+mkdir -p "$ISB/work/taken"
+out=$(irun taken) && rc=0 || rc=$?
+assert_rc "an existing target dir refuses" "$rc" "1"
+assert_contains "the refusal names the dir" "$out" "already exists"
+mkdir -p "$ISB/empty/pithead-x" && touch "$ISB/empty/pithead-x/README"
+tar -czf "$ISB/srv/pithead.tar.gz" -C "$ISB/empty" pithead-x
+out=$(irun corrupt) && rc=0 || rc=$?
+assert_rc "a bundle without a pithead executable refuses" "$rc" "1"
+assert_contains "the refusal suspects corruption" "$out" "no pithead executable"
+rm -rf "$ISB"
+unset -f irun
+
 echo "== black-box: monero.out_peers renders to .env, bounds enforced (#595) =="
 # Default 48 when unset (the Tor-IBD bandwidth default); an explicit value lands verbatim in
 # MONERO_OUT_PEERS (each outbound peer ≈ one Tor circuit — the steady-state Tor CPU lever);
