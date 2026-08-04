@@ -1971,6 +1971,16 @@ class TestXvbRealization:
         # A hostile/corrupt negative published figure gives a negative face value — no factor.
         assert xvb_realization(self._payouts(1), self.WINS, -0.016, 1.0, now=self.NOW) is None
 
+    def test_baseline_subtraction_removes_ordinary_p2pool_leak(self):
+        # Ordinary P2Pool payouts land inside win windows too; the box's linear rate over the
+        # windowed hours is subtracted so the factor measures only the wins' excess. Here the
+        # 4.8 mXMR gross per win contains 1.6 mXMR of baseline (6.4 mXMR/day × 6h): excess
+        # 3.2 mXMR against a 16 mXMR face => 0.2, not the inflated 0.3.
+        out = xvb_realization(
+            self._payouts(4_800_000_000), self.WINS, 0.016, 1.0, now=self.NOW, p2pool_day=0.0064
+        )
+        assert out == (pytest.approx(0.2), 6)
+
 
 class TestEarningsVsActualTempering:
     NOW = 1_760_000_000
@@ -2306,6 +2316,20 @@ class TestXvbCalc:
         assert by_threshold[100_000]["realized_reward_year"] == pytest.approx(6.17 * 0.19)
         assert out["realization_pct"] == 19
         assert out["realization_wins"] == 15
+
+    def test_unmeasured_boxes_get_the_prior_band_measured_boxes_do_not(self):
+        # #872: no local measurement -> published × the measured prior band, so "should I enable
+        # this" is answerable everywhere. A measured factor supersedes it (never both), and stale
+        # estimates null both — a band cannot resurrect a stale face value.
+        out = build_xvb_calc(_metrics(), self._sm())
+        whale = next(t for t in out["tiers"] if t["threshold"] == 100_000)
+        lo, hi = views.XVB_REALIZATION_PRIOR
+        assert whale["assumed_reward_year_range"] == pytest.approx([6.17 * lo, 6.17 * hi])
+        out = build_xvb_calc(_metrics(), self._sm(), realization=(0.19, 15))
+        assert all(t["assumed_reward_year_range"] is None for t in out["tiers"])
+        stale = self._sm(last_update=time.time() - XVB_STATS_STALE_AFTER_S - 1)
+        out = build_xvb_calc(_metrics(), stale)
+        assert all(t["assumed_reward_year_range"] is None for t in out["tiers"])
 
     def test_no_realization_leaves_realized_none(self):
         # Unmeasured (too few wins / payout confirmation off): realized stays None so the client
