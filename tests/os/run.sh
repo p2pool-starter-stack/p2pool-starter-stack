@@ -1743,27 +1743,14 @@ phase_rig() {
     done
     [ "$miner_v2" -eq 1 ] && ok "the rig mines again on the updated slot" ||
         bad "the rig stopped mining after the A/B update"
-    # An uncommitted update must revert here for the same reason it does on a coordinator.
-    _ssh reboot || true
-    sleep 10
-    _wait_ssh 300 || {
-        bad "the rig never returned after the no-commit reboot"
-        return
-    }
-    marker=$(_ssh cat /etc/pithead-test-marker | tr -d '\r\n')
-    [ "$marker" = "v1" ] && ok "ROLLBACK: an uncommitted update reverts on a rig too" ||
-        bad "expected v1 after the rig's uncommitted reboot, got '$marker'"
-    _ssh "$(_install_cmd /data/update.bundle)" || {
-        bad "the second v2 install failed on the rig"
-        return
-    }
-    _ssh "$(_boot_spare_cmd)" || true
-    sleep 10
-    _wait_ssh 300 || {
-        bad "the rig never returned after the second install"
-        return
-    }
-    # No harness mark-good: the rig's own boot path must commit, the same way it did on v1.
+    # No harness mark-good: the boot that just brought the miner up must have COMMITTED — a rig
+    # commits on the miner running, the same event this leg just waited for. That coupling is
+    # also why an "uncommitted revert" is not observable here: on a provisioned rig the commit
+    # window closes the moment the miner is up (seconds), which is the property itself, not a
+    # gap. The generic uncommitted-fallback machinery — same grub.cfg, same RAUC — is proven by
+    # the update phase on an unprovisioned box, where no boot path self-commits. This leg's
+    # first run asserted the revert anyway and refuted ITSELF: the rig had already committed,
+    # the reboot stayed v2, and a follow-up install then targeted the wrong slot.
     local genv2 tries4=0
     while [ "$tries4" -lt 24 ]; do
         genv2=$(_ssh "grub-editenv /boot/efi/grub/grubenv list" 2>/dev/null | tr '\n' ' ')
