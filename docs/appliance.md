@@ -318,10 +318,12 @@ key-only, and only if you need it.
 **"Wrong token."** The token changes each time the setup service restarts — read the
 current one from the console. After five wrong attempts it mints a new one on purpose.
 
-**The address was rejected.** You most likely pasted a subaddress (starts with `8`) or an
-integrated address. Use your primary address, which starts with `4` and is 95 characters.
-If the message says the checksum failed, at least one character of the address is wrong —
-re-copy it from your wallet rather than fixing it by eye.
+**The address was rejected.** For Monero you most likely pasted a subaddress (starts with
+`8`) or an integrated address. Use your primary address, which starts with `4` and is 95
+characters. If the message says the checksum failed — for either the Monero or the Tari
+address — at least one character is wrong: re-copy it from your wallet rather than fixing
+it by eye. A Tari address rejected as the wrong network came from a testnet wallet; the
+stack mines mainnet.
 
 **It came back on the old version after an update.** That is the safety mechanism working:
 the new version did not come up healthy, so the machine reverted. Nothing is lost. Check
