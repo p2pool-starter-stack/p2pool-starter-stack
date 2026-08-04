@@ -3876,8 +3876,8 @@ mkdir -p "$ISB/work/taken"
 out=$(irun taken) && rc=0 || rc=$?
 assert_rc "an existing target dir refuses" "$rc" "1"
 assert_contains "the refusal names the dir" "$out" "already exists"
-tar -czf "$ISB/srv/pithead.tar.gz" -C "$ISB/bundle-src" --exclude 'pithead-x/pithead' pithead-x 2>/dev/null ||
-    { mkdir -p "$ISB/empty/pithead-x" && touch "$ISB/empty/pithead-x/README" && tar -czf "$ISB/srv/pithead.tar.gz" -C "$ISB/empty" pithead-x; }
+mkdir -p "$ISB/empty/pithead-x" && touch "$ISB/empty/pithead-x/README"
+tar -czf "$ISB/srv/pithead.tar.gz" -C "$ISB/empty" pithead-x
 out=$(irun corrupt) && rc=0 || rc=$?
 assert_rc "a bundle without a pithead executable refuses" "$rc" "1"
 assert_contains "the refusal suspects corruption" "$out" "no pithead executable"
