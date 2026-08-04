@@ -16,7 +16,7 @@ situation honestly.
 | **1 — Unit** | `build/dashboard/tests/` (pytest, mocked clients) and `tests/stack/` (shell, `docker`/`sudo` stubbed) | Decision logic & field mapping: sync-gate, failover, node-health debounce, XvB engine, `/api/state` shapes, `pithead` config/status logic | Every PR (`make test`) |
 | **2 — Contract** | `tests/integration/fakes/test_contract.py` | The real Monero/Tari **clients** parsing the real daemons' wire format — points the actual clients at controllable fakes | Every PR (docker-free) |
 | **3 — Mini-stack** | `tests/integration/mini-stack/` (real dashboard + docker-control vs fake daemons) | The control plane **end-to-end with real containers**: hold/release and reject/readmit actually stopping/starting `p2pool`/`xmrig-proxy`, driven deterministically | CI with Docker (`make test-mini-stack`) |
-| **4 — Live matrix** | `tests/integration/run.sh` against a real, synced box | What only reality proves: real merge-mining, prune/full DB size, Caddy TLS, Tor onions, HugePages, plus fault injection for real container health verdicts | Manual / release gate (`make test-integration`) |
+| **4 — Live matrix** | `tests/integration/run.sh` against a real, synced box — and, for the appliance channel, `tests/os/run.sh`, the KVM battery for the flashed image | What only reality proves: real merge-mining, prune/full DB size, Caddy TLS, Tor onions, HugePages, fault injection for real container health verdicts — and, for the image, EFI boot, A/B commit/rollback, install-to-disk | Manual / release gate (`make test-integration`; the battery on the KVM bench) |
 
 Stubs do most of the work. The dashboard unit tests drive the hard runtime states with mocked
 clients; more mocks for the same logic would duplicate them. What stubs can't prove is wiring:
@@ -159,6 +159,29 @@ are **not** re-provable at a lower tier: the auth-header logic (tier 1) and the 
 (tier 2) already are, so the only thing left for the real rig is real mining and the real proxy's
 accept/reject — which only a real xmrig-proxy binary can prove.
 
+### J. Appliance image (`pithead-os`, #77)
+
+The flashed image is the second distribution channel, and it follows the same rule as
+everything else: logic at tier 1, reality at tier 4 — there is no separate model for it.
+Tier 4 has one meaning (what only reality proves) and two harnesses, one per channel: the
+live matrix for a DIY install, the KVM battery (`tests/os/run.sh`, see
+[`tests/os/README.md`](../../tests/os/README.md)) for the flashed image. The battery needs
+KVM + libvirt + root — the bench, not CI — and is the release gate for the image
+([`appliance-release.md`](appliance-release.md)). `tests/os/verify-image.sh` sits below it:
+static assertions against the built rootfs (variant stamp, baked units, watchdog config),
+no VM needed, run on every image build.
+
+| Situation | Trigger | Tier |
+|---|---|---|
+| Wizard Q&A → `config.json`, spool round-trips, token gate, error re-display | `test_wizard.py` (pytest) + `wizard.test.mjs` (node) | 1 ✅ |
+| Image invariants: variant stamp, enabled units, watchdog/governor config, dev-keyring refusal | `tests/os/verify-image.sh` (static, no KVM) | build-time ✅ |
+| EFI boot; first-boot wizard window; token gate answers | battery `--phase boot` | 4 ✅ |
+| A/B contract: uncommitted auto-rollback, committed update persists, rollback off a committed slot, containers refreshed, `/data` grew | battery `--phase update` | 4 ✅ |
+| Install-to-disk copies a COMPLETE system; reinstall keep/fresh paths | battery `--phase install` | 4 ✅ |
+| Wizard's real HTTP flow provisions the STACK (images verified, Tor-only egress enforced, miner up); unaided reboot return; commit-gate honesty both ways; the migration hold starts the chain only post-commit | battery `--phase provision` | 4 ✅ |
+| Rig role: no containers, mines from the baked binary, takes an A/B update like a coordinator | battery `--phase rig` | 4 ✅ |
+| Power cuts mid-write and mid-commit; corrupt bundle — a brick is disqualifying | battery `--phase fault` (opt-in) | 4 ✅ |
+
 ## Running each tier
 
 ```bash
@@ -166,6 +189,9 @@ make test                 # tiers 1 + 2 (+ harness self-test) — every-PR, no d
 make test-fakes           # tier 2 contract test on its own
 make test-mini-stack      # tier 3 — needs docker
 make test-integration ARGS="--host user@box --dir pithead --lifecycle --fault-injection"  # tier 4
+# tier 4, appliance channel (KVM bench):
+os/build-image.sh --ssh && os/rauc/mkimage.sh --dev
+sudo tests/os/run.sh --image os/rauc/build/system.img
 ```
 
 ## Production-readiness posture
@@ -188,6 +214,7 @@ locally).
 | **Test-inventory drift** check | — | every PR | ✅ required |
 | Fake-daemon **docker mini-stack** | 3 | PRs touching the harness/dashboard | ✅ (own workflow) |
 | **Live config matrix** on real nodes | 4 | manual / pre-release | ✅ **release gate** ([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)) |
+| **KVM appliance battery** (`tests/os/run.sh`) | 4 | manual / pre-release | ✅ **release gate for the image** ([appliance-release.md](appliance-release.md)) |
 
 The first three tiers run on every PR with no special infrastructure. Tier 4 is the blocking
 pre-release gate (see [Releasing](releasing.md)) because it needs the real synced nodes.
