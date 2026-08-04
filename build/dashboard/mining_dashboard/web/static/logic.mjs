@@ -323,9 +323,20 @@ export function xvbTierComparison(tier, coeffDay) {
     tier && Number.isFinite(tier.expected_reward_year) ? tier.expected_reward_year : null;
   const realized =
     tier && Number.isFinite(tier.realized_reward_year) ? tier.realized_reward_year : null;
+  // The measured-prior band for unmeasured boxes (#872): published × [low, high] realization.
+  // Server-emitted only while no local measurement exists, so realizedNet and assumedNetRange
+  // are mutually exclusive by construction.
+  const assumed =
+    tier &&
+    Array.isArray(tier.assumed_reward_year_range) &&
+    tier.assumed_reward_year_range.every(Number.isFinite)
+      ? tier.assumed_reward_year_range
+      : null;
   const net = expected !== null && cost !== null ? expected - cost : null;
   const realizedNet = realized !== null && cost !== null ? realized - cost : null;
-  return { expected, cost, net, realized, realizedNet };
+  const assumedNetRange =
+    assumed !== null && cost !== null ? [assumed[0] - cost, assumed[1] - cost] : null;
+  return { expected, cost, net, realized, realizedNet, assumedNetRange };
 }
 
 // Decimal places for a coin amount: more for small amounts (a day's earnings can be a tiny

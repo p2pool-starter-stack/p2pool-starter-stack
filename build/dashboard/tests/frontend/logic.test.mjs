@@ -386,6 +386,20 @@ test('xvbTierComparison: measured realization yields realizedNet — the sign th
     assert.ok(c.realizedNet < 0);
 });
 
+test('xvbTierComparison: the prior band yields assumedNetRange, exclusive with measured (#872)', () => {
+    const tier = {
+        name: 'Whale', threshold: 100_000,
+        expected_reward_year: 6.17, realized_reward_year: null,
+        assumed_reward_year_range: [6.17 * 0.19, 6.17 * 0.55],
+    };
+    const c = xvbTierComparison(tier, 1e-7); // cost 3.65
+    assert.ok(Math.abs(c.assumedNetRange[0] - (6.17 * 0.19 - 3.65)) < 1e-9);
+    assert.ok(Math.abs(c.assumedNetRange[1] - (6.17 * 0.55 - 3.65)) < 1e-9);
+    // No cost (network stats down) -> no range either; absent field -> null (old server).
+    assert.equal(xvbTierComparison(tier, 0).assumedNetRange, null);
+    assert.equal(xvbTierComparison({ name: 'W', threshold: 1, expected_reward_year: 1 }, 1e-7).assumedNetRange, null);
+});
+
 test('xvbTierComparison: unmeasured realization stays null — never fabricated (#872)', () => {
     const tier = { name: 'Whale', threshold: 100_000, expected_reward_year: 6.17, realized_reward_year: null };
     const c = xvbTierComparison(tier, 1e-7);

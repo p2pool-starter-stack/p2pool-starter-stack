@@ -516,9 +516,47 @@ class XvbComparison extends Component {
       tiers.find((t) => t.name === calc.target_tier) ||
       tiers[0];
     const cmp = xvbTierComparison(sel, coeffDay);
-    // The actionable net: measured realization when the wallet has one, face value otherwise —
-    // the label always says which (#872: the face-value net once had the wrong SIGN).
-    const netShown = cmp.realizedNet !== null ? cmp.realizedNet : cmp.net;
+    // The actionable net, best first (#872): measured realization when the wallet has one; the
+    // measured-prior band otherwise; raw face value only when even the band can't be computed.
+    // Decided ONCE here — label, value, colour and tooltip below all follow `net`. The
+    // face-value net once had the wrong SIGN, so the label always says which figure this is.
+    // Range colour: red only when even the optimistic end loses, green only when even the
+    // pessimistic end profits — a zero-spanning band stays neutral.
+    const [lo, hi] = cmp.assumedNetRange || [null, null];
+    const net =
+      cmp.realizedNet !== null
+        ? {
+            label: "Net / yr (measured)",
+            value: formatXmr(cmp.realizedNet),
+            cls: netCls(cmp.realizedNet),
+            title:
+              `XvB's published reward scaled to what this wallet's wins actually paid — ` +
+              `${calc.realization_pct}% of face value over the last ${calc.realization_wins} wins — ` +
+              `minus the P2Pool earnings given up.`,
+          }
+        : cmp.assumedNetRange
+          ? {
+              label: "Net / yr (estimated)",
+              value: `${formatXmr(lo)} … ${formatXmr(hi)}`,
+              cls: hi < 0 ? "status-bad" : lo > 0 ? "status-ok" : "",
+              title:
+                "XvB's published reward scaled by the measured realization band from live " +
+                "deployments — wallets collected 24% of face value (tight margin over the " +
+                "tier threshold) to 42% (comfortable margin) — minus the P2Pool earnings " +
+                "given up. Your own measurement replaces this band once enough wins land.",
+            }
+          : {
+              label: "Net / yr (face value)",
+              value: cmp.net !== null ? formatXmr(cmp.net) : "—",
+              cls: cmp.net !== null ? netCls(cmp.net) : "",
+              title:
+                "XvB's published FACE-VALUE reward minus the P2Pool earnings given up — an " +
+                "upper bound: it prices every bonus hash at full block reward and assumes " +
+                "every won round runs to completion.",
+            };
+    // Fiat mirror wants one number; a range has none, so its fiat net shows "—".
+    const netShown =
+      cmp.realizedNet !== null ? cmp.realizedNet : cmp.assumedNetRange ? null : cmp.net;
     // The same sustains rule the tier block states: donating the threshold must fit inside the
     // donateable share of the what-if hashrate. An unsustainable tier's Net is "—" — showing,
     // say, Mega's +56 XMR/yr to a 269 kH/s fleet would imply an unreachable payout.
@@ -538,20 +576,13 @@ class XvbComparison extends Component {
                              title="XvB's own published expected reward for this tier per year (their reward_calc figures, fetched over Tor). This is the raffle expectation across all qualifiers — donating above the tier threshold does NOT raise it." />
                 <${StatCard} label="Cost / yr" value=${cmp.cost !== null ? formatXmr(cmp.cost) : "—"}
                              title="P2Pool earnings foregone by donating the tier threshold for a year (threshold × the P2Pool daily rate × 365)." />
-                <${StatCard} label=${cmp.realizedNet !== null ? "Net / yr (measured)" : "Net / yr (face value)"}
-                             value=${sustainable && netShown !== null ? formatXmr(netShown) : "—"}
-                             cls=${sustainable && netShown !== null ? netCls(netShown) : ""}
+                <${StatCard} label=${net.label}
+                             value=${sustainable ? net.value : "—"}
+                             cls=${sustainable ? net.cls : ""}
                              title=${
-                               !sustainable
-                                 ? "Not shown — this tier isn't sustainable at your hashrate, so its payout isn't reachable."
-                                 : cmp.realizedNet !== null
-                                   ? `XvB's published reward scaled to what this wallet's wins actually paid — ` +
-                                     `${calc.realization_pct}% of face value over the last ${calc.realization_wins} wins — ` +
-                                     `minus the P2Pool earnings given up.`
-                                   : "XvB's published FACE-VALUE reward minus the P2Pool earnings given up. The face " +
-                                     "value prices every bonus hash at full block reward and assumes every won round " +
-                                     "runs to completion — wallets collect less; this net is an upper bound. Once " +
-                                     "enough wins land, this figure switches to your measured payout realization."
+                               sustainable
+                                 ? net.title
+                                 : "Not shown — this tier isn't sustainable at your hashrate, so its payout isn't reachable."
 } />
             </div>
             ${
