@@ -204,7 +204,10 @@ configured, rather than sitting idle on a stack that can't mine. A sustained out
 monerod is required to mine, so a monerod outage always rejects. Whether a Tari outage rejects
 follows [`dashboard.tari_required`](configuration.md): `true` (default) rejects on a Tari outage;
 `false` keeps mining Monero through it. Rejection never triggers for a remote monerod, since the
-stack doesn't manage that node.
+stack doesn't manage that node. Readmission waits for monerod to be confirmed healthy; a required
+Tari holds it back only if Tari has actually answered since the dashboard started — a Tari whose
+gRPC has never come up (it can take many minutes after a boot) can't keep workers off a healthy
+monerod.
 
 **Non-blocking Tari.** With `tari_required: false`, a Tari-only (re)sync doesn't take over the
 screen: the operational view stays up, mining continues, and a `Tari syncing` badge shows Tari's
