@@ -615,17 +615,32 @@ class TestWorkerRejection:
         svc.docker_control.start.assert_awaited_once()
         assert svc.workers_rejected is False
 
-    async def test_no_readmit_while_a_relevant_node_unconfirmed(self):
-        # Rejected + nodes no longer "down", but a node we reject on isn't yet confirmed
-        # healthy (e.g. fresh after restart) → do NOT readmit to a possibly-still-down stack.
+    async def test_no_readmit_while_required_tari_was_up_but_unconfirmed(self):
+        # Rejected + a required Tari that HAS worked this run but isn't confirmed healthy
+        # again yet → do NOT readmit; wait out its recovery window.
         svc = self._svc()
         svc.workers_rejected = True
         svc.monero_health.healthy = True
+        svc.tari_health.ever_up = True
         svc.tari_health.healthy = False
         with self._tari(required=True):
             await svc._apply_worker_rejection(monero_down=False, tari_down=False)
         svc.docker_control.start.assert_not_called()
         assert svc.workers_rejected is True
+
+    async def test_readmit_when_required_tari_never_reachable(self):
+        # A required Tari that has NEVER answered this run (post-boot gRPC not listening
+        # yet) must not hold workers off a healthy monerod — the mirror of the ever-up
+        # guard. Observed live: a monerod blip during a post-update boot stopped the proxy
+        # and Tari's slow gRPC start-up blocked readmission indefinitely.
+        svc = self._svc()
+        svc.workers_rejected = True
+        svc.monero_health.healthy = True
+        assert svc.tari_health.ever_up is False  # fresh monitor: never observed
+        with self._tari(required=True):
+            await svc._apply_worker_rejection(monero_down=False, tari_down=False)
+        svc.docker_control.start.assert_awaited_once()
+        assert svc.workers_rejected is False
 
     async def test_readmit_ignores_tari_when_non_blocking(self):
         # Tari non-blocking → Tari health is irrelevant to readmission; monerod healthy is enough.
