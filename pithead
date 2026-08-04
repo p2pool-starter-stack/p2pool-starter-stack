@@ -230,7 +230,25 @@ stack_up() {
     # proceeds (signing is opt-in, #461), a present key that fails aborts before anything starts.
     verify_release_images
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
-    if ! compose_up_checked -d; then
+    #
+    # PITHEAD_HOLD_CHAIN=1 is the migration hold (#851), set only by the appliance boot path on
+    # the first boot of a data_migration bundle: bring up everything EXCEPT the chain services
+    # (monerod/tari and their wallets — the holders of forward-only lmdb migrations, and the
+    # only containers anything depends on together), so the A/B commit decision is made before
+    # any migration touches /data. The chain services start with a plain `up` after the commit.
+    if [ "${PITHEAD_HOLD_CHAIN:-0}" = 1 ]; then
+        local services c
+        local filter=()
+        for c in $REVENUE_CHAIN_CONTAINERS; do filter+=(-e "$c"); done
+        services=$(docker compose config --services 2>/dev/null)
+        [ -n "$services" ] || error "Could not list compose services for the chain hold."
+        log "Data migration pending — holding chain services ($REVENUE_CHAIN_CONTAINERS) until the slot commits."
+        services=$(printf '%s\n' "$services" | grep -vxF "${filter[@]}")
+        # shellcheck disable=SC2086 # word-splitting the service list is the point
+        if ! compose_up_checked -d $services; then
+            error "Stack failed to start — see the error above."
+        fi
+    elif ! compose_up_checked -d; then
         error "Stack failed to start — see the error above."
     fi
     log "Stack started successfully!"
@@ -2452,6 +2470,23 @@ os_raise_data_floor() { # $1: new floor — raise it, never lower (a migration o
     fi
 }
 
+# The migration-pending marker (#851): written by os-update when a data_migration bundle installs,
+# holding the version that bundle carries. On the next boot, pithead-boot and doctor read it back:
+# a marker matching the RUNNING version means "this boot must not start the chain services until
+# the slot commits" — the lmdb migration only runs once A/B fallback can no longer need the
+# pre-migration data. A marker that does NOT match the running version is a fallback boot (the
+# migrating slot failed health and the old OS is back); the old data was never touched, so it is
+# ignored. pithead-boot removes the marker once the migrating slot commits.
+os_migration_marker_file() { printf '%s' "${PITHEAD_MIGRATION_MARKER_FILE:-/data/pithead/.os-migration-pending}"; }
+
+os_migration_hold_active() { # rc 0 when this boot is the held, pre-commit boot of a migrating bundle
+    local f v
+    f=$(os_migration_marker_file)
+    [ -f "$f" ] || return 1
+    v=$(tr -d ' \t\r\n' <"$f" 2>/dev/null)
+    [ -n "$v" ] && [ "$v" = "$(os_running_version)" ]
+}
+
 os_update_needs_confirmation() { # $1: running variant, $2: bundle variant — rc 0 = confirm first
     # Consent is needed whenever an install flips the box's shell/SSH posture, in EITHER direction,
     # or when the bundle's posture can't be verified. A debug image bakes a standing root
@@ -2561,11 +2596,20 @@ os_update() {
     # A data_migration bundle raises the /data floor so a later rollback below it is refused. Armed
     # at install (conservative: before the migration actually runs on the new slot's next boot) —
     # the safe direction, and the only floor pithead can guarantee without executing the migration
-    # itself. Executing the forward-only migration + withholding chain services until the slot
-    # commits is the remaining half of the deadlock rule, tracked as follow-up (see appliance-release.md).
+    # itself. The marker beside it is the other half of the deadlock rule (#851): the next boot
+    # reads it and withholds the chain services until the slot commits, so automatic A/B fallback
+    # always lands on pre-migration data. A NON-migrating install clears any stale marker — it
+    # supersedes a migrating install that never booted, and its own boot must not hold anything.
+    local marker
+    marker=$(os_migration_marker_file)
     if [ "$bundle_migrates" = "true" ] && os_semver_ok "$bundle_min"; then
         os_raise_data_floor "$bundle_min"
         log "Recorded /data migration floor: OS >= $bundle_min required to read chain data after this update commits."
+        mkdir -p "$(dirname "$marker")" 2>/dev/null || true
+        printf '%s\n' "$bundle_version" >"$marker"
+        log "Marked a data migration pending: the next boot starts the chain services only after the new slot commits."
+    else
+        rm -f "$marker"
     fi
 }
 
@@ -3625,8 +3669,13 @@ REVENUE_MINER_CONTAINERS="p2pool xmrig-proxy"
 # Prints "ok" or "fail:<reason>". Kept pure — no engine calls — so the commit gate's honesty is
 # unit-testable without a running stack (tests/stack/run.sh). A non-revenue name is always "ok":
 # the rest of doctor covers those, and this must not judge containers outside its remit.
-revenue_container_verdict() { # <name> <state> <status>
-    local name="$1" state="$2" status="$3" running=0
+#
+# chain_hold=1 is the migration hold (#851): pithead-boot deliberately withholds the chain
+# containers until the slot commits, so — exactly like the miners' sync hold — a DOWN chain node
+# is then the expected state, not a crash, and only a running-but-unhealthy one is a fault.
+# Without this arm the commit gate would fail on the very hold it is gating, a deadlock.
+revenue_container_verdict() { # <name> <state> <status> [chain_hold]
+    local name="$1" state="$2" status="$3" chain_hold="${4:-0}" running=0
     # "running" from EITHER signal: podman and docker both print an "Up …" status for a live
     # container, and `.State` is "running". Reading both is belt-and-suspenders — some docker CLI
     # versions leave the `.State` ps field empty, and a chain node judged down on that alone would
@@ -3638,6 +3687,18 @@ revenue_container_verdict() { # <name> <state> <status>
     fi
     case " $REVENUE_CHAIN_CONTAINERS " in
     *" $name "*)
+        # Under the migration hold, judge a chain node by the miners' rule: down is deliberate.
+        if [ "$chain_hold" = 1 ]; then
+            case "$status" in
+            *'(unhealthy)'*)
+                if [ "$running" = 1 ]; then
+                    printf 'fail:%s is running but unhealthy (%s)\n' "$name" "$status"
+                else printf 'ok\n'; fi
+                ;;
+            *) printf 'ok\n' ;;
+            esac
+            return
+        fi
         # Chain node: it must be running and PAST its healthcheck. "starting"/"unhealthy" and any
         # stopped/exited/created state all mean not-ready-or-crashed. The boot gate loops, so a node
         # that is only starting simply gets retried rather than committed early.
@@ -3680,15 +3741,21 @@ revenue_container_verdict() { # <name> <state> <status>
 # honest gate: it rejects the healthy-looking-but-dead slot while staying quiet on the sync hold and
 # the long initial sync. Engine-aware (docker on DIY, podman on the appliance) and read-only.
 check_revenue_containers() {
-    local engine rows name state status verdict failed=0
+    local engine rows name state status verdict failed=0 chain_hold=0
     engine=$(container_engine)
     command -v "$engine" >/dev/null 2>&1 || return 0
     rows=$("$engine" ps -a --format '{{.Names}}\t{{.State}}\t{{.Status}}' 2>/dev/null) || return 0
     [ -n "$rows" ] || return 0
+    # The migration hold (#851): while pithead-boot withholds the chain services pre-commit,
+    # their absence is deliberate — the gate must not deadlock on the hold it is gating.
+    if os_migration_hold_active; then
+        chain_hold=1
+        dr_info "A data migration is pending — chain services are deliberately held until this slot commits."
+    fi
     # A here-string (not a pipe) keeps the loop in this shell, so `failed` survives it.
     while IFS=$'\t' read -r name state status; do
         [ -n "$name" ] || continue
-        verdict=$(revenue_container_verdict "$name" "$state" "$status")
+        verdict=$(revenue_container_verdict "$name" "$state" "$status" "$chain_hold")
         case "$verdict" in
         fail:*)
             dr_fail "${verdict#fail:}"

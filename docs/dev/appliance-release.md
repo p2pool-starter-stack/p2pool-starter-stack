@@ -120,14 +120,20 @@ PITHEAD_DATA_MIGRATION=true PITHEAD_MIN_OS_VERSION=X.Y.Z os/rauc/mkbundle.sh ...
 migration — normally this release's own version. `mkbundle.sh` refuses to build a
 migrating bundle without it.
 
-**Scoped follow-up — the migration runner.** Recording and enforcing the floor is done;
-*executing* the forward-only migration is not. The remaining half of the deadlock rule
-(`dual-distribution-plan.md` risk #6) is `pithead-boot` withholding the chain services
-(monerod/tari) until the slot commits on a `data_migration` update, so automatic A/B
-fallback stays pre-migration. Until that lands, the floor guard above prevents the *manual*
-rollback path from stranding data; the automatic-fallback ordering is bench (tier-4) work,
-asserted by `tests/os/run.sh --phase update`. The `db_schema` field the plan also lists
-lands with that runner — nothing reads it yet.
+**The migration hold — how a flagged update boots.** Installing a `data_migration` bundle
+also leaves a marker on `/data` (`.os-migration-pending`, stamped with the bundle's
+version). On the next boot, `pithead-boot` sees a marker matching its own version and
+brings the stack up **without** the chain services (monerod, tari, and their wallets — the
+holders of forward-only lmdb migrations): the A/B commit decision is made on everything
+else first. `doctor` reads the same marker and judges the deliberately-held chain
+containers by the sync-hold rule, so the commit gate gates on what is running instead of
+deadlocking on the hold. Only after `mark-good` does the boot path remove the marker and
+run a plain `up` — the chain services start, and the migration runs on a slot a fallback
+can no longer leave. If health fails instead, the slot stays uncommitted, the machine
+falls back, and the old OS boots normally — its data was never touched (the old boot path
+ignores a marker for a version it isn't). A non-migrating install clears any stale marker.
+The `db_schema` field the plan also lists stays out until something reads it — an
+unread manifest field is a claim, not a contract.
 
 ## Development loop
 

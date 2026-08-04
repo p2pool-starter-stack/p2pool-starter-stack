@@ -60,7 +60,27 @@ fi
 ./pithead load-images
 
 ./pithead render || exit 1
-./pithead up || exit 1
+
+# The migration hold (#851): os-update leaves a marker when the installed bundle declares a
+# forward-only /data migration, stamped with that bundle's version. A marker matching THIS
+# slot's version means this is the migrating bundle's pre-commit boot — the chain services
+# (the holders of irreversible lmdb migrations) must not start until the commit decision is
+# made, so automatic A/B fallback always lands on data the old OS can still read. A marker
+# that does not match is a fallback boot (the migrating slot failed health): the migration
+# never ran, the data is untouched, and this boot proceeds normally. doctor reads the same
+# marker and judges the deliberately-held chain containers by the sync-hold rule, so the
+# commit gate below gates on everything that IS running instead of deadlocking on the hold.
+hold_chain=0
+if [ -f .os-migration-pending ] &&
+    [ "$(tr -d '[:space:]' <.os-migration-pending)" = "$(tr -d '[:space:]' <VERSION 2>/dev/null)" ]; then
+    hold_chain=1
+fi
+
+if [ "$hold_chain" = 1 ]; then
+    PITHEAD_HOLD_CHAIN=1 ./pithead up || exit 1
+else
+    ./pithead up || exit 1
+fi
 
 for _ in $(seq 90); do
     # localhost, not 127.0.0.1: the bare IP is not in the Caddyfile's site list, so it hits
@@ -74,6 +94,19 @@ for _ in $(seq 90); do
     if [ "${code:-000}" != "000" ] && ./pithead doctor --json >/dev/null 2>&1; then
         command -v rauc >/dev/null 2>&1 && rauc status mark-good
         echo "pithead-boot: stack is serving (HTTP $code) and doctor reports healthy — booted slot committed"
+        # Post-commit, the held chain services start and the forward migration runs NOW — the
+        # slot is committed, so a fallback can no longer strand migrated data. Marker removal
+        # comes first: if the chain start fails, the slot stays committed, the next boot takes
+        # the normal path and retries a plain `up` — re-holding would gate on a commit that has
+        # already happened. `|| true` for the same reason: a chain service that cannot start is
+        # a fault to alert on, never grounds to fail a boot the commit already accepted.
+        if [ "$hold_chain" = 1 ]; then
+            rm -f .os-migration-pending
+            # Logged BEFORE the up: the release line marks the commit boundary for the journal
+            # (and the tier-4 battery), and the up that starts the chain can take minutes.
+            echo "pithead-boot: slot committed — chain services released, the data migration runs now"
+            ./pithead up || true
+        fi
         # The on-box miner comes LAST, after the slot commit: it needs the stack's stratum
         # listening, and a miner that cannot start must never delay or block the commit — the
         # stack serving is the product's health, the miner is a passenger. Idempotent every

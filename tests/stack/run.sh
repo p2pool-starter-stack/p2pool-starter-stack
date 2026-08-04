@@ -4051,6 +4051,41 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari mem_limit explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" "3072m"
 
+echo "== black-box: 'pithead up' under the migration hold starts everything but the chain (#851) =="
+# PITHEAD_HOLD_CHAIN=1 is set by the appliance boot path on the first boot of a data_migration
+# bundle: the chain services (the lmdb holders) must not start before the A/B slot commits. The
+# compose service list comes from a dedicated stub because the shared one answers nothing for
+# `compose config --services`, and stack_status's tests rely on exactly that.
+HCB="$SANDBOX/hold-chain-bin"
+mkdir -p "$HCB"
+cat >"$HCB/docker" <<'EOF'
+#!/usr/bin/env bash
+echo "[docker] $*" >> "${DOCKER_LOG:-/dev/null}"
+case "$*" in
+"compose config --services") printf 'tor\nmonerod\ntari\nwallet-rpc\ntari-wallet\np2pool\nxmrig-proxy\ncaddy\ndashboard\n' ;;
+esac
+exit 0
+EOF
+chmod +x "$HCB/docker"
+HOLD_LOG=$(mktemp)
+seed_env
+out="$(cd "$V" && DOCKER_LOG="$HOLD_LOG" PATH="$HCB:$V/bin:$PATH" PITHEAD_HOLD_CHAIN=1 ./pithead up 2>&1)"
+assert_rc "up succeeds under the hold" "$?" "0"
+assert_contains "the hold is announced for the journal" "$out" "holding chain services"
+up_line=$(grep "compose up" "$HOLD_LOG" | tail -1)
+assert_contains "tor still starts under the hold" "$up_line" "tor"
+assert_contains "p2pool still starts under the hold" "$up_line" "p2pool"
+assert_contains "the dashboard still starts under the hold" "$up_line" "dashboard"
+assert_not_contains "monerod is withheld" "$up_line" "monerod"
+assert_not_contains "tari and tari-wallet are withheld" "$up_line" "tari"
+assert_not_contains "wallet-rpc is withheld" "$up_line" "wallet-rpc"
+# Without the env the same sandbox starts the whole stack — the hold is opt-in per boot.
+HOLD_LOG2=$(mktemp)
+(cd "$V" && DOCKER_LOG="$HOLD_LOG2" PATH="$HCB:$V/bin:$PATH" ./pithead up >/dev/null 2>&1)
+up_line2=$(grep "compose up" "$HOLD_LOG2" | tail -1)
+assert_not_contains "a plain up names no service subset" "$up_line2" "p2pool"
+rm -f "$HOLD_LOG" "$HOLD_LOG2"
+
 # Healthchecks.io (#79): absent => no ping URL (off).
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
@@ -8705,6 +8740,15 @@ assert_eq "xmrig-proxy down (sync hold) -> ok" "$(rcv xmrig-proxy exited 'Exited
 # Non-revenue containers are out of scope — the rest of doctor covers them.
 assert_eq "caddy (not revenue) -> ok" "$(rcv caddy running 'Up 5 minutes')" "ok"
 assert_eq "dashboard (not revenue) -> ok" "$(rcv dashboard running 'Up 5 minutes (healthy)')" "ok"
+# The migration hold (#851): with chain_hold=1 a chain node is judged by the miners' rule — the
+# boot path is deliberately withholding it, so down is expected and the commit must not deadlock
+# on the very hold it gates. A RUNNING-but-unhealthy chain node is still a fault.
+assert_eq "monerod down under the migration hold -> ok" "$(rcv monerod exited 'Exited (0) 1 minute ago' 1)" "ok"
+assert_eq "tari never created under the migration hold -> ok" "$(rcv tari created 'Created' 1)" "ok"
+assert_eq "wallet-rpc down under the migration hold -> ok" "$(rcv wallet-rpc exited 'Exited (0) 2 minutes ago' 1)" "ok"
+assert_contains "monerod running+unhealthy under the hold -> still fail" "$(rcv monerod running 'Up 2 minutes (unhealthy)' 1)" "fail:monerod"
+assert_eq "monerod up+healthy under the hold -> ok (an early manual start is not a fault)" "$(rcv monerod running 'Up 5 minutes (healthy)' 1)" "ok"
+assert_contains "the hold changes nothing for a miner" "$(rcv p2pool running 'Up 30 seconds (unhealthy)' 1)" "fail:p2pool"
 unset -f rcv
 
 echo "== unit: pithead-sync's rigforge leg — program replaced, state preserved, prebuilt seeded =="
@@ -8956,6 +9000,7 @@ ourun_v() { # <running-version> <floor-file> <info-json> [os-update args...]
         source "$STACK"
         set +e
         PITHEAD_VERSION="$rv" PITHEAD_DATA_FLOOR_FILE="$ff" \
+            PITHEAD_MIGRATION_MARKER_FILE="${MARKER_FILE:-$OUSB/marker-scratch}" \
             RAUC_INFO_JSON="$ij" PITHEAD_VARIANT_FILE="$OUSB/variant-release" os_update "$@" </dev/null
     )
 }
@@ -9001,6 +9046,40 @@ FN="$OUSB/floor-none"
 rm -f "$FN"
 ourun_v "1.10.0" "$FN" "$OUSB/info-1170.json" bundle.raucb >/dev/null 2>&1
 assert_eq "a non-migration bundle records no floor" "$([ -f "$FN" ] && echo present || echo absent)" "absent"
+
+# #851 marker lifecycle: a migrating install leaves the pending marker (stamped with the bundle's
+# version) for the next boot's chain hold; a non-migrating install clears a stale one — it
+# supersedes a migrating install that never booted.
+MK="$OUSB/marker-mig"
+rm -f "$MK"
+MARKER_FILE="$MK" ourun_v "1.10.0" "$OUSB/floor-scratch" "$OUSB/info-mig.json" bundle.raucb >/dev/null 2>&1
+assert_eq "a data_migration install writes the pending marker with the bundle version" "$(tr -d ' \n' <"$MK" 2>/dev/null)" "1.17.0"
+MARKER_FILE="$MK" ourun_v "1.10.0" "$OUSB/floor-scratch" "$OUSB/info-1170.json" bundle.raucb >/dev/null 2>&1
+assert_eq "a non-migrating install clears a stale pending marker" "$([ -f "$MK" ] && echo present || echo absent)" "absent"
+
+# The hold query the boot path and doctor share: active only when the marker matches the RUNNING
+# version — a mismatched marker is a fallback boot onto untouched data and must not hold anything.
+omh() { # <marker-content-or-ABSENT> <running-version>
+    local mf="$OUSB/marker-q"
+    rm -f "$mf"
+    [ "$1" != "ABSENT" ] && printf '%s\n' "$1" >"$mf"
+    (
+        cd "$OUSB" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        PITHEAD_MIGRATION_MARKER_FILE="$mf" PITHEAD_VERSION="$2" os_migration_hold_active
+    )
+}
+omh "1.17.0" "1.17.0"
+assert_rc "hold active: marker matches the running version" "$?" "0"
+omh "1.17.0" "1.16.0"
+assert_rc "no hold: marker for another version (fallback boot)" "$?" "1"
+omh "ABSENT" "1.17.0"
+assert_rc "no hold: no marker" "$?" "1"
+omh "" "1.17.0"
+assert_rc "no hold: empty marker is not a version match" "$?" "1"
+unset -f omh
 
 # Fail-closed: a version the comparator can't parse is NOT proof of safety. Releases DO use -prep
 # tags, so a pre-release bundle must not silently bypass the downgrade guard by parsing as "0".
