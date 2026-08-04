@@ -38,8 +38,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         avahi-daemon libnss-mdns \
         squashfs-tools \
         openssh-server sudo less nano htpdate
-# NB: apt lists are kept on purpose — the Rugix core recipes run `apt-get install` in the build
-# chroot (fdisk/parted etc.) and need resolvable metadata; deleting them fails the bake.
+# NB: the apt lists survive THIS layer on purpose — the later `apt-get install` steps below
+# (the RigForge toolchain, the updater) run without their own `apt-get update` and resolve
+# against these lists. They are deleted after the LAST apt step: nothing at runtime uses apt
+# (no apt on the running box), and the rootfs ships as a flat tarball, so a late deletion
+# genuinely leaves every slot and update bundle smaller.
 
 # The stack, at the image's exact release state: pithead + schemas + the build/ mount sources
 # (config templates and entrypoints that services bind-mount). Build context = repo root.
@@ -199,6 +202,8 @@ ARG PITHEAD_UPDATER=""
 RUN if [ "$PITHEAD_UPDATER" = "rauc" ]; then \
         apt-get install -y --no-install-recommends rauc rauc-service; \
     fi
+# The last apt step is above — from here the lists are dead weight in every slot and bundle.
+RUN rm -rf /var/lib/apt/lists/*
 # The disk installer and the boot config it writes to a target. No image payload ships with it —
 # it copies the running slot, so the artifact does not carry a compressed copy of itself.
 COPY os/installer/pithead-install /usr/local/sbin/pithead-install
