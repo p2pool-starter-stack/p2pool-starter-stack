@@ -73,14 +73,19 @@ def _spool_read(name: str) -> str | None:
         return f.read().strip()
 
 
+def _spool_json(name: str) -> dict:
+    """A spool file parsed as a dict; absent, unparseable, or non-dict all mean {}. Every
+    spool reader fails open the same way — a broken file blocks nothing."""
+    try:
+        d = json.loads(_spool_read(name) or "{}")
+    except ValueError:
+        d = {}
+    return d if isinstance(d, dict) else {}
+
+
 def _reference() -> dict:
     """Every key with its documented default, published into the spool by the host."""
-    raw = _spool_read("config.reference.json")
-    try:
-        ref = json.loads(raw) if raw else {}
-    except ValueError:
-        ref = {}
-    return {k: v for k, v in ref.items() if not k.startswith("_")}
+    return {k: v for k, v in _spool_json("config.reference.json").items() if not k.startswith("_")}
 
 
 def _deep_merge(base: dict, over: dict) -> dict:
@@ -114,23 +119,14 @@ def strip_defaults(cfg: dict, ref: dict) -> dict:
 
 
 def _last_attempt() -> dict:
-    raw = _spool_read("last-attempt.json")
-    try:
-        return json.loads(raw) if raw else {}
-    except ValueError:
-        return {}
+    return _spool_json("last-attempt.json")
 
 
 def _rig_defaults() -> dict:
     """The rig role's pre-fill, published by the HOST like the disk inventory: a Pithead pool
     discovered on the LAN (when one answered) and this machine's own name for the worker
-    field. Fail open — absent or unparseable means the fields open empty, nothing blocked."""
-    raw = _spool_read("rig-defaults.json")
-    try:
-        d = json.loads(raw) if raw else {}
-    except ValueError:
-        d = {}
-    return d if isinstance(d, dict) else {}
+    field."""
+    return _spool_json("rig-defaults.json")
 
 
 def wizard_stage() -> str:
@@ -308,14 +304,8 @@ def _spool_write_text(name: str, text: str) -> None:
 
 
 def _spool_write_config(cfg: dict) -> None:
-    """Atomic write: the host's consume loop only ever sees a complete file."""
-    sd = spool_dir()
-    os.makedirs(sd, exist_ok=True)
     _spool_clear_error()
-    fd, tmp = tempfile.mkstemp(dir=sd, prefix=".config.")
-    with os.fdopen(fd, "w") as f:
-        json.dump(cfg, f, indent=2)
-    os.replace(tmp, os.path.join(sd, "config.json"))
+    _spool_write_text("config.json", json.dumps(cfg, indent=2))
 
 
 def _gate_install_request(form: dict) -> str | None:
