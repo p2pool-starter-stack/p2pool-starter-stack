@@ -4195,6 +4195,41 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari mem_limit explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" "3072m"
 
+echo "== black-box: 'pithead up' under the migration hold starts everything but the chain (#851) =="
+# PITHEAD_HOLD_CHAIN=1 is set by the appliance boot path on the first boot of a data_migration
+# bundle: the chain services (the lmdb holders) must not start before the A/B slot commits. The
+# compose service list comes from a dedicated stub because the shared one answers nothing for
+# `compose config --services`, and stack_status's tests rely on exactly that.
+HCB="$SANDBOX/hold-chain-bin"
+mkdir -p "$HCB"
+cat >"$HCB/docker" <<'EOF'
+#!/usr/bin/env bash
+echo "[docker] $*" >> "${DOCKER_LOG:-/dev/null}"
+case "$*" in
+"compose config --services") printf 'tor\nmonerod\ntari\nwallet-rpc\ntari-wallet\np2pool\nxmrig-proxy\ncaddy\ndashboard\n' ;;
+esac
+exit 0
+EOF
+chmod +x "$HCB/docker"
+HOLD_LOG=$(mktemp)
+seed_env
+out="$(cd "$V" && DOCKER_LOG="$HOLD_LOG" PATH="$HCB:$V/bin:$PATH" PITHEAD_HOLD_CHAIN=1 ./pithead up 2>&1)"
+assert_rc "up succeeds under the hold" "$?" "0"
+assert_contains "the hold is announced for the journal" "$out" "holding chain services"
+up_line=$(grep "compose up" "$HOLD_LOG" | tail -1)
+assert_contains "tor still starts under the hold" "$up_line" "tor"
+assert_contains "p2pool still starts under the hold" "$up_line" "p2pool"
+assert_contains "the dashboard still starts under the hold" "$up_line" "dashboard"
+assert_not_contains "monerod is withheld" "$up_line" "monerod"
+assert_not_contains "tari and tari-wallet are withheld" "$up_line" "tari"
+assert_not_contains "wallet-rpc is withheld" "$up_line" "wallet-rpc"
+# Without the env the same sandbox starts the whole stack — the hold is opt-in per boot.
+HOLD_LOG2=$(mktemp)
+(cd "$V" && DOCKER_LOG="$HOLD_LOG2" PATH="$HCB:$V/bin:$PATH" ./pithead up >/dev/null 2>&1)
+up_line2=$(grep "compose up" "$HOLD_LOG2" | tail -1)
+assert_not_contains "a plain up names no service subset" "$up_line2" "p2pool"
+rm -f "$HOLD_LOG" "$HOLD_LOG2"
+
 # Healthchecks.io (#79): absent => no ping URL (off).
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
@@ -8849,6 +8884,15 @@ assert_eq "xmrig-proxy down (sync hold) -> ok" "$(rcv xmrig-proxy exited 'Exited
 # Non-revenue containers are out of scope — the rest of doctor covers them.
 assert_eq "caddy (not revenue) -> ok" "$(rcv caddy running 'Up 5 minutes')" "ok"
 assert_eq "dashboard (not revenue) -> ok" "$(rcv dashboard running 'Up 5 minutes (healthy)')" "ok"
+# The migration hold (#851): with chain_hold=1 a chain node is judged by the miners' rule — the
+# boot path is deliberately withholding it, so down is expected and the commit must not deadlock
+# on the very hold it gates. A RUNNING-but-unhealthy chain node is still a fault.
+assert_eq "monerod down under the migration hold -> ok" "$(rcv monerod exited 'Exited (0) 1 minute ago' 1)" "ok"
+assert_eq "tari never created under the migration hold -> ok" "$(rcv tari created 'Created' 1)" "ok"
+assert_eq "wallet-rpc down under the migration hold -> ok" "$(rcv wallet-rpc exited 'Exited (0) 2 minutes ago' 1)" "ok"
+assert_contains "monerod running+unhealthy under the hold -> still fail" "$(rcv monerod running 'Up 2 minutes (unhealthy)' 1)" "fail:monerod"
+assert_eq "monerod up+healthy under the hold -> ok (an early manual start is not a fault)" "$(rcv monerod running 'Up 5 minutes (healthy)' 1)" "ok"
+assert_contains "the hold changes nothing for a miner" "$(rcv p2pool running 'Up 30 seconds (unhealthy)' 1)" "fail:p2pool"
 unset -f rcv
 
 echo "== unit: pithead-sync's rigforge leg — program replaced, state preserved, prebuilt seeded =="
@@ -8977,12 +9021,13 @@ assert_rc "unstamped system + release bundle passes — stays shell-less, no cha
 
 OUSB=$(mktemp -d)
 mkdir -p "$OUSB/bin"
-# A fake rauc: logs every call, answers `info` with a canned JSON body.
+# A fake rauc: logs every call, answers `info` with a canned shell-format body —
+# the format the real os_bundle_meta parses (RAUC 1.11's JSON output omits [meta.*]).
 cat >"$OUSB/bin/rauc" <<'EOF'
 #!/usr/bin/env bash
 echo "[rauc] $*" >>"${RAUC_LOG:?}"
 case "$1" in
-info) [ -s "${RAUC_INFO_JSON:-}" ] && cat "$RAUC_INFO_JSON" ;;
+info) [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT" ;;
 install) exit 0 ;;
 esac
 exit 0
@@ -9010,59 +9055,60 @@ ourun() { # <variant-file> <info-json-file or empty> [os-update args...] — std
         # shellcheck disable=SC1090
         source "$STACK"
         set +e
-        RAUC_INFO_JSON="$ij" PITHEAD_VARIANT_FILE="$vf" os_update "$@" </dev/null
+        RAUC_INFO_OUT="$ij" PITHEAD_VARIANT_FILE="$vf" \
+            PITHEAD_MIGRATION_MARKER_FILE="$OUSB/marker-scratch" os_update "$@" </dev/null
     )
 }
-printf '{"manifest":{"meta":{"pithead":{"variant":"release"}}}}\n' >"$OUSB/info-release.json"
-printf '{"meta":{"pithead":{"variant":"debug"}}}\n' >"$OUSB/info-debug.json"
-assert_eq "bundle variant parsed from rauc info JSON (nested manifest)" \
-    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="$OUSB/info-release.json" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "release"
-assert_eq "bundle variant parse tolerates a different nesting" \
-    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="$OUSB/info-debug.json" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "debug"
+printf "RAUC_META_PITHEAD_VARIANT='release'\n" >"$OUSB/info-release.txt"
+printf "RAUC_META_PITHEAD_VARIANT='debug'\n" >"$OUSB/info-debug.txt"
+assert_eq "bundle variant parsed from rauc info shell output" \
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="$OUSB/info-release.txt" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "release"
+assert_eq "bundle variant parse reads the debug stamp" \
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="$OUSB/info-debug.txt" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "debug"
 assert_eq "an unstamped bundle is unknown" \
-    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "unknown"
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "unknown"
 
 # The command end to end, with the daemon stubbed. Non-interactive stdin means the prompt reads
 # EOF -> cancelled: precisely the automation case where a silent install would strand the box.
 : >"$RAUC_LOG"
-out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.json" bundle.raucb 2>&1)
+out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.txt" bundle.raucb 2>&1)
 rc=$?
 assert_rc "debug box + release bundle, no --yes -> refused" "$rc" "1"
 assert_contains "the refusal names the SSH loss" "$out" "removes SSH"
 assert_not_contains "rauc install was NOT reached" "$(cat "$RAUC_LOG")" "install"
 : >"$RAUC_LOG"
-ourun "$OUSB/variant-debug" "$OUSB/info-release.json" bundle.raucb --yes >/dev/null 2>&1
+ourun "$OUSB/variant-debug" "$OUSB/info-release.txt" bundle.raucb --yes >/dev/null 2>&1
 assert_rc "--yes acknowledges the warning and proceeds" "$?" "0"
 assert_contains "rauc install ran with the bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 # The #854 direction: a hardened release box taking a debug bundle GAINS a root SSH backdoor. Non-
 # interactive stdin reads EOF -> refused, and rauc install must never be reached — the silent
 # install is exactly the backdoor this guards.
 : >"$RAUC_LOG"
-out=$(ourun "$OUSB/variant-release" "$OUSB/info-debug.json" bundle.raucb 2>&1)
+out=$(ourun "$OUSB/variant-release" "$OUSB/info-debug.txt" bundle.raucb 2>&1)
 rc=$?
 assert_rc "release box + debug bundle, no --yes -> refused" "$rc" "1"
 assert_contains "the refusal names the root SSH it would gain" "$out" "root SSH"
 assert_not_contains "rauc install was NOT reached on the gain-a-shell refusal" "$(cat "$RAUC_LOG")" "install"
 : >"$RAUC_LOG"
-ourun "$OUSB/variant-release" "$OUSB/info-debug.json" bundle.raucb --yes >/dev/null 2>&1
+ourun "$OUSB/variant-release" "$OUSB/info-debug.txt" bundle.raucb --yes >/dev/null 2>&1
 assert_rc "--yes acknowledges the backdoor warning and proceeds" "$?" "0"
 assert_contains "rauc install ran with the debug bundle after --yes" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 : >"$RAUC_LOG"
-ourun "$OUSB/variant-release" "$OUSB/info-release.json" bundle.raucb >/dev/null 2>&1
+ourun "$OUSB/variant-release" "$OUSB/info-release.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "release -> release installs with no prompt" "$?" "0"
 assert_contains "rauc install ran unprompted" "$(cat "$RAUC_LOG")" "install bundle.raucb"
-out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.json" 2>&1)
+out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.txt" 2>&1)
 assert_rc "a missing bundle path is an error, not an install" "$?" "1"
 
 # --- os-update version floor + data-migration guards (#856 downgrade, #851 migration deadlock) ---
 # A correctly-signed bundle is not automatically a safe one: an OLDER image re-opens fixed holes,
 # and an image below the /data migration floor cannot read the chain data a newer release migrated.
-printf '{"manifest":{"meta":{"pithead":{"variant":"release","version":"1.17.0","data_migration":"false","minimum_os_version":""}}}}\n' >"$OUSB/info-1170.json"
-printf '{"manifest":{"meta":{"pithead":{"variant":"release","version":"1.10.0","data_migration":"false","minimum_os_version":""}}}}\n' >"$OUSB/info-1100.json"
-printf '{"manifest":{"meta":{"pithead":{"variant":"release","version":"1.17.0","data_migration":"true","minimum_os_version":"1.17.0"}}}}\n' >"$OUSB/info-mig.json"
+printf "RAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='1.17.0'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OUSB/info-1170.txt"
+printf "RAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='1.10.0'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OUSB/info-1100.txt"
+printf "RAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='1.17.0'\nRAUC_META_PITHEAD_DATA_MIGRATION='true'\nRAUC_META_PITHEAD_MINIMUM_OS_VERSION='1.17.0'\n" >"$OUSB/info-mig.txt"
 
 # os_bundle_meta: the manifest fields read back out of `rauc info` JSON.
-ometa() { cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="$1" run_sourced "$OUSB" os_bundle_meta bundle.raucb "$2"; }
+ometa() { cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="$1" run_sourced "$OUSB" os_bundle_meta bundle.raucb "$2"; }
 # render_bundle_manifest: the WRITE side of the manifest (the read side is os_bundle_meta below).
 # RAUC refuses a key with an empty value, so an ordinary non-migrating build must omit the floor
 # entirely — emitting `minimum_os_version=` unconditionally broke every plain bundle build, and
@@ -9082,10 +9128,10 @@ else
     ok "no manifest key renders with an empty value"
 fi
 
-assert_eq "os_bundle_meta reads version" "$(ometa "$OUSB/info-mig.json" version)" "1.17.0"
-assert_eq "os_bundle_meta reads data_migration" "$(ometa "$OUSB/info-mig.json" data_migration)" "true"
-assert_eq "os_bundle_meta reads minimum_os_version" "$(ometa "$OUSB/info-mig.json" minimum_os_version)" "1.17.0"
-assert_eq "an absent meta key is empty, not an error" "$(ometa "$OUSB/info-mig.json" db_schema)" ""
+assert_eq "os_bundle_meta reads version" "$(ometa "$OUSB/info-mig.txt" version)" "1.17.0"
+assert_eq "os_bundle_meta reads data_migration" "$(ometa "$OUSB/info-mig.txt" data_migration)" "true"
+assert_eq "os_bundle_meta reads minimum_os_version" "$(ometa "$OUSB/info-mig.txt" minimum_os_version)" "1.17.0"
+assert_eq "an absent meta key is empty, not an error" "$(ometa "$OUSB/info-mig.txt" db_schema)" ""
 unset -f ometa
 
 # ourun_v: os_update with a set running version + a data-floor file, variant pinned to release
@@ -9100,69 +9146,104 @@ ourun_v() { # <running-version> <floor-file> <info-json> [os-update args...]
         source "$STACK"
         set +e
         PITHEAD_VERSION="$rv" PITHEAD_DATA_FLOOR_FILE="$ff" \
-            RAUC_INFO_JSON="$ij" PITHEAD_VARIANT_FILE="$OUSB/variant-release" os_update "$@" </dev/null
+            PITHEAD_MIGRATION_MARKER_FILE="${MARKER_FILE:-$OUSB/marker-scratch}" \
+            RAUC_INFO_OUT="$ij" PITHEAD_VARIANT_FILE="$OUSB/variant-release" os_update "$@" </dev/null
     )
 }
 
 # #856: an older bundle is refused, and rauc install is never reached.
 : >"$RAUC_LOG"
-out=$(ourun_v "1.17.0" "" "$OUSB/info-1100.json" bundle.raucb 2>&1)
+out=$(ourun_v "1.17.0" "" "$OUSB/info-1100.txt" bundle.raucb 2>&1)
 assert_rc "a bundle older than running is refused" "$?" "1"
 assert_contains "the refusal names the downgrade" "$out" "possible downgrade"
 assert_not_contains "rauc install was NOT reached on a refused downgrade" "$(cat "$RAUC_LOG")" "install"
 # ...unless --allow-downgrade is passed on purpose.
 : >"$RAUC_LOG"
-ourun_v "1.17.0" "" "$OUSB/info-1100.json" bundle.raucb --allow-downgrade >/dev/null 2>&1
+ourun_v "1.17.0" "" "$OUSB/info-1100.txt" bundle.raucb --allow-downgrade >/dev/null 2>&1
 assert_rc "--allow-downgrade installs the older bundle" "$?" "0"
 assert_contains "rauc install ran under --allow-downgrade" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 # A newer bundle installs with no ceremony.
 : >"$RAUC_LOG"
-ourun_v "1.10.0" "" "$OUSB/info-1170.json" bundle.raucb >/dev/null 2>&1
+ourun_v "1.10.0" "" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "a newer bundle installs" "$?" "0"
 assert_contains "rauc install ran for the newer bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 
 # #851: below the /data migration floor is refused OUTRIGHT — --allow-downgrade does not override it.
 printf '2.0.0\n' >"$OUSB/floor-2"
 : >"$RAUC_LOG"
-out=$(ourun_v "1.17.0" "$OUSB/floor-2" "$OUSB/info-1170.json" bundle.raucb --allow-downgrade 2>&1)
+out=$(ourun_v "1.17.0" "$OUSB/floor-2" "$OUSB/info-1170.txt" bundle.raucb --allow-downgrade 2>&1)
 assert_rc "a bundle below the /data floor is refused even with --allow-downgrade" "$?" "1"
 assert_contains "the floor refusal warns about the chain data" "$out" "strand the chain data"
 assert_not_contains "rauc install was NOT reached below the floor" "$(cat "$RAUC_LOG")" "install"
 # A bundle at or above the floor installs.
 printf '1.17.0\n' >"$OUSB/floor-at"
 : >"$RAUC_LOG"
-ourun_v "1.17.0" "$OUSB/floor-at" "$OUSB/info-1170.json" bundle.raucb >/dev/null 2>&1
+ourun_v "1.17.0" "$OUSB/floor-at" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "a bundle at the /data floor installs" "$?" "0"
 
 # #851: installing a data_migration bundle RECORDS the floor; a plain bundle does not.
 FW="$OUSB/floor-written"
 rm -f "$FW"
 : >"$RAUC_LOG"
-ourun_v "1.17.0" "$FW" "$OUSB/info-mig.json" bundle.raucb >/dev/null 2>&1
+ourun_v "1.17.0" "$FW" "$OUSB/info-mig.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "a data_migration bundle installs" "$?" "0"
 assert_eq "installing a data_migration bundle records the /data floor" "$(tr -d ' \n' <"$FW" 2>/dev/null)" "1.17.0"
 FN="$OUSB/floor-none"
 rm -f "$FN"
-ourun_v "1.10.0" "$FN" "$OUSB/info-1170.json" bundle.raucb >/dev/null 2>&1
+ourun_v "1.10.0" "$FN" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
 assert_eq "a non-migration bundle records no floor" "$([ -f "$FN" ] && echo present || echo absent)" "absent"
+
+# #851 marker lifecycle: a migrating install leaves the pending marker (stamped with the bundle's
+# version) for the next boot's chain hold; a non-migrating install clears a stale one — it
+# supersedes a migrating install that never booted.
+MK="$OUSB/marker-mig"
+rm -f "$MK"
+MARKER_FILE="$MK" ourun_v "1.10.0" "$OUSB/floor-scratch" "$OUSB/info-mig.txt" bundle.raucb >/dev/null 2>&1
+assert_eq "a data_migration install writes the pending marker with the bundle version" "$(tr -d ' \n' <"$MK" 2>/dev/null)" "1.17.0"
+MARKER_FILE="$MK" ourun_v "1.10.0" "$OUSB/floor-scratch" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
+assert_eq "a non-migrating install clears a stale pending marker" "$([ -f "$MK" ] && echo present || echo absent)" "absent"
+
+# The hold query the boot path and doctor share: active only when the marker matches the RUNNING
+# version — a mismatched marker is a fallback boot onto untouched data and must not hold anything.
+omh() { # <marker-content-or-ABSENT> <running-version>
+    local mf="$OUSB/marker-q"
+    rm -f "$mf"
+    [ "$1" != "ABSENT" ] && printf '%s\n' "$1" >"$mf"
+    (
+        cd "$OUSB" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        PITHEAD_MIGRATION_MARKER_FILE="$mf" PITHEAD_VERSION="$2" os_migration_hold_active
+    )
+}
+omh "1.17.0" "1.17.0"
+assert_rc "hold active: marker matches the running version" "$?" "0"
+omh "1.17.0" "1.16.0"
+assert_rc "no hold: marker for another version (fallback boot)" "$?" "1"
+omh "ABSENT" "1.17.0"
+assert_rc "no hold: no marker" "$?" "1"
+omh "" "1.17.0"
+assert_rc "no hold: empty marker is not a version match" "$?" "1"
+unset -f omh
 
 # Fail-closed: a version the comparator can't parse is NOT proof of safety. Releases DO use -prep
 # tags, so a pre-release bundle must not silently bypass the downgrade guard by parsing as "0".
-printf '{"manifest":{"meta":{"pithead":{"variant":"release","version":"1.17.0-prep","data_migration":"false","minimum_os_version":""}}}}\n' >"$OUSB/info-prep.json"
+printf "RAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='1.17.0-prep'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OUSB/info-prep.txt"
 : >"$RAUC_LOG"
-out=$(ourun_v "1.17.0" "" "$OUSB/info-prep.json" bundle.raucb 2>&1)
+out=$(ourun_v "1.17.0" "" "$OUSB/info-prep.txt" bundle.raucb 2>&1)
 assert_rc "a pre-release (-prep) bundle is refused fail-closed" "$?" "1"
 assert_contains "the refusal names it a possible downgrade" "$out" "possible downgrade"
 assert_not_contains "rauc install was NOT reached for the pre-release bundle" "$(cat "$RAUC_LOG")" "install"
 : >"$RAUC_LOG"
-ourun_v "1.17.0" "" "$OUSB/info-prep.json" bundle.raucb --allow-downgrade >/dev/null 2>&1
+ourun_v "1.17.0" "" "$OUSB/info-prep.txt" bundle.raucb --allow-downgrade >/dev/null 2>&1
 assert_rc "--allow-downgrade installs the pre-release bundle on purpose" "$?" "0"
 assert_contains "rauc install ran for the pre-release under --allow-downgrade" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 
 # Fail-closed: a corrupt floor file is NOT permission to downgrade past a migration.
 printf 'not-a-version\n' >"$OUSB/floor-corrupt"
 : >"$RAUC_LOG"
-out=$(ourun_v "1.17.0" "$OUSB/floor-corrupt" "$OUSB/info-1170.json" bundle.raucb --allow-downgrade 2>&1)
+out=$(ourun_v "1.17.0" "$OUSB/floor-corrupt" "$OUSB/info-1170.txt" bundle.raucb --allow-downgrade 2>&1)
 assert_rc "a corrupt /data floor is refused fail-closed, even with --allow-downgrade" "$?" "1"
 assert_contains "the corrupt-floor refusal says the floor is unreadable" "$out" "floor is unreadable"
 assert_not_contains "rauc install was NOT reached with a corrupt floor" "$(cat "$RAUC_LOG")" "install"
