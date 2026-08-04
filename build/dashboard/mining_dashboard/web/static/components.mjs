@@ -255,7 +255,13 @@ function Header({ state }) {
         <div class="text-right">
             <div class="text-muted text-xs">Last Update: ${state.last_update}</div>
             <div class=${"text-xs mt-1 " + cVar(hr.p2p_variant)}>P2Pool (routed): ${hr.p2p_1h} (1h) / ${hr.p2p_24h} (24h)</div>
-            <div class=${"text-xs mt-xs " + cVar(hr.xvb_variant)}>XvB (routed): ${hr.xvb_routed_1h} (1h) / ${hr.xvb_routed_24h} (24h)</div>
+            ${
+              // The XvB split line earns its header slot only while donation is on — off, it's a
+              // permanent row of zeros advertising a feature the operator turned off.
+              state.xvb_calc && state.xvb_calc.enabled
+                ? html`<div class=${"text-xs mt-xs " + cVar(hr.xvb_variant)}>XvB (routed): ${hr.xvb_routed_1h} (1h) / ${hr.xvb_routed_24h} (24h)</div>`
+                : null
+            }
         </div>
     </div>`;
 }
@@ -324,7 +330,8 @@ function SyncView({ sync }) {
 function Overview({ state }) {
   const hr = state.hashrate,
     st = state.stratum,
-    t = state.tari;
+    t = state.tari,
+    xvbOn = !!(state.xvb_calc && state.xvb_calc.enabled);
   // Stat order (#159): fleet headline (total / mode / workers) → raffle status (tier / VIP /
   // shares / target) → routed split → reference (last share / Tari / wallets).
   return html`
@@ -334,14 +341,27 @@ function Overview({ state }) {
             <${StatCard} label="Total Hashrate" value=${hr.total} cls="text-accent" />
             <${StatCard} label="Mining Mode" value=${hr.mode_name} cls=${cVar(hr.mode_variant)} />
             <${StatCard} label="Workers Alive" value=${state.proxy_workers} />
+            ${
+              // Five of these tiles are raffle/split state — on a non-donating box they'd all
+              // read None / N/A / zeros, a third of the Overview spent saying "off" five ways.
+              // The mode tile already says it once.
+              xvbOn
+                ? html`
             <${StatCard} label="Current Tier" value=${hr.tier} />
-            <${StatCard} label="Raffle Eligible" value=${state.raffle_eligible.label} cls=${raffleCls(state.raffle_eligible)} />
+            <${StatCard} label="Raffle Eligible" value=${state.raffle_eligible.label} cls=${raffleCls(state.raffle_eligible)} />`
+                : null
+            }
             <${SharesStat} sw=${state.shares_window} />
-            <${StatCard} label="Target Tier" value=${hr.target_tier} />
+            ${xvbOn ? html`<${StatCard} label="Target Tier" value=${hr.target_tier} />` : null}
             <${StatCard} label="P2Pool 1h (routed)" value=${hr.p2p_1h} cls=${cVar(hr.p2p_variant)} />
             <${StatCard} label="P2Pool 24h (routed)" value=${hr.p2p_24h} cls=${cVar(hr.p2p_variant)} />
+            ${
+              xvbOn
+                ? html`
             <${StatCard} label="XvB 1h (routed)" value=${hr.xvb_routed_1h} cls=${cVar(hr.xvb_variant)} />
-            <${StatCard} label="XvB 24h (routed)" value=${hr.xvb_routed_24h} cls=${cVar(hr.xvb_variant)} />
+            <${StatCard} label="XvB 24h (routed)" value=${hr.xvb_routed_24h} cls=${cVar(hr.xvb_variant)} />`
+                : null
+            }
             <${StatCard} label="Last Share" value=${st.last_share} />
             <div class="stat-card"><h5>Tari Mining</h5><${TariStatus} tari=${t} /></div>
             <${StatCard} label="Wallet XMR" value=${st.wallet_short} cls="font-mono text-xs" />
@@ -408,6 +428,9 @@ function GlobalStats({ state }) {
 
 function XvBStats({ state }) {
   const hr = state.hashrate;
+  // A non-donating box gets no XvB stats card at all — every figure in it would be a zero or a
+  // "None", and the tier calculator alongside already hides itself the same way.
+  if (!(state.xvb_calc && state.xvb_calc.enabled)) return null;
   // When the xmrvsbeast.com fetch is stale (#311) the CREDITED figures are frozen —
   // grey them and tag the label so they don't read as live. Routed (our own proxy
   // history) is unaffected. Tooltip explains why.
@@ -431,6 +454,7 @@ function XvBStats({ state }) {
         </div>
         <div class="mt-2">
             <div class="text-small text-muted">Raffle Wins</div>
+            <div class="raffle-wins-list">
             ${
               (state.raffle_wins || []).length
                 ? state.raffle_wins.map(
@@ -439,6 +463,7 @@ function XvBStats({ state }) {
                   )
                 : html`<div class="text-xs text-muted">No wins recorded yet — a win lands here and as a gold star on the chart.</div>`
             }
+            </div>
         </div>
         <div class=${"text-xs mt-2 " + (hr.xvb_stale ? "status-warn" : "text-muted")} title=${credTitle}>
             ${hr.xvb_stale ? "⚠ Stale — last successful fetch from xmrvsbeast.com: " : "Stats fetched from xmrvsbeast.com (Updated: "}${hr.xvb_updated}${hr.xvb_stale ? "" : ")"}
@@ -491,9 +516,47 @@ class XvbComparison extends Component {
       tiers.find((t) => t.name === calc.target_tier) ||
       tiers[0];
     const cmp = xvbTierComparison(sel, coeffDay);
-    // The actionable net: measured realization when the wallet has one, face value otherwise —
-    // the label always says which (#872: the face-value net once had the wrong SIGN).
-    const netShown = cmp.realizedNet !== null ? cmp.realizedNet : cmp.net;
+    // The actionable net, best first (#872): measured realization when the wallet has one; the
+    // measured-prior band otherwise; raw face value only when even the band can't be computed.
+    // Decided ONCE here — label, value, colour and tooltip below all follow `net`. The
+    // face-value net once had the wrong SIGN, so the label always says which figure this is.
+    // Range colour: red only when even the optimistic end loses, green only when even the
+    // pessimistic end profits — a zero-spanning band stays neutral.
+    const [lo, hi] = cmp.assumedNetRange || [null, null];
+    const net =
+      cmp.realizedNet !== null
+        ? {
+            label: "Net / yr (measured)",
+            value: formatXmr(cmp.realizedNet),
+            cls: netCls(cmp.realizedNet),
+            title:
+              `XvB's published reward scaled to what this wallet's wins actually paid — ` +
+              `${calc.realization_pct}% of face value over the last ${calc.realization_wins} wins — ` +
+              `minus the P2Pool earnings given up.`,
+          }
+        : cmp.assumedNetRange
+          ? {
+              label: "Net / yr (estimated)",
+              value: `${formatXmr(lo)} … ${formatXmr(hi)}`,
+              cls: hi < 0 ? "status-bad" : lo > 0 ? "status-ok" : "",
+              title:
+                "XvB's published reward scaled by the measured realization band from live " +
+                "deployments — wallets collected 24% of face value (tight margin over the " +
+                "tier threshold) to 42% (comfortable margin) — minus the P2Pool earnings " +
+                "given up. Your own measurement replaces this band once enough wins land.",
+            }
+          : {
+              label: "Net / yr (face value)",
+              value: cmp.net !== null ? formatXmr(cmp.net) : "—",
+              cls: cmp.net !== null ? netCls(cmp.net) : "",
+              title:
+                "XvB's published FACE-VALUE reward minus the P2Pool earnings given up — an " +
+                "upper bound: it prices every bonus hash at full block reward and assumes " +
+                "every won round runs to completion.",
+            };
+    // Fiat mirror wants one number; a range has none, so its fiat net shows "—".
+    const netShown =
+      cmp.realizedNet !== null ? cmp.realizedNet : cmp.assumedNetRange ? null : cmp.net;
     // The same sustains rule the tier block states: donating the threshold must fit inside the
     // donateable share of the what-if hashrate. An unsustainable tier's Net is "—" — showing,
     // say, Mega's +56 XMR/yr to a 269 kH/s fleet would imply an unreachable payout.
@@ -513,20 +576,13 @@ class XvbComparison extends Component {
                              title="XvB's own published expected reward for this tier per year (their reward_calc figures, fetched over Tor). This is the raffle expectation across all qualifiers — donating above the tier threshold does NOT raise it." />
                 <${StatCard} label="Cost / yr" value=${cmp.cost !== null ? formatXmr(cmp.cost) : "—"}
                              title="P2Pool earnings foregone by donating the tier threshold for a year (threshold × the P2Pool daily rate × 365)." />
-                <${StatCard} label=${cmp.realizedNet !== null ? "Net / yr (measured)" : "Net / yr (face value)"}
-                             value=${sustainable && netShown !== null ? formatXmr(netShown) : "—"}
-                             cls=${sustainable && netShown !== null ? netCls(netShown) : ""}
+                <${StatCard} label=${net.label}
+                             value=${sustainable ? net.value : "—"}
+                             cls=${sustainable ? net.cls : ""}
                              title=${
-                               !sustainable
-                                 ? "Not shown — this tier isn't sustainable at your hashrate, so its payout isn't reachable."
-                                 : cmp.realizedNet !== null
-                                   ? `XvB's published reward scaled to what this wallet's wins actually paid — ` +
-                                     `${calc.realization_pct}% of face value over the last ${calc.realization_wins} wins — ` +
-                                     `minus the P2Pool earnings given up.`
-                                   : "XvB's published FACE-VALUE reward minus the P2Pool earnings given up. The face " +
-                                     "value prices every bonus hash at full block reward and assumes every won round " +
-                                     "runs to completion — wallets collect less; this net is an upper bound. Once " +
-                                     "enough wins land, this figure switches to your measured payout realization."
+                               sustainable
+                                 ? net.title
+                                 : "Not shown — this tier isn't sustainable at your hashrate, so its payout isn't reachable."
 } />
             </div>
             ${
@@ -688,7 +744,8 @@ function ExpectedVsActualCard({ summary }) {
       title:
         "Raffle wins recorded in the last 30 days (last-win recency can predate the window). " +
         "Expected is computed from XvB's public winners file: how often your tier's rounds are " +
-        "drawn ÷ how many qualifiers they have. A win's XMR arrives through ordinary payouts, " +
+        "drawn ÷ how many qualifiers they have — for the tier you hold, or the tier you're " +
+        "targeting while none is held yet. A win's XMR arrives through ordinary payouts, " +
         "so its value is counted in the Monero + XvB row above — this row tracks the draw.",
     });
   }

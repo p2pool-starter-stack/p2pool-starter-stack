@@ -1528,15 +1528,39 @@ def xvb_current_tier_key(metrics, tiers):
 
 
 # Measuring what a raffle win actually pays (#866/#872). A win's bonus round mines for up to an
-# hour and lands as ordinary small P2Pool payouts shortly after; production measurement put the
-# attributable payout mass inside 2h of the win timestamp. A win younger than the settle window
-# may still have payouts in flight, so it is left out of the sample rather than dragging the
-# factor down. Below the minimum sample the factor is noise — callers fall back to the published
-# figure and the UI labels it face value.
-_XVB_WIN_PAYOUT_WINDOW_S = 2 * 3600
+# hour and its shares then ride the PPLNS window — a baseline-subtracted stream measurement on a
+# production wallet (17 wins, two eras) put ~90% of the attributable excess inside 6h of the win
+# timestamp, front-loaded in the first two hours. A win younger than the settle window may still
+# have payouts in flight, so it is left out of the sample rather than dragging the factor down.
+# Below the minimum sample the factor is noise — callers fall back to the published figure and
+# the UI labels it face value.
+_XVB_WIN_PAYOUT_WINDOW_S = 6 * 3600
 _XVB_WIN_SETTLE_S = 12 * 3600
 _XVB_REALIZATION_MIN_WINS = 5
 _XVB_REALIZATION_WINDOW_S = 45 * SECONDS_PER_DAY
+
+# Measured realization PRIOR for boxes with no local measurement (#872): the band a wallet's
+# collected-vs-published fraction actually landed in on live deployments (Jun–Aug 2026, one
+# wallet, two regimes; baseline-subtracted 6h post-win payout streams). 0.24 = Whale with the
+# credited average riding the 100k round minimum (terminated rounds); 0.42 = VIP with a
+# comfortable margin above its threshold. The mechanism behind the sub-1.0 ceiling even at
+# comfortable margin is not visible from outside XvB, so this is an empirical bound, not a
+# model — a local measurement (xvb_realization) supersedes it.
+# ponytail: two hard-coded endpoints from one wallet's history — recalibrate if more deployments
+# report measurements outside the band.
+XVB_REALIZATION_PRIOR = (0.24, 0.42)
+
+
+def xvb_forecast_tier_key(metrics, tiers):
+    """The tier the expected-wins forecast should speak to: held, else targeted (#866).
+
+    Before any tier is held — a fleet still ramping its credited average, or an operator weighing
+    whether donating is worth enabling at all — the honest forecast is for the TARGET tier: "what
+    would this buy", rather than a dash that reads as unknowable."""
+    key = xvb_current_tier_key(metrics, tiers)
+    if key is None and metrics.target_threshold > 0:
+        key = next((k for k, t in tiers.items() if t == metrics.target_threshold), None)
+    return key
 
 
 def xvb_expected_wins_day(round_stats_state, tier_key, tiers):
@@ -1564,7 +1588,7 @@ def xvb_expected_wins_day(round_stats_state, tier_key, tiers):
     return total if total > 0 else None
 
 
-def xvb_realization(payouts, raffle_wins, xvb_day, expected_wins_day, now=None):
+def xvb_realization(payouts, raffle_wins, xvb_day, expected_wins_day, now=None, p2pool_day=None):
     """Measured fraction of XvB's published expectation this wallet actually collects (#866/#872).
 
     Numerator: mean confirmed XMR landing within the attribution window after each settled win in
@@ -1596,6 +1620,11 @@ def xvb_realization(payouts, raffle_wins, xvb_day, expected_wins_day, now=None):
         )
         / ATOMIC_PER_XMR
     )
+    # Ordinary P2Pool payouts also land inside the attribution windows; left in, they inflate the
+    # factor (the failure mode this whole measurement exists to prevent). Subtract the expected
+    # baseline: the box's own linear P2Pool rate over the windowed hours.
+    if p2pool_day and p2pool_day > 0:
+        realized -= p2pool_day * (_XVB_WIN_PAYOUT_WINDOW_S / SECONDS_PER_DAY) * len(stamps)
     frac = (realized / len(stamps)) / face_per_win
     return (max(0.0, min(1.0, frac)), len(stamps))
 
@@ -1843,6 +1872,18 @@ def build_xvb_calc(metrics, state_mgr, realization=None):
                         if estimates_available and key in estimates and realization
                         else None
                     ),
+                    # Unmeasured boxes still get a calculable band (#872): the published figure
+                    # scaled by the measured realization PRIOR below. None once a local
+                    # measurement exists (realized_reward_year supersedes it) or estimates are
+                    # stale — the two never show together.
+                    "assumed_reward_year_range": (
+                        [
+                            float(estimates[key]) * XVB_REALIZATION_PRIOR[0],
+                            float(estimates[key]) * XVB_REALIZATION_PRIOR[1],
+                        ]
+                        if estimates_available and key in estimates and not realization
+                        else None
+                    ),
                     "win_odds_day": _odds_day(key),
                     "players_avg": (round_types.get(key) or {}).get("players_avg"),
                 }
@@ -2006,10 +2047,14 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
     if metrics.xvb_enabled:
         xvb_tiers = state_mgr.get_tiers()
         xvb_wins_day = xvb_expected_wins_day(
-            state_mgr.get_xvb_round_stats(), xvb_current_tier_key(metrics, xvb_tiers), xvb_tiers
+            state_mgr.get_xvb_round_stats(), xvb_forecast_tier_key(metrics, xvb_tiers), xvb_tiers
         )
         xvb_realized = xvb_realization(
-            monero_payouts, raffle_wins, earnings["xvb_day"], xvb_wins_day
+            monero_payouts,
+            raffle_wins,
+            earnings["xvb_day"],
+            xvb_wins_day,
+            p2pool_day=earnings["coeff_day"] * metrics.p2pool_30d,
         )
 
     egress = egress_posture_from_config()  # per-component egress route + privacy roll-up (#170)

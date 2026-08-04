@@ -132,10 +132,13 @@ A strip of headline KPIs sits below the top bar:
 |---|---|
 | **Total Hashrate** | Your combined hashrate across all workers. |
 | **Shares in Window** | Shares you currently hold in the P2Pool PPLNS window (green when above zero). |
-| **Raffle Eligible** | Whether you'd actually win **and** collect an XvB raffle payout: green **Yes**, red **No**, or muted **N/A** when XvB is off. (Full definition in [Overview](#overview).) |
+| **Raffle Eligible** | Whether you'd actually win **and** collect an XvB raffle payout: green **Yes**, red **No**. (Full definition in [Overview](#overview).) |
 | **Blocks Found** | P2Pool sidechain blocks your node has found. |
 | **XvB Tier** | The donation tier you're currently holding. |
 | **Mining Mode** | What your hashrate is routed to right now: P2Pool, XvB, or a split. |
+
+While XvB is disabled the two raffle KPIs stand down entirely — the mode badge already says XvB
+is off, and a strip of **N/A** and **None** would just repeat it.
 
 ### Mine cart train
 
@@ -260,6 +263,10 @@ The summary panel pulls the key numbers together:
 | **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
 | **Wallet XMR / Wallet TARI** | Your configured Monero and Tari payout addresses, one card each. |
 
+While XvB is disabled the five raffle/split tiles (Current Tier, Raffle Eligible, Target Tier,
+XvB routed averages) drop out of the card, along with the header's XvB routed line and the whole
+*XvB Donation Stats* card — one mode badge says XvB is off; nothing else repeats it.
+
 ### Earnings — Expected vs Actual
 
 One compact table, shown in **both** views, that answers "am I earning what this hashrate should?"
@@ -270,7 +277,7 @@ trailing **30-day** window:
 |---|---|---|
 | **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** the XvB share for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). Once enough of your wins have confirmed payouts to measure, the XvB share is XvB's published figure **scaled to what your wins actually paid** — the tooltip names the measured percentage and sample. Until then the published face value stands, and the tooltip says it is an upper bound. | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
 | **Tari (30d)** | Expected **blocks** (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
-| **XvB wins (30d)** | Forecast wins for your tier, from XvB's own winners file: how often your tier's rounds are drawn ÷ how many qualifiers they have (summed with the lower donor rounds you also qualify for). `—` while the file hasn't been read or has gone stale. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
+| **XvB wins (30d)** | Forecast wins for your tier, from XvB's own winners file: how often your tier's rounds are drawn ÷ how many qualifiers they have (summed with the lower donor rounds you also qualify for). While no tier is held yet — a fleet still ramping, or an operator weighing whether donating is worth it — the forecast uses your **target** tier instead. `—` while the file hasn't been read or has gone stale. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
 
 Monero and XvB share one row **on both sides** deliberately: an XvB win pays out through ordinary
 small payouts that can't be told apart from P2Pool payouts, so the confirmed actual always
@@ -638,7 +645,7 @@ Below the tier figures, a **per-tier payout comparison** dropdown weighs each do
 |---|---|
 | **Expected (XvB)** | XvB's own published expected reward for the tier, in XMR per year. This is XvB's pre-computed `reward_calc` figure for the tier's donor round, fetched over Tor from `reward_estimate_pub.txt` — the dashboard does not re-derive it. It is the raffle expectation across all qualifiers, so donating **above** the tier threshold does not raise it. It is also **face value**: it prices every bonus hash at full block reward and assumes every won round runs to completion — wallets collect less. `estimate unavailable` when the fetch is stale or failed — never a stale figure implied fresh. |
 | **Cost / yr** | The P2Pool earnings given up by donating the tier threshold for a year: `threshold × the P2Pool daily rate × 365`, using the same rate the Monero tab shows. |
-| **Net / yr** | The reward minus the P2Pool earnings given up — the number to act on. Labeled **(measured)** when enough of your wins have confirmed payouts to measure what they actually paid: the published reward is scaled to that measured fraction first, because the face-value net can carry the wrong **sign** (a production Whale box showed +2.97 XMR/yr while the measured net was about −1.8). Labeled **(face value)** until then — read it as an upper bound. |
+| **Net / yr** | The reward minus the P2Pool earnings given up — the number to act on. Labeled **(measured)** when enough of your wins have confirmed payouts to measure what they actually paid: the published reward is scaled to that measured fraction first, because the face-value net can carry the wrong **sign** (a production Whale box showed +2.97 XMR/yr while the measured net was about −1.8). Before your own measurement exists it is labeled **(estimated)** and shows a **range**: the published reward scaled by the realization band measured on live deployments — wallets collected 24% of face value (donation riding the tier threshold, terminated rounds) to 42% (comfortable margin) — so "is this worth enabling" is answerable on a fresh box. Red only when even the optimistic end loses; green only when even the pessimistic end profits. Falls back to a labeled **(face value)** upper bound only when no band can be computed. |
 
 Below the figures, a **draw line** shows the selected tier's raffle odds from the winners file:
 about how many wins per 30 days its rounds pay out and among how many qualifiers the draw runs. A

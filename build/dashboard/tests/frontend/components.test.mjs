@@ -707,6 +707,31 @@ test('XvB tier comparison prefers the measured net and shows the draw behind it 
     assert.doesNotMatch(fv, /id="xvb-draw-line"/);
 });
 
+test('XvB tier comparison shows the estimated band on an unmeasured box (#872)', () => {
+    const base = clone();
+    base.earnings.available = true;
+    base.earnings.coeff_day = 1e-7;
+    base.earnings.p2pool_hr = 200000;
+    base.xvb_calc = {
+        enabled: true, estimates_available: true, estimates_stale: false, max_fraction: 0.85,
+        current_tier: 'Whale (100.00 kH/s+)', target_tier: 'Whale (100.00 kH/s+)',
+        target_threshold: 100000, sustainable: true, note: 'raffle status', mode_note: null,
+        realization_pct: null, realization_wins: null,
+        tiers: [
+            { name: 'Whale (100.00 kH/s+)', threshold: 100000, expected_reward_year: 6.17,
+              realized_reward_year: null, assumed_reward_year_range: [6.17 * 0.19, 6.17 * 0.55],
+              win_odds_day: 0.84, players_avg: 8.2 },
+        ],
+    };
+    const out = renderApp({ state: base });
+    // Both endpoints of published × [0.19, 0.55] − 3.65 cost render, labeled estimated; the
+    // face-value net (+2.52) must not appear as the acted-on figure.
+    assert.match(out, /Net \/ yr \(estimated\)/);
+    assert.match(out, /-2\.477\d* XMR … -0\.256\d* XMR/);
+    assert.doesNotMatch(out, /2\.5200 XMR/);
+    assert.match(out, /24% of face value \(tight margin/);
+});
+
 test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
     // The base fixture has no pool difficulty → cadence.available === false → server-sent dashes.
     const cold = renderApp();
@@ -1101,6 +1126,26 @@ test('ExpectedVsActualCard counts Tari blocks and windows XvB wins (#808)', () =
     // XvB off → the row disappears (no invented raffle framing on a non-XvB box).
     s.earnings_summary.xvb = { enabled: false, wins_30d: 0, last_win_ts: 0 };
     assert.doesNotMatch(renderApp({ state: s }), /XvB wins \(30d\)/);
+});
+
+test('disabled XvB de-emphasizes: no stats card, no header split line, no hero raffle slots', () => {
+    // One mention — the mode badge — is enough on a non-donating box. The stats card, the
+    // header's routed-split line, and the two hero raffle KPIs all stand down with it.
+    const s = clone();
+    assert.match(renderApp({ state: s }), /XvB Donation Stats/); // fixture has XvB on
+    assert.match(renderApp({ state: s }), /XvB \(routed\):/);
+    s.xvb_calc = { enabled: false };
+    const off = renderApp({ state: s });
+    assert.doesNotMatch(off, /XvB Donation Stats/);
+    assert.doesNotMatch(off, /XvB \(routed\):/);
+    assert.doesNotMatch(off, /Raffle Eligible/);
+    assert.doesNotMatch(off, /XvB Tier</);
+});
+
+test('raffle wins render inside the scroll-capped list wrapper', () => {
+    // The wins log is what made the XvB card the tallest in its grid row (whitespace under every
+    // neighbour) — the wrapper carries the max-height cap.
+    assert.match(renderApp({ state: clone() }), /class="raffle-wins-list"/);
 });
 
 test('ExpectedVsActualCard forecasts XvB wins from the winners feed, dash when unmeasured (#866)', () => {

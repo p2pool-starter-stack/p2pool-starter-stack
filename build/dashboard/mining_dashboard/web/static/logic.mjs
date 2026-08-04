@@ -51,15 +51,19 @@ export function heroKpis(state) {
   const hr = state.hashrate,
     sw = state.shares_window,
     p = state.pool,
-    raffle = state.raffle_eligible || {};
+    raffle = state.raffle_eligible || {},
+    // On a box that isn't donating, two raffle KPI slots ("Raffle Eligible: N/A", "XvB Tier:
+    // None") are dead weight in the most prominent strip on the page — the mode badge already
+    // says XvB is off, once. Dropped entirely; they return the moment XvB is enabled.
+    xvbOn = !!(state.xvb_calc && state.xvb_calc.enabled);
   return [
     { label: "Total Hashrate", value: hr.total, cls: "text-accent" },
     { label: "Shares in Window", value: sw.count, cls: sw.ok ? "status-ok" : "status-bad" },
     // Raffle Eligible (#158): Yes only when you'd WIN and COLLECT — in a donor tier AND holding a
-    // PPLNS share. Muted "N/A" when XvB is off; red "No" when donating but a gate is unmet.
-    { label: "Raffle Eligible", value: raffle.label, cls: raffleCls(raffle) },
+    // PPLNS share. Red "No" when donating but a gate is unmet.
+    ...(xvbOn ? [{ label: "Raffle Eligible", value: raffle.label, cls: raffleCls(raffle) }] : []),
     { label: "Blocks Found", value: p.blocks, cls: "" },
-    { label: "XvB Tier", value: hr.tier, cls: "" },
+    ...(xvbOn ? [{ label: "XvB Tier", value: hr.tier, cls: "" }] : []),
     { label: "Mining Mode", value: hr.mode_name, cls: "c-" + hr.mode_variant },
   ];
 }
@@ -319,9 +323,20 @@ export function xvbTierComparison(tier, coeffDay) {
     tier && Number.isFinite(tier.expected_reward_year) ? tier.expected_reward_year : null;
   const realized =
     tier && Number.isFinite(tier.realized_reward_year) ? tier.realized_reward_year : null;
+  // The measured-prior band for unmeasured boxes (#872): published × [low, high] realization.
+  // Server-emitted only while no local measurement exists, so realizedNet and assumedNetRange
+  // are mutually exclusive by construction.
+  const assumed =
+    tier &&
+    Array.isArray(tier.assumed_reward_year_range) &&
+    tier.assumed_reward_year_range.every(Number.isFinite)
+      ? tier.assumed_reward_year_range
+      : null;
   const net = expected !== null && cost !== null ? expected - cost : null;
   const realizedNet = realized !== null && cost !== null ? realized - cost : null;
-  return { expected, cost, net, realized, realizedNet };
+  const assumedNetRange =
+    assumed !== null && cost !== null ? [assumed[0] - cost, assumed[1] - cost] : null;
+  return { expected, cost, net, realized, realizedNet, assumedNetRange };
 }
 
 // Decimal places for a coin amount: more for small amounts (a day's earnings can be a tiny

@@ -386,6 +386,20 @@ test('xvbTierComparison: measured realization yields realizedNet — the sign th
     assert.ok(c.realizedNet < 0);
 });
 
+test('xvbTierComparison: the prior band yields assumedNetRange, exclusive with measured (#872)', () => {
+    const tier = {
+        name: 'Whale', threshold: 100_000,
+        expected_reward_year: 6.17, realized_reward_year: null,
+        assumed_reward_year_range: [6.17 * 0.19, 6.17 * 0.55],
+    };
+    const c = xvbTierComparison(tier, 1e-7); // cost 3.65
+    assert.ok(Math.abs(c.assumedNetRange[0] - (6.17 * 0.19 - 3.65)) < 1e-9);
+    assert.ok(Math.abs(c.assumedNetRange[1] - (6.17 * 0.55 - 3.65)) < 1e-9);
+    // No cost (network stats down) -> no range either; absent field -> null (old server).
+    assert.equal(xvbTierComparison(tier, 0).assumedNetRange, null);
+    assert.equal(xvbTierComparison({ name: 'W', threshold: 1, expected_reward_year: 1 }, 1e-7).assumedNetRange, null);
+});
+
 test('xvbTierComparison: unmeasured realization stays null — never fabricated (#872)', () => {
     const tier = { name: 'Whale', threshold: 100_000, expected_reward_year: 6.17, realized_reward_year: null };
     const c = xvbTierComparison(tier, 1e-7);
@@ -427,6 +441,7 @@ const _heroState = (over = {}) => ({
     shares_window: { count: 5, ok: true, ...over.shares_window },
     raffle_eligible: { applies: true, eligible: true, label: 'Yes', ...over.raffle_eligible },
     pool: { blocks: 42, ...over.pool },
+    xvb_calc: 'xvb_calc' in over ? over.xvb_calc : { enabled: true },
 });
 const _byLabel = (state) => Object.fromEntries(heroKpis(state).map((k) => [k.label, k]));
 
@@ -434,6 +449,19 @@ test('heroKpis: surfaces the six headline numbers under stable labels, in order'
     assert.deepEqual(
         heroKpis(_heroState()).map((k) => k.label),
         ['Total Hashrate', 'Shares in Window', 'Raffle Eligible', 'Blocks Found', 'XvB Tier', 'Mining Mode'],
+    );
+});
+
+test('heroKpis: the raffle slots vanish while XvB is disabled — no N/A dead weight', () => {
+    // The mode badge says XvB is off, once; the band should not repeat it as two empty KPIs.
+    assert.deepEqual(
+        heroKpis(_heroState({ xvb_calc: { enabled: false } })).map((k) => k.label),
+        ['Total Hashrate', 'Shares in Window', 'Blocks Found', 'Mining Mode'],
+    );
+    // A payload without the section at all (old server) behaves like disabled — never a crash.
+    assert.deepEqual(
+        heroKpis(_heroState({ xvb_calc: undefined })).map((k) => k.label),
+        ['Total Hashrate', 'Shares in Window', 'Blocks Found', 'Mining Mode'],
     );
 });
 
