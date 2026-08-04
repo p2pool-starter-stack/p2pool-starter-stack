@@ -42,9 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (the RigForge toolchain, the updater) run without their own `apt-get update` and resolve
 # against these lists. They are deleted after the LAST apt step: nothing at runtime uses apt
 # (no apt on the running box), and the rootfs ships as a flat tarball, so a late deletion
-# genuinely leaves every slot and update bundle smaller. (An earlier comment here credited the
-# retired Rugix candidate's build chroot — that reason left with Rugix; this one is checked by
-# the bake itself.)
+# genuinely leaves every slot and update bundle smaller.
 
 # The stack, at the image's exact release state: pithead + schemas + the build/ mount sources
 # (config templates and entrypoints that services bind-mount). Build context = repo root.
