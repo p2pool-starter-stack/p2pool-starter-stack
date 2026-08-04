@@ -42,9 +42,11 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
   until the slot commits, then start, with the pending marker consumed.
 - **rig** — answer `RigForge` on the same page and prove the other machine this image installs:
   it mines from the baked binary with no compile and no clearnet, starts no containers at all,
-  and takes an A/B update — install, uncommitted rollback, self-commit, persistence — exactly
-  like a coordinator. A rig serves no dashboard, so one that silently never mines is invisible
-  to everything except this.
+  and takes an A/B update — install, boot, self-commit on the miner running, persistence —
+  exactly like a coordinator. (Uncommitted fallback is the update phase's to prove: a
+  provisioned rig commits the moment its miner is up, so the uncommitted window closes by
+  design.) A rig serves no dashboard, so one that silently never mines is invisible to
+  everything except this.
 - **fault** — power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is
   disqualifying. Opt-in: `all` runs the five phases above, not this one.
 
