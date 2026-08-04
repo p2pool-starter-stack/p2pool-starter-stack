@@ -4,7 +4,7 @@ Tier-4 tests for the `pithead-os` appliance image (#77 phase 2): the properties 
 firmware and a real A/B updater can prove. The compose/CLI stack is covered by the other
 tiers ([`docs/dev/testing-strategy.md`](../../docs/dev/testing-strategy.md)); this harness
 covers what the flashed image adds — EFI boot, the first-boot wizard window, install-to-disk,
-and the update → commit → rollback cycle that is the phase-2 exit criterion.
+the rig role, and the update → commit → rollback cycle that is the phase-2 exit criterion.
 
 It needs a Linux host with KVM, libvirt and qemu, and root (the bench, not CI):
 
@@ -24,9 +24,9 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
   banner reaches the serial console, the first-boot wizard announces its URL + one-time token,
   and the token gate answers.
 - **update** — build a v2 bundle, `rauc install` it, boot the spare slot, and assert the whole
-  A/B contract: an uncommitted slot auto-rolls-back, a healthy one commits (the gate is
-  `pithead doctor --json`), and a committed version can still be rolled off. Also asserts `/data`
-  grew to fill the disk.
+  A/B contract: an uncommitted slot auto-rolls-back, `rauc status mark-good` makes the update
+  stick across a reboot, and `rauc status mark-bad booted` still rolls off a committed version.
+  Also asserts `/data` grew to fill the disk.
 - **install** — boot the image as removable media beside a blank disk, run the disk installer,
   then boot the target and prove the copied system is COMPLETE — the `/var` overlay made an
   incomplete copy easy to produce and invisible to every other phase. Then the reinstall leg:
@@ -35,11 +35,18 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
 - **provision** — submit a config through the wizard's real HTTP flow and require the STACK to
   come up: wizard accepted, setup ran, images pulled and verified, containers running, dashboard
   served, Tor-only egress actually enforced, built-in miner up. This is the phase that catches an
-  appliance whose engine cannot run the product.
+  appliance whose engine cannot run the product. Then the stack must return from a reboot with no
+  hands on it, and the real commit gate — `pithead doctor --json` — must pass on that healthy
+  stack yet refuse once a revenue service is down.
+- **rig** — answer `RigForge` on the same page and prove the other machine this image installs:
+  it mines from the baked binary with no compile and no clearnet, starts no containers at all,
+  and takes an A/B update — install, uncommitted rollback, self-commit, persistence — exactly
+  like a coordinator. A rig serves no dashboard, so one that silently never mines is invisible
+  to everything except this.
 - **fault** — power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is
-  disqualifying. Opt-in: `all` runs the four phases above, not this one.
+  disqualifying. Opt-in: `all` runs the five phases above, not this one.
 
-`--keep` leaves the VM and disks for inspection; `--phase boot|update|install|provision|fault|all`
+`--keep` leaves the VM and disks for inspection; `--phase boot|update|install|provision|rig|fault|all`
 scopes the run. A failed assertion is recorded and the run carries on, so one bench boot collects
 the whole battery; the run exits non-zero if anything failed.
 
