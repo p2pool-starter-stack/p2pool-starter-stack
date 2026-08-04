@@ -705,10 +705,18 @@ class DataService:
                 self.workers_rejected = True
             return
 
-        # Readmit only once every node we reject on is confirmed healthy (not merely 'not
-        # down'), so a dashboard restart mid-outage doesn't bring workers back to a still-down
-        # stack. Tari's health is ignored when it's non-blocking.
-        recovered = self.monero_health.healthy and ((not TARI_REQUIRED) or self.tari_health.healthy)
+        # Readmit once monerod is confirmed healthy (not merely 'not down'), so a dashboard
+        # restart mid-outage doesn't bring workers back to a stack that can't mine. Tari's
+        # health is ignored when it's non-blocking; when it IS blocking, a Tari that has been
+        # reachable and healthy readmits, and so does one that has NEVER been reachable this
+        # run — the mirror of the monitor's ever-up guard. Without that escape, a required
+        # Tari whose gRPC isn't listening yet (it takes many minutes after a boot) held the
+        # proxy stopped indefinitely after a monerod blip: neither down nor healthy, it
+        # blocked readmission forever on a node that never caused the stop, and a shell-less
+        # appliance mined nothing until someone intervened.
+        recovered = self.monero_health.healthy and (
+            (not TARI_REQUIRED) or self.tari_health.healthy or not self.tari_health.ever_up
+        )
         if self.workers_rejected and recovered:
             logger.info(
                 f"Required nodes recovered — starting {REJECT_WORKERS_CONTAINER} to readmit workers."

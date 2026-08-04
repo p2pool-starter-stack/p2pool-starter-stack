@@ -1406,6 +1406,35 @@ printf '#!/usr/bin/env bash\nexit 127\n' >"$NOPY/python3"
 chmod +x "$NOPY/python3"
 assert_eq "monero_address_type: python3 unusable => shape-only primary" "$(PATH="$NOPY:$PATH" run_sourced "$SANDBOX" monero_address_type "4$_h94")" "primary"
 
+echo "== unit: tari_address_type — DammSum over both address forms (#845) =="
+# The Tari sibling of the gate above. Both Tari forms (base58 and emoji) carry a 1-byte DammSum
+# checksum; the decode and check order mirror tari's own from_bytes. The checksum-VALID fixture
+# is the dual mainnet address hardcoded in tari's OWN test suite (test_serialize_deserialize_
+# dual_address: one-sided, known view/spend keys) — reference-blessed, never ours. The emoji
+# fixture is that same address's byte-for-byte emoji form; the single-address fixture reuses the
+# reference spend key with a recomputed checksum (no project publishes a single-form address).
+# The invalid emoji strings are ALSO tari's own test vectors (invalid_emoji / invalid_checksum).
+VALID_TARI="126J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5BJ"
+VALID_TARI_EMOJI="🐢📟🍼🌈🍓🚓➕🎸🍆🍷🎣🍗📿😂🥊⏰🍯👾🤔👒🍾👀🍼🌊🎷📟😈🚨👙🍈🌈🛵🤢🍔🔋👙🚽🤑🎽🎓🎓🐀🐜🐴🥄🚿📷💰👶👍🎉🍄🎢🔌🐋🚰🚑💅👢🦂🐬🐋🍗🍸🎹🏀🍄"
+VALID_TARI_SINGLE="1224yPceFvbksLKQ8JE6APDzVY2D6P3SpXwB5LLC3BH4F7oF"
+assert_eq "tari_address_type: reference dual base58 => ok" "$(run_sourced "$SANDBOX" tari_address_type "$VALID_TARI")" "ok"
+assert_eq "tari_address_type: same address, emoji form => ok" "$(run_sourced "$SANDBOX" tari_address_type "$VALID_TARI_EMOJI")" "ok"
+assert_eq "tari_address_type: single form => ok" "$(run_sourced "$SANDBOX" tari_address_type "$VALID_TARI_SINGLE")" "ok"
+# One flipped character in each form must fail as "checksum", not pass — the whole point.
+assert_eq "tari_address_type: one flipped base58 char => checksum" "$(run_sourced "$SANDBOX" tari_address_type "${VALID_TARI:0:90}B")" "checksum"
+_TARI_66="🍗🌊🦂🍎🐛🔱🍟🚦🦆👃🐛🎼🛵🔮💋👙💦🍷👠🦀🐺🍪🚀🎮🎩👅🐔🐉🍍🥑💔📌🚧🐊💄🎥🎓🚗🎳🐛🚿💉🌴🧢🐵🎩👾👽🎃🤡👍🔮👒👽🎵👀🚨😷🎒👂👶🍄🏰🚑🌸🍁"
+assert_eq "tari_address_type: tari's invalid-checksum emoji vector => checksum" "$(run_sourced "$SANDBOX" tari_address_type "${_TARI_66}🎒")" "checksum"
+assert_eq "tari_address_type: tari's invalid-emoji vector => invalid" "$(run_sourced "$SANDBOX" tari_address_type "${_TARI_66}🎅")" "invalid"
+assert_eq "tari_address_type: 66-emoji (too short for dual) => invalid" "$(run_sourced "$SANDBOX" tari_address_type "$_TARI_66")" "invalid"
+# A checksum-valid address for the wrong network (esmeralda byte, checksum recomputed over the
+# reference keys) is a REAL address someone pasted from a testnet wallet — its own verdict.
+assert_eq "tari_address_type: esmeralda address => network" "$(run_sourced "$SANDBOX" tari_address_type "f26J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5Cb")" "network"
+# Unknown feature bits (0x09), checksum recomputed — decodes cleanly but is no address.
+assert_eq "tari_address_type: unknown feature bits => invalid" "$(run_sourced "$SANDBOX" tari_address_type "1A6J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5Dr")" "invalid"
+assert_eq "tari_address_type: old placeholder => invalid" "$(run_sourced "$SANDBOX" tari_address_type "T")" "invalid"
+# No usable python3: the address is "unchecked" — accepted, degraded, never a false reject.
+assert_eq "tari_address_type: python3 unusable => unchecked" "$(PATH="$NOPY:$PATH" run_sourced "$SANDBOX" tari_address_type "$VALID_TARI")" "unchecked"
+
 echo "== unit: dashboard auth (#8) =="
 # Dashboard login (#8): enabling/changing is DEST (caddy is recreated), disabling is INFO. The bcrypt
 # hash is a secret and must never surface in the change preview; the internal fingerprint stays silent.
@@ -2946,7 +2975,7 @@ EOF
 }
 WALLET="$VALID_PRIMARY" # checksum-valid mainnet primary (the XMRig donation address) — #250 gates the type, #829 the checksum
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"banana"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"banana"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "invalid pool rejected" "$rc" "1"
@@ -2954,7 +2983,7 @@ assert_contains "invalid pool message" "$out" "p2pool.pool"
 
 # A non-IP stratum_bind must be rejected before it reaches the compose port mapping.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main","stratum_bind":"not-an-ip"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main","stratum_bind":"not-an-ip"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "invalid stratum_bind rejected" "$rc" "1"
@@ -2962,7 +2991,7 @@ assert_contains "invalid stratum_bind message" "$out" "p2pool.stratum_bind"
 
 # A dashboard.host with Caddyfile-breaking characters (space/braces) must be rejected before render.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"bad host{x}"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"bad host{x}"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "invalid dashboard.host rejected" "$rc" "1"
@@ -2970,21 +2999,21 @@ assert_contains "invalid dashboard.host message" "$out" "dashboard.host"
 
 # proxy.donate_level must be an integer 0-99 (default 0); an out-of-range value is rejected (#173).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":150}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":150}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "out-of-range donate_level rejected" "$rc" "1"
 assert_contains "donate_level message" "$out" "proxy.donate_level"
 # Non-numeric donate_level is rejected (the "auto" sentinel was removed — the value is a plain integer).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":"auto"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":"auto"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "non-numeric donate_level rejected" "$rc" "1"
 
 # A stratum_password with a shell/.env-unsafe character (a space) is rejected before render (#152).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main","stratum_password":"bad pass"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main","stratum_password":"bad pass"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "unsafe stratum_password rejected" "$rc" "1"
@@ -2994,7 +3023,7 @@ assert_contains "stratum_password message" "$out" "p2pool.stratum_password"
 # before they can render an unparseable compose port mapping.
 for bad_port in '"abc"' 0 65536; do
     seed_env
-    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main","stratum_port":%s}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$bad_port" >"$V/config.json"
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main","stratum_port":%s}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$bad_port" >"$V/config.json"
     out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
     rc=$?
     assert_rc "invalid stratum_port $bad_port rejected" "$rc" "1"
@@ -3005,7 +3034,7 @@ done
 # be silently dropped at dashboard runtime. host charset is the #122 guard (no port/path/userinfo).
 dw_case() { # <workers-json> <label> <expected-msg-fragment>
     seed_env
-    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":%s} }\n' "$WALLET" "$1" >"$V/config.json"
     out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
     rc=$?
     assert_rc "$2 rejected" "$rc" "1"
@@ -3024,7 +3053,7 @@ dw_case '[{"name":"rig1","watts":"142"}]' "string worker watts (#260)" "dashboar
 # Duplicate names are legal (first-declared wins) but warned about, and a valid dashboard.workers[]
 # list applies. Also proves the legacy fallback still validates + warns once (#506).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"rig1","port":1111},{"name":"rig1","port":2222},{"name":"rig2","host":"worker-lan.local","token":"tok_abc123"}]} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"rig1","port":1111},{"name":"rig1","port":2222},{"name":"rig2","host":"worker-lan.local","token":"tok_abc123"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "valid dashboard.workers applies" "$rc" "0"
@@ -3040,7 +3069,7 @@ if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "to
 # whichever key is actually in use, not a hardcoded string.
 wl_case() { # <workers-json> <label> <expected-msg-fragment>
     seed_env
-    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":%s} }\n' "$WALLET" "$1" >"$V/config.json"
     out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
     rc=$?
     assert_rc "$2 rejected" "$rc" "1"
@@ -3057,7 +3086,7 @@ wl_case '[{"name":"rig1","watts":0}]' "non-positive workers.list watts (#260)" "
 # A valid workers.list[] applies cleanly, warns no deprecation, and — like the legacy shape — never
 # leaks a per-worker token into .env.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":[{"name":"rig1","host":"worker-lan.local","token":"tok_xyz789"}]} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":[{"name":"rig1","host":"worker-lan.local","token":"tok_xyz789"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "valid workers.list applies" "$?" "0"
 assert_not_contains "workers.list applying raises no deprecation warning" "$out" "deprecated"
@@ -3067,7 +3096,7 @@ if grep -q 'tok_xyz789' "$V/.env"; then bad "workers.list token stays out of .en
 # leave the other a stale, unnoticed copy of hosts/tokens. REVERT-PROOF: the exact case a partial
 # revert of the dual-read change would silently start allowing again.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig"}]}, "workers":{"list":[{"name":"new-rig"}]} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig"}]}, "workers":{"list":[{"name":"new-rig"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "both workers.list and dashboard.workers set is rejected" "$rc" "1"
@@ -3078,7 +3107,7 @@ assert_contains "both-set refusal names both keys" "$out" "sets both workers.lis
 # operator's config before serving the form, and round-trips the merged doc on save — so an
 # empty array beside the populated key must neither refuse nor warn.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[]}, "workers":{"list":[{"name":"new-rig","host":"worker-lan.local"}]} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[]}, "workers":{"list":[{"name":"new-rig","host":"worker-lan.local"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "workers.list beside an empty dashboard.workers applies (#679)" "$?" "0"
 assert_not_contains "empty legacy default does not trip the both-set refusal" "$out" "sets both workers.list[] and dashboard.workers[]"
@@ -3087,12 +3116,12 @@ assert_not_contains "empty legacy default raises no deprecation warning" "$out" 
 # Mirror: a populated legacy list beside an empty workers.list (the same reference-merge shape,
 # for an operator still on the deprecated key) selects — and still validates — the legacy entries.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"10.0.0.5"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"10.0.0.5"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "populated dashboard.workers beside an empty workers.list applies (#679)" "$?" "0"
 assert_contains "legacy shape beside the empty default still warns as deprecated" "$out" "dashboard.workers[] is deprecated"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"attacker:8080"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"attacker:8080"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "an empty workers.list must not shadow legacy entries from validation (#679)" "$?" "1"
 assert_contains "shadowed legacy entry is flagged under its own path label" "$out" "dashboard.workers[legacy-rig].host"
@@ -3103,7 +3132,7 @@ assert_contains "shadowed legacy entry is flagged under its own path label" "$ou
 # default that trips validation, whatever the key.
 seed_env
 cp "$ROOT/config.reference.json" "$V/reference.json"
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":[{"name":"new-rig","host":"worker-lan.local"}]} }\n' "$WALLET" >"$V/operator.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":[{"name":"new-rig","host":"worker-lan.local"}]} }\n' "$WALLET" >"$V/operator.json"
 jq -s '(.[0] | del(._docs)) * .[1]' "$V/reference.json" "$V/operator.json" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
 assert_rc "reference-merged editor round-trip survives the preview dry-run (#679)" "$?" "0"
@@ -3113,7 +3142,7 @@ assert_rc "reference-merged editor round-trip survives the preview dry-run (#679
 # copy kept beside the file (the .bak-control naming). Dry runs never write.
 rm -f "$V/config.json.bak-workers"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"worker-lan.local","token":"tok_mig456"}]}, "workers":{"api_port":9090} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"worker-lan.local","token":"tok_mig456"}]}, "workers":{"api_port":9090} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
 assert_rc "dry run on a legacy config succeeds" "$?" "0"
 if [ -f "$V/config.json.bak-workers" ]; then bad "dry run never migrates (#556)" "backup appeared"; else ok "dry run never migrates (#556)"; fi
@@ -3137,7 +3166,7 @@ assert_not_contains "no deprecation warning after migration" "$out" "deprecated"
 # An INVALID legacy list fails validation before the migration hook — config and backup untouched.
 rm -f "$V/config.json.bak-workers"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"attacker:8080"}]} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"attacker:8080"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "invalid legacy config still fails apply" "$?" "1"
 assert_eq "failed validation leaves the legacy key untouched" "$(jq -r '.dashboard | has("workers")' "$V/config.json")" "true"
@@ -3146,7 +3175,7 @@ if [ -f "$V/config.json.bak-workers" ]; then bad "no backup written for a refuse
 # dashboard.energy (#260): malformed price/currency fails apply loudly, like the worker descriptors.
 en_case() { # <energy-json> <label> <expected-msg-fragment>
     seed_env
-    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":%s} }\n' "$WALLET" "$1" >"$V/config.json"
     out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
     rc=$?
     assert_rc "$2 rejected" "$rc" "1"
@@ -3167,20 +3196,20 @@ en_case '{"cost_per_kwh":0.1,"__evil":{"x":1}}' "unknown dashboard.energy subkey
 # A valid energy block (prices + feed opt-in + per-worker watts) applies; like workers[], nothing
 # reaches .env.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":{"cost_per_kwh":0.18,"xmr_price":150,"tari_price":2.5,"currency":"EUR","price_feed":true},"workers":[{"name":"rig1","watts":142}]} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","energy":{"cost_per_kwh":0.18,"xmr_price":150,"tari_price":2.5,"currency":"EUR","price_feed":true},"workers":[{"name":"rig1","watts":142}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "valid dashboard.energy applies" "$?" "0"
 
 # Dashboard login (#8): a username with a Caddyfile-unsafe character (a space) is rejected before any
 # hashing; the password is validated for length/charset too. Both fail fast on apply.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"bad user","password":"longenough1"}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"bad user","password":"longenough1"}} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "invalid dashboard.auth.username rejected" "$rc" "1"
 assert_contains "dashboard.auth.username message" "$out" "dashboard.auth.username"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"short"}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"short"}} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "too-short dashboard.auth.password rejected" "$rc" "1"
@@ -3191,7 +3220,7 @@ assert_contains "dashboard.auth.password message" "$out" "dashboard.auth.passwor
 # pinned Caddy image — make sure it's present here (it's copied for later tests further down too).
 cp "$ROOT/docker-compose.yml" "$V/docker-compose.yml"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"shortish12"}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"shortish12"}} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "onion with a <16-char password rejected" "$rc" "1"
@@ -3199,12 +3228,12 @@ assert_contains "onion strong-password message" "$out" "at least 16 characters"
 # Weak-password denylist: even at 16+ chars, a single repeated character or a well-known pattern is
 # rejected once the onion is on.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"aaaaaaaaaaaaaaaa"}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"aaaaaaaaaaaaaaaa"}} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "onion repeated-character password rejected" "$?" "1"
 assert_contains "repeated-character message" "$out" "single repeated character"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"changemechangeme"}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","onion":{"enabled":true},"auth":{"username":"admin","password":"changemechangeme"}} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "onion well-known-weak password rejected" "$?" "1"
 assert_contains "well-known-weak message" "$out" "well-known weak pattern"
@@ -3239,13 +3268,13 @@ assert_contains "onion-client-key off message" "$out" "password-only"
 SUBADDR="$VALID_SUBADDR"    # checksum-valid subaddress (the Monero project donation address)
 INTADDR="$VALID_INTEGRATED" # checksum-valid integrated address (derived fixture, see the unit block)
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$SUBADDR" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$SUBADDR" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "subaddress payout rejected (would never be paid)" "$rc" "1"
 assert_contains "subaddress message names the type" "$out" "SUBADDRESS"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$INTADDR" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$INTADDR" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "integrated payout rejected (would never be paid)" "$rc" "1"
@@ -3253,11 +3282,25 @@ assert_contains "integrated message names the type" "$out" "INTEGRATED"
 # Checksum hard-fail: a well-shaped primary with mistyped characters must abort apply with the
 # retype message — accepted, it crash-loops p2pool on a stack that looks healthy from outside.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"4%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$(printf 'A%.0s' $(seq 94))" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"4%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$(printf 'A%.0s' $(seq 94))" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "checksum-invalid payout rejected (would crash p2pool)" "$rc" "1"
 assert_contains "checksum message says to re-copy the address" "$out" "checksum"
+# The Tari sibling: a mistyped Tari address means merge-mine rewards silently lost, and a
+# testnet address pasted from the wrong wallet is the same class of quiet loss.
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "${VALID_TARI:0:90}B" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "checksum-invalid tari payout rejected" "$rc" "1"
+assert_contains "tari checksum message says to re-copy" "$out" "checksum"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"f26J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5Cb"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+rc=$?
+assert_rc "testnet tari payout rejected" "$rc" "1"
+assert_contains "tari network message names mainnet" "$out" "MAINNET"
 
 # tari.wallet_address left at the placeholder -> rejected by the shared template-placeholder guard
 # (else mining earns Tari that goes nowhere, the #250 failure mode). No exact-format gate
@@ -3277,7 +3320,7 @@ assert_contains "whitespace message names the field" "$out" "tari.wallet_address
 # Remote mode with no host (#*): renders an empty MONERO_NODE_HOST -> p2pool/dashboard dial nothing,
 # mining can't start. Must abort at validation, not silently proceed.
 seed_env
-printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "remote mode without a host rejected" "$rc" "1"
@@ -3287,7 +3330,7 @@ assert_contains "remote-host message" "$out" "monero.remote.host"
 # into the p2pool `--host` arg the same way tari's does, and the comma vector slips past the central
 # control-char guard, so the field-specific guard must catch it here too.
 seed_env
-printf '{ "monero": {"mode":"remote","remote":{"host":"1.2.3.4,fork"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"remote","remote":{"host":"1.2.3.4,fork"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "monero.remote.host with a comma rejected" "$?" "1"
 assert_contains "monero comma-host message names the field" "$out" "monero.remote.host"
@@ -3295,7 +3338,7 @@ assert_contains "monero comma-host message names the field" "$out" "monero.remot
 # A malformed network.subnet (#180): anything but an X.Y.Z.0/24 block renders a broken NETWORK_PREFIX
 # into every service IP and the #270 firewall rules — reject before it can.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "network":{"subnet":"172.28.0.0/16"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "network":{"subnet":"172.28.0.0/16"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "non-/24 network.subnet rejected" "$rc" "1"
@@ -3309,7 +3352,7 @@ AUTH_LOG="$V/auth-docker.log"
 
 # (1) ENABLE: a password turns on basic_auth — hash + fingerprint persisted, plaintext never stored.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":0}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"hunter2hunter2"}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":0}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"hunter2hunter2"}} }\n' "$WALLET" >"$V/config.json"
 : >"$AUTH_LOG"
 out="$(cd "$V" && DOCKER_LOG="$AUTH_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
@@ -3328,7 +3371,7 @@ esac
 
 # (2) REUSE: re-applying (here nudging an unrelated knob) keeps the SAME hash and does NOT re-hash —
 # bcrypt is salted, so a stable fingerprint is what keeps the Caddyfile from churning every apply.
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"hunter2hunter2"}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"hunter2hunter2"}} }\n' "$WALLET" >"$V/config.json"
 : >"$AUTH_LOG"
 out="$(cd "$V" && DOCKER_LOG="$AUTH_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "unchanged password keeps the same hash" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_AUTH_HASH_B64)" "$hash1"
@@ -3338,7 +3381,7 @@ case "$(cat "$AUTH_LOG")" in
 esac
 
 # (3) CHANGE: a new password re-hashes (fingerprint changes) and recreates the caddy container.
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"freshpass99"}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan","auth":{"username":"admin","password":"freshpass99"}} }\n' "$WALLET" >"$V/config.json"
 : >"$AUTH_LOG"
 out="$(cd "$V" && DOCKER_LOG="$AUTH_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_contains "changed password re-hashes" "$(cat "$AUTH_LOG")" "hash-password"
@@ -3346,7 +3389,7 @@ assert_eq "changed password updates fingerprint" "$([ "$(run_sourced "$V" env_ge
 assert_contains "auth change recreates caddy" "$(cat "$AUTH_LOG")" "restart caddy"
 
 # (4) DISABLE: clearing the password drops basic_auth — hash cleared, dashboard reachable again.
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "proxy":{"donate_level":1}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$AUTH_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "auth disable clears the hash" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_AUTH_HASH_B64)" ""
 case "$(cat "$V/Caddyfile")" in
@@ -3362,7 +3405,7 @@ echo "== black-box: payout confirmation view key (#381) =="
 VIEWKEY="$(printf 'a%.0s' $(seq 64))" # 64 hex chars — a well-formed private view key
 # (1) OFF by default: no view key -> feature disabled, wallet-rpc profile absent.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "payout confirm off by default" "$(run_sourced "$V" env_get_file "$V/.env" PAYOUT_CONFIRM_ENABLED)" "false"
 case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
@@ -3371,7 +3414,7 @@ case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
 esac
 # (2) ON (local node): view key set -> profile added, key + creds rendered, flag true.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","view_key":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$VIEWKEY" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","view_key":"%s"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$VIEWKEY" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "apply with a view key succeeds" "$?" "0"
 assert_eq "payout confirm enabled renders true" "$(run_sourced "$V" env_get_file "$V/.env" PAYOUT_CONFIRM_ENABLED)" "true"
@@ -3396,13 +3439,13 @@ assert_eq "wallet-rpc password preserved across apply" "$(run_sourced "$V" env_g
 # (3) REMOTE node + view key -> refused loudly (Phase 1 is local-only; scanning a third-party node
 # changes the trust story).
 seed_env
-printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p","view_key":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$VIEWKEY" >"$V/config.json"
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p","view_key":"%s"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$VIEWKEY" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "view key on a remote node rejected" "$?" "1"
 assert_contains "remote view-key message names the mode" "$out" "monero.view_key"
 # (4) A malformed view key (not 64 hex) is rejected before it reaches the wallet.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","view_key":"not-a-view-key"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","view_key":"not-a-view-key"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "malformed view key rejected" "$?" "1"
 assert_contains "malformed view-key message" "$out" "64-character hex"
@@ -3416,7 +3459,7 @@ TVIEW="$(printf 'a%.0s' $(seq 64))"  # 64 hex — a well-formed Tari private vie
 TSPEND="$(printf 'b%.0s' $(seq 64))" # 64 hex — a well-formed Tari public spend key
 # (1) OFF by default: no tari view key -> feature disabled, tari_payout_confirm profile absent.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari payout confirm off by default" "$(run_sourced "$V" env_get_file "$V/.env" TARI_PAYOUT_CONFIRM_ENABLED)" "false"
 case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
@@ -3425,7 +3468,7 @@ case "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" in
 esac
 # (2) ON (local node): tari view key + spend key set -> profile added, keys rendered, flag true.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","view_key":"%s","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "apply with a tari view key succeeds" "$?" "0"
 assert_eq "tari payout confirm enabled renders true" "$(run_sourced "$V" env_get_file "$V/.env" TARI_PAYOUT_CONFIRM_ENABLED)" "true"
@@ -3449,20 +3492,20 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari wallet password preserved across apply" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_PASSWORD)" "$tpw1"
 # (3) A view key WITHOUT the spend key -> refused (a view-only wallet needs both).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","view_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "tari view key without spend key rejected" "$?" "1"
 assert_contains "missing-spend-key message" "$out" "tari.spend_public_key"
 # (4) A malformed tari view key (not 64 hex) is rejected before it reaches the wallet.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"nope","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TSPEND" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","view_key":"nope","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TSPEND" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "malformed tari view key rejected" "$?" "1"
 assert_contains "malformed tari view-key message" "$out" "64-character hex"
 # (5) A spend key PRESENT but malformed (not 64 hex) is rejected — the require-both check keys off
 # the same 64-hex shape as the view key, so a garbage spend key fails just like a missing one (#523).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"deadbeef"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","view_key":"%s","spend_public_key":"deadbeef"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "malformed tari spend key rejected" "$?" "1"
 assert_contains "malformed spend-key message names spend_public_key" "$out" "tari.spend_public_key"
@@ -3474,19 +3517,19 @@ echo "== black-box: tari.payout_scan_birthday validation (#523) =="
 # only the birthday is under test.
 # (1) A non-integer birthday (a block height, say) is refused.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"%s","payout_scan_birthday":"height-3200000"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","view_key":"%s","spend_public_key":"%s","payout_scan_birthday":"height-3200000"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "non-integer birthday rejected" "$?" "1"
 assert_contains "non-integer birthday message names the field" "$out" "tari.payout_scan_birthday"
 # (2) An in-range-looking but too-large birthday (> 65535, e.g. a block height) is refused.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"%s","payout_scan_birthday":"99999"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","view_key":"%s","spend_public_key":"%s","payout_scan_birthday":"99999"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "out-of-range birthday rejected" "$?" "1"
 assert_contains "out-of-range birthday message names the u16 ceiling" "$out" "65535"
 # (3) A valid u16 birthday applies and reflects verbatim into .env.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","view_key":"%s","spend_public_key":"%s","payout_scan_birthday":"1000"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","view_key":"%s","spend_public_key":"%s","payout_scan_birthday":"1000"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "valid birthday accepted" "$?" "0"
 assert_eq "valid birthday reflected into .env" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_BIRTHDAY)" "1000"
@@ -3499,7 +3542,7 @@ echo "== black-box: tari.mode remote (#103) =="
 # (1) local (default): TARI_GRPC_ADDRESS renders the bundled node's fixed bridge IP, and local_tari
 # is added to COMPOSE_PROFILES so compose actually starts it.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "local tari mode applies cleanly" "$?" "0"
 assert_eq "local tari renders the bundled node's gRPC address" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" "172.28.0.27:18142"
@@ -3508,7 +3551,7 @@ assert_contains "local_tari profile added" "$(run_sourced "$V" env_get_file "$V/
 # (2) remote: TARI_GRPC_ADDRESS renders host:port from tari.remote, and local_tari is OMITTED from
 # COMPOSE_PROFILES so the bundled node stays off. Port defaults to 18142 when unset.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "remote tari mode applies cleanly" "$?" "0"
 assert_eq "remote tari renders host:port with the default gRPC port" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" "tari.example.com:18142"
@@ -3522,14 +3565,14 @@ esac
 
 # (3) remote with a custom grpc_port reflects verbatim.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com","grpc_port":28142}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote","remote":{"host":"tari.example.com","grpc_port":28142}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "remote tari custom grpc_port reflected" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" "tari.example.com:28142"
 
 # (4) remote mode with no host: renders an empty TARI_GRPC_ADDRESS -> p2pool/dashboard dial nothing,
 # merge-mining can't start. Must abort at validation, not silently proceed.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "remote tari mode without a host rejected" "$rc" "1"
@@ -3538,7 +3581,7 @@ assert_contains "tari remote-host message" "$out" "tari.remote.host"
 # (5) remote Tari node + tari.view_key -> refused loudly (Phase 1 is local-only for the same reason
 # as Monero's #381 gate: scanning through a third-party node changes the trust story).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"},"view_key":"%s","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote","remote":{"host":"tari.example.com"},"view_key":"%s","spend_public_key":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$TVIEW" "$TSPEND" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "tari view key on a remote node rejected" "$?" "1"
 assert_contains "remote tari view-key message names the field" "$out" "tari.view_key"
@@ -3548,7 +3591,7 @@ assert_contains "remote tari view-key message names the field" "$out" "tari.view
 # per-field is_valid_host check below even runs — so assert rejection + no forged line, not a
 # field-specific message.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"1.2.3.4\\nEVIL=pwned"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote","remote":{"host":"1.2.3.4\\nEVIL=pwned"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "tari.remote.host with a newline rejected" "$?" "1"
 case "$(cat "$V/.env" 2>/dev/null)" in
@@ -3560,21 +3603,21 @@ esac
 # it slips past the central guard above, but it would inject socat address options in the p2pool
 # entrypoint's bridge command (TCP:$_mmhost:$_mmport). This is the field-specific guard's own case.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"1.2.3.4,fork,reuseaddr"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote","remote":{"host":"1.2.3.4,fork,reuseaddr"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "tari.remote.host with a comma rejected" "$?" "1"
 assert_contains "comma-host message names the field" "$out" "tari.remote.host"
 
 # (6c) A non-numeric tari.remote.grpc_port is rejected.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com","grpc_port":"18142; rm -rf"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote","remote":{"host":"tari.example.com","grpc_port":"18142; rm -rf"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "non-numeric tari.remote.grpc_port rejected" "$?" "1"
 assert_contains "bad grpc_port message names the field" "$out" "tari.remote.grpc_port"
 
 # (7) An invalid tari.mode value is rejected before it ever reaches render_env.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"bogus"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"bogus"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "invalid tari.mode rejected" "$?" "1"
 assert_contains "invalid tari.mode message" "$out" "tari.mode must be"
@@ -3588,7 +3631,7 @@ echo "== black-box: profile deactivation removes the old container (#795) =="
 # (1) Baseline, both nodes local: the reconcile list is exactly the (off) payout-confirm wallets —
 # neither node container is touched.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 SWLOG="$V/docker-switch.log"
 : >"$SWLOG"
 out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
@@ -3596,7 +3639,7 @@ assert_rc "baseline local-nodes apply exits 0" "$?" "0"
 assert_contains "local nodes: only the off payout wallets reconcile" "$(cat "$SWLOG")" "compose rm -sf wallet-rpc tari-wallet"
 # (2) tari local→remote (the #795 reproduction): the tari container joins the removal list. No
 # re-seed — the committed local-mode .env from (1) makes this a real transition.
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 : >"$SWLOG"
 out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "tari local-to-remote switch applies cleanly" "$?" "0"
@@ -3606,7 +3649,7 @@ assert_contains "switch removes the deactivated tari container" "$(cat "$SWLOG")
 assert_contains "tari removal happens before the recreate up" "$(sed '/compose up --pull never -d --remove-orphans/q' "$SWLOG")" "compose rm -sf tari wallet-rpc tari-wallet"
 # (3) monerod rides the same guard on a monero local→remote switch.
 seed_env
-printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 : >"$SWLOG"
 out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "monero local-to-remote switch applies cleanly" "$?" "0"
@@ -3616,11 +3659,11 @@ assert_contains "switch removes the deactivated monerod container" "$(cat "$SWLO
 # wallets off) reconcile — and the recreate up must run with local_tari back in the committed
 # profile list, which is what brings the tari container up again. First commit a tari-remote .env
 # so the switch back is a real transition.
-printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote","remote":{"host":"tari.example.com"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "tari remote baseline applies cleanly" "$?" "0"
 assert_not_contains "tari remote baseline commits a profile list without local_tari" "$(grep '^COMPOSE_PROFILES=' "$V/.env")" "local_tari"
-printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mode":"local"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"remote","remote":{"host":"node.example"},"wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"local"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 : >"$SWLOG"
 out="$(cd "$V" && DOCKER_LOG="$SWLOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "tari remote-to-local switch applies cleanly" "$?" "0"
@@ -3639,14 +3682,14 @@ echo "== black-box: monero.rpc_lan_access + prep_blocks_threads reflect into .en
 # (unset) keeps it localhost-only; true opens it to the LAN. prep_blocks_threads overrides the
 # host-core-derived block-verification thread count verbatim when it is an integer.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "rpc_lan_access default binds monerod RPC to localhost" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_BIND)" "127.0.0.1"
 # The #760 siblings default localhost-only the same way: ZMQ and the Tari gRPC publish.
 assert_eq "zmq_lan_access default binds monerod ZMQ to localhost" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_BIND)" "127.0.0.1"
 assert_eq "grpc_lan_access default binds tari gRPC to localhost" "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_BIND)" "127.0.0.1"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","rpc_lan_access":true,"zmq_lan_access":true,"prep_blocks_threads":6}, "tari":{"wallet_address":"T","grpc_lan_access":true}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","rpc_lan_access":true,"zmq_lan_access":true,"prep_blocks_threads":6}, "tari":{"wallet_address":"'"$VALID_TARI"'","grpc_lan_access":true}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "rpc_lan_access true binds monerod RPC to all interfaces" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_BIND)" "0.0.0.0"
 assert_eq "zmq_lan_access true binds monerod ZMQ to all interfaces" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_BIND)" "0.0.0.0"
@@ -3708,13 +3751,13 @@ assert_eq "tokens vary" "$([ "$tok" = "$tok2" ] && echo same || echo differ)" "d
 WSPOOL="$V/data/firstboot-test"
 mkdir -p "$WSPOOL"
 rm -f "$V/config.json"
-printf '{ "monero": {"wallet_address":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"auto"} }\n' "$WALLET" >"$WSPOOL/config.json"
+printf '{ "monero": {"wallet_address":"%s"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini","stratum_password":"auto"} }\n' "$WALLET" >"$WSPOOL/config.json"
 out=$(cd "$V" && PATH="$V/bin:$PATH" run_sourced "$V" firstboot_consume_spool "$WSPOOL" && echo rc0)
 assert_contains "valid submission accepted" "$out" "rc0"
 assert_eq "valid submission installs config.json" "$([ -f "$V/config.json" ] && echo yes)" "yes"
 assert_eq "applied marker set" "$([ -f "$WSPOOL/applied" ] && echo yes)" "yes"
 rm -f "$WSPOOL/applied"
-printf '{ "monero": {"wallet_address":"8-not-a-primary"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"} }\n' >"$WSPOOL/config.json"
+printf '{ "monero": {"wallet_address":"8-not-a-primary"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"} }\n' >"$WSPOOL/config.json"
 out=$(cd "$V" && PATH="$V/bin:$PATH" run_sourced "$V" firstboot_consume_spool "$WSPOOL" || echo "rc$?")
 assert_contains "invalid submission rejected" "$out" "rc1"
 assert_eq "rejection surfaces spool error" "$([ -s "$WSPOOL/error.txt" ] && echo yes)" "yes"
@@ -3723,7 +3766,7 @@ out=$(run_sourced "$V" firstboot_consume_spool "$WSPOOL" || echo "rc$?")
 assert_contains "empty spool is rc2" "$out" "rc2"
 rm -rf "$WSPOOL"
 # Restore the sandbox config for later sections.
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 # A missing env file is a hard error, not an empty render.
 out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/no-such.env" "$SANDBOX/quadlet-none" 2>&1)
 assert_contains "render-quadlet missing env errors" "$out" "env file not found"
@@ -3768,7 +3811,7 @@ out=$(cd "$V" && PATH="$V/bin:$PATH" ./pithead uninstall --bogus 2>&1) || true
 assert_contains "uninstall rejects unknown options" "$out" "Unknown option"
 # Re-render the sandbox .env for the sections below — uninstall just deleted it.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 
 echo "== unit: install.sh host gate (#77 phase 1) =="
@@ -3783,26 +3826,127 @@ printf '#!/bin/bash\ncase "$1" in -s) echo Darwin ;; -m) echo x86_64 ;; esac\n' 
 out=$(PATH="$IBIN:$PATH" bash "$ROOT/install.sh" 2>&1) || true
 assert_contains "install.sh refuses non-Linux" "$out" "runs on Linux"
 
+echo "== unit: install.sh download verification fails CLOSED (#868) =="
+# The two security-critical branches of the public curl installer: the bundle sha256 against the
+# release manifest, and the cosign signature against the repo-pinned key. This is the path a new
+# operator runs BEFORE any of the bundle's own defenses exist — a tampered bundle that gets
+# extracted has already won — so a mismatch must install NOTHING. The stubs model each remote
+# artifact as a file served by basename; absent file = curl -f failure, exactly the shape the
+# script distinguishes (absent degrades politely, present-but-wrong is fatal).
+ISB=$(mktemp -d)
+mkdir -p "$ISB/bin" "$ISB/srv" "$ISB/work"
+printf '#!/bin/bash\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n' >"$ISB/bin/uname"
+cat >"$ISB/bin/curl" <<'EOF'
+#!/bin/bash
+out="" url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -o)
+        out="$2"
+        shift 2
+        ;;
+    http*)
+        url="$1"
+        shift
+        ;;
+    *) shift ;;
+    esac
+done
+src="$CURL_SRV/$(basename "$url")"
+[ -f "$src" ] || exit 22
+[ -n "$out" ] && cp "$src" "$out"
+exit 0
+EOF
+# macOS has no sha256sum; shasum -a 256 prints the identical "hash  file" shape.
+printf '#!/bin/bash\nif command -v /usr/bin/sha256sum >/dev/null; then exec /usr/bin/sha256sum "$@"; fi\nexec shasum -a 256 "$@"\n' >"$ISB/bin/sha256sum"
+printf '#!/bin/bash\nexit "${COSIGN_RC:-0}"\n' >"$ISB/bin/cosign"
+chmod +x "$ISB/bin/"*
+# A canned release bundle whose pithead stub proves the handoff (install.sh exec's it).
+mkdir -p "$ISB/bundle-src/pithead-x"
+printf '#!/bin/bash\necho "SETUP-REACHED $*"\n' >"$ISB/bundle-src/pithead-x/pithead"
+chmod +x "$ISB/bundle-src/pithead-x/pithead"
+tar -czf "$ISB/srv/pithead.tar.gz" -C "$ISB/bundle-src" pithead-x
+BUNDLE_SHA=$(cd "$ISB" && PATH="$ISB/bin:$PATH" sha256sum srv/pithead.tar.gz | cut -d' ' -f1)
+# One invocation per scenario; PATH keeps the stubs first, cosign joins only where a test wants it.
+irun() { # <dest-subdir> [env overrides via preceding assignments]
+    (
+        cd "$ISB/work" || exit
+        CURL_SRV="$ISB/srv" PITHEAD_VERSION=v9.9.9 PITHEAD_ALLOW_ANY_DISTRO=1 \
+            PITHEAD_DIR="$ISB/work/$1" PATH="$ISB/bin:$PATH" bash "$ROOT/install.sh" 2>&1
+    )
+}
+
+# sha256 verified against the manifest: match proceeds to the handoff, mismatch installs NOTHING.
+printf 'bundle sha256: `%s`\n' "$BUNDLE_SHA" >"$ISB/srv/ingredients-v9.9.9.md"
+out=$(irun ok-sha)
+assert_rc "verified install runs to the setup handoff" "$?" "0"
+assert_contains "sha256 match is announced" "$out" "sha256 verified"
+assert_contains "the extracted pithead was exec'd" "$out" "SETUP-REACHED"
+printf 'bundle sha256: `%s`\n' "$(printf 'a%.0s' $(seq 64))" >"$ISB/srv/ingredients-v9.9.9.md"
+out=$(irun bad-sha) && rc=0 || rc=$?
+assert_rc "sha256 mismatch refuses to install" "$rc" "1"
+assert_contains "the mismatch names both digests' verdict" "$out" "sha256 mismatch"
+assert_eq "nothing was installed on a sha256 mismatch" "$([ -e "$ISB/work/bad-sha" ] && echo present || echo absent)" "absent"
+# A manifest with no sha line (pre-v1.15) and a missing manifest both degrade politely.
+printf 'no digest here\n' >"$ISB/srv/ingredients-v9.9.9.md"
+out=$(irun no-sha-line)
+assert_contains "manifest without a sha degrades to HTTPS trust" "$out" "carries no bundle sha256"
+rm -f "$ISB/srv/ingredients-v9.9.9.md"
+out=$(irun no-manifest)
+assert_contains "missing manifest degrades to HTTPS trust" "$out" "No release manifest"
+
+# cosign: a present-but-bad signature is FATAL; an absent one is a note; a signature whose
+# pinned key cannot be fetched is fatal too (the cross-channel check cannot be half-done).
+touch "$ISB/srv/pithead.tar.gz.sig" "$ISB/srv/cosign.pub"
+out=$(irun sig-ok)
+assert_rc "good signature installs" "$?" "0"
+assert_contains "signature verification is announced" "$out" "signature verified"
+out=$(COSIGN_RC=1 irun sig-bad) && rc=0 || rc=$?
+assert_rc "bad signature refuses to install" "$rc" "1"
+assert_contains "the failure names the signature" "$out" "signature verification FAILED"
+assert_eq "nothing was installed on a bad signature" "$([ -e "$ISB/work/sig-bad" ] && echo present || echo absent)" "absent"
+rm -f "$ISB/srv/cosign.pub"
+out=$(irun sig-nokey) && rc=0 || rc=$?
+assert_rc "signature without a fetchable pinned key refuses" "$rc" "1"
+assert_contains "the failure names the pinned key" "$out" "pinned key could not be fetched"
+rm -f "$ISB/srv/pithead.tar.gz.sig"
+out=$(irun sig-absent)
+assert_contains "absent signature is noted, not fatal" "$out" "No bundle signature"
+
+# The remaining guards on the same path: an occupied target refuses before downloading, and a
+# bundle with no pithead executable refuses after extraction.
+mkdir -p "$ISB/work/taken"
+out=$(irun taken) && rc=0 || rc=$?
+assert_rc "an existing target dir refuses" "$rc" "1"
+assert_contains "the refusal names the dir" "$out" "already exists"
+mkdir -p "$ISB/empty/pithead-x" && touch "$ISB/empty/pithead-x/README"
+tar -czf "$ISB/srv/pithead.tar.gz" -C "$ISB/empty" pithead-x
+out=$(irun corrupt) && rc=0 || rc=$?
+assert_rc "a bundle without a pithead executable refuses" "$rc" "1"
+assert_contains "the refusal suspects corruption" "$out" "no pithead executable"
+rm -rf "$ISB"
+unset -f irun
+
 echo "== black-box: monero.out_peers renders to .env, bounds enforced (#595) =="
 # Default 48 when unset (the Tor-IBD bandwidth default); an explicit value lands verbatim in
 # MONERO_OUT_PEERS (each outbound peer ≈ one Tor circuit — the steady-state Tor CPU lever);
 # out-of-range or non-integer values are refused before anything is written.
 assert_eq "out_peers default renders 48" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_OUT_PEERS)" "48"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":32}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":32}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "out_peers 32 reflected verbatim" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_OUT_PEERS)" "32"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":"lots"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":"lots"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "non-integer out_peers refused" "$?" "1"
 assert_contains "out_peers refusal names the bounds" "$out" "between 8 and 1024"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":4}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":4}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "below-minimum out_peers refused" "$?" "1"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":2000}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","out_peers":2000}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "above-maximum out_peers refused" "$?" "1"
 assert_contains "above-maximum refusal names the bounds" "$out" "between 8 and 1024"
@@ -3811,17 +3955,17 @@ echo "== black-box: tor.auto_heal renders to .env (#424) =="
 # The dashboard's healer reads TOR_AUTO_HEAL from .env. Key absent -> off (the stack never
 # restarts its privacy boundary unbidden); explicit true -> on.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tor.auto_heal defaults to off" "$(run_sourced "$V" env_get_file "$V/.env" TOR_AUTO_HEAL)" "false"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "tor":{"auto_heal":true}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "tor":{"auto_heal":true}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tor.auto_heal opt-in renders true" "$(run_sourced "$V" env_get_file "$V/.env" TOR_AUTO_HEAL)" "true"
 
 echo "== black-box: apply preserves secrets + propagates =="
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 DOCKER_LOG="$V/docker.log"
 : >"$DOCKER_LOG"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
@@ -3877,40 +4021,40 @@ esac
 # A custom p2pool.stratum_port (#172) propagates to STRATUM_PORT; the internal proxy→p2pool leg
 # (P2POOL_URL) is deliberately untouched — only the operator-facing published port moves.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_port":4444}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini","stratum_port":4444}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "stratum_port propagated" "$(run_sourced "$V" env_get_file "$V/.env" STRATUM_PORT)" "4444"
 assert_eq "custom stratum_port leaves P2POOL_URL internal" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_URL)" "172.28.0.28:3333"
 
 # Non-blocking Tari (dashboard.tari_required:false) propagates as TARI_REQUIRED=false.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","tari_required":false} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","tari_required":false} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari_required propagated false" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "false"
 
 # Opt-in fail-closed (dashboard.fail_closed:true) propagates as DASHBOARD_FAIL_CLOSED=true (#490).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","fail_closed":true} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","fail_closed":true} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "fail_closed propagated true" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_FAIL_CLOSED)" "true"
 
 # Opting out (dashboard.check_for_updates:false) propagates as DASHBOARD_CHECK_UPDATES=false (#224) —
 # only an explicit false disables it (anything else, incl. absent, stays the default-on true).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","check_for_updates":false} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","check_for_updates":false} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "check_for_updates opt-out propagated false" "$(run_sourced "$V" env_get_file "$V/.env" DASHBOARD_CHECK_UPDATES)" "false"
 
 # Telegram defaults (#121): no telegram block => disabled, per-event toggles default on.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "telegram disabled by default" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_ENABLED)" "false"
 assert_eq "telegram event defaults on" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_EVENT_NODE_DOWN)" "true"
 
 # Telegram enabled: token/chat_id + per-event toggles propagate from config.json into .env.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","events":{"worker_offline":false}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","events":{"worker_offline":false}} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "telegram enabled propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_ENABLED)" "true"
 assert_eq "telegram token propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_BOT_TOKEN)" "BOTSECRET"
@@ -3925,18 +4069,18 @@ esac
 
 # Interactive command interface (#45): off by default, opt-in via telegram.commands.enabled.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "telegram commands off by default" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_COMMANDS_ENABLED)" "false"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","commands":{"enabled":true}} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","commands":{"enabled":true}} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "telegram commands opt-in propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_COMMANDS_ENABLED)" "true"
 
 # Daily-summary time (#121): defaults to 08:00; an explicit telegram.daily_summary_time propagates.
 assert_eq "daily summary time defaults to 08:00" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_DAILY_SUMMARY_TIME)" "08:00"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","daily_summary_time":"21:30"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "telegram":{"enabled":true,"bot_token":"BOTSECRET","chat_id":"-100123","daily_summary_time":"21:30"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "daily summary time propagated" "$(run_sourced "$V" env_get_file "$V/.env" TELEGRAM_DAILY_SUMMARY_TIME)" "21:30"
 
@@ -3948,7 +4092,7 @@ assert_eq "notify tor defaults on" "$(run_sourced "$V" env_get_file "$V/.env" NO
 # Configured block propagates: the webhook list joins to one space-separated value, ntfy url/token
 # land verbatim, tor:false carries through — and apply never prints the URL/token secrets.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "notifications":{"webhooks":["https://hook.example/a","https://hook2.example/b?key=HOOKSECRET"],"ntfy":{"url":"https://ntfy.sh/PITTOPIC","token":"NTFYSECRET"},"tor":false} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "notifications":{"webhooks":["https://hook.example/a","https://hook2.example/b?key=HOOKSECRET"],"ntfy":{"url":"https://ntfy.sh/PITTOPIC","token":"NTFYSECRET"},"tor":false} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "webhook urls join space-separated" "$(run_sourced "$V" env_get_file "$V/.env" NOTIFY_WEBHOOK_URLS)" "https://hook.example/a https://hook2.example/b?key=HOOKSECRET"
 assert_eq "ntfy url propagated" "$(run_sourced "$V" env_get_file "$V/.env" NTFY_URL)" "https://ntfy.sh/PITTOPIC"
@@ -3963,7 +4107,7 @@ esac
 assert_eq "hashrate drop threshold default 50" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_THRESHOLD_PCT)" "50"
 assert_eq "hashrate drop minutes default 10" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_MINUTES)" "10"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","hashrate_drop_threshold":40,"hashrate_drop_minutes":5} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan","hashrate_drop_threshold":40,"hashrate_drop_minutes":5} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "hashrate drop threshold override propagated" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_THRESHOLD_PCT)" "40"
 assert_eq "hashrate drop minutes override propagated" "$(run_sourced "$V" env_get_file "$V/.env" HASHRATE_DROP_MINUTES)" "5"
@@ -3987,7 +4131,7 @@ done < <(jq -r '.telegram.events | keys[]' "$ROOT/config.reference.json")
 # OMITS p2pool.pool must render the mini sidechain flag, not the old "main". Standalone config so
 # it doesn't disturb the propagate block above.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$V/docker.log" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_contains "omitted p2pool.pool defaults to the mini sidechain flag (#502)" "$(run_sourced "$V" env_get_file "$V/.env" P2POOL_FLAGS)" "--mini"
 
@@ -3996,9 +4140,9 @@ echo "== black-box: payout-wallet change needs a typed confirm (#375) =="
 # the new address typed back (a pasted 'y' can't wave it through), while -y keeps automation alive.
 WALLET2="44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A" # a second checksum-valid primary (the Monero project's legacy donation address); first 8 chars = 44AFFq5k
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)" # baseline .env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET2" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET2" >"$V/config.json"
 # (1) A bare 'y' — the old destructive confirm — must NOT pass; .env stays untouched.
 out="$(cd "$V" && printf 'y\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
 rc=$?
@@ -4013,53 +4157,88 @@ out="$(cd "$V" && printf '44AFFq5k\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$P
 assert_rc "typed confirm applies" "$?" "0"
 assert_eq "wallet updated in .env after typed confirm" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET2"
 # (3) -y still bypasses the prompt for automation.
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1 </dev/null)"
 assert_rc "apply -y skips the typed confirm" "$?" "0"
 assert_eq "wallet updated with -y" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
 
 # A TARI-only wallet change demands the same typed confirm (the suite above only drove Monero).
-TARI2="TARITARITARI2" # first 8 chars = TARITARI
+TARI2="12KQktz75n4MDh12q8CSV2evxAHrPFAMo29tZqsgKhyHXqP17Tz9jkVhE3T7bB5qAcHQu2kFoXi78EgwfzDhYZ748JT" # checksum-valid (reference keys swapped); first 8 chars = 12KQktz7
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"%s"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" "$TARI2" >"$V/config.json"
 out="$(cd "$V" && printf 'y\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
 assert_rc "tari wallet change with 'y' aborts cleanly" "$?" "0"
-assert_contains "tari wallet prompt shows the new address's first 8 chars" "$out" "(TARITARI)"
-assert_eq "tari wallet unchanged in .env after abort" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "T"
-out="$(cd "$V" && printf 'TARITARI\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+assert_contains "tari wallet prompt shows the new address's first 8 chars" "$out" "(12KQktz7)"
+assert_eq "tari wallet unchanged in .env after abort" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$VALID_TARI"
+out="$(cd "$V" && printf '12KQktz7\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
 assert_rc "tari typed confirm applies" "$?" "0"
 assert_eq "tari wallet updated in .env after typed confirm" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI2"
 
 # BOTH wallets changing in one apply needs TWO typed confirms — one prefix must never wave both
 # through (env_changed_keys sorts, so Monero prompts first, then Tari).
-TARI3="TARIXTARIX3" # first 8 chars = TARIXTAR
+TARI3="16beoiD8FT6Ty7q9fyGVk7BmstB3rrtAb7FLFUnJ66deCkAUNsh3suMDQ1CTnhkNKfAjMF2UHJQDVjYJ57wmdMPpwqJfi2i3" # checksum-valid (payment-id form); first 8 chars = 16beoiD8
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"%s"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET2" "$TARI3" >"$V/config.json"
 out="$(cd "$V" && printf '44AFFq5k\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
 assert_rc "both-wallet change with one prefix aborts cleanly" "$?" "0"
 assert_contains "both-wallet change prompts for the Monero prefix" "$out" "(44AFFq5k)"
-assert_contains "both-wallet change prompts for the Tari prefix too" "$out" "(TARIXTAR)"
+assert_contains "both-wallet change prompts for the Tari prefix too" "$out" "(16beoiD8)"
 assert_contains "both-wallet change with one prefix is cancelled" "$out" "Apply cancelled"
 assert_eq "monero wallet unchanged after one-prefix abort" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET"
 assert_eq "tari wallet unchanged after one-prefix abort" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI2"
-out="$(cd "$V" && printf '44AFFq5k\nTARIXTAR\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
+out="$(cd "$V" && printf '44AFFq5k\n16beoiD8\n' | DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply 2>&1)"
 assert_rc "both typed confirms apply" "$?" "0"
 assert_eq "monero wallet updated after both confirms" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_WALLET_ADDRESS)" "$WALLET2"
 assert_eq "tari wallet updated after both confirms" "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" "$TARI3"
 
 # An explicit tari.mem_limit is passed through verbatim (overriding the "auto" host-RAM scaling).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","mem_limit":"3072m"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mem_limit":"3072m"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari mem_limit explicit propagated" "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" "3072m"
 
+echo "== black-box: 'pithead up' under the migration hold starts everything but the chain (#851) =="
+# PITHEAD_HOLD_CHAIN=1 is set by the appliance boot path on the first boot of a data_migration
+# bundle: the chain services (the lmdb holders) must not start before the A/B slot commits. The
+# compose service list comes from a dedicated stub because the shared one answers nothing for
+# `compose config --services`, and stack_status's tests rely on exactly that.
+HCB="$SANDBOX/hold-chain-bin"
+mkdir -p "$HCB"
+cat >"$HCB/docker" <<'EOF'
+#!/usr/bin/env bash
+echo "[docker] $*" >> "${DOCKER_LOG:-/dev/null}"
+case "$*" in
+"compose config --services") printf 'tor\nmonerod\ntari\nwallet-rpc\ntari-wallet\np2pool\nxmrig-proxy\ncaddy\ndashboard\n' ;;
+esac
+exit 0
+EOF
+chmod +x "$HCB/docker"
+HOLD_LOG=$(mktemp)
+seed_env
+out="$(cd "$V" && DOCKER_LOG="$HOLD_LOG" PATH="$HCB:$V/bin:$PATH" PITHEAD_HOLD_CHAIN=1 ./pithead up 2>&1)"
+assert_rc "up succeeds under the hold" "$?" "0"
+assert_contains "the hold is announced for the journal" "$out" "holding chain services"
+up_line=$(grep "compose up" "$HOLD_LOG" | tail -1)
+assert_contains "tor still starts under the hold" "$up_line" "tor"
+assert_contains "p2pool still starts under the hold" "$up_line" "p2pool"
+assert_contains "the dashboard still starts under the hold" "$up_line" "dashboard"
+assert_not_contains "monerod is withheld" "$up_line" "monerod"
+assert_not_contains "tari and tari-wallet are withheld" "$up_line" "tari"
+assert_not_contains "wallet-rpc is withheld" "$up_line" "wallet-rpc"
+# Without the env the same sandbox starts the whole stack — the hold is opt-in per boot.
+HOLD_LOG2=$(mktemp)
+(cd "$V" && DOCKER_LOG="$HOLD_LOG2" PATH="$HCB:$V/bin:$PATH" ./pithead up >/dev/null 2>&1)
+up_line2=$(grep "compose up" "$HOLD_LOG2" | tail -1)
+assert_not_contains "a plain up names no service subset" "$up_line2" "p2pool"
+rm -f "$HOLD_LOG" "$HOLD_LOG2"
+
 # Healthchecks.io (#79): absent => no ping URL (off).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "healthchecks off by default (no ping URL)" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_PING_URL)" ""
 
 # A ping URL propagates verbatim to .env (the URL is the on switch; Tor is always used).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "healthchecks":{"ping_url":"https://hc-ping.com/abc"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"}, "healthchecks":{"ping_url":"https://hc-ping.com/abc"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "healthchecks ping_url propagated" "$(run_sourced "$V" env_get_file "$V/.env" HEALTHCHECKS_PING_URL)" "https://hc-ping.com/abc"
 
@@ -4093,7 +4272,7 @@ echo "== black-box: xmrig-proxy knobs (#152 stratum auth, #173 donate-level) =="
 # stratum_password "auto" generates + persists a stable secret and surfaces it for rigs; an explicit
 # proxy.donate_level propagates verbatim.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"auto"}, "proxy":{"donate_level":1}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini","stratum_password":"auto"}, "proxy":{"donate_level":1}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 sp1="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
 case "$sp1" in ?*) ok "stratum_password auto generated a secret" ;; *) bad "stratum_password auto generated a secret" "got empty" ;; esac
@@ -4145,7 +4324,7 @@ assert_eq "stratum TLS off by default" "$(run_sourced "$V" env_get_file "$V/.env
 # STABLE across a second apply (the fingerprint is what every rig pins — regenerating it on each
 # apply would break every TLS rig).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_tls":true}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini","stratum_tls":true}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "stratum TLS renders true" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_TLS)" "true"
 [ -f "$V/data/proxy-tls/cert.pem" ] && [ -f "$V/data/proxy-tls/key.pem" ] &&
@@ -4168,7 +4347,7 @@ echo "== black-box: clearnet initial sync render (#183) =="
 # Default (no flags): both daemons stay Tor-only — .env flags are false and the rendered Tari config
 # keeps the Tor transport, empty DNS seeds, and an onion public address.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "monero clearnet off by default" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_CLEARNET_SYNC)" "false"
 assert_eq "tari clearnet off by default" "$(run_sourced "$V" env_get_file "$V/.env" TARI_CLEARNET_SYNC)" "false"
@@ -4179,7 +4358,7 @@ assert_contains "tari default: advertises onion" "$(cat "$V/build/tari/config.to
 # Monero clearnet ON (Tari left off): only the Monero flag flips; Tari stays Tor. The apply preview
 # must spell out the clearnet exposure (a CONFIRM change — disruptive, warned ⚠ on the host CLI).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","clearnet_initial_sync":true}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","clearnet_initial_sync":true}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "monero clearnet flag propagated true" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_CLEARNET_SYNC)" "true"
 assert_eq "tari clearnet still false" "$(run_sourced "$V" env_get_file "$V/.env" TARI_CLEARNET_SYNC)" "false"
@@ -4191,7 +4370,7 @@ assert_contains "apply preview warns clearnet exposure" "$out" "CLEARNET"
 # stays Tor even with the flag on. That's what lets the node return to Tor on its own after sync
 # without pithead re-rendering clearnet over it.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T","clearnet_initial_sync":true}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","clearnet_initial_sync":true}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "tari clearnet flag propagated true" "$(run_sourced "$V" env_get_file "$V/.env" TARI_CLEARNET_SYNC)" "true"
 assert_contains "tari host-render stays Tor even with flag on (#234)" "$(cat "$V/build/tari/config.toml")" 'type = "tor"'
@@ -4200,14 +4379,14 @@ assert_contains "tari host-render still advertises the onion (#234)" "$(cat "$V/
 
 # Truthy parse consistency (#183): a JSON string "yes" reads as enabled, like normalize_bool/MONERO_PRUNE.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","clearnet_initial_sync":"yes"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","clearnet_initial_sync":"yes"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "monero clearnet truthy 'yes' => true" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_CLEARNET_SYNC)" "true"
 
 # doctor flags the active clearnet sync (read-only). Re-render Tor-only first so later sections see a
 # clean default, then assert doctor's WARN/OK both ways.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_contains "doctor: OK when Tor-only (#183)" "$(cd "$V" && PATH="$V/bin:$PATH" ./pithead doctor 2>&1)" "Tor-only"
 
@@ -4225,7 +4404,7 @@ echo "== black-box: local node creds auto-generated + persisted (#50) =="
 # A local node with BLANK creds: apply must generate them, write them into .env AND back into
 # config.json, and keep them stable on a second apply (don't regenerate every run).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"","node_password":""}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"","node_password":""}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_contains "auto-gen is logged" "$out" "Auto-generated missing local"
 env_pass="$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_PASSWORD)"
@@ -4239,7 +4418,7 @@ assert_eq "password stable across apply" "$(jq -r '.monero.node_password' "$V/co
 
 # A REMOTE node with blank creds means "no auth" — leave it empty, don't invent credentials.
 seed_env
-printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"","node_password":"","remote":{"host":"node.example.com"}}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"","node_password":"","remote":{"host":"node.example.com"}}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "remote username left blank" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_NODE_USERNAME)" ""
 assert_eq "remote creds not persisted" "$(jq -r '.monero.node_username' "$V/config.json")" ""
@@ -4247,13 +4426,13 @@ assert_eq "remote creds not persisted" "$(jq -r '.monero.node_username' "$V/conf
 # Custom remote rpc_port/zmq_port propagate to .env (the dashboard + p2pool read these to reach the
 # node); both default to 18081/18083 but an operator can point at a node on non-standard ports.
 seed_env
-printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"","node_password":"","remote":{"host":"node.example.com","rpc_port":28081,"zmq_port":28083}}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"","node_password":"","remote":{"host":"node.example.com","rpc_port":28081,"zmq_port":28083}}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "remote rpc_port propagated" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_PORT)" "28081"
 assert_eq "remote zmq_port propagated" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_PORT)" "28083"
 # And the defaults apply when omitted (local node).
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "zmq_port defaults to 18083" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_PORT)" "18083"
 
@@ -4282,7 +4461,7 @@ HOST_IP=box.lan
 DEPLOYMENT_COMPLETED=true
 COMPOSE_PROFILES=local_node
 EOF
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$U/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$U/config.json"
 UL="$U/docker.log"
 : >"$UL"
 out="$(cd "$U" && DOCKER_LOG="$UL" PATH="$U/bin:$PATH" ./pithead upgrade 2>&1)"
@@ -4330,7 +4509,7 @@ HOST_IP=box.lan
 DEPLOYMENT_COMPLETED=true
 COMPOSE_PROFILES=local_node
 EOF
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$A/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$A/config.json"
 # First apply: real config delta committed, but `compose up` FAILS -> marker left, rc 1, guidance.
 out="$(cd "$A" && FAIL_UP=1 PATH="$A/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
@@ -4550,7 +4729,7 @@ HOST_IP=box.lan
 DEPLOYMENT_COMPLETED=true
 COMPOSE_PROFILES=local_node
 EOF
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$BK/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$BK/config.json"
 printf 'CADDY-ORIG\n' >"$BK/Caddyfile"
 printf 'ONIONKEY-ORIG\n' >"$BK/data/tor/hs_ed25519_secret_key"
 printf 'DBDATA-ORIG\n' >"$BK/data/dashboard/dashboard.db"
@@ -4787,7 +4966,7 @@ HOST_IP=box.lan
 DEPLOYMENT_COMPLETED=true
 COMPOSE_PROFILES=local_node
 EOF
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$FB/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$FB/config.json"
 
 out="$(cd "$FB" && DOCKER_LOG="$FB/docker.log" PATH="$FB/bin:$PATH" ./pithead backup -y --no-encrypt 2>&1)"
 rc=$?
@@ -4818,7 +4997,7 @@ DASHBOARD_DATA_DIR=$R/envdir/dashboard
 P2POOL_DATA_DIR=$R/envdir/p2pool
 EOF
 # config.json points the data dirs somewhere ELSE (a path the running stack never used).
-printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"T"}, "p2pool":{"data_dir":"%s/CONFIGONLY/p2pool"}, "dashboard":{"data_dir":"%s/CONFIGONLY/dashboard"} }\n' "$WALLET" "$R" "$R" >"$R/config.json"
+printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"data_dir":"%s/CONFIGONLY/p2pool"}, "dashboard":{"data_dir":"%s/CONFIGONLY/dashboard"} }\n' "$WALLET" "$R" "$R" >"$R/config.json"
 SUDO_LOG="$R/sudo.log"
 : >"$SUDO_LOG"
 out="$(cd "$R" && SUDO_LOG="$SUDO_LOG" PATH="$R/bin:$PATH" ./pithead reset-dashboard -y 2>&1)"
@@ -4864,7 +5043,7 @@ NETWORK_SUBNET=172.28.0.0/24
 DASHBOARD_DATA_DIR=$RD557/envdir/dashboard
 P2POOL_DATA_DIR=$RD557/envdir/p2pool
 EOF
-printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"T"} }\n' "$WALLET" >"$RD557/config.json"
+printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"'"$VALID_TARI"'"} }\n' "$WALLET" >"$RD557/config.json"
 out="$(cd "$RD557" && PATH="$RD557/bin:$PATH" ./pithead reset-dashboard -y 2>&1)"
 rc=$?
 assert_rc "reset-dashboard: compose failure still exits 1 (fail-closed unchanged)" "$rc" "1"
@@ -4877,7 +5056,7 @@ echo "== black-box: rotate-secrets regenerates the internal credentials (#378) =
 # PROXY_AUTH_TOKEN — the three values apply/load_preserved_state otherwise preserve forever.
 # Baseline: an applied local-mode config with stratum auth on "auto".
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"oldrpcpass"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"auto"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"oldrpcpass"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini","stratum_password":"auto"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rot_sp_old="$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)"
 rm -f "$V"/config.json.bak-* "$V"/.env.bak-*
@@ -4923,7 +5102,7 @@ assert_eq "rotated token survives the next apply" "$(run_sourced "$V" env_get_fi
 echo "== black-box: rotate-secrets skips what it must (#378) =="
 # Remote mode: the RPC credential belongs to the remote node — config.json stays untouched.
 seed_env
-printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"ru","node_password":"remotepass","remote":{"host":"node.example.com"}}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"ru","node_password":"remotepass","remote":{"host":"node.example.com"}}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
 assert_rc "rotate-secrets (remote) exits 0" "$?" "0"
@@ -4933,7 +5112,7 @@ assert_eq "proxy token still rotates in remote mode" "$([ "$(run_sourced "$V" en
 
 # Literal stratum password: lives in config.json, so rotate leaves it and points there instead.
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_password":"my.literal-pass"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini","stratum_password":"my.literal-pass"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
 assert_eq "literal stratum password untouched" "$(run_sourced "$V" env_get_file "$V/.env" PROXY_STRATUM_PASSWORD)" "my.literal-pass"
@@ -4961,7 +5140,7 @@ exit 0
 EOF
 chmod +x "$FDOCK/docker"
 seed_env
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"failoldpass"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"failoldpass"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rm -f "$V"/config.json.bak-* "$V"/.env.bak-* "$V/.env.apply-incomplete"
 out="$(cd "$V" && PATH="$FDOCK:$V/bin:$PATH" ./pithead rotate-secrets -y 2>&1)"
@@ -5178,7 +5357,7 @@ mkdir -p "$DOC/build/tari" "$DOC/build/dashboard"
 cp "$STACK" "$DOC/pithead"
 cp "$ROOT/build/tari/config.toml.template" "$DOC/build/tari/"
 make_stubs "$DOC/bin"
-printf '{"monero":{"mode":"remote","wallet_address":"%s","remote":{"host":"10.0.0.8"}},"tari":{"mode":"remote","wallet_address":"T","remote":{"host":"10.0.0.9"}}}\n' "$WALLET" >"$DOC/config.json"
+printf '{"monero":{"mode":"remote","wallet_address":"%s","remote":{"host":"10.0.0.8"}},"tari":{"mode":"remote","wallet_address":"'"$VALID_TARI"'","remote":{"host":"10.0.0.9"}}}\n' "$WALLET" >"$DOC/config.json"
 doctor_onions() { # <COMPOSE_PROFILES> -> doctor's "Tor onion addresses" section
     {
         printf 'MONERO_ONION_ADDRESS=placeholder\nTARI_ONION_ADDRESS=placeholder\nP2POOL_ONION_ADDRESS=p2pa.onion\n'
@@ -5232,7 +5411,7 @@ EOF
 }
 control_config() { # <pool> [extra dashboard keys...] -> writes $C/config.json
     printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
-              "tari":{"wallet_address":"T"}, "p2pool":{"pool":"%s"},
+              "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"%s"},
               "dashboard":{"secure":true,"host":"box.lan",
                            "auth":{"username":"admin","password":"a control passphrase"},
                            "control":{"enabled":true}} }\n' "$WALLET" "$1" >"$C/config.json"
@@ -5241,7 +5420,7 @@ control_config() { # <pool> [extra dashboard keys...] -> writes $C/config.json
 # Fail-closed: enabling the control channel without a dashboard password must not validate.
 seed_control_env
 printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
-          "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"},
+          "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"},
           "dashboard":{"secure":true,"host":"box.lan","control":{"enabled":true}} }\n' "$WALLET" >"$C/config.json"
 out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
@@ -5285,7 +5464,7 @@ assert_rc "--porcelain without --dry-run is rejected" "$?" "1"
 # PITHEAD_CONFIG_FILE points ONE invocation at a candidate config; config.json is not consulted.
 control_config main # config.json back to the applied state (no changes)
 printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
-          "tari":{"wallet_address":"T"}, "p2pool":{"pool":"nano"},
+          "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"nano"},
           "dashboard":{"secure":true,"host":"box.lan",
                        "auth":{"username":"admin","password":"a control passphrase"},
                        "control":{"enabled":true}} }\n' "$WALLET" >"$C/alt.json"
@@ -5314,7 +5493,7 @@ echo "== black-box: apply --dry-run is read-only re: node credential generation 
 # config.json rewritten by a --dry-run preview — the read-only contract #556 reported broken
 # (persist_node_credentials was writing the freshly-generated creds back to disk).
 printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"","node_password":""},
-          "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"},
+          "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"},
           "dashboard":{"secure":true,"host":"box.lan",
                        "auth":{"username":"admin","password":"a control passphrase"},
                        "control":{"enabled":true}} }\n' "$WALLET" >"$C/config.json"
@@ -5339,7 +5518,7 @@ STAGED0="$C/data/control/staged"
 RESULTS0="$C/data/control/results"
 jq -n --arg w "$WALLET" --arg id "$UUID0" '{id:$id, action:"preview", actor:"admin", config:{
     monero:{mode:"local",wallet_address:$w,node_username:"",node_password:""},
-    tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+    tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"main"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS0/$UUID0.json"
 (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead control-run-pending >/dev/null 2>&1)
 assert_eq "blank-creds preview status" "$(jq -r '.status' "$RESULTS0/$UUID0.json" 2>/dev/null)" "previewed"
@@ -5361,7 +5540,7 @@ run_pending() { (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead
 # Preview: a valid typed intent (pool main -> mini) → previewed result + a host-side staged copy.
 jq -n --arg w "$WALLET" --arg id "$UUID1" '{id:$id, action:"preview", actor:"admin", config:{
     monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
-    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"mini"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID1.json"
 out="$(run_pending)"
 assert_rc "runner exits 0 on a valid preview" "$?" "0"
@@ -5412,7 +5591,7 @@ printf '{"id":"%s","action":"preview","actor":"x","config":{},"cmd":"rm -rf /"}\
 run_pending >/dev/null
 assert_contains "extra request keys are rejected" "$(jq -r '.error' "$RESULTS/$UUID2.json" 2>/dev/null)" "unexpected keys"
 jq -n --arg w "$WALLET" --arg id "$UUID2" '{id:$id, action:"preview", actor:"x", config:{
-    monero:{mode:"local",wallet_address:$w}, tari:{wallet_address:"T"}, p2pool:{pool:"banana"},
+    monero:{mode:"local",wallet_address:$w}, tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"banana"},
     dashboard:{auth:{password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID2.json"
 run_pending >/dev/null
 assert_eq "invalid candidate config is rejected" "$(jq -r '.status' "$RESULTS/$UUID2.json" 2>/dev/null)" "rejected"
@@ -5506,7 +5685,7 @@ esac
 UUID5="55555555-5555-4555-8555-555555555555"
 jq -n --arg w "$WALLET" --arg id "$UUID5" '{id:$id, action:"preview", actor:"admin", config:{
     monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:{"__secret__":true}},
-    tari:{wallet_address:"T"}, p2pool:{pool:"main"}, workers:{api_token:{"__secret__":true}},
+    tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"main"}, workers:{api_token:{"__secret__":true}},
     telegram:{bot_token:{"__secret__":true},chat_id:"-100123"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:{"__secret__":true}},control:{enabled:true}}}}' >"$REQS/$UUID5.json"
 run_pending >/dev/null
@@ -5544,7 +5723,7 @@ echo "== black-box: .env line-injection guard (#33 hardening, per field) =="
 inject_reject() { # <label> <jq-setter expr using $v>
     jq -n --arg w "$WALLET" --arg v $'legit\nPITHEAD_REGISTRY=evil.tld/attacker' \
         '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
-          tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+          tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"main"},
           dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}
          | '"$2" >"$C/config.json"
     out="$(cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
@@ -5561,7 +5740,7 @@ inject_reject "chat_id" '(.telegram={chat_id:$v})'
 # Positive: legitimate tokens (no control chars) still validate.
 jq -n --arg w "$WALLET" \
     '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
-      tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+      tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"main"},
       telegram:{bot_token:"123456:legit-ABC_def"}, workers:{api_token:"tok_legit123"},
       healthchecks:{ping_url:"https://hc-ping.com/abc-123"},
       dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
@@ -5570,7 +5749,7 @@ assert_rc "legitimate secrets still validate" "$?" "0"
 # No second line reaches .env: a poisoned config rejected at `apply -y` never renders the attacker key.
 jq -n --arg w "$WALLET" --arg v $'legit\nPITHEAD_REGISTRY=evil.tld/attacker' \
     '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
-      tari:{wallet_address:"T"}, p2pool:{pool:"main"}, telegram:{bot_token:$v},
+      tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"main"}, telegram:{bot_token:$v},
       dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
 (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
 if grep -q 'PITHEAD_REGISTRY' "$C/.env"; then bad "no injected line in .env" "PITHEAD_REGISTRY landed in .env"; else ok "rejected config injects no second .env line"; fi
@@ -5581,7 +5760,7 @@ echo "== black-box: control channel on a published onion requires client-auth (#
 onion_control_config() { # <onion-enabled> <client-auth> -> writes config.json
     jq -n --arg w "$WALLET" --argjson onion "$1" --argjson ca "$2" \
         '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
-          tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+          tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"main"},
           dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a strong control passphrase"},
                      onion:{enabled:$onion,client_auth:$ca}, control:{enabled:true}}}' >"$C/config.json"
 }
@@ -5606,7 +5785,7 @@ echo "== black-box: telegram.control fails closed on each leg (#521) =="
 tg_control_config() { # <dashboard.control.enabled> <telegram.commands.enabled> <allowed_ids-json>
     jq -n --arg w "$WALLET" --argjson ctl "$1" --argjson cmds "$2" --argjson ids "$3" \
         '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
-          tari:{wallet_address:"T"}, p2pool:{pool:"main"},
+          tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"main"},
           telegram:{enabled:true,bot_token:"123456:legit-ABC_def",chat_id:"1111",
                     commands:{enabled:$cmds}, control:{enabled:true,allowed_ids:$ids}},
           dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},
@@ -5646,7 +5825,7 @@ control_config mini
 preview_clearnet() {
     jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
         monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",clearnet_initial_sync:true},
-        tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+        tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"mini"},
         dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
     run_pending >/dev/null
 }
@@ -5683,7 +5862,7 @@ echo "== black-box: the typed APPLY does NOT unlock the perimeter — DEST stays
 # DEST) is refused even WITH the token, on the security-sensitive gate.
 jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
     monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",rpc_lan_access:true},
-    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"mini"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
 run_pending >/dev/null
 printf '{"id":"%s","action":"commit","actor":"admin","confirm":"APPLY"}\n' "$UUID3" >"$REQS/$UUID3.json"
@@ -5694,12 +5873,12 @@ assert_eq "perimeter change did not touch config.json" "$(jq -r '.monero.rpc_lan
 # (b) A confirm-KEY in its HEAVY direction (monero.prune DISABLE → full re-sync) still emits DEST
 # and is refused even WITH the token — the confirm allowlist is not a blanket unlock for the key.
 jq -n --arg w "$WALLET" '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",prune:true},
-    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"mini"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
 (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
 jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
     monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",prune:false},
-    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"mini"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
 run_pending >/dev/null
 printf '{"id":"%s","action":"commit","actor":"admin","confirm":"APPLY"}\n' "$UUID3" >"$REQS/$UUID3.json"
@@ -5723,7 +5902,7 @@ EVIL_DIR="$SANDBOX/other-service-vol/monero" # absolute, NOT blocklisted, NOT un
 preview_move() {                             # <monero.data_dir>
     jq -n --arg w "$WALLET" --arg id "$UUID7" --arg dd "$1" '{id:$id,action:"preview",actor:"admin",config:{
         monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",data_dir:$dd},
-        tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+        tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"mini"},
         dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID7.json"
     run_pending >/dev/null
 }
@@ -5746,7 +5925,7 @@ assert_eq "refused move did not touch config.json" "$(jq -r '.monero.data_dir //
 [ ! -f "$STAGED/$UUID7.json" ] && ok "refused out-of-root move cleared from staged" || bad "refused out-of-root move cleared from staged" "still staged"
 # (3) The SAME path from the HOST shell still applies — the tighter rule is control-only.
 jq -n --arg w "$WALLET" --arg dd "$EVIL_DIR" '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",data_dir:$dd},
-    tari:{wallet_address:"T"}, p2pool:{pool:"mini"},
+    tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"mini"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}' >"$C/config.json"
 (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
 assert_rc "host-shell apply to the same out-of-root path succeeds" "$?" "0"
@@ -5759,7 +5938,7 @@ control_config mini
 (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
 jq -n --arg w "$WALLET" --arg id "$UUID3" '{id:$id,action:"preview",actor:"admin",config:{
     monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
-    tari:{wallet_address:"T"}, p2pool:{pool:"nano"},
+    tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"nano"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},control:{enabled:true}}}}' >"$REQS/$UUID3.json"
 run_pending >/dev/null
 printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID3" >"$REQS/$UUID3.json"
@@ -5776,7 +5955,7 @@ UUID5="55555555-5555-4555-8555-555555555555"
 # Baseline: nano pool + stratum password + telegram bot + control, applied from the host CLI.
 jq -n --arg w "$WALLET" \
     '{monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p"},
-    tari:{wallet_address:"T"}, p2pool:{pool:"nano",stratum_password:"s3cretpw"},
+    tari:{wallet_address:"'"$VALID_TARI"'"}, p2pool:{pool:"nano",stratum_password:"s3cretpw"},
     telegram:{enabled:true,bot_token:"123456:legit-ABC_def",chat_id:"1111"},
     dashboard:{secure:true,host:"box.lan",auth:{username:"admin",password:"a control passphrase"},
                control:{enabled:true}}}' >"$C/config.json"
@@ -6011,7 +6190,7 @@ echo "== black-box: editable-allowlist commit round-trip, every key (#522) =="
 # env diff (pool flips P2POOL_FLAGS + P2POOL_PORT, both allowlisted).
 jq -n --arg w "$WALLET" '{
     monero:{mode:"local",wallet_address:$w,node_username:"u",node_password:"p",mem_limit:"4g",prep_blocks_threads:4},
-    tari:{wallet_address:"T",mem_limit:"3g"}, p2pool:{pool:"main"},
+    tari:{wallet_address:"'"$VALID_TARI"'",mem_limit:"3g"}, p2pool:{pool:"main"},
     xvb:{enabled:true,donation_level:"donor"}, telegram:{daily_summary_time:"08:00"},
     dashboard:{secure:true,host:"box.lan",tari_required:true,check_for_updates:true,timezone:"UTC",
                hashrate_drop_threshold:50,hashrate_drop_minutes:10,
@@ -6930,7 +7109,7 @@ COMPOSE_PROFILES=local_node
 EOF
 }
 cfg_L() { # <dashboard-extra-json>  e.g. ',"data_dir":"/pinned"'
-    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","data_dir":"%s/monero"}, "tari":{"wallet_address":"T","data_dir":"%s/tari"}, "p2pool":{"pool":"main","data_dir":"%s/p2pool"}, "tor":{"data_dir":"%s/tor"}, "dashboard":{"secure":true,"host":"box.lan"%s} }\n' \
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","data_dir":"%s/monero"}, "tari":{"wallet_address":"'"$VALID_TARI"'","data_dir":"%s/tari"}, "p2pool":{"pool":"main","data_dir":"%s/p2pool"}, "tor":{"data_dir":"%s/tor"}, "dashboard":{"secure":true,"host":"box.lan"%s} }\n' \
         "$WALLET" "$SHARED" "$SHARED" "$SHARED" "$SHARED" "$1" >"$L/config.json"
 }
 # Old layout on disk: the dashboard DB inside the version dir's ./data (the pre-#455 default).
@@ -6956,7 +7135,7 @@ assert_eq "upgrade maintains current -> pithead-v9.9.9" "$(readlink "$SANDBOX/bo
 assert_eq "upgrade leaves the migrated DB alone" "$(cat "$SHARED/dashboard/mining_data.db")" "proddb"
 # Scattered custom dirs (no single parent): the classic in-install ./data default stands.
 seed_L
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","data_dir":"%s/monero"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' \
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","data_dir":"%s/monero"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' \
     "$WALLET" "$SHARED" >"$L/config.json"
 out="$(cd "$L" && PATH="$L/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "apply with scattered data dirs succeeds" "$?" "0"
@@ -7617,7 +7796,7 @@ echo "== unit: wizard — Enter-through defaults skip everything but the core an
 # config.reference.json default because the wizard never wrote them at all.
 W1="$SANDBOX/wizard-defaults"
 mkdir -p "$W1"
-printf '%s\n%s\n\n\n\n\n\n\n\n\n' "$WALLET" "TARIWALLETDEFAULT" | run_sourced "$W1" run_wizard >/dev/null 2>&1
+printf '%s\n%s\n\n\n\n\n\n\n\n\n' "$WALLET" "$VALID_TARI" | run_sourced "$W1" run_wizard >/dev/null 2>&1
 if [ -f "$W1/config.json" ]; then
     ok "wizard (defaults path) writes config.json"
 else
@@ -7625,7 +7804,7 @@ else
 fi
 w1_cfg="$(cat "$W1/config.json" 2>/dev/null)"
 assert_eq "defaults path: monero.wallet_address" "$(jq -r '.monero.wallet_address' <<<"$w1_cfg")" "$WALLET"
-assert_eq "defaults path: tari.wallet_address" "$(jq -r '.tari.wallet_address' <<<"$w1_cfg")" "TARIWALLETDEFAULT"
+assert_eq "defaults path: tari.wallet_address" "$(jq -r '.tari.wallet_address' <<<"$w1_cfg")" "$VALID_TARI"
 assert_eq "defaults path: monero.mode local (Enter-through)" "$(jq -r '.monero.mode' <<<"$w1_cfg")" "local"
 assert_eq "defaults path: p2pool.pool Enter-through is mini (the global default)" "$(jq -r '.p2pool.pool' <<<"$w1_cfg")" "mini"
 assert_eq "defaults path: local node RPC creds auto-generated (non-empty)" \
@@ -7648,7 +7827,7 @@ assert_eq "defaults path: no local_miner block written (opt-in off, #593)" \
 # local_miner.enabled=true; every other answer left blank so only that key appears.
 WLM="$SANDBOX/wizard-local-miner"
 mkdir -p "$WLM"
-printf '%s\n%s\n\n\n\n\n\n\n\ny\n' "$WALLET" "TARIWALLETLM" | run_sourced "$WLM" run_wizard >/dev/null 2>&1
+printf '%s\n%s\n\n\n\n\n\n\n\ny\n' "$WALLET" "$VALID_TARI" | run_sourced "$WLM" run_wizard >/dev/null 2>&1
 wlm_cfg="$(cat "$WLM/config.json" 2>/dev/null)"
 assert_eq "opt-in path: local_miner.enabled written true (#593)" "$(jq -r '.local_miner.enabled' <<<"$wlm_cfg")" "true"
 unset wlm_cfg
@@ -7659,7 +7838,7 @@ echo "== unit: wizard — remote node branch is unchanged by the ask/write split
 W3="$SANDBOX/wizard-remote"
 mkdir -p "$W3"
 printf '%s\n%s\nn\nnode.example.com\n\n\ny\nremoteuser\nremotepass\n\n\n\n\n\n\n' \
-    "$WALLET" "TARIWALLETREMOTE" | run_sourced "$W3" run_wizard >/dev/null 2>&1
+    "$WALLET" "$VALID_TARI" | run_sourced "$W3" run_wizard >/dev/null 2>&1
 w3_cfg="$(cat "$W3/config.json" 2>/dev/null)"
 assert_eq "remote path: monero.mode remote" "$(jq -r '.monero.mode' <<<"$w3_cfg")" "remote"
 assert_eq "remote path: remote host set" "$(jq -r '.monero.remote.host' <<<"$w3_cfg")" "node.example.com"
@@ -7676,7 +7855,7 @@ echo "== unit: wizard — remote node WITHOUT auth + an explicit nano pool tier 
 W4="$SANDBOX/wizard-remote-noauth-nano"
 mkdir -p "$W4"
 printf '%s\n%s\nn\nremote2.example.com\n\n\nn\nnano\n\n\n\n\n\n' \
-    "$WALLET" "TARIWALLETNOAUTH" | run_sourced "$W4" run_wizard >/dev/null 2>&1
+    "$WALLET" "$VALID_TARI" | run_sourced "$W4" run_wizard >/dev/null 2>&1
 w4_cfg="$(cat "$W4/config.json" 2>/dev/null)"
 assert_eq "remote-noauth path: monero.mode remote" "$(jq -r '.monero.mode' <<<"$w4_cfg")" "remote"
 assert_eq "remote-noauth path: remote host set" "$(jq -r '.monero.remote.host' <<<"$w4_cfg")" "remote2.example.com"
@@ -7691,7 +7870,7 @@ echo "== unit: wizard — shape-question and dashboard-login answers flow into c
 W2="$SANDBOX/wizard-full"
 mkdir -p "$W2"
 printf '%s\n%s\n\nmain\nopuser\nsuperSecret1\ny\ny\ny\nmybottoken123\n987654321\n' \
-    "$WALLET" "TARIWALLETFULL" | run_sourced "$W2" run_wizard >/dev/null 2>&1
+    "$WALLET" "$VALID_TARI" | run_sourced "$W2" run_wizard >/dev/null 2>&1
 w2_cfg="$(cat "$W2/config.json" 2>/dev/null)"
 assert_eq "full path: monero.mode local (Enter-through)" "$(jq -r '.monero.mode' <<<"$w2_cfg")" "local"
 assert_eq "full path: p2pool.pool honors an explicit main" "$(jq -r '.p2pool.pool' <<<"$w2_cfg")" "main"
@@ -7734,7 +7913,7 @@ mkdir -p "$SU/build/tari" "$SU/build/dashboard"
 cp "$STACK" "$SU/pithead"
 cp "$ROOT/build/tari/config.toml.template" "$SU/build/tari/"
 make_stubs "$SU/bin"
-printf '%s\n%s\n\n\n\n\n\n\n\n\n' "$WALLET" "TARISETUPWALLET" | run_sourced "$SU" run_wizard >/dev/null 2>&1
+printf '%s\n%s\n\n\n\n\n\n\n\n\n' "$WALLET" "$VALID_TARI" | run_sourced "$SU" run_wizard >/dev/null 2>&1
 if [ -f "$SU/config.json" ]; then ok "setup e2e: wizard stage produces config.json"; else bad "setup e2e: wizard stage produces config.json" "no file at $SU/config.json"; fi
 su_out="$(cd "$SU" && printf '\nn\n' | DOCKER_LOG=/dev/null PATH="$SU/bin:$PATH" ./pithead setup --skip-deps --skip-optimize 2>&1)"
 su_rc=$?
@@ -7754,7 +7933,7 @@ mkdir -p "$SUT/build/tari" "$SUT/build/dashboard"
 cp "$STACK" "$SUT/pithead"
 cp "$ROOT/build/tari/config.toml.template" "$SUT/build/tari/"
 make_stubs "$SUT/bin"
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini","stratum_tls":true}, "dashboard":{"secure":false} }\n' "$WALLET" >"$SUT/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini","stratum_tls":true}, "dashboard":{"secure":false} }\n' "$WALLET" >"$SUT/config.json"
 sut_out="$(cd "$SUT" && printf '\nn\n' | DOCKER_LOG=/dev/null PATH="$SUT/bin:$PATH" ./pithead setup --skip-deps --skip-optimize 2>&1)"
 assert_rc "setup with stratum_tls exits 0" "$?" "0"
 [ -f "$SUT/data/proxy-tls/cert.pem" ] && [ -f "$SUT/data/proxy-tls/key.pem" ] &&
@@ -7893,7 +8072,7 @@ unset SSHSB ssh_run
 echo "== unit: ssh.enabled without a public key is refused at validation =="
 VSB="$SANDBOX/vsb"
 mkdir -p "$VSB"
-printf '{ "monero": {"wallet_address":"%s"}, "tari":{"wallet_address":"T"}, "ssh":{"enabled":true} }' "$WALLET" >"$VSB/config.json"
+printf '{ "monero": {"wallet_address":"%s"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "ssh":{"enabled":true} }' "$WALLET" >"$VSB/config.json"
 vout=$(
     cd "$VSB" || exit
     # shellcheck disable=SC1090
@@ -7916,7 +8095,7 @@ mkdir -p "$RSUT/bin"
 cp "$STACK" "$RSUT/pithead" && chmod +x "$RSUT/pithead"
 cp -R "$(dirname "$STACK")/build" "$RSUT/build" # service-config templates render injects from
 make_stubs "$RSUT/bin"
-printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"T"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false} }\n' "$WALLET" >"$RSUT/config.json"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false} }\n' "$WALLET" >"$RSUT/config.json"
 (cd "$RSUT" && printf '\nn\n' | DOCKER_LOG=/dev/null PATH="$RSUT/bin:$PATH" ./pithead setup --skip-deps --skip-optimize >/dev/null 2>&1)
 echo "# stale — written by an older build" >"$RSUT/Caddyfile"
 render_out=$(cd "$RSUT" && DOCKER_LOG=/dev/null PATH="$RSUT/bin:$PATH" ./pithead render 2>&1)
@@ -8100,7 +8279,7 @@ run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
 assert_rc "invalid config -> rc 1, wizard still opens" "$?" "1"
 [ -f "$PSD/out.json" ] && bad "rejected config NOT installed" "it was" || ok "rejected config NOT installed"
 
-printf '{"monero":{"wallet_address":"%s"},"tari":{"wallet_address":"harness-tari"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
+printf '{"monero":{"wallet_address":"%s"},"tari":{"wallet_address":"'"$VALID_TARI"'"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
     "$VALID_PRIMARY" >"$PSD/pithead-config.json"
 cp "$PSD/pithead-config.json" "$PSD/original.json"
 run_sourced "$SANDBOX" consume_preseed_config "$PSD/out.json" >/dev/null 2>&1
@@ -8705,6 +8884,15 @@ assert_eq "xmrig-proxy down (sync hold) -> ok" "$(rcv xmrig-proxy exited 'Exited
 # Non-revenue containers are out of scope — the rest of doctor covers them.
 assert_eq "caddy (not revenue) -> ok" "$(rcv caddy running 'Up 5 minutes')" "ok"
 assert_eq "dashboard (not revenue) -> ok" "$(rcv dashboard running 'Up 5 minutes (healthy)')" "ok"
+# The migration hold (#851): with chain_hold=1 a chain node is judged by the miners' rule — the
+# boot path is deliberately withholding it, so down is expected and the commit must not deadlock
+# on the very hold it gates. A RUNNING-but-unhealthy chain node is still a fault.
+assert_eq "monerod down under the migration hold -> ok" "$(rcv monerod exited 'Exited (0) 1 minute ago' 1)" "ok"
+assert_eq "tari never created under the migration hold -> ok" "$(rcv tari created 'Created' 1)" "ok"
+assert_eq "wallet-rpc down under the migration hold -> ok" "$(rcv wallet-rpc exited 'Exited (0) 2 minutes ago' 1)" "ok"
+assert_contains "monerod running+unhealthy under the hold -> still fail" "$(rcv monerod running 'Up 2 minutes (unhealthy)' 1)" "fail:monerod"
+assert_eq "monerod up+healthy under the hold -> ok (an early manual start is not a fault)" "$(rcv monerod running 'Up 5 minutes (healthy)' 1)" "ok"
+assert_contains "the hold changes nothing for a miner" "$(rcv p2pool running 'Up 30 seconds (unhealthy)' 1)" "fail:p2pool"
 unset -f rcv
 
 echo "== unit: pithead-sync's rigforge leg — program replaced, state preserved, prebuilt seeded =="
@@ -8833,12 +9021,13 @@ assert_rc "unstamped system + release bundle passes — stays shell-less, no cha
 
 OUSB=$(mktemp -d)
 mkdir -p "$OUSB/bin"
-# A fake rauc: logs every call, answers `info` with a canned JSON body.
+# A fake rauc: logs every call, answers `info` with a canned shell-format body —
+# the format the real os_bundle_meta parses (RAUC 1.11's JSON output omits [meta.*]).
 cat >"$OUSB/bin/rauc" <<'EOF'
 #!/usr/bin/env bash
 echo "[rauc] $*" >>"${RAUC_LOG:?}"
 case "$1" in
-info) [ -s "${RAUC_INFO_JSON:-}" ] && cat "$RAUC_INFO_JSON" ;;
+info) [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT" ;;
 install) exit 0 ;;
 esac
 exit 0
@@ -8866,59 +9055,60 @@ ourun() { # <variant-file> <info-json-file or empty> [os-update args...] — std
         # shellcheck disable=SC1090
         source "$STACK"
         set +e
-        RAUC_INFO_JSON="$ij" PITHEAD_VARIANT_FILE="$vf" os_update "$@" </dev/null
+        RAUC_INFO_OUT="$ij" PITHEAD_VARIANT_FILE="$vf" \
+            PITHEAD_MIGRATION_MARKER_FILE="$OUSB/marker-scratch" os_update "$@" </dev/null
     )
 }
-printf '{"manifest":{"meta":{"pithead":{"variant":"release"}}}}\n' >"$OUSB/info-release.json"
-printf '{"meta":{"pithead":{"variant":"debug"}}}\n' >"$OUSB/info-debug.json"
-assert_eq "bundle variant parsed from rauc info JSON (nested manifest)" \
-    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="$OUSB/info-release.json" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "release"
-assert_eq "bundle variant parse tolerates a different nesting" \
-    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="$OUSB/info-debug.json" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "debug"
+printf "RAUC_META_PITHEAD_VARIANT='release'\n" >"$OUSB/info-release.txt"
+printf "RAUC_META_PITHEAD_VARIANT='debug'\n" >"$OUSB/info-debug.txt"
+assert_eq "bundle variant parsed from rauc info shell output" \
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="$OUSB/info-release.txt" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "release"
+assert_eq "bundle variant parse reads the debug stamp" \
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="$OUSB/info-debug.txt" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "debug"
 assert_eq "an unstamped bundle is unknown" \
-    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "unknown"
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="" run_sourced "$OUSB" os_bundle_variant bundle.raucb)" "unknown"
 
 # The command end to end, with the daemon stubbed. Non-interactive stdin means the prompt reads
 # EOF -> cancelled: precisely the automation case where a silent install would strand the box.
 : >"$RAUC_LOG"
-out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.json" bundle.raucb 2>&1)
+out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.txt" bundle.raucb 2>&1)
 rc=$?
 assert_rc "debug box + release bundle, no --yes -> refused" "$rc" "1"
 assert_contains "the refusal names the SSH loss" "$out" "removes SSH"
 assert_not_contains "rauc install was NOT reached" "$(cat "$RAUC_LOG")" "install"
 : >"$RAUC_LOG"
-ourun "$OUSB/variant-debug" "$OUSB/info-release.json" bundle.raucb --yes >/dev/null 2>&1
+ourun "$OUSB/variant-debug" "$OUSB/info-release.txt" bundle.raucb --yes >/dev/null 2>&1
 assert_rc "--yes acknowledges the warning and proceeds" "$?" "0"
 assert_contains "rauc install ran with the bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 # The #854 direction: a hardened release box taking a debug bundle GAINS a root SSH backdoor. Non-
 # interactive stdin reads EOF -> refused, and rauc install must never be reached — the silent
 # install is exactly the backdoor this guards.
 : >"$RAUC_LOG"
-out=$(ourun "$OUSB/variant-release" "$OUSB/info-debug.json" bundle.raucb 2>&1)
+out=$(ourun "$OUSB/variant-release" "$OUSB/info-debug.txt" bundle.raucb 2>&1)
 rc=$?
 assert_rc "release box + debug bundle, no --yes -> refused" "$rc" "1"
 assert_contains "the refusal names the root SSH it would gain" "$out" "root SSH"
 assert_not_contains "rauc install was NOT reached on the gain-a-shell refusal" "$(cat "$RAUC_LOG")" "install"
 : >"$RAUC_LOG"
-ourun "$OUSB/variant-release" "$OUSB/info-debug.json" bundle.raucb --yes >/dev/null 2>&1
+ourun "$OUSB/variant-release" "$OUSB/info-debug.txt" bundle.raucb --yes >/dev/null 2>&1
 assert_rc "--yes acknowledges the backdoor warning and proceeds" "$?" "0"
 assert_contains "rauc install ran with the debug bundle after --yes" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 : >"$RAUC_LOG"
-ourun "$OUSB/variant-release" "$OUSB/info-release.json" bundle.raucb >/dev/null 2>&1
+ourun "$OUSB/variant-release" "$OUSB/info-release.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "release -> release installs with no prompt" "$?" "0"
 assert_contains "rauc install ran unprompted" "$(cat "$RAUC_LOG")" "install bundle.raucb"
-out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.json" 2>&1)
+out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.txt" 2>&1)
 assert_rc "a missing bundle path is an error, not an install" "$?" "1"
 
 # --- os-update version floor + data-migration guards (#856 downgrade, #851 migration deadlock) ---
 # A correctly-signed bundle is not automatically a safe one: an OLDER image re-opens fixed holes,
 # and an image below the /data migration floor cannot read the chain data a newer release migrated.
-printf '{"manifest":{"meta":{"pithead":{"variant":"release","version":"1.17.0","data_migration":"false","minimum_os_version":""}}}}\n' >"$OUSB/info-1170.json"
-printf '{"manifest":{"meta":{"pithead":{"variant":"release","version":"1.10.0","data_migration":"false","minimum_os_version":""}}}}\n' >"$OUSB/info-1100.json"
-printf '{"manifest":{"meta":{"pithead":{"variant":"release","version":"1.17.0","data_migration":"true","minimum_os_version":"1.17.0"}}}}\n' >"$OUSB/info-mig.json"
+printf "RAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='1.17.0'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OUSB/info-1170.txt"
+printf "RAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='1.10.0'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OUSB/info-1100.txt"
+printf "RAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='1.17.0'\nRAUC_META_PITHEAD_DATA_MIGRATION='true'\nRAUC_META_PITHEAD_MINIMUM_OS_VERSION='1.17.0'\n" >"$OUSB/info-mig.txt"
 
 # os_bundle_meta: the manifest fields read back out of `rauc info` JSON.
-ometa() { cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_JSON="$1" run_sourced "$OUSB" os_bundle_meta bundle.raucb "$2"; }
+ometa() { cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="$1" run_sourced "$OUSB" os_bundle_meta bundle.raucb "$2"; }
 # render_bundle_manifest: the WRITE side of the manifest (the read side is os_bundle_meta below).
 # RAUC refuses a key with an empty value, so an ordinary non-migrating build must omit the floor
 # entirely — emitting `minimum_os_version=` unconditionally broke every plain bundle build, and
@@ -8938,10 +9128,10 @@ else
     ok "no manifest key renders with an empty value"
 fi
 
-assert_eq "os_bundle_meta reads version" "$(ometa "$OUSB/info-mig.json" version)" "1.17.0"
-assert_eq "os_bundle_meta reads data_migration" "$(ometa "$OUSB/info-mig.json" data_migration)" "true"
-assert_eq "os_bundle_meta reads minimum_os_version" "$(ometa "$OUSB/info-mig.json" minimum_os_version)" "1.17.0"
-assert_eq "an absent meta key is empty, not an error" "$(ometa "$OUSB/info-mig.json" db_schema)" ""
+assert_eq "os_bundle_meta reads version" "$(ometa "$OUSB/info-mig.txt" version)" "1.17.0"
+assert_eq "os_bundle_meta reads data_migration" "$(ometa "$OUSB/info-mig.txt" data_migration)" "true"
+assert_eq "os_bundle_meta reads minimum_os_version" "$(ometa "$OUSB/info-mig.txt" minimum_os_version)" "1.17.0"
+assert_eq "an absent meta key is empty, not an error" "$(ometa "$OUSB/info-mig.txt" db_schema)" ""
 unset -f ometa
 
 # ourun_v: os_update with a set running version + a data-floor file, variant pinned to release
@@ -8956,69 +9146,104 @@ ourun_v() { # <running-version> <floor-file> <info-json> [os-update args...]
         source "$STACK"
         set +e
         PITHEAD_VERSION="$rv" PITHEAD_DATA_FLOOR_FILE="$ff" \
-            RAUC_INFO_JSON="$ij" PITHEAD_VARIANT_FILE="$OUSB/variant-release" os_update "$@" </dev/null
+            PITHEAD_MIGRATION_MARKER_FILE="${MARKER_FILE:-$OUSB/marker-scratch}" \
+            RAUC_INFO_OUT="$ij" PITHEAD_VARIANT_FILE="$OUSB/variant-release" os_update "$@" </dev/null
     )
 }
 
 # #856: an older bundle is refused, and rauc install is never reached.
 : >"$RAUC_LOG"
-out=$(ourun_v "1.17.0" "" "$OUSB/info-1100.json" bundle.raucb 2>&1)
+out=$(ourun_v "1.17.0" "" "$OUSB/info-1100.txt" bundle.raucb 2>&1)
 assert_rc "a bundle older than running is refused" "$?" "1"
 assert_contains "the refusal names the downgrade" "$out" "possible downgrade"
 assert_not_contains "rauc install was NOT reached on a refused downgrade" "$(cat "$RAUC_LOG")" "install"
 # ...unless --allow-downgrade is passed on purpose.
 : >"$RAUC_LOG"
-ourun_v "1.17.0" "" "$OUSB/info-1100.json" bundle.raucb --allow-downgrade >/dev/null 2>&1
+ourun_v "1.17.0" "" "$OUSB/info-1100.txt" bundle.raucb --allow-downgrade >/dev/null 2>&1
 assert_rc "--allow-downgrade installs the older bundle" "$?" "0"
 assert_contains "rauc install ran under --allow-downgrade" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 # A newer bundle installs with no ceremony.
 : >"$RAUC_LOG"
-ourun_v "1.10.0" "" "$OUSB/info-1170.json" bundle.raucb >/dev/null 2>&1
+ourun_v "1.10.0" "" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "a newer bundle installs" "$?" "0"
 assert_contains "rauc install ran for the newer bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 
 # #851: below the /data migration floor is refused OUTRIGHT — --allow-downgrade does not override it.
 printf '2.0.0\n' >"$OUSB/floor-2"
 : >"$RAUC_LOG"
-out=$(ourun_v "1.17.0" "$OUSB/floor-2" "$OUSB/info-1170.json" bundle.raucb --allow-downgrade 2>&1)
+out=$(ourun_v "1.17.0" "$OUSB/floor-2" "$OUSB/info-1170.txt" bundle.raucb --allow-downgrade 2>&1)
 assert_rc "a bundle below the /data floor is refused even with --allow-downgrade" "$?" "1"
 assert_contains "the floor refusal warns about the chain data" "$out" "strand the chain data"
 assert_not_contains "rauc install was NOT reached below the floor" "$(cat "$RAUC_LOG")" "install"
 # A bundle at or above the floor installs.
 printf '1.17.0\n' >"$OUSB/floor-at"
 : >"$RAUC_LOG"
-ourun_v "1.17.0" "$OUSB/floor-at" "$OUSB/info-1170.json" bundle.raucb >/dev/null 2>&1
+ourun_v "1.17.0" "$OUSB/floor-at" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "a bundle at the /data floor installs" "$?" "0"
 
 # #851: installing a data_migration bundle RECORDS the floor; a plain bundle does not.
 FW="$OUSB/floor-written"
 rm -f "$FW"
 : >"$RAUC_LOG"
-ourun_v "1.17.0" "$FW" "$OUSB/info-mig.json" bundle.raucb >/dev/null 2>&1
+ourun_v "1.17.0" "$FW" "$OUSB/info-mig.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "a data_migration bundle installs" "$?" "0"
 assert_eq "installing a data_migration bundle records the /data floor" "$(tr -d ' \n' <"$FW" 2>/dev/null)" "1.17.0"
 FN="$OUSB/floor-none"
 rm -f "$FN"
-ourun_v "1.10.0" "$FN" "$OUSB/info-1170.json" bundle.raucb >/dev/null 2>&1
+ourun_v "1.10.0" "$FN" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
 assert_eq "a non-migration bundle records no floor" "$([ -f "$FN" ] && echo present || echo absent)" "absent"
+
+# #851 marker lifecycle: a migrating install leaves the pending marker (stamped with the bundle's
+# version) for the next boot's chain hold; a non-migrating install clears a stale one — it
+# supersedes a migrating install that never booted.
+MK="$OUSB/marker-mig"
+rm -f "$MK"
+MARKER_FILE="$MK" ourun_v "1.10.0" "$OUSB/floor-scratch" "$OUSB/info-mig.txt" bundle.raucb >/dev/null 2>&1
+assert_eq "a data_migration install writes the pending marker with the bundle version" "$(tr -d ' \n' <"$MK" 2>/dev/null)" "1.17.0"
+MARKER_FILE="$MK" ourun_v "1.10.0" "$OUSB/floor-scratch" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
+assert_eq "a non-migrating install clears a stale pending marker" "$([ -f "$MK" ] && echo present || echo absent)" "absent"
+
+# The hold query the boot path and doctor share: active only when the marker matches the RUNNING
+# version — a mismatched marker is a fallback boot onto untouched data and must not hold anything.
+omh() { # <marker-content-or-ABSENT> <running-version>
+    local mf="$OUSB/marker-q"
+    rm -f "$mf"
+    [ "$1" != "ABSENT" ] && printf '%s\n' "$1" >"$mf"
+    (
+        cd "$OUSB" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        PITHEAD_MIGRATION_MARKER_FILE="$mf" PITHEAD_VERSION="$2" os_migration_hold_active
+    )
+}
+omh "1.17.0" "1.17.0"
+assert_rc "hold active: marker matches the running version" "$?" "0"
+omh "1.17.0" "1.16.0"
+assert_rc "no hold: marker for another version (fallback boot)" "$?" "1"
+omh "ABSENT" "1.17.0"
+assert_rc "no hold: no marker" "$?" "1"
+omh "" "1.17.0"
+assert_rc "no hold: empty marker is not a version match" "$?" "1"
+unset -f omh
 
 # Fail-closed: a version the comparator can't parse is NOT proof of safety. Releases DO use -prep
 # tags, so a pre-release bundle must not silently bypass the downgrade guard by parsing as "0".
-printf '{"manifest":{"meta":{"pithead":{"variant":"release","version":"1.17.0-prep","data_migration":"false","minimum_os_version":""}}}}\n' >"$OUSB/info-prep.json"
+printf "RAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='1.17.0-prep'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OUSB/info-prep.txt"
 : >"$RAUC_LOG"
-out=$(ourun_v "1.17.0" "" "$OUSB/info-prep.json" bundle.raucb 2>&1)
+out=$(ourun_v "1.17.0" "" "$OUSB/info-prep.txt" bundle.raucb 2>&1)
 assert_rc "a pre-release (-prep) bundle is refused fail-closed" "$?" "1"
 assert_contains "the refusal names it a possible downgrade" "$out" "possible downgrade"
 assert_not_contains "rauc install was NOT reached for the pre-release bundle" "$(cat "$RAUC_LOG")" "install"
 : >"$RAUC_LOG"
-ourun_v "1.17.0" "" "$OUSB/info-prep.json" bundle.raucb --allow-downgrade >/dev/null 2>&1
+ourun_v "1.17.0" "" "$OUSB/info-prep.txt" bundle.raucb --allow-downgrade >/dev/null 2>&1
 assert_rc "--allow-downgrade installs the pre-release bundle on purpose" "$?" "0"
 assert_contains "rauc install ran for the pre-release under --allow-downgrade" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 
 # Fail-closed: a corrupt floor file is NOT permission to downgrade past a migration.
 printf 'not-a-version\n' >"$OUSB/floor-corrupt"
 : >"$RAUC_LOG"
-out=$(ourun_v "1.17.0" "$OUSB/floor-corrupt" "$OUSB/info-1170.json" bundle.raucb --allow-downgrade 2>&1)
+out=$(ourun_v "1.17.0" "$OUSB/floor-corrupt" "$OUSB/info-1170.txt" bundle.raucb --allow-downgrade 2>&1)
 assert_rc "a corrupt /data floor is refused fail-closed, even with --allow-downgrade" "$?" "1"
 assert_contains "the corrupt-floor refusal says the floor is unreadable" "$out" "floor is unreadable"
 assert_not_contains "rauc install was NOT reached with a corrupt floor" "$(cat "$RAUC_LOG")" "install"
@@ -9130,7 +9355,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' >"$CR/bin/docker"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$CR/bin/sudo"
 chmod +x "$CR/bin/docker" "$CR/bin/sudo"
 seed_cr() {
-    printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"T"} }\n' "$WALLET" >"$CR/config.json"
+    printf '{ "monero":{"mode":"local","wallet_address":"%s"}, "tari":{"wallet_address":"'"$VALID_TARI"'"} }\n' "$WALLET" >"$CR/config.json"
     printf 'DEPLOYMENT_COMPLETED=true\nHOST_IP=box.lan\n' >"$CR/.env"
     : >"$CR/Caddyfile"
     : >"$CR/data/monero/blockchain" # stand-in for the synced chain

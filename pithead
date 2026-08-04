@@ -230,7 +230,25 @@ stack_up() {
     # proceeds (signing is opt-in, #461), a present key that fails aborts before anything starts.
     verify_release_images
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
-    if ! compose_up_checked -d; then
+    #
+    # PITHEAD_HOLD_CHAIN=1 is the migration hold (#851), set only by the appliance boot path on
+    # the first boot of a data_migration bundle: bring up everything EXCEPT the chain services
+    # (monerod/tari and their wallets — the holders of forward-only lmdb migrations, and the
+    # only containers anything depends on together), so the A/B commit decision is made before
+    # any migration touches /data. The chain services start with a plain `up` after the commit.
+    if [ "${PITHEAD_HOLD_CHAIN:-0}" = 1 ]; then
+        local services c
+        local filter=()
+        for c in $REVENUE_CHAIN_CONTAINERS; do filter+=(-e "$c"); done
+        services=$(docker compose config --services 2>/dev/null)
+        [ -n "$services" ] || error "Could not list compose services for the chain hold."
+        log "Data migration pending — holding chain services ($REVENUE_CHAIN_CONTAINERS) until the slot commits."
+        services=$(printf '%s\n' "$services" | grep -vxF "${filter[@]}")
+        # shellcheck disable=SC2086 # word-splitting the service list is the point
+        if ! compose_up_checked -d $services; then
+            error "Stack failed to start — see the error above."
+        fi
+    elif ! compose_up_checked -d; then
         error "Stack failed to start — see the error above."
     fi
     log "Stack started successfully!"
@@ -1013,6 +1031,18 @@ doctor() {
             integrated) dr_fail "Monero payout address is an INTEGRATED address — p2pool can't pay it. Use your plain PRIMARY address (4…)." ;;
             checksum) dr_fail "Monero payout address FAILS its checksum — at least one character is mistyped, and p2pool crashes on it at startup. Re-copy the address from your wallet into monero.wallet_address and run './pithead apply'." ;;
             *) dr_warn "Monero payout address doesn't look like a primary address (expected 95 chars starting with 4)." ;;
+            esac
+        fi
+        # Same class of check for the Tari payout address: both forms carry a DammSum checksum.
+        local _tw
+        _tw=$(jq -r '.tari.wallet_address // empty' "$CONFIG_FILE" 2>/dev/null)
+        if [ -n "$_tw" ] && [ "$_tw" != "your_tari_wallet_address" ]; then
+            case "$(tari_address_type "$_tw")" in
+            ok) dr_ok "Tari payout address passes its checksum." ;;
+            unchecked) dr_info "Could not verify the Tari payout address checksum (no usable python3)." ;;
+            checksum) dr_fail "Tari payout address FAILS its checksum — at least one character is mistyped, and Tari rewards are silently lost. Re-copy the address from your Tari wallet into tari.wallet_address and run './pithead apply'." ;;
+            network) dr_fail "Tari payout address is for a different Tari network — this stack mines MAINNET Tari. Set tari.wallet_address to your mainnet address and run './pithead apply'." ;;
+            *) dr_warn "Tari payout address doesn't look like a valid Tari address (base58 or emoji form)." ;;
             esac
         fi
     fi
@@ -2410,11 +2440,15 @@ os_running_variant() { # echoes debug|release|unknown
 }
 
 os_bundle_meta() { # $1: bundle, $2: [meta.pithead] key — echoes its value or empty, never fails
-    # `rauc info --output-format=json` exposes the manifest meta. Parsed defensively: find any
-    # object carrying a `pithead` child (so a RAUC that nests the manifest differently still
-    # resolves) and read the key out of it. Anything unparseable degrades to empty.
-    rauc info --output-format=json "$1" 2>/dev/null |
-        jq -r --arg k "$2" '[.. | objects | select(has("pithead")) | .pithead | objects | .[$k]? // empty] | map(select(. != "")) | first // empty' 2>/dev/null
+    # `rauc info --output-format=shell` is the one machine-readable format that carries the
+    # manifest's [meta.*] sections on the RAUC the appliance actually ships (1.11's JSON output
+    # OMITS them entirely — the json parser here read real bundles as unstamped, found by the
+    # tier-4 migration leg). Verification still runs: rauc info checks the bundle signature
+    # against the system keyring before printing anything. Anything unparseable degrades to
+    # empty, which every consumer treats as fail-closed "unstamped".
+    rauc info --output-format=shell "$1" 2>/dev/null |
+        sed -n "s/^RAUC_META_PITHEAD_$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]')='\(.*\)'\$/\1/p" |
+        head -1
 }
 
 os_bundle_variant() { # $1: bundle path — echoes debug|release|unknown, never fails
@@ -2450,6 +2484,23 @@ os_raise_data_floor() { # $1: new floor — raise it, never lower (a migration o
         mkdir -p "$(dirname "$f")" 2>/dev/null || true
         printf '%s\n' "$1" >"$f"
     fi
+}
+
+# The migration-pending marker (#851): written by os-update when a data_migration bundle installs,
+# holding the version that bundle carries. On the next boot, pithead-boot and doctor read it back:
+# a marker matching the RUNNING version means "this boot must not start the chain services until
+# the slot commits" — the lmdb migration only runs once A/B fallback can no longer need the
+# pre-migration data. A marker that does NOT match the running version is a fallback boot (the
+# migrating slot failed health and the old OS is back); the old data was never touched, so it is
+# ignored. pithead-boot removes the marker once the migrating slot commits.
+os_migration_marker_file() { printf '%s' "${PITHEAD_MIGRATION_MARKER_FILE:-/data/pithead/.os-migration-pending}"; }
+
+os_migration_hold_active() { # rc 0 when this boot is the held, pre-commit boot of a migrating bundle
+    local f v
+    f=$(os_migration_marker_file)
+    [ -f "$f" ] || return 1
+    v=$(tr -d ' \t\r\n' <"$f" 2>/dev/null)
+    [ -n "$v" ] && [ "$v" = "$(os_running_version)" ]
 }
 
 os_update_needs_confirmation() { # $1: running variant, $2: bundle variant — rc 0 = confirm first
@@ -2561,11 +2612,20 @@ os_update() {
     # A data_migration bundle raises the /data floor so a later rollback below it is refused. Armed
     # at install (conservative: before the migration actually runs on the new slot's next boot) —
     # the safe direction, and the only floor pithead can guarantee without executing the migration
-    # itself. Executing the forward-only migration + withholding chain services until the slot
-    # commits is the remaining half of the deadlock rule, tracked as follow-up (see appliance-release.md).
+    # itself. The marker beside it is the other half of the deadlock rule (#851): the next boot
+    # reads it and withholds the chain services until the slot commits, so automatic A/B fallback
+    # always lands on pre-migration data. A NON-migrating install clears any stale marker — it
+    # supersedes a migrating install that never booted, and its own boot must not hold anything.
+    local marker
+    marker=$(os_migration_marker_file)
     if [ "$bundle_migrates" = "true" ] && os_semver_ok "$bundle_min"; then
         os_raise_data_floor "$bundle_min"
         log "Recorded /data migration floor: OS >= $bundle_min required to read chain data after this update commits."
+        mkdir -p "$(dirname "$marker")" 2>/dev/null || true
+        printf '%s\n' "$bundle_version" >"$marker"
+        log "Marked a data migration pending: the next boot starts the chain services only after the new slot commits."
+    else
+        rm -f "$marker"
     fi
 }
 
@@ -3625,8 +3685,13 @@ REVENUE_MINER_CONTAINERS="p2pool xmrig-proxy"
 # Prints "ok" or "fail:<reason>". Kept pure — no engine calls — so the commit gate's honesty is
 # unit-testable without a running stack (tests/stack/run.sh). A non-revenue name is always "ok":
 # the rest of doctor covers those, and this must not judge containers outside its remit.
-revenue_container_verdict() { # <name> <state> <status>
-    local name="$1" state="$2" status="$3" running=0
+#
+# chain_hold=1 is the migration hold (#851): pithead-boot deliberately withholds the chain
+# containers until the slot commits, so — exactly like the miners' sync hold — a DOWN chain node
+# is then the expected state, not a crash, and only a running-but-unhealthy one is a fault.
+# Without this arm the commit gate would fail on the very hold it is gating, a deadlock.
+revenue_container_verdict() { # <name> <state> <status> [chain_hold]
+    local name="$1" state="$2" status="$3" chain_hold="${4:-0}" running=0
     # "running" from EITHER signal: podman and docker both print an "Up …" status for a live
     # container, and `.State` is "running". Reading both is belt-and-suspenders — some docker CLI
     # versions leave the `.State` ps field empty, and a chain node judged down on that alone would
@@ -3638,6 +3703,18 @@ revenue_container_verdict() { # <name> <state> <status>
     fi
     case " $REVENUE_CHAIN_CONTAINERS " in
     *" $name "*)
+        # Under the migration hold, judge a chain node by the miners' rule: down is deliberate.
+        if [ "$chain_hold" = 1 ]; then
+            case "$status" in
+            *'(unhealthy)'*)
+                if [ "$running" = 1 ]; then
+                    printf 'fail:%s is running but unhealthy (%s)\n' "$name" "$status"
+                else printf 'ok\n'; fi
+                ;;
+            *) printf 'ok\n' ;;
+            esac
+            return
+        fi
         # Chain node: it must be running and PAST its healthcheck. "starting"/"unhealthy" and any
         # stopped/exited/created state all mean not-ready-or-crashed. The boot gate loops, so a node
         # that is only starting simply gets retried rather than committed early.
@@ -3680,15 +3757,21 @@ revenue_container_verdict() { # <name> <state> <status>
 # honest gate: it rejects the healthy-looking-but-dead slot while staying quiet on the sync hold and
 # the long initial sync. Engine-aware (docker on DIY, podman on the appliance) and read-only.
 check_revenue_containers() {
-    local engine rows name state status verdict failed=0
+    local engine rows name state status verdict failed=0 chain_hold=0
     engine=$(container_engine)
     command -v "$engine" >/dev/null 2>&1 || return 0
     rows=$("$engine" ps -a --format '{{.Names}}\t{{.State}}\t{{.Status}}' 2>/dev/null) || return 0
     [ -n "$rows" ] || return 0
+    # The migration hold (#851): while pithead-boot withholds the chain services pre-commit,
+    # their absence is deliberate — the gate must not deadlock on the hold it is gating.
+    if os_migration_hold_active; then
+        chain_hold=1
+        dr_info "A data migration is pending — chain services are deliberately held until this slot commits."
+    fi
     # A here-string (not a pipe) keeps the loop in this shell, so `failed` survives it.
     while IFS=$'\t' read -r name state status; do
         [ -n "$name" ] || continue
-        verdict=$(revenue_container_verdict "$name" "$state" "$status")
+        verdict=$(revenue_container_verdict "$name" "$state" "$status" "$chain_hold")
         case "$verdict" in
         fail:*)
             dr_fail "${verdict#fail:}"
@@ -4023,7 +4106,16 @@ wizard_ask_core() {
         *) echo "  ✗ Not a valid Monero primary address (95 chars, starts with 4). Try again." >&2 ;;
         esac
     done
-    read -r -p "Enter Tari Wallet Address: " IN_TARI_WALLET || true
+    while :; do
+        read -r -p "Enter Tari Wallet Address (base58 or emoji form): " IN_TARI_WALLET || break
+        [ -z "$IN_TARI_WALLET" ] && break # the shared required-fields check below owns this
+        case "$(tari_address_type "$IN_TARI_WALLET")" in
+        ok | unchecked) break ;;
+        checksum) echo "  ✗ Checksum failed — at least one character is mistyped. Re-copy the address from your Tari wallet." >&2 ;;
+        network) echo "  ✗ That address is for a Tari testnet — this stack mines MAINNET Tari. Use your mainnet address." >&2 ;;
+        *) echo "  ✗ Not a valid Tari address (base58 or emoji form). Try again." >&2 ;;
+        esac
+    done
 
     if [ -z "$IN_MONERO_WALLET" ] || [ -z "$IN_TARI_WALLET" ]; then
         error "Wallet addresses are required. Aborting."
@@ -4322,6 +4414,105 @@ if kind is None or len(body) != kind[1]:
     print("invalid")
     sys.exit(0)
 print(kind[0])
+PYEOF
+}
+
+# Tari payout-address verdict: ok | checksum | network | invalid | unchecked. Tari addresses come
+# in base58 AND emoji forms, single or dual, with an optional embedded payment id (RFC-0155) —
+# but every form carries a 1-byte DammSum checksum, so a mistyped character is detectable here
+# instead of at the Tari node at merge-mine time, or never visibly at all (#845). The decode and
+# the check order (length, checksum, network byte, feature bits) mirror tari's own from_bytes.
+#
+# python3 does the math, same as the Monero gate above. Without it the address is "unchecked" —
+# accepted, the pre-gate behaviour, degraded, never a false reject.
+tari_address_type() {
+    command -v python3 >/dev/null 2>&1 || {
+        echo "unchecked"
+        return
+    }
+    python3 - "$1" <<'PYEOF' 2>/dev/null || echo "unchecked"
+import os
+import sys
+
+# Bitcoin base58 (Tari uses the bs58 crate) — NOT Monero's block-wise scheme. In Tari's base58
+# form the network byte and the features byte are each encoded ALONE (one character each), then
+# the remaining bytes as one base58 string.
+_B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+# The 256-emoji alphabet from tari's emoji.rs, index = byte value. Every entry is a single
+# codepoint, and tari's own parser matches codepoints exactly — so exact .find() is faithful.
+_EMOJI = (
+    "🐢📟🌈🌊🎯🐋🌙🤔🌕⭐🎋🌰🌴🌵🌲🌸🌹🌻🌽🍀🍁🍄🥑🍆🍇🍈🍉🍊🍋🍌🍍🍎"
+    "🍐🍑🍒🍓🍔🍕🍗🍚🍞🍟🥝🍣🍦🍩🍪🍫🍬🍭🍯🥐🍳🥄🍵🍶🍷🍸🍾🍺🍼🎀🎁🎂"
+    "🎃🤖🎈🎉🎒🎓🎠🎡🎢🎣🎤🎥🎧🎨🎩🎪🎬🎭🎮🎰🎱🎲🎳🎵🎷🎸🎹🎺🎻🎼🎽🎾"
+    "🎿🏀🏁🏆🏈⚽🏠🏥🏦🏭🏰🐀🐉🐊🐌🐍🦁🐐🐑🐔🙈🐗🐘🐙🐚🐛🐜🐝🐞🦋🐣🐨"
+    "🦀🐪🐬🐭🐮🐯🐰🦆🦂🐴🐵🐶🐷🐸🐺🐻🐼🐽🐾👀👅👑👒🧢💅👕👖👗👘👙💃👛"
+    "👞👟👠🥊👢👣🤡👻👽👾🤠👃💄💈💉💊💋👂💍💎💐💔🔒🧩💡💣💤💦💨💩➕💯"
+    "💰💳💵💺💻💼📈📜📌📎📖📿📡⏰📱📷🔋🔌🚰🔑🔔🔥🔦🔧🔨🔩🔪🔫🔬🔭🔮🔱"
+    "🗽😂😇😈🤑😍😎😱😷🤢👍👶🚀🚁🚂🚚🚑🚒🚓🛵🚗🚜🚢🚦🚧🚨🚪🚫🚲🚽🚿🧲"
+)
+
+
+def b58_decode(s):
+    n = 0
+    for ch in s:
+        d = _B58.find(ch)
+        if d < 0:
+            return None
+        n = n * 58 + d
+    body = n.to_bytes((n.bit_length() + 7) // 8, "big") if n else b""
+    return b"\x00" * (len(s) - len(s.lstrip("1"))) + body
+
+
+def dammsum(data):
+    # DammSum over base 256 with coefficients [4,3,1] (mask 27); a valid array sums to 0.
+    r = 0
+    for d in data:
+        r ^= d
+        overflow = r & 0x80
+        r = (r << 1) & 0xFF
+        if overflow:
+            r ^= 27
+    return r
+
+
+try:
+    # Re-decode argv as strict UTF-8: under a C locale the interpreter may have decoded the
+    # emoji bytes with surrogateescape, which would silently miss the alphabet.
+    s = os.fsencode(sys.argv[1]).decode("utf-8")
+except UnicodeDecodeError:
+    print("invalid")
+    sys.exit(0)
+
+if all(ord(c) < 128 for c in s):
+    if len(s) < 45:  # tari's own minimum encoded length for the base58 form
+        print("invalid")
+        sys.exit(0)
+    parts = [b58_decode(s[0]), b58_decode(s[1]), b58_decode(s[2:])]
+    raw = None if any(p is None for p in parts) else b"".join(parts)
+else:
+    raw = bytearray()
+    for c in s:
+        i = _EMOJI.find(c)
+        if i < 0:
+            raw = None
+            break
+        raw.append(i)
+
+# A single address is exactly 35 bytes; a dual one 67, plus up to 256 payment-id bytes.
+if raw is None or not (len(raw) == 35 or 67 <= len(raw) <= 67 + 256):
+    print("invalid")
+elif dammsum(raw) != 0:
+    print("checksum")
+elif raw[0] != 0x00:
+    # 0x00 is mainnet — the only network this stack mines. The other assigned network bytes
+    # mean a real address for the wrong network, which deserves its own message; anything
+    # else is no Tari address at all.
+    print("network" if raw[0] in (0x01, 0x02, 0x10, 0x24, 0x26) else "invalid")
+elif raw[1] & ~0b111:  # unknown feature bits (known: one-sided 1, interactive 2, payment-id 4)
+    print("invalid")
+else:
+    print("ok")
 PYEOF
 }
 
@@ -4693,14 +4884,12 @@ parse_and_validate_config() {
     if [ -z "$MONERO_WALLET" ] || [ -z "$TARI_WALLET" ]; then
         error "Missing required wallet addresses in $CONFIG_FILE."
     fi
-    # tari.wallet_address gets no exact-format gate like monero's below: Tari addresses come in
-    # base58 AND emoji forms, single/dual, with optional payment IDs — length and charset both vary
-    # (RFC-0155), and p2pool passes the string straight to the Tari node, which accepts either form,
-    # so a strict regex would false-reject valid addresses. The untouched placeholder is caught by the
-    # combined check just below; also reject embedded whitespace here — no Tari address of either form
-    # has an ASCII space, and a space isn't a control char so the central guard above misses it, yet it
-    # would silently mine to a wrong address (the #250 failure mode). A subtler typo is the node's to
-    # reject at merge-mine time — the DammSum checksum gate that would catch it here is #845.
+    # tari.wallet_address gets no shape regex: Tari addresses come in base58 AND emoji forms,
+    # single/dual, with optional payment IDs — length and charset both vary (RFC-0155), so a
+    # regex would false-reject valid addresses. Instead the real gate is tari_address_type below
+    # (full decode + DammSum checksum, #845). Whitespace still gets its own message here — it's
+    # the likeliest paste error, a space isn't a control char so the central guard above misses
+    # it, and "invalid" alone wouldn't say where to look.
     case "$TARI_WALLET" in
     *[[:space:]]*) error "tari.wallet_address contains whitespace — a Tari address (base58 or emoji) has none. Check for a stray space or line break in $CONFIG_FILE." ;;
     esac
@@ -4716,6 +4905,16 @@ parse_and_validate_config() {
     integrated) error "monero.wallet_address is an INTEGRATED address. p2pool needs your plain PRIMARY address (95 chars, starts with 4)." ;;
     checksum) error "monero.wallet_address ('${MONERO_WALLET:0:6}…') fails its checksum — at least one character is mistyped, and p2pool crashes on a mistyped address instead of mining. Re-copy the address from your wallet and try again." ;;
     *) error "monero.wallet_address ('${MONERO_WALLET:0:6}…', ${#MONERO_WALLET} chars) is not a valid Monero primary address (expected 95 chars starting with 4)." ;;
+    esac
+
+    # The Tari sibling of the gate above (#845): full decode + DammSum verdict, both address
+    # forms. "unchecked" (no usable python3) passes — degraded to the pre-gate behaviour,
+    # never a false reject.
+    case "$(tari_address_type "$TARI_WALLET")" in
+    ok | unchecked) ;;
+    checksum) error "tari.wallet_address fails its checksum — at least one character is mistyped, and a mistyped address means Tari rewards are silently lost. Re-copy the address (base58 or emoji form) from your Tari wallet and try again." ;;
+    network) error "tari.wallet_address is for a different Tari network (a testnet). This stack mines MAINNET Tari — use your mainnet address." ;;
+    *) error "tari.wallet_address (${#TARI_WALLET} chars) is not a valid Tari address in either the base58 or the emoji form. Copy it from your Tari wallet." ;;
     esac
 
     MONERO_MODE=$(jq -r '.monero.mode // "local"' "$CONFIG_FILE")

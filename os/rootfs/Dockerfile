@@ -23,7 +23,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 # program container networking, and pithead-install calls sgdisk (gdisk), partprobe (parted),
 # jq, lsblk, mkfs and the grub tools ON THE APPLIANCE — a tool the build host happens to have is
 # not a tool the image has. Each absence surfaces at runtime, so the set is audited against the
-# built image rather than added one failure at a time.
+# built image rather than added one failure at a time. squashfs-tools is in that set too:
+# `rauc info` extracts a bundle's manifest with unsquashfs, and without it `pithead os-update`
+# cannot read any bundle's compatibility metadata — every guard it carries was dead on the
+# appliance (found live on the bench, not by CI, whose stack tests stub rauc).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv systemd-timesyncd systemd-resolved dbus udev \
         linux-image-amd64 initramfs-tools zstd \
@@ -33,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fdisk gdisk parted e2fsprogs dosfstools \
         nftables iptables systemd-repart \
         avahi-daemon libnss-mdns \
+        squashfs-tools \
         openssh-server sudo less nano htpdate
 # NB: apt lists are kept on purpose — the Rugix core recipes run `apt-get install` in the build
 # chroot (fdisk/parted etc.) and need resolvable metadata; deleting them fails the bake.

@@ -37,7 +37,9 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
   served, Tor-only egress actually enforced, built-in miner up. This is the phase that catches an
   appliance whose engine cannot run the product. Then the stack must return from a reboot with no
   hands on it, and the real commit gate — `pithead doctor --json` — must pass on that healthy
-  stack yet refuse once a revenue service is down.
+  stack yet refuse once a revenue service is down. The closing leg installs a `data_migration`
+  bundle through `pithead os-update` and proves the migration hold: the chain services stay down
+  until the slot commits, then start, with the pending marker consumed.
 - **rig** — answer `RigForge` on the same page and prove the other machine this image installs:
   it mines from the baked binary with no compile and no clearnet, starts no containers at all,
   and takes an A/B update — install, uncommitted rollback, self-commit, persistence — exactly
