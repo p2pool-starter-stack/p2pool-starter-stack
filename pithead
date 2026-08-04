@@ -2428,11 +2428,15 @@ os_running_variant() { # echoes debug|release|unknown
 }
 
 os_bundle_meta() { # $1: bundle, $2: [meta.pithead] key — echoes its value or empty, never fails
-    # `rauc info --output-format=json` exposes the manifest meta. Parsed defensively: find any
-    # object carrying a `pithead` child (so a RAUC that nests the manifest differently still
-    # resolves) and read the key out of it. Anything unparseable degrades to empty.
-    rauc info --output-format=json "$1" 2>/dev/null |
-        jq -r --arg k "$2" '[.. | objects | select(has("pithead")) | .pithead | objects | .[$k]? // empty] | map(select(. != "")) | first // empty' 2>/dev/null
+    # `rauc info --output-format=shell` is the one machine-readable format that carries the
+    # manifest's [meta.*] sections on the RAUC the appliance actually ships (1.11's JSON output
+    # OMITS them entirely — the json parser here read real bundles as unstamped, found by the
+    # tier-4 migration leg). Verification still runs: rauc info checks the bundle signature
+    # against the system keyring before printing anything. Anything unparseable degrades to
+    # empty, which every consumer treats as fail-closed "unstamped".
+    rauc info --output-format=shell "$1" 2>/dev/null |
+        sed -n "s/^RAUC_META_PITHEAD_$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]')='\(.*\)'\$/\1/p" |
+        head -1
 }
 
 os_bundle_variant() { # $1: bundle path — echoes debug|release|unknown, never fails
