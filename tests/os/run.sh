@@ -1445,10 +1445,12 @@ phase_provision() {
     # os-update is the path that writes the pending marker (a bare rauc install does not) — and
     # this is also the first tier-4 exercise of os-update against a REAL bundle: it needs
     # unsquashfs on the appliance to read the manifest back, which CI's stubbed rauc never shows.
-    _ssh "cd /data/pithead && ./pithead os-update /data/update.bundle --yes" || {
+    local ou_out
+    if ! ou_out=$(_ssh "cd /data/pithead && ./pithead os-update /data/update.bundle --yes 2>&1"); then
+        printf '     os-update output: %s\n' "$(printf '%s' "$ou_out" | tail -8)"
         bad "pithead os-update failed on the guest (manifest unreadable, or a guard misfired)"
         return
-    }
+    fi
     marker=$(_ssh "cat /data/pithead/.os-migration-pending 2>/dev/null" | tr -d ' \r\n')
     if [ -n "$marker" ]; then
         ok "os-update left the migration-pending marker ($marker)"
