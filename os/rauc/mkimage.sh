@@ -42,6 +42,7 @@ TARBALL="os/build/pithead-root.tar"
     echo "missing $TARBALL — run os/build-image.sh first to stage the rootfs" >&2
     exit 2
 }
+verify_tarball_commit "$TARBALL" || exit $?
 
 # The keyring baked into slot A is the fleet's update trust root. Resolve it before anything heavy
 # so a release build with no key stops immediately, not after minutes of imaging.

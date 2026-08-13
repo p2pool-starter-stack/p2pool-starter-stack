@@ -55,6 +55,7 @@ trap 'umount "$WORK/mnt" 2>/dev/null || true; rm -rf "$WORK"' EXIT
     echo "missing $TARBALL — run os/build-image.sh first" >&2
     exit 2
 }
+verify_tarball_commit "$TARBALL" || exit $?
 
 # The bundle is signed with this key and RAUC verifies it against the keyring baked at image build.
 # A release bundle must name the key explicitly; --dev auto-generates a labelled throwaway.
