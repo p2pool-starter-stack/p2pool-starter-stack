@@ -4,21 +4,21 @@
 # must land before systemd-networkd (DHCP DUID) and systemd-journal-flush (the persistent
 # journal directory name) observe /etc/machine-id, and after /data is mounted.
 #
-# Why a plain write here works: the image ships /etc/machine-id EMPTY. On a read-only /etc,
-# systemd's own early boot (before any unit, ours included, ever runs) detects the empty file
-# and bind-mounts a freshly generated, in-memory id from /run/machine-id over /etc/machine-id —
-# systemd's documented "volatile" first-boot behaviour for a read-only root (machine-id(5)). That
-# bind mount is what makes /etc/machine-id writable here despite the root filesystem being ro;
-# nothing in this script (or pithead) needs to prepare an overlay for it. Without the restore
-# below, systemd-machine-id-commit never manages to persist that transient id (/etc stays
-# read-only for the whole boot), so a NEW random id would otherwise be picked on every single
-# boot — worse than the bug being fixed.
+# Why a plain write here works: the image ships /etc/machine-id EMPTY, and on this appliance
+# /etc is an overlay whose upper is a volatile tmpfs. PID 1's own first-boot handling (long
+# before any unit, ours included, runs) either writes a freshly generated transient id straight
+# into that writable upper, or — if it judged /etc unwritable — ro-bind-mounts the id from
+# /run/machine-id over the file instead; machine-id(5) describes both shapes. Either way the
+# upper is discarded at power-off, so without the restore below the machine would pick a NEW
+# random id on every single boot — worse than the bug being fixed. The umount guard below
+# covers the bind-mount shape and is a silent no-op on the plain-overlay one.
 set -eu
 
 ID_FILE="${PITHEAD_MACHINE_ID_DATA_DIR:-/data/pithead}/machine-id"
 mkdir -p "$(dirname "$ID_FILE")"
 
 if [ -s "$ID_FILE" ]; then
+    umount /etc/machine-id 2>/dev/null || true
     cat "$ID_FILE" >/etc/machine-id
     echo "pithead-machine-id: restored persisted machine-id from $ID_FILE"
 else

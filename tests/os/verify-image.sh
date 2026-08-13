@@ -243,6 +243,15 @@ chk "machine-id restore unit enabled" \
 chk "machine-id restore orders before networkd (DHCP DUID) and the journal flush" \
     'grep -q "systemd-networkd.service" "$ROOT/etc/systemd/system/pithead-machine-id.service" &&
      grep -q "systemd-journal-flush.service" "$ROOT/etc/systemd/system/pithead-machine-id.service"'
+# An empty machine-id makes systemd run FIRST-BOOT semantics on every power cycle (the volatile
+# /etc upper resets it), and first boot applies preset-all — with no preset files, systemd's
+# fallback is enable-everything, which would resurrect the deliberately-disabled ssh.service on
+# a release image. The disable-* preset neutralizes that pass; systemd-firstboot is masked so it
+# cannot re-run (and prompt on console) each boot. Guard both or the machine-id fix reopens ssh.
+chk "blanket disable preset baked (first-boot preset-all must be a no-op)" \
+    'grep -qx "disable \*" "$ROOT/etc/systemd/system-preset/00-pithead.preset"'
+chk "systemd-firstboot masked (every boot is a first boot with an empty machine-id)" \
+    '[ "$(readlink "$ROOT/etc/systemd/system/systemd-firstboot.service")" = "/dev/null" ]'
 
 echo "==> test material"
 # The variant stamp must MATCH the material, not just exist: a debug image stamped "release"

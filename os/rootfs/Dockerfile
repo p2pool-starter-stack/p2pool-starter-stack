@@ -203,6 +203,17 @@ RUN mkdir -p /etc/ssh/sshd_config.d \
     && printf 'HostKey /data/ssh/ssh_host_ed25519_key\n' > /etc/ssh/sshd_config.d/pithead-host-keys.conf \
     && rm -f /etc/ssh/ssh_host_* \
     && : > /etc/machine-id
+# An empty machine-id makes systemd treat EVERY boot as a first boot (the volatile /etc upper
+# resets it each power cycle), and on first boot PID 1 applies preset-all in enable-only mode.
+# Debian ships no preset files, and systemd's no-preset fallback is "enable" — which would
+# quietly re-enable every installable unit, ssh.service included, on a RELEASE image. The
+# blanket disable-* preset turns that pass into a no-op; the enable symlinks written at build
+# below live in the image's /etc and presets never touch existing state. systemd-firstboot
+# would likewise re-run per boot and can prompt on the console for anything it finds unset —
+# masked: this image bakes its own locale/timezone, and the console password is pithead's.
+RUN mkdir -p /etc/systemd/system-preset \
+    && printf 'disable *\n' > /etc/systemd/system-preset/00-pithead.preset \
+    && systemctl mask systemd-firstboot.service
 RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-data-reset /usr/local/sbin/pithead-ssh-host-keys /usr/local/sbin/pithead-machine-id /usr/lib/systemd/system-generators/pithead-mount-generator
 # The updater is chosen per image. RAUC is a Debian package, so it is installed here when
 # selected; leaving PITHEAD_UPDATER empty builds the same rootfs with no updater at all.
