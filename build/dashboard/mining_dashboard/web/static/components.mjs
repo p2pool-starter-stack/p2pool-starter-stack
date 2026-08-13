@@ -32,7 +32,7 @@ import {
   THEME_ORDER,
   uptimeCell,
   WORKER_COLUMNS,
-  xvbTierComparison,
+  xvbDecisionRows,
 } from "./logic.mjs";
 import { MineCartTrain } from "./minecart.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
@@ -492,134 +492,79 @@ function NetworkCard({ state }) {
     </div>`;
 }
 
-// XvB per-tier payout comparison dropdown (#118). Picks one of the four donor tiers and weighs XvB's
-// OWN published expected reward for it (server-fetched over Tor) against the P2Pool earnings donating
-// that tier costs, and the net. Defaults to the operator's target tier. When XvB's estimate is
-// stale/unavailable it shows the tier cost with an "estimate unavailable" note — never a fabricated
-// number. Selection is local UI state; the whole block is a raffle comparison, not a claim that
-// donating above a tier threshold pays more (it does not — the draw is random among qualifiers).
-class XvbComparison extends Component {
-  constructor(props) {
-    super(props);
-    this.state = { selected: null };
-    this.onSelect = (e) => this.setState({ selected: e.target.value });
-  }
-
-  render() {
-    const { calc, coeffDay, hr, energy } = this.props;
-    const tiers = (calc && calc.tiers) || [];
-    if (!tiers.length) return null;
-    const { selected } = this.state;
-    // Default the dropdown to the operator's configured target tier; fall back to the lowest.
-    const sel =
-      tiers.find((t) => t.name === selected) ||
-      tiers.find((t) => t.name === calc.target_tier) ||
-      tiers[0];
-    const cmp = xvbTierComparison(sel, coeffDay);
-    // The actionable net, best first (#872): measured realization when the wallet has one; the
-    // measured-prior band otherwise; raw face value only when even the band can't be computed.
-    // Decided ONCE here — label, value, colour and tooltip below all follow `net`. The
-    // face-value net once had the wrong SIGN, so the label always says which figure this is.
-    // Range colour: red only when even the optimistic end loses, green only when even the
-    // pessimistic end profits — a zero-spanning band stays neutral.
-    const [lo, hi] = cmp.assumedNetRange || [null, null];
-    const net =
-      cmp.realizedNet !== null
-        ? {
-            label: "Net / yr (measured)",
-            value: formatXmr(cmp.realizedNet),
-            cls: netCls(cmp.realizedNet),
-            title:
-              `XvB's published reward scaled to what this wallet's wins actually paid — ` +
-              `${calc.realization_pct}% of face value over the last ${calc.realization_wins} wins — ` +
-              `minus the P2Pool earnings given up.`,
-          }
-        : cmp.assumedNetRange
-          ? {
-              label: "Net / yr (estimated)",
-              value: `${formatXmr(lo)} … ${formatXmr(hi)}`,
-              cls: hi < 0 ? "status-bad" : lo > 0 ? "status-ok" : "",
-              title:
-                "XvB's published reward scaled by the measured realization band from live " +
-                "deployments — wallets collected 24% of face value (tight margin over the " +
-                "tier threshold) to 42% (comfortable margin) — minus the P2Pool earnings " +
-                "given up. Your own measurement replaces this band once enough wins land.",
-            }
-          : {
-              label: "Net / yr (face value)",
-              value: cmp.net !== null ? formatXmr(cmp.net) : "—",
-              cls: cmp.net !== null ? netCls(cmp.net) : "",
-              title:
-                "XvB's published FACE-VALUE reward minus the P2Pool earnings given up — an " +
-                "upper bound: it prices every bonus hash at full block reward and assumes " +
-                "every won round runs to completion.",
-            };
-    // Fiat mirror wants one number; a range has none, so its fiat net shows "—".
-    const netShown =
-      cmp.realizedNet !== null ? cmp.realizedNet : cmp.assumedNetRange ? null : cmp.net;
-    // The same sustains rule the tier block states: donating the threshold must fit inside the
-    // donateable share of the what-if hashrate. An unsustainable tier's Net is "—" — showing,
-    // say, Mega's +56 XMR/yr to a 269 kH/s fleet would imply an unreachable payout.
-    const sustainable = hr > 0 && sel.threshold <= hr * (calc.max_fraction || 0);
-    const expected =
-      calc.estimates_available && cmp.expected !== null
-        ? formatXmr(cmp.expected)
-        : "estimate unavailable";
-    return html`
+// XvB tier decision table (#872, study-final): the analytical tool a miner decides with. Every
+// donor tier on one row — draw odds (live winners feed), cost at YOUR hashrate, XvB's published
+// face value AND the study estimate (face x the measured on-chain delivery band) side by side,
+// and a coloured net verdict. This wallet's own measured wins supersede the study band when they
+// exist. Unsustainable tiers stay visible but grayed with the net withheld. No dropdown: the
+// comparison IS the decision, so all tiers show at once.
+function XvbDecisionTable({ calc, coeffDay, hr, energy }) {
+  const rows = xvbDecisionRows(calc, coeffDay, hr);
+  if (!rows.length) return null;
+  const measured = calc.realization_pct !== null && calc.realization_pct !== undefined;
+  const fmtRange = (r) =>
+    r === null ? "—" : r[0] === r[1] ? formatXmr(r[0]) : `${formatXmr(r[0])} … ${formatXmr(r[1])}`;
+  const estHeader = measured
+    ? `Yours (${calc.realization_pct}% × ${calc.realization_wins} wins)`
+    : "Study est. / yr";
+  // Fiat mirror (#520) for the best sustainable net only — one line, never a fiat number whose
+  // XMR figure is hidden.
+  const best = rows.filter((r) => r.sustainable && r.net).sort((a, b) => b.net[1] - a.net[1])[0];
+  return html`
         <div class="xvb-comparison">
-            <label class="xvb-compare-label" for="xvb-tier-select">Compare tier payout (per year)</label>
-            <select id="xvb-tier-select" class="xvb-tier-select" value=${sel.name} onChange=${this.onSelect}>
-                ${tiers.map((t) => html`<option value=${t.name}>${t.name}</option>`)}
-            </select>
-            <div class="stat-grid mt-2">
-                <${StatCard} label="Expected (XvB)" value=${expected} cls="c-purple"
-                             title="XvB's own published expected reward for this tier per year (their reward_calc figures, fetched over Tor). This is the raffle expectation across all qualifiers — donating above the tier threshold does NOT raise it." />
-                <${StatCard} label="Cost / yr" value=${cmp.cost !== null ? formatXmr(cmp.cost) : "—"}
-                             title="P2Pool earnings foregone by donating the tier threshold for a year (threshold × the P2Pool daily rate × 365)." />
-                <${StatCard} label=${net.label}
-                             value=${sustainable ? net.value : "—"}
-                             cls=${sustainable ? net.cls : ""}
-                             title=${
-                               sustainable
-                                 ? net.title
-                                 : "Not shown — this tier isn't sustainable at your hashrate, so its payout isn't reachable."
-} />
+            <label class="xvb-compare-label">Should I donate? — per-tier verdict (per year)</label>
+            <p class="text-muted text-xs" id="xvb-study-note">
+                XvB's figures are face value. A 25-round single-wallet on-chain audit (Jun–Aug
+                2026, all three sidechains) measured winners receiving 33% of face (95% CI
+                28–39%), with at most a small margin effect; a 14-winner public crawl
+                corroborates (no winner near face value). The
+                ${measured ? "Yours" : "Study"} column prices that in; the Net verdict uses it.
+            </p>
+            <div class="table-scroll">
+            <table class="est-table" id="xvb-decision-table">
+                <thead><tr>
+                    <th>Tier</th>
+                    <th scope="col" title="How often this tier's rounds pay out, and among how many qualifiers — from XvB's public winners feed.">Odds / 30d</th>
+                    <th scope="col" title="P2Pool earnings forgone by donating the tier threshold for a year, at your current rate.">Cost / yr</th>
+                    <th scope="col" title="XvB's own published expected reward — face value: prices every bonus hash at full block reward.">XvB says / yr</th>
+                    <th scope="col" title=${
+                      measured
+                        ? "XvB's figure scaled by what THIS wallet's raffle wins actually paid."
+                        : "XvB's figure scaled by the measured delivery band (33%, CI 28–39% — on-chain single-wallet audit, 25 rounds; crawl-corroborated)."
+                    }>${estHeader}</th>
+                    <th scope="col" title="Estimated reward minus the P2Pool earnings given up. Red: loses even at the optimistic end. Green: profits even at the pessimistic end.">Net / yr</th>
+                </tr></thead>
+                <tbody>
+                ${rows.map((r) => {
+                  const est = r.yours !== null ? [r.yours, r.yours] : r.study;
+                  return html`<tr class=${r.sustainable ? "" : "text-muted"}
+                      title=${r.sustainable ? "" : `Not sustainable at your hashrate — holding this tier needs about ${fmtHashrate(r.threshold)} donated continuously.`}>
+                    <th scope="row">${r.name}${r.sustainable ? "" : " ⚠"}</th>
+                    <td>${r.oddsPer30d ? `≈ ${Number(r.oddsPer30d.toPrecision(2))} wins · ${Number((r.players || 0).toPrecision(2))} players` : "—"}</td>
+                    <td>${r.cost !== null ? formatXmr(r.cost) : "—"}</td>
+                    <td class="c-purple">${r.xvbSays !== null ? formatXmr(r.xvbSays) : "—"}</td>
+                    <td>${fmtRange(est)}</td>
+                    <td class=${r.sustainable ? r.cls : ""}>${r.sustainable ? fmtRange(r.net) : "—"}</td>
+                  </tr>`;
+                })}
+                </tbody>
+            </table>
             </div>
             ${
-              // The draw behind the XMR figure (#872): how often this round type comes up and
-              // against how many qualifiers — which also makes a single-qualifier tier (whose
-              // headline reward evaporates the moment a second donor qualifies) self-evident.
-              sel.win_odds_day > 0
-                ? html`<p class="text-muted text-xs mt-1" id="xvb-draw-line">
-                    Draw: ≈ ${Number((sel.win_odds_day * 30).toPrecision(2))} wins / 30d
-                    among ~${Number(sel.players_avg.toPrecision(2))} qualifiers</p>`
-                : null
-            }
-            ${
-              // Fiat mirror of the XMR/yr figures (#520): same visibility guards as the cards
-              // above (never a fiat number whose XMR figure is hidden), at the XMR price in use.
-              energy && energy.xmr_price > 0
+              energy && energy.xmr_price > 0 && best
                 ? html`<p class="text-muted text-xs mt-1" id="xvb-fiat-line">
-                    ≈ ${calc.estimates_available ? formatFiat(coinFiat(cmp.expected, energy.xmr_price), energy.currency) : "—"} expected ·
-                    ${formatFiat(coinFiat(cmp.cost, energy.xmr_price), energy.currency)} cost ·
-                    ${sustainable ? formatFiat(coinFiat(netShown, energy.xmr_price), energy.currency) : "—"} net, per year
-                </p>`
-                : null
-            }
-            ${
-              !sustainable
-                ? html`<p class="status-warn text-xs mt-1">Not sustainable at your hashrate — holding this tier needs about ${fmtHashrate(sel.threshold)} donated continuously, more than your hashrate can spare.</p>`
+                    ${best.name}: net ≈ ${formatFiat(coinFiat(best.net[0], energy.xmr_price), energy.currency)}
+                    … ${formatFiat(coinFiat(best.net[1], energy.xmr_price), energy.currency)} per year at the current XMR price</p>`
                 : null
             }
             <p class="text-muted text-xs mt-2">
                 ${
                   calc.estimates_available
-                    ? "From XvB's published per-tier estimate, fetched over Tor."
-                    : "Expected reward estimate unavailable — showing tier cost only."
+                    ? "XvB figures fetched over Tor from the operator's published estimates; odds from the public winners feed; the draw is random among qualifiers — donating above a threshold buys no extra odds."
+                    : "Expected reward estimate unavailable — tier costs only."
                 }
             </p>
         </div>`;
-  }
 }
 
 // XvB tier / raffle block (#118), inside the earnings card and driven by the same what-if
@@ -658,7 +603,7 @@ function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
                      price=${energy ? energy.xmr_price : 0} currency=${energy ? energy.currency : "USD"} />`
             : null
         }
-        <${XvbComparison} calc=${calc} coeffDay=${coeffDay} hr=${hr} energy=${energy} />
+        <${XvbDecisionTable} calc=${calc} coeffDay=${coeffDay} hr=${hr} energy=${energy} />
         <p class="text-muted text-xs mt-2">${calc.note}${calc.mode_note ? " " + calc.mode_note : ""}</p>
     </div>`;
 }

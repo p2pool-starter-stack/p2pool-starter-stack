@@ -638,23 +638,18 @@ the comparison below shows them.
 | **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). |
 | **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. |
 
-Below the tier figures, a **per-tier payout comparison** dropdown weighs each donor tier three ways:
+Below the tier figures sits the **per-tier decision table** — every donor tier on one row, so
+the whole choice is visible at once:
 
-| Field | Meaning |
+| Column | Meaning |
 |---|---|
-| **Expected (XvB)** | XvB's own published expected reward for the tier, in XMR per year. This is XvB's pre-computed `reward_calc` figure for the tier's donor round, fetched over Tor from `reward_estimate_pub.txt` — the dashboard does not re-derive it. It is the raffle expectation across all qualifiers, so donating **above** the tier threshold does not raise it. It is also **face value**: it prices every bonus hash at full block reward and assumes every won round runs to completion — wallets collect less. `estimate unavailable` when the fetch is stale or failed — never a stale figure implied fresh. |
-| **Cost / yr** | The P2Pool earnings given up by donating the tier threshold for a year: `threshold × the P2Pool daily rate × 365`, using the same rate the Monero tab shows. |
-| **Net / yr** | The reward minus the P2Pool earnings given up — the number to act on. Labeled **(measured)** when enough of your wins have confirmed payouts to measure what they actually paid: the published reward is scaled to that measured fraction first, because the face-value net can carry the wrong **sign** (a production Whale box showed +2.97 XMR/yr while the measured net was about −1.8). Before your own measurement exists it is labeled **(estimated)** and shows a **range**: the published reward scaled by the realization band measured on live deployments — wallets collected 24% of face value (donation riding the tier threshold, terminated rounds) to 42% (comfortable margin) — so "is this worth enabling" is answerable on a fresh box. Red only when even the optimistic end loses; green only when even the pessimistic end profits. Falls back to a labeled **(face value)** upper bound only when no band can be computed. |
+| **Odds / 30d** | How often this tier's rounds pay out and among how many qualifiers, computed from XvB's public winners feed. The draw is random among qualifiers — donating above a threshold buys no extra odds. |
+| **Cost / yr** | The P2Pool earnings given up by donating the tier threshold for a year, at your current rate. |
+| **XvB says / yr** | XvB's own published expected reward — **face value**: it prices every bonus hash at full block reward. Shown as their number, never blended. |
+| **Study est. / yr** | The same figure scaled by the **measured delivery band**: across 25 audited won rounds, verified on-chain across all three P2Pool sidechains (June–August 2026), winners received 33% of the advertised prize work (95% CI 28–39%; single-wallet on-chain audit, corroborated by a 14-winner public crawl), with at most a small margin effect. Once this box has enough measured wins of its own, the column becomes **Yours (N% × M wins)** and uses your wallet's measured figure instead. |
+| **Net / yr** | The verdict: estimated reward minus the cost. **Red** when even the optimistic end of the band loses; **green** when even the pessimistic end profits; neutral when the band spans zero. Withheld (with a ⚠ on the tier) when your hashrate cannot sustain the tier — an unreachable payout must never look reachable. |
 
-Below the figures, a **draw line** shows the selected tier's raffle odds from the winners file:
-about how many wins per 30 days its rounds pay out and among how many qualifiers the draw runs. A
-tier with one qualifier (it happens) is winner-take-all: its headline reward assumes that one
-donor stays alone, and evaporates the moment a second qualifies.
-
-The estimate and the winners file are fetched over Tor on the same cadence and staleness rules as
-the XvB stats card, so a quiet feed degrades to `estimate unavailable` (and the draw line
-disappears) rather than showing an old number. Pick a tier to compare, e.g. Whale against VIP
-Donor, at a glance.
+A fiat line prices the best sustainable tier's net at your configured XMR price.
 
 Raffle mechanics, flat: the winner of a donor round is drawn at random among wallets above the
 tier threshold on both credited averages; a win terminates if the 1h average then drops below the

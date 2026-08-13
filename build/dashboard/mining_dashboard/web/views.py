@@ -1521,16 +1521,16 @@ _XVB_WIN_SETTLE_S = 12 * 3600
 _XVB_REALIZATION_MIN_WINS = 5
 _XVB_REALIZATION_WINDOW_S = 45 * SECONDS_PER_DAY
 
-# Measured realization PRIOR for boxes with no local measurement (#872): the band a wallet's
-# collected-vs-published fraction actually landed in on live deployments (Jun–Aug 2026, one
-# wallet, two regimes; baseline-subtracted 6h post-win payout streams). 0.24 = Whale with the
-# credited average riding the 100k round minimum (terminated rounds); 0.42 = VIP with a
-# comfortable margin above its threshold. The mechanism behind the sub-1.0 ceiling even at
-# comfortable margin is not visible from outside XvB, so this is an empirical bound, not a
-# model — a local measurement (xvb_realization) supersedes it.
-# ponytail: two hard-coded endpoints from one wallet's history — recalibrate if more deployments
-# report measurements outside the band.
-XVB_REALIZATION_PRIOR = (0.24, 0.42)
+# Measured delivery PRIOR for boxes with no local measurement (#872): the fraction of the
+# advertised prize a winner's wallet actually receives, measured ON-CHAIN (p2pool.observer,
+# all three sidechains) across 25 audited won rounds, Jun–Aug 2026: point 0.33, bootstrap 95%
+# CI (0.28, 0.39). At most a small margin effect (a controlled experiment pinning the credited
+# margin at 2.1–2.5x the round minimum measured +5pp with overlapping CIs), so ONE band serves
+# every tier and regime. Payout of delivered work measured complete, so delivery == realization.
+# Supersedes the earlier (0.24, 0.42) two-era payout-window band, whose upper endpoint did not
+# survive on-chain recount. A local measurement (xvb_realization) still supersedes this prior.
+# ponytail: single-wallet study constant — recalibrate from the public-winners generalization.
+XVB_REALIZATION_PRIOR = (0.28, 0.39)
 
 
 def xvb_forecast_tier_key(metrics, tiers):
@@ -1806,7 +1806,7 @@ def build_xvb_calc(metrics, state_mgr, realization=None):
     cumulative forecast) and ``players_avg`` (which also makes a single-qualifier artifact like
     Mega's self-evident). ``realized_reward_year`` scales the published figure by this wallet's
     measured win realization (``realization``, from ``xvb_realization``) — None when unmeasured,
-    so the client falls back to face value and says so. Returns ``{"enabled": False}`` alone when
+    so the client falls back to the study band; face value shows only in its own column. Returns ``{"enabled": False}`` alone when
     XvB is off — there is no tier to calculate."""
     if not metrics.xvb_enabled:
         return {"enabled": False}
