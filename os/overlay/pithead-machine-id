@@ -14,7 +14,7 @@
 # covers the bind-mount shape and is a silent no-op on the plain-overlay one.
 set -eu
 
-ID_FILE="${PITHEAD_MACHINE_ID_DATA_DIR:-/data/pithead}/machine-id"
+ID_FILE="/data/pithead/machine-id"
 mkdir -p "$(dirname "$ID_FILE")"
 
 if [ -s "$ID_FILE" ]; then

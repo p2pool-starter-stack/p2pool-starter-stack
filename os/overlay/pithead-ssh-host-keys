@@ -14,7 +14,7 @@
 # persistence root, the same rule Tor's onion identity already follows.
 set -eu
 
-DIR="${PITHEAD_SSH_HOST_KEY_DIR:-/data/ssh}"
+DIR="/data/ssh"
 KEY="$DIR/ssh_host_ed25519_key"
 
 # Already generated — nothing to do. Idempotent so every sshd start (config toggled off then
