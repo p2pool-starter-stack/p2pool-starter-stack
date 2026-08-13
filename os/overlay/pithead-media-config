@@ -1,0 +1,250 @@
+#!/bin/bash
+# Physical-presence configuration channel (issue D of the appliance parity set): a removable FAT
+# stick carrying pithead-config.json can change ANY setting, including the never-approve set no
+# remote channel may touch (ssh.*, the approval channel's own identity, dashboard.auth.password,
+# the tamper-evidence toggles). Trust statement, stated once here and in docs/appliance.md:
+# whoever can insert media and power-cycle the machine already has full authority over it — this
+# channel makes that authority usable instead of implicit, and adds a tamper-evidence trail (the
+# normal host-edit detector fires on whatever it changes) rather than a new way in. Boot-time
+# only, credential-less on purpose (it doubles as the forgotten-password recovery path, exactly
+# like Synology's reset button): no browser, no dashboard password, no keyboard required.
+#
+# Runs as one stage inside pithead-boot, BEFORE render, so an applied change drives the rest of
+# that boot. Reuses the pre-seed validation engine (pithead's parse_and_validate_config, run in a
+# fresh process against a scratch copy — the same idiom consume_preseed_config uses for the
+# installer's own pre-seed) rather than re-implementing config validation here.
+set -uo pipefail
+
+# Env-overridable so the stack tests can run this against a sandbox, matching pithead-sync and
+# pithead-data-reset's convention.
+PITHEAD_DIR="${PITHEAD_MEDIA_DIR:-$PWD}"
+PITHEAD_BIN="${PITHEAD_MEDIA_BIN:-$PITHEAD_DIR/pithead}"
+RUNNING_CONFIG="${PITHEAD_MEDIA_CONFIG:-$PITHEAD_DIR/config.json}"
+COUNTDOWN="${PITHEAD_MEDIA_COUNTDOWN:-60}"
+STAGED_NAME="pithead-config.json"
+
+warn() { echo "pithead-media-config: $*" >&2; }
+
+# Put words in front of a human standing at the machine, on every physical console — the same
+# broadcast the wizard uses (pithead's token announcement): /dev/console is only whichever the
+# kernel cmdline named LAST, so a message sent there alone is invisible to an operator watching
+# the other one. Every line also reaches the journal.
+_console() { # lines...
+    local line dev
+    for line in "$@"; do
+        [ -n "$line" ] && echo "pithead-media-config: $line"
+    done
+    for dev in /dev/tty1 /dev/ttyS0; do
+        [ -w "$dev" ] || continue
+        printf '%s\n' "$@" >"$dev" 2>/dev/null || true
+    done
+}
+
+# Removable, FAT-family partitions — candidates for the media channel. Excludes the machine's own
+# internal disk by construction: pithead-boot only ever runs a fully provisioned appliance from
+# its internal disk, which lsblk never reports removable=1 for, so anything this finds is a stick
+# someone actually inserted. A separate function so tests can stub `lsblk` alone.
+_removable_fat_partitions() {
+    lsblk -rno NAME,TYPE,RM,FSTYPE 2>/dev/null |
+        awk '$2 == "part" && $3 == "1" && $4 ~ /^(vfat|fat|fat32|fat16|msdos)$/ {print "/dev/"$1}'
+}
+
+# Find a staged config on removable media. On a hit, prints "<partition>\t<scratch-copy-path>"
+# and returns 0 — the file is copied out and the medium unmounted immediately, so the following
+# validation and the countdown never hold a mount open. rc 1: no candidate carries the file.
+media_find_config() {
+    local part mnt out
+    while IFS= read -r part; do
+        [ -n "$part" ] || continue
+        mnt=$(mktemp -d) || continue
+        if mount -o ro "$part" "$mnt" 2>/dev/null; then
+            if [ -f "$mnt/$STAGED_NAME" ]; then
+                out=$(mktemp) || out=""
+                if [ -n "$out" ] && ! cp "$mnt/$STAGED_NAME" "$out" 2>/dev/null; then
+                    rm -f "$out"
+                    out=""
+                fi
+                umount "$mnt" 2>/dev/null || true
+                rmdir "$mnt" 2>/dev/null || true
+                if [ -n "$out" ]; then
+                    printf '%s\t%s\n' "$part" "$out"
+                    return 0
+                fi
+                continue
+            fi
+            umount "$mnt" 2>/dev/null || true
+        fi
+        rmdir "$mnt" 2>/dev/null || true
+    done < <(_removable_fat_partitions)
+    return 1
+}
+
+# Validate a candidate config through a COPY, exactly like consume_preseed_config: parse_and_
+# validate_config fills in generated fields (e.g. auto-generated node RPC creds) as it goes, so
+# validating in place would mutate the caller's file. Runs in a fresh bash -c: pithead sources
+# cleanly when $_STACK_SOURCED is set (its own test seam), defining functions/constants with no
+# side effects. On success prints the path to the validated scratch file; on failure prints the
+# trimmed error to stderr and returns 1.
+media_validate_config() { # <candidate-json>
+    local src="$1" tmp err
+    tmp=$(mktemp) || return 1
+    cp "$src" "$tmp" 2>/dev/null || {
+        rm -f "$tmp"
+        return 1
+    }
+    if err=$(PITHEAD_CONFIG_FILE="$tmp" bash -c "source '$PITHEAD_BIN' && parse_and_validate_config" 2>&1); then
+        printf '%s' "$tmp"
+        return 0
+    fi
+    rm -f "$tmp"
+    printf '%s' "$err" | tail -n 1 | tr -d '[:cntrl:]' | tail -c 200 >&2
+    return 1
+}
+
+# CONTROL_SECRET_PATHS as JSON, read from pithead itself — the single host-side list of secret
+# leaf paths (#440), so this channel's masking can never drift from the control channel's.
+_secret_paths_json() {
+    bash -c "source '$PITHEAD_BIN' && printf '%s' \"\$CONTROL_SECRET_PATHS\"" 2>/dev/null || printf '[]'
+}
+
+# The exact-diff line list between two config.json files, one line per changed leaf. Secret
+# leaves (CONTROL_SECRET_PATHS, plus the variable-length token/webhook shapes render_masked_config
+# also masks) show that they changed and nothing else — never the value, in or out. Every other
+# leaf, including the wallet addresses, shows old -> new: verifying the payout address is the
+# whole point of this display. Empty output means the two configs are identical.
+media_config_diff() { # <old-json> <new-json>
+    local old="$1" new="$2"
+    jq -n -r --slurpfile o "$old" --slurpfile n "$new" --argjson secret "$(_secret_paths_json)" '
+        def is_secret($p):
+            ($secret | any(. == $p))
+            or ($p[0:2] == ["workers","list"] and $p[-1] == "token")
+            or ($p[0:2] == ["dashboard","workers"] and $p[-1] == "token")
+            or ($p[0:2] == ["notifications","webhooks"]);
+        def show($v): if $v == null then "(unset)" else ($v | tostring) end;
+        ($o[0]) as $O | ($n[0]) as $N |
+        (([$O | paths(scalars)] + [$N | paths(scalars)]) | unique) as $leaves |
+        $leaves[] as $p |
+        ($O | getpath($p)) as $ov | ($N | getpath($p)) as $nv |
+        select($ov != $nv) |
+        ($p | join(".")) as $dotted |
+        if is_secret($p) then
+            "  \($dotted): changed (value hidden)"
+        else
+            "  \($dotted): \(show($ov)) -> \(show($nv))"
+        end
+    ' 2>/dev/null
+}
+
+media_config_identical() { # <old-json> <new-json>
+    [ -z "$(media_config_diff "$1" "$2")" ]
+}
+
+# Override points for the confirmation gate — real hardware checks in production, canned
+# sequences in tests (see tests/stack/run.sh). Kept as separate one-line functions so a test can
+# redefine just one without reimplementing the wait loop.
+media_device_present() { [ -b "$1" ]; } # $1: partition device
+media_read_key() {                      # $1: timeout seconds -> prints one char, rc 1 on timeout
+    local tty="${PITHEAD_MEDIA_TTY:-/dev/tty1}" k=""
+    [ -r "$tty" ] || {
+        sleep "$1" 2>/dev/null
+        return 1
+    }
+    read -r -t "$1" -N 1 k <"$tty" 2>/dev/null || return 1
+    printf '%s' "$k"
+}
+
+# The confirmation wait itself, isolated so it is testable with stubbed device-presence/keys and
+# no real 60-second sleep. Polls once a second for the media disappearing (abort — media removal
+# is a physical act nobody can inject over a channel) and for a keypress on an available console
+# (a/A applies now; n/N/c/C cancels now; anything else, including no keyboard at all, is ignored
+# and the countdown keeps running — absence of input is never treated as an abort). Prints
+# "apply" or "abort".
+media_confirm_gate() { # <partition> <countdown-seconds>
+    local dev="$1" seconds="$2" elapsed=0 key
+    while [ "$elapsed" -lt "$seconds" ]; do
+        media_device_present "$dev" || {
+            echo abort
+            return 0
+        }
+        key=$(media_read_key 1) || key=""
+        case "$key" in
+        a | A)
+            echo apply
+            return 0
+            ;;
+        n | N | c | C)
+            echo abort
+            return 0
+            ;;
+        esac
+        elapsed=$((elapsed + 1))
+    done
+    media_device_present "$dev" || {
+        echo abort
+        return 0
+    }
+    echo apply
+}
+
+# Remove the staged file from the medium so it cannot re-apply on a later boot — the same
+# consumed-pre-seed hygiene as the installer's own pre-seed (pithead deletes, rather than keeping
+# a renamed copy, a plaintext-credential-bearing file on a stick that may travel to other
+# machines). Best-effort: an unmountable/read-only stick still leaves the change applied.
+media_consume() { # <partition>
+    local part="$1" mnt
+    mnt=$(mktemp -d) || return 1
+    if mount -o rw "$part" "$mnt" 2>/dev/null; then
+        rm -f "$mnt/$STAGED_NAME" 2>/dev/null ||
+            warn "could not remove the consumed configuration from $part — it may hold credentials; delete it by hand."
+        umount "$mnt" 2>/dev/null || true
+    fi
+    rmdir "$mnt" 2>/dev/null || true
+}
+
+main() {
+    local found part cand validated decision errf
+    found=$(media_find_config) || return 0
+    part=${found%%$'\t'*}
+    cand=${found#*$'\t'}
+    errf=$(mktemp)
+
+    if ! validated=$(media_validate_config "$cand" 2>"$errf"); then
+        _console "" "A configuration file was found on removable media but it was rejected:" \
+            "  $(cat "$errf" 2>/dev/null)" "" \
+            "Continuing boot with the running configuration. Fix the file and reboot to retry."
+        rm -f "$errf" "$cand"
+        return 0
+    fi
+    rm -f "$errf" "$cand"
+
+    if [ ! -f "$RUNNING_CONFIG" ] || media_config_identical "$RUNNING_CONFIG" "$validated"; then
+        _console "" "Media configuration channel: the staged configuration matches the running one — continuing boot."
+        rm -f "$validated"
+        return 0
+    fi
+
+    _console "" "Media configuration channel: a staged configuration differs from the running one." "" \
+        "$(media_config_diff "$RUNNING_CONFIG" "$validated")" "" \
+        "Applying automatically in ${COUNTDOWN}s. Remove the media now to cancel." \
+        "On a keyboard: 'a' applies immediately, 'n' cancels." ""
+
+    decision=$(media_confirm_gate "$part" "$COUNTDOWN")
+    if [ "$decision" != apply ]; then
+        _console "Media configuration channel: cancelled — no changes applied."
+        rm -f "$validated"
+        return 0
+    fi
+
+    if ! install -m 600 "$validated" "$RUNNING_CONFIG" 2>/dev/null; then
+        _console "Media configuration channel: could not write the new configuration — no changes applied."
+        rm -f "$validated"
+        return 0
+    fi
+    rm -f "$validated"
+    media_consume "$part"
+    _console "Media configuration channel: applied. Continuing boot with the new configuration."
+    return 0
+}
+
+# Sourceable for the test suite (functions only); runs main only when executed directly.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi

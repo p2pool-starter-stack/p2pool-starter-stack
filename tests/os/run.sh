@@ -5,7 +5,7 @@
 # os-image sibling of tests/integration/run.sh; it needs a Linux host with KVM + libvirt + the
 # built image, so it runs on the bench, not in CI.
 #
-#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|install|provision|rig|fault|all]
+#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|install|provision|rig|media|fault|all]
 #
 # Phases:
 #   boot    flash the image to a scratch disk, boot it, assert EFI boot + firstboot wizard up
@@ -23,8 +23,11 @@
 #   rig     answer "RigForge" on the same page and prove the OTHER machine this image installs:
 #           mines from the baked binary with no compile and no stack at all, and takes an A/B
 #           update — install, uncommitted rollback, self-commit — exactly like a coordinator.
+#   media   physical-presence config channel (#786 sub-issue D): a removable stick applied at
+#           boot shows its exact diff on the console, counts down, applies, and consumes itself —
+#           and pulling the stick mid-countdown cancels the change. Opt-in, like fault.
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
-#   all     all five (default)
+#   all     boot, update, install, provision and rig (default) — media and fault are opt-in
 #
 # A failed assertion is recorded and the run continues, so one bench boot collects the whole
 # battery rather than stopping at the first fault; the run exits non-zero if any assertion failed.
@@ -1534,6 +1537,153 @@ phase_provision() {
     fi
 }
 
+# Build a small raw disk with one FAT partition carrying $2 as pithead-config.json at its root —
+# the media the physical-presence channel reads. $1: output path.
+_make_media_stick() {
+    local path="$1" json="$2" loop mnt tries=0
+    rm -f "$path"
+    truncate -s 64M "$path"
+    sgdisk -n1:0:0 -t1:0700 "$path" >/dev/null
+    loop=$(losetup -Pf --show "$path")
+    while [ ! -e "${loop}p1" ] && [ "$tries" -lt 50 ]; do
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    mkfs.vfat -n PITHEAD "${loop}p1" >/dev/null
+    mnt=$(mktemp -d)
+    mount "${loop}p1" "$mnt"
+    printf '%s' "$json" >"$mnt/pithead-config.json"
+    umount "$mnt"
+    rmdir "$mnt"
+    losetup -d "$loop"
+}
+
+# Does $1 (a raw disk with one FAT partition) still carry pithead-config.json at its root? Used
+# after a boot to prove the applied stick was consumed. Host-side, so the disk must already be
+# detached from the guest.
+_media_stick_has_config() {
+    local path="$1" loop mnt tries=0 rc=1
+    loop=$(losetup -Pf --show "$path")
+    while [ ! -e "${loop}p1" ] && [ "$tries" -lt 50 ]; do
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    mnt=$(mktemp -d)
+    mount -o ro "${loop}p1" "$mnt" 2>/dev/null && {
+        [ -f "$mnt/pithead-config.json" ] && rc=0
+        umount "$mnt"
+    }
+    rmdir "$mnt"
+    losetup -d "$loop"
+    return $rc
+}
+
+phase_media() {
+    info "phase: media (physical-presence config channel — removable stick applied at boot)"
+    # ponytail: provisions via the ESP pre-seed path (already proven by the install phase's
+    # second leg) rather than re-driving the wizard's HTTP flow — this phase is about the SECOND
+    # stick, read by a running appliance, not first-boot setup.
+    local img loop mnt tries=0
+    img=$(_build_image v1) || {
+        bad "image build failed (/tmp/os-fault-build.log)"
+        return
+    }
+    loop=$(losetup -Pf --show "$img")
+    while [ ! -e "${loop}p1" ] && [ "$tries" -lt 50 ]; do
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+    mnt=$(mktemp -d)
+    mount "${loop}p1" "$mnt"
+    printf '{"monero":{"wallet_address":"%s"},"tari":{"wallet_address":"harness-dummy-tari-address"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
+        "$HARNESS_WALLET" >"$mnt/pithead-config.json"
+    umount "$mnt"
+    rmdir "$mnt"
+    losetup -d "$loop"
+
+    _vm_boot_disk "$img" && _wait_ssh 300 || {
+        bad "guest never answered SSH (ip: ${ip:-none})"
+        return
+    }
+    if ! _ssh "for i in \$(seq 90); do [ -f /data/pithead/config.json ] && exit 0; sleep 2; done; exit 1"; then
+        bad "the ESP pre-seed never reached the running system — nothing to change from here"
+        return
+    fi
+    local deadline=$(($(date +%s) + 1500)) names=""
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        case "$names" in *dashboard*caddy* | *caddy*dashboard*) break ;; esac
+        sleep 15
+    done
+    case "$names" in
+    *dashboard*caddy* | *caddy*dashboard*) ok "provisioned via ESP pre-seed, stack up ($ip)" ;;
+    *)
+        bad "stack never came up within 25m — running: '${names:-none}'"
+        return
+        ;;
+    esac
+
+    # ---- apply leg: a real change, shown, counted down, applied, consumed --------------------
+    local stick1="${DISK%.img}-media-apply.img"
+    local new_wallet="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
+    _make_media_stick "$stick1" \
+        "{\"monero\":{\"wallet_address\":\"$new_wallet\"},\"tari\":{\"wallet_address\":\"harness-dummy-tari-address\"},\"p2pool\":{\"pool\":\"nano\",\"stratum_password\":\"auto\"}}"
+    virsh attach-disk "$VM" "$stick1" sdz --targetbus usb --subdriver raw --config --live >/dev/null 2>&1
+    : >"$SERIAL"
+    _ssh reboot >/dev/null 2>&1 || true
+
+    wait_serial "staged configuration differs from the running one" 180 &&
+        ok "the exact diff is shown on the console before anything applies" ||
+        bad "no diff banner appeared on the console"
+    if tr -d '\r' <"$SERIAL" | grep -qE "$new_wallet"; then
+        ok "the changed wallet address is shown in full — verifying it is the point"
+    else
+        bad "the changed wallet address never appeared on the console"
+    fi
+    wait_serial "Media configuration channel: applied" 120 &&
+        ok "the countdown ran out and the change applied" ||
+        bad "no applied confirmation ever appeared on the console"
+    _wait_ssh 180 || {
+        bad "guest never came back after the applied change"
+        return
+    }
+    local pool_now
+    pool_now=$(_ssh "jq -r '.p2pool.pool' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
+    [ "$pool_now" = "nano" ] && ok "the changed setting took effect (p2pool.pool: mini -> nano)" ||
+        bad "the changed setting did not take effect (p2pool.pool is '${pool_now:-unknown}')"
+
+    virsh detach-disk "$VM" sdz --config --live >/dev/null 2>&1
+    sleep 2
+    if _media_stick_has_config "$stick1"; then
+        bad "the applied stick still carries pithead-config.json — it would re-apply next boot"
+    else
+        ok "the applied stick is consumed — it cannot re-apply on a later boot"
+    fi
+    rm -f "$stick1"
+
+    # ---- abort leg: pulling the media mid-countdown cancels the change -----------------------
+    local stick2="${DISK%.img}-media-abort.img"
+    _make_media_stick "$stick2" \
+        "{\"monero\":{\"wallet_address\":\"$HARNESS_WALLET\"},\"tari\":{\"wallet_address\":\"harness-dummy-tari-address\"},\"p2pool\":{\"pool\":\"mini\",\"stratum_password\":\"auto\"}}"
+    virsh attach-disk "$VM" "$stick2" sdz --targetbus usb --subdriver raw --config --live >/dev/null 2>&1
+    : >"$SERIAL"
+    _ssh reboot >/dev/null 2>&1 || true
+    wait_serial "staged configuration differs from the running one" 180 || bad "no diff banner on the abort leg"
+    # Pull the medium mid-countdown — the deliberate physical act that cancels a pending change.
+    virsh detach-disk "$VM" sdz --config --live >/dev/null 2>&1
+    wait_serial "cancelled" 90 &&
+        ok "removing the media mid-countdown cancels the change" ||
+        bad "no cancellation ever appeared on the console after the media was pulled"
+    _wait_ssh 180 || {
+        bad "guest never came back after the cancelled change"
+        return
+    }
+    pool_now=$(_ssh "jq -r '.p2pool.pool' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
+    [ "$pool_now" = "nano" ] && ok "a cancelled change never took effect (p2pool.pool stayed nano)" ||
+        bad "a cancelled change altered the running config anyway (p2pool.pool is '${pool_now:-unknown}')"
+    rm -f "$stick2"
+}
+
 phase_rig() {
     info "phase: rig (the OTHER machine this image installs — mines instead of coordinating)"
     # One image, two machines. Every other phase proves the coordinator; this one proves that
@@ -1938,6 +2088,7 @@ update) phase_update ;;
 install) phase_install ;;
 provision) phase_provision ;;
 rig) phase_rig ;;
+media) phase_media ;;
 fault) phase_fault ;;
 all)
     phase_boot

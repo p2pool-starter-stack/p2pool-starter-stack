@@ -9532,6 +9532,247 @@ assert_eq "no marker + /data mounts clean -> skip (fail-safe: never touch a heal
 assert_eq "no marker + /data wedged after fsck -> reformat-wedged (recovery)" "$(decide "$DR/no-marker" fail)" "reformat-wedged"
 assert_eq "no marker + fsck repairs the mount -> skip (recoverable /data is never wiped)" "$(decide "$DR/no-marker" repair)" "skip"
 
+echo "== unit: pithead-media-config — physical-presence media channel (#786 sub-issue D) =="
+# Source the boot leg (functions only — its main is guarded) and drive its pieces with stubbed
+# lsblk/mount/umount and a real (sandboxed) copy of pithead for validation — the same two-layer
+# style pithead-data-reset's block above uses: fake the hardware, keep the decision logic real.
+MC="$SANDBOX/media-config"
+mkdir -p "$MC/bin"
+cp "$ROOT/pithead" "$ROOT/config.reference.json" "$ROOT/config.core-keys.json" "$MC/"
+
+# lsblk stub: prints whatever TSV the test staged, so _removable_fat_partitions' own awk filter
+# runs for real against controlled input.
+cat >"$MC/bin/lsblk" <<'EOF'
+#!/usr/bin/env bash
+cat "${LSBLK_OUT:?}"
+EOF
+# mount stub: simulates `mount -o <ro|rw> <device> <mountpoint>` by copying $MOUNT_SRC's contents
+# into the mountpoint (refusing any device but the one under test) and logging the mountpoint so
+# a test can inspect what ended up there after an in-script `rm` — real bind semantics are a KVM
+# concern; the decision logic (which device, which flag, what gets removed) is not.
+cat >"$MC/bin/mount" <<'EOF'
+#!/usr/bin/env bash
+dev="$3" mnt="$4"
+[ "$dev" = "${MOUNT_DEVICE:-/dev/fake1}" ] || exit 1
+mkdir -p "$mnt"
+cp -a "${MOUNT_SRC:-/dev/null}"/. "$mnt"/ 2>/dev/null
+[ -n "${MOUNT_LOG:-}" ] && printf '%s\n' "$mnt" >>"$MOUNT_LOG"
+exit 0
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' >"$MC/bin/umount"
+chmod +x "$MC/bin/lsblk" "$MC/bin/mount" "$MC/bin/umount"
+
+printf 'sda\tdisk\t0\t\nsda1\tpart\t0\text4\nsdb\tdisk\t1\t\nsdb1\tpart\t1\tvfat\n' >"$MC/lsblk-out"
+
+echo "== unit: _removable_fat_partitions =="
+out=$(
+    export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
+    source "$ROOT/os/overlay/pithead-media-config"
+    _removable_fat_partitions
+)
+assert_eq "removable FAT partitions filtered from lsblk (skips internal disk + a non-FAT removable)" "$out" "/dev/sdb1"
+
+echo "== unit: media_find_config =="
+STICK="$MC/stick"
+mkdir -p "$STICK"
+printf '{"staged":true}' >"$STICK/pithead-config.json"
+result=$(
+    export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
+    export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_find_config
+)
+assert_eq "media_find_config names the carrying partition" "${result%%$'\t'*}" "/dev/sdb1"
+found_copy="${result#*$'\t'}"
+if [ -s "$found_copy" ] && cmp -s "$found_copy" "$STICK/pithead-config.json"; then
+    ok "media_find_config copies the staged file out unmodified"
+else
+    bad "media_find_config copies the staged file out unmodified" "missing or altered: $found_copy"
+fi
+rm -f "$found_copy"
+
+rc=$(
+    export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
+    export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$MC/empty-stick"
+    mkdir -p "$MOUNT_SRC"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_find_config >/dev/null 2>&1
+    echo $?
+)
+assert_eq "media_find_config returns 1 when no candidate carries the file" "$rc" "1"
+
+echo "== unit: media_validate_config (reuses the pre-seed validation engine) =="
+cat >"$MC/good.json" <<EOF
+{"monero":{"wallet_address":"$VALID_PRIMARY","node_username":"admin","node_password":"a-generated-password-1"},"tari":{"wallet_address":"$VALID_TARI"},"p2pool":{"pool":"mini","stratum_password":"auto"}}
+EOF
+cat >"$MC/bad.json" <<'EOF'
+{"monero":{"wallet_address":"nope"},"tari":{"wallet_address":"t"}}
+EOF
+validated=$(
+    export PITHEAD_MEDIA_BIN="$MC/pithead"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_validate_config "$MC/good.json"
+)
+if [ -s "$validated" ]; then
+    ok "a valid candidate validates and yields a scratch file"
+else
+    bad "a valid candidate validates and yields a scratch file" "no output"
+fi
+if cmp -s "$MC/good.json" "$validated"; then
+    ok "a candidate that already carries its node credentials validates byte-identical"
+else
+    bad "a candidate that already carries its node credentials validates byte-identical" "$(diff "$MC/good.json" "$validated" 2>&1 | head -3)"
+fi
+rm -f "$validated"
+
+rc=$(
+    export PITHEAD_MEDIA_BIN="$MC/pithead"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_validate_config "$MC/bad.json" >/dev/null 2>&1
+    echo $?
+)
+assert_eq "an invalid candidate is rejected, not installed" "$rc" "1"
+
+echo "== unit: media_config_diff / media_config_identical (masked, wallet shown in full) =="
+cat >"$MC/changed.json" <<EOF
+{"monero":{"wallet_address":"44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg","node_username":"admin","node_password":"a-generated-password-1"},"tari":{"wallet_address":"$VALID_TARI"},"p2pool":{"pool":"mini","stratum_password":"auto"},"dashboard":{"auth":{"password":"a-new-dashboard-password"}}}
+EOF
+diffout=$(
+    export PITHEAD_MEDIA_BIN="$MC/pithead"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_config_diff "$MC/good.json" "$MC/changed.json"
+)
+assert_contains "the payout wallet change shows old -> new in full (that IS the point)" "$diffout" "$VALID_PRIMARY -> 44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
+assert_contains "a changed secret (dashboard password) names the path" "$diffout" "dashboard.auth.password"
+assert_not_contains "a changed secret never shows the new value" "$diffout" "a-new-dashboard-password"
+
+rc=$(
+    export PITHEAD_MEDIA_BIN="$MC/pithead"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_config_identical "$MC/good.json" "$MC/good.json"
+    echo $?
+)
+assert_eq "identical configs -> media_config_identical true" "$rc" "0"
+rc=$(
+    export PITHEAD_MEDIA_BIN="$MC/pithead"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_config_identical "$MC/good.json" "$MC/changed.json"
+    echo $?
+)
+assert_eq "a real change -> media_config_identical false" "$rc" "1"
+
+echo "== unit: media_confirm_gate (abort/apply state machine, no real 60s wait) =="
+gate() { # $1 device-present override rc, $2 key sequence (space-separated, 'timeout' = no key)
+    # shellcheck disable=SC2206  # deliberate word-splitting: $2 is a space-separated key sequence
+    local present_rc="$1" keys=($2) i=0
+    (
+        source "$ROOT/os/overlay/pithead-media-config"
+        media_device_present() { return "$present_rc"; }
+        media_read_key() {
+            local k="${keys[$i]:-timeout}"
+            i=$((i + 1))
+            [ "$k" = "timeout" ] && return 1
+            printf '%s' "$k"
+        }
+        media_confirm_gate /dev/fake 3
+    )
+}
+assert_eq "countdown exhausted with no keypress -> apply" "$(gate 0 'timeout timeout timeout')" "apply"
+assert_eq "media removed mid-countdown -> abort" "$(gate 1 '')" "abort"
+assert_eq "'a' keypress -> apply immediately, before the countdown ends" "$(gate 0 a)" "apply"
+assert_eq "'n' keypress -> abort immediately" "$(gate 0 n)" "abort"
+assert_eq "an unrecognized key is ignored, not treated as abort" "$(gate 0 'x x apply')" "apply"
+
+echo "== unit: media_consume (deletes the staged file on the medium, never renames it) =="
+STICK2="$MC/stick2"
+mkdir -p "$STICK2"
+printf '{"staged":true}' >"$STICK2/pithead-config.json"
+: >"$MC/mount.log"
+(
+    export PATH="$MC/bin:$PATH"
+    export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK2" MOUNT_LOG="$MC/mount.log"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_consume "/dev/sdb1"
+)
+mounted_at=$(tail -1 "$MC/mount.log")
+if [ -n "$mounted_at" ] && [ ! -f "$mounted_at/pithead-config.json" ]; then
+    ok "the consumed configuration is removed from the medium (installer's own hygiene, not a renamed copy)"
+else
+    bad "the consumed configuration is removed from the medium" "still present at ${mounted_at:-<no mount>}"
+fi
+
+echo "== unit: pithead-media-config main() — identical short-circuit vs. a real apply =="
+RUN_CFG="$MC/running.json"
+cp "$MC/good.json" "$RUN_CFG"
+STICK3="$MC/stick-identical"
+mkdir -p "$STICK3"
+cp "$MC/good.json" "$STICK3/pithead-config.json"
+: >"$MC/mount.log"
+(
+    export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
+    export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK3" MOUNT_LOG="$MC/mount.log"
+    export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_confirm_gate() {
+        echo "media_confirm_gate must not be called for an identical config" >&2
+        echo apply
+    }
+    main
+) >"$MC/identical.out" 2>&1
+if cmp -s "$MC/good.json" "$RUN_CFG"; then
+    ok "an identical staged config never touches the running config.json"
+else
+    bad "an identical staged config never touches the running config.json" "it was rewritten"
+fi
+assert_not_contains "an identical config never reaches the confirm gate (no ceremony)" "$(cat "$MC/identical.out")" "must not be called"
+assert_contains "an identical config says so on the console" "$(cat "$MC/identical.out")" "matches the running one"
+[ -f "$STICK3/pithead-config.json" ] && ok "an identical config is not consumed — nothing was applied" ||
+    bad "an identical config is not consumed" "the stick's file was removed anyway"
+
+STICK4="$MC/stick-apply"
+mkdir -p "$STICK4"
+cp "$MC/changed.json" "$STICK4/pithead-config.json"
+: >"$MC/mount.log"
+(
+    export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
+    export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK4" MOUNT_LOG="$MC/mount.log"
+    export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_confirm_gate() { echo apply; }
+    main
+) >"$MC/apply.out" 2>&1
+if cmp -s "$MC/changed.json" "$RUN_CFG"; then
+    ok "a confirmed change is written to the running config.json — the changed setting took effect"
+else
+    bad "a confirmed change is written to the running config.json" "$(diff "$MC/changed.json" "$RUN_CFG" 2>&1 | head -3)"
+fi
+mounted_at=$(tail -1 "$MC/mount.log")
+[ -n "$mounted_at" ] && [ ! -f "$mounted_at/pithead-config.json" ] &&
+    ok "the applied stick is consumed so it cannot re-apply next boot" ||
+    bad "the applied stick is consumed" "still present"
+assert_contains "the applied change is announced on the console" "$(cat "$MC/apply.out")" "applied"
+
+STICK5="$MC/stick-abort"
+mkdir -p "$STICK5"
+cp "$MC/changed.json" "$STICK5/pithead-config.json"
+cp "$MC/good.json" "$RUN_CFG"
+: >"$MC/mount.log"
+(
+    export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
+    export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK5" MOUNT_LOG="$MC/mount.log"
+    export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_confirm_gate() { echo abort; }
+    main
+) >"$MC/abort.out" 2>&1
+if cmp -s "$MC/good.json" "$RUN_CFG"; then
+    ok "a cancelled change never touches the running config.json"
+else
+    bad "a cancelled change never touches the running config.json" "it was rewritten"
+fi
+[ -f "$STICK5/pithead-config.json" ] && ok "a cancelled change is not consumed — the stick still carries it" ||
+    bad "a cancelled change is not consumed" "the stick's file was removed anyway"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

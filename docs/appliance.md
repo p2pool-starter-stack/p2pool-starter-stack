@@ -298,6 +298,41 @@ pithead factory-reset
 Both ask you to type the reset name before they do anything. The machine reboots itself
 into setup when the reset is done.
 
+## Changing settings with a USB stick
+
+Insert a stick carrying a `pithead-config.json` and reboot: the machine validates it, shows
+the exact change on the console, and applies it after a countdown — no password, no browser,
+no keyboard required. This is the same file format the setup wizard reads (see [setting it up
+without a monitor](#setting-it-up-without-a-monitor)), and it can change **any** setting,
+including the ones the dashboard never exposes: the SSH toggle, the dashboard login password,
+and the Telegram alert channel's own identity. That is deliberate. Whoever can insert media
+and power the machine off and on already has full authority over it — a shell at the console
+proves the same thing today — so this channel makes that authority usable instead of assuming
+you have a monitor and a working password. It is the recovery path when the dashboard password
+is lost.
+
+Prepare the stick with a normal FAT32 partition and a `pithead-config.json` at its root — copy
+`config.json` from a machine you already set up, or write one by hand (see
+[configuration](configuration.md)). At boot:
+
+- If the staged file matches the running configuration exactly, the console says so and the
+  boot carries on without stopping.
+- If it differs, the console prints every changed setting: the old value, the new value, and
+  for a password, token or RPC credential, that it changed — never what it changed to. Wallet
+  addresses print in full; confirming the payout address is the point of the display.
+- The console then counts down 60 seconds. Pulling the stick during the countdown cancels the
+  change. On a machine with a keyboard attached, `a` applies immediately and `n` cancels; a
+  headless machine needs neither key — letting the countdown run out applies the change.
+- Once applied, the file is deleted from the stick, the same way the installer clears its own
+  pre-seed, so the same change cannot reapply on a later boot. Reinsert a fresh export to make
+  another change.
+
+An applied change is a real config commit: it goes through the same path as any other, so a
+payout-wallet swap or a clearnet-exposure change still fires the matching Telegram alert.
+
+NOTE: this channel only reads at boot. Inserting the stick into a running machine does nothing
+until you reboot it.
+
 ## If something goes wrong
 
 **The machine will not boot from the stick.** Almost always Secure Boot — disable it in
