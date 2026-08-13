@@ -70,7 +70,7 @@ cleanup() {
 trap cleanup EXIT
 
 # See loop-wait.sh for why this wait exists.
-wait_loop_partitions "$LOOP" p1 p2 || {
+wait_loop_partitions "$LOOP" || {
     echo "partition nodes for $LOOP never appeared after losetup -P" >&2
     exit 1
 }

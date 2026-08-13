@@ -56,7 +56,7 @@ trap cleanup EXIT
 
 # Same race as mkimage.sh (see loop-wait.sh). Hard-fail like it does: a mount error two screens
 # later names the wrong culprit.
-wait_loop_partitions "$LOOP" p1 p2 || {
+wait_loop_partitions "$LOOP" || {
     echo "partition nodes never appeared on $LOOP — udev timing or a broken image" >&2
     exit 1
 }
