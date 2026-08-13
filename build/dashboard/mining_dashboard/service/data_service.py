@@ -69,6 +69,7 @@ from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
     effective_hashrate,
     format_hashrate,
+    get_tier_info,
     pplns_block_time,
     shares_in_pplns_window,
 )
@@ -126,9 +127,19 @@ _HOURLY_CAPTURE_SEC = 3600  # disk_growth + network_history
 _WORKER_HISTORY_CAPTURE_SEC = 300  # ~5 min
 
 # XvB's public winners file updates once per hourly round and covers ~4 days, so a 30-min re-read
-# can never miss a win while keeping the fetch off the every-10th-poll cadence. Wall-clock gated
-# like the capture cadences above.
+# can never miss a win outright. But the in-round hold (#769) reacts only when the mirror runs, so
+# a win landing at the wrong phase went undetected — and unprotected — for up to 30 min (#892).
+# The gate is therefore adaptive (_xvb_winners_gate_sec): 30-min baseline, dropping to the fast
+# cadence in exactly the windows where detection latency costs money. Wall-clock gated like the
+# capture cadences above.
 _XVB_WINNERS_SYNC_SEC = 1800
+_XVB_WINNERS_SYNC_FAST_SEC = 150
+# The fast windows: the credited 1h average within 25% above the current tier threshold (the band
+# the controller deliberately rides, #769's threshold + cushion — where a won round is one
+# steering step from sagging out), or a recorded win younger than 90 min (rounds run ~an hour, so
+# one may still be live).
+_XVB_WINNERS_MARGIN = 0.25
+_XVB_WIN_FRESH_S = 5400
 
 # Per-worker flood cap on NEW rig-edit audit rows (#724). The enriched worker feed is
 # unauthenticated LAN input, so a rogue device presenting as a worker can report a fresh random
@@ -139,6 +150,31 @@ _XVB_WINNERS_SYNC_SEC = 1800
 # most, so a legitimate cadence never trips it — only a flood does.
 _RIG_EDIT_CAP_PER_HOUR = 12
 _RIG_EDIT_WINDOW_SEC = 3600
+
+
+def _xvb_winners_gate_sec(avg_1h, avg_24h, tiers, last_win_ts, now):
+    """Seconds the winners mirror must wait between fetches — the adaptive gate (#892).
+
+    Fast (150 s) in the sensitive window: the wallet credited at a tier (the LOWER of the 1h/24h
+    averages, the raffle's qualifying rule, #157) with the 1h average within 25% above that
+    tier's threshold — the band the controller holds it in, where a win the dashboard hasn't
+    seen yet is one downward step from termination — or a recorded win younger than 90 min (a
+    won round may still be live). 30-min baseline everywhere else. The caller only runs while
+    XvB is enabled, so a disabled stack never fetches at all.
+
+    Extra Tor load, honestly: the fast gate admits at most 24 fetches/h vs 2/h at baseline, and
+    the every-10th-poll outer throttle caps it at ~12/h at the default 30 s UPDATE_INTERVAL —
+    only while the sensitive window holds. Win-detection latency in that window falls from up
+    to 30 min to the first eligible poll past the gate: ~5 min at the default interval, 2.5 min
+    at the gate's own floor. This is the detection half of #892; the other half — steering off
+    the credited average's projected trajectory instead of its current reading — remains open.
+    """
+    _, threshold = get_tier_info(min(avg_1h, avg_24h), tiers)
+    if threshold > 0 and avg_1h <= threshold * (1 + _XVB_WINNERS_MARGIN):
+        return _XVB_WINNERS_SYNC_FAST_SEC
+    if last_win_ts > 0 and now - last_win_ts < _XVB_WIN_FRESH_S:
+        return _XVB_WINNERS_SYNC_FAST_SEC
+    return _XVB_WINNERS_SYNC_SEC
 
 
 def _parse_proxy_list_worker(w):
@@ -883,10 +919,24 @@ class DataService:
         the XvB card read the table.
 
         Same "no write on failure" contract as the other XvB syncs: a failed fetch returns None,
-        nothing is written, and the 30-min gate is NOT stamped so the next 10th poll retries.
+        nothing is written, and the gate is NOT stamped so the next 10th poll retries.
+
+        The gate is adaptive (#892): ``_xvb_winners_gate_sec`` picks the fast cadence while a
+        won round is plausibly live or at stake, the 30-min baseline otherwise.
         """
         now = time.time()
-        if now - self._last_xvb_winners_sync < _XVB_WINNERS_SYNC_SEC:
+        xvb = self.state_manager.get_xvb_stats()
+        recent_wins = await asyncio.to_thread(
+            self.state_manager.get_raffle_wins, now - _XVB_WIN_FRESH_S
+        )
+        gate = _xvb_winners_gate_sec(
+            xvb.get("avg_1h", 0) or 0,
+            xvb.get("avg_24h", 0) or 0,
+            self.state_manager.get_tiers(),
+            max((w.get("ts", 0) or 0 for w in recent_wins), default=0.0),
+            now,
+        )
+        if now - self._last_xvb_winners_sync < gate:
             return
         result = await asyncio.to_thread(self.xvb_client.get_recent_wins)
         if result is None:
