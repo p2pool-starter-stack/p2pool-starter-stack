@@ -1523,14 +1523,14 @@ _XVB_REALIZATION_WINDOW_S = 45 * SECONDS_PER_DAY
 
 # Measured delivery PRIOR for boxes with no local measurement (#872): the fraction of the
 # advertised prize a winner's wallet actually receives, measured ON-CHAIN (p2pool.observer,
-# all three sidechains) across 25 audited won rounds, Jun–Aug 2026: point 0.32, bootstrap 95%
-# CI (0.27, 0.38). Margin-invariant (a controlled experiment pinning the credited margin at
-# 2.1–2.5x the round minimum measured +2pp vs mixed-margin history — zero), so ONE band serves
+# all three sidechains) across 25 audited won rounds, Jun–Aug 2026: point 0.33, bootstrap 95%
+# CI (0.28, 0.39). At most a small margin effect (a controlled experiment pinning the credited
+# margin at 2.1–2.5x the round minimum measured +5pp with overlapping CIs), so ONE band serves
 # every tier and regime. Payout of delivered work measured complete, so delivery == realization.
 # Supersedes the earlier (0.24, 0.42) two-era payout-window band, whose upper endpoint did not
 # survive on-chain recount. A local measurement (xvb_realization) still supersedes this prior.
 # ponytail: single-wallet study constant — recalibrate from the public-winners generalization.
-XVB_REALIZATION_PRIOR = (0.27, 0.38)
+XVB_REALIZATION_PRIOR = (0.28, 0.39)
 
 
 def xvb_forecast_tier_key(metrics, tiers):
@@ -1806,7 +1806,7 @@ def build_xvb_calc(metrics, state_mgr, realization=None):
     cumulative forecast) and ``players_avg`` (which also makes a single-qualifier artifact like
     Mega's self-evident). ``realized_reward_year`` scales the published figure by this wallet's
     measured win realization (``realization``, from ``xvb_realization``) — None when unmeasured,
-    so the client falls back to face value and says so. Returns ``{"enabled": False}`` alone when
+    so the client falls back to the study band; face value shows only in its own column. Returns ``{"enabled": False}`` alone when
     XvB is off — there is no tier to calculate."""
     if not metrics.xvb_enabled:
         return {"enabled": False}

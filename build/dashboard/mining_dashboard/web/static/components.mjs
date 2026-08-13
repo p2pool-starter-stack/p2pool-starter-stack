@@ -514,10 +514,11 @@ function XvbDecisionTable({ calc, coeffDay, hr, energy }) {
         <div class="xvb-comparison">
             <label class="xvb-compare-label">Should I donate? — per-tier verdict (per year)</label>
             <p class="text-muted text-xs" id="xvb-study-note">
-                XvB's figures are face value. A 25-round on-chain study (Jun–Aug 2026, all three
-                sidechains) measured winners receiving 32% of face (95% CI 27–38%), regardless of
-                donation margin. The ${measured ? "Yours" : "Study"} column prices that in; the
-                Net verdict uses it.
+                XvB's figures are face value. A 25-round single-wallet on-chain audit (Jun–Aug
+                2026, all three sidechains) measured winners receiving 33% of face (95% CI
+                28–39%), with at most a small margin effect; a 14-winner public crawl
+                corroborates (no winner near face value). The
+                ${measured ? "Yours" : "Study"} column prices that in; the Net verdict uses it.
             </p>
             <div class="table-scroll">
             <table class="est-table" id="xvb-decision-table">
@@ -529,7 +530,7 @@ function XvbDecisionTable({ calc, coeffDay, hr, energy }) {
                     <th scope="col" title=${
                       measured
                         ? "XvB's figure scaled by what THIS wallet's raffle wins actually paid."
-                        : "XvB's figure scaled by the measured delivery band (32%, CI 27–38% — on-chain, 25 rounds, margin-invariant)."
+                        : "XvB's figure scaled by the measured delivery band (33%, CI 28–39% — on-chain single-wallet audit, 25 rounds; crawl-corroborated)."
                     }>${estHeader}</th>
                     <th scope="col" title="Estimated reward minus the P2Pool earnings given up. Red: loses even at the optimistic end. Green: profits even at the pessimistic end.">Net / yr</th>
                 </tr></thead>

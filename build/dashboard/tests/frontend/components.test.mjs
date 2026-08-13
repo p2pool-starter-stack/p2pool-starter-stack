@@ -622,7 +622,7 @@ test('XvB decision table: all tiers at once, study column, coloured net verdict 
     assert.doesNotMatch(up, /id="xvb-tier-select"/);
     assert.match(up, /XvB says \/ yr/);
     assert.match(up, /Study est\. \/ yr/);
-    assert.match(up, /measured winners receiving 32%|winners received 32%|winners receiving 32%/);
+    assert.match(up, /winners receiving 33% of face/);
     // Whale row: cost 3.65; study band 1.6659…2.3446; net band negative at both ends -> red.
     assert.match(up, /1\.6659[0-9]* XMR … 2\.3446[0-9]* XMR/);
     assert.match(up, /-1\.98[0-9]* XMR … -1\.30[0-9]* XMR/);
@@ -657,6 +657,65 @@ test('XvB decision table: local measured wins supersede the study column (#872)'
     assert.match(up, /-1\.6756[0-9]* XMR/); // net = 1.9744 − 3.65, single point
 });
 
+
+test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
+    // The base fixture has no pool difficulty → cadence.available === false → server-sent dashes.
+    const cold = renderApp();
+    assert.match(cold, /Pool Cadence & Luck/);
+    assert.match(cold, /Since Pool's Last Block/);
+    assert.match(cold, /Est\. Time \/ Share/);
+    assert.match(cold, /Your PPLNS Weight/);
+    assert.match(cold, /—/);
+    // With server-computed figures, the card renders them verbatim (no client-side math).
+    const s = clone();
+    s.cadence = {
+        last_block: '12:34:56', since_block: '5m 0s', tts: '1h 0m',
+        luck: '123%', weight: '1,234,567', available: true,
+    };
+    const up = renderApp({ state: s });
+    assert.match(up, /5m 0s/);
+    assert.match(up, /1h 0m/);
+    assert.match(up, /123%/);
+    assert.match(up, /1,234,567/);
+});
+
+test('XvB decision table: verdict colours cover green and zero-spanning bands, stale degrades honestly (#872)', () => {
+    const base = clone();
+    base.earnings.available = true;
+    base.earnings.coeff_day = 1e-9; // tiny cost so a positive band is constructible
+    base.earnings.p2pool_hr = 200000;
+    base.earnings.p2pool_hr_str = '200.00 kH/s';
+    base.xvb_calc = {
+        enabled: true, max_fraction: 0.85, estimates_available: true, estimates_stale: false,
+        current_tier: 'None', target_tier: 'Vip (10.00 kH/s+)', target_threshold: 10000,
+        sustainable: true, note: 'raffle status', mode_note: null,
+        realization_pct: null, realization_wins: null,
+        tiers: [
+            // cost = 10000 × 1e-9 × 365 = 0.00365; band well above -> green at both ends
+            { name: 'Vip (10.00 kH/s+)', threshold: 10000, expected_reward_year: 0.81,
+              realized_reward_year: null, assumed_reward_year_range: [0.22, 0.31],
+              win_odds_day: 0.12, players_avg: 31.4 },
+            // band straddles cost -> neutral (no class)
+            { name: 'Whale (100.00 kH/s+)', threshold: 100000, expected_reward_year: 6.17,
+              realized_reward_year: null, assumed_reward_year_range: [0.03, 0.05],
+              win_odds_day: 0.84, players_avg: 8.2 },
+        ],
+    };
+    const up = renderApp({ state: base });
+    assert.match(up, /class="status-ok">0\.21635/); // green: even pessimistic end profits
+    assert.match(up, /class="">-0\.0065/); // zero-spanning: neutral cell class
+    // Stale estimates: costs still render, estimate/net columns dash, footer says costs only.
+    const stale = clone();
+    stale.earnings.available = true;
+    stale.earnings.coeff_day = 1e-7;
+    stale.earnings.p2pool_hr = 200000;
+    stale.xvb_calc = { ...base.xvb_calc, estimates_available: false, estimates_stale: true,
+        tiers: base.xvb_calc.tiers.map((t) => ({ ...t, expected_reward_year: null,
+            assumed_reward_year_range: null, realized_reward_year: null })) };
+    const sh = renderApp({ state: stale });
+    assert.match(sh, /tier costs only/);
+    assert.match(sh, /0\.365\d* XMR/); // vip cost at 1e-7
+});
 
 test('XvBStats greys the credited figures and flags the footer when the fetch is stale (#311)', () => {
     // Fresh (base fixture, xvb_stale false): the normal "Stats fetched" footer, no stale marks.
