@@ -97,9 +97,19 @@ render_bundle_manifest() { # $1 os_version, $2 variant, $3 data_migration, $4 mi
 verify_tarball_commit() {
     local tarball="$1" stamped head
     stamped=$(tar -xOf "$tarball" opt/pithead/BUILD_COMMIT 2>/dev/null) || stamped=""
-    head=$(git rev-parse HEAD 2>/dev/null || echo unknown)
-    git diff --quiet 2>/dev/null || head="${head}-dirty"
     [ -n "$stamped" ] || stamped="(no BUILD_COMMIT stamp in the tarball)"
+
+    if ! head=$(_working_tree_commit); then
+        if [ "${PITHEAD_STALE_TARBALL_OK:-0}" = 1 ]; then
+            echo "==> PITHEAD_STALE_TARBALL_OK=1: proceeding with $tarball (stamped $stamped) though the working tree's commit cannot be read" >&2
+            return 0
+        fi
+        echo "refusing $tarball: cannot read the working tree's commit to check the tarball's" \
+            "freshness against it (git failed — under sudo, root may refuse another user's" \
+            "checkout). Run from the checkout's owner, or set PITHEAD_STALE_TARBALL_OK=1 to" \
+            "skip the freshness check" >&2
+        return 2
+    fi
 
     if [ "$stamped" = "$head" ]; then
         return 0
@@ -112,6 +122,28 @@ verify_tarball_commit() {
         "working tree is now at $head — rerun os/build-image.sh, or set PITHEAD_STALE_TARBALL_OK=1" \
         "to use it anyway" >&2
     return 2
+}
+
+# The working tree's commit, with build-image.sh's exact -dirty suffix. These scripts normally run
+# under sudo, and root's git refuses to read another user's checkout ("dubious ownership") — and
+# `git -c safe.directory=` is documented as ignored from the command line — so on failure ask
+# again as the invoking user. Without this the guard would refuse EVERY sudo build on a
+# user-owned checkout, which is exactly the flow the stale-tarball incident happened on.
+_working_tree_commit() {
+    local h
+    if h=$(git rev-parse HEAD 2>/dev/null); then
+        git diff --quiet 2>/dev/null || h="${h}-dirty"
+        printf '%s\n' "$h"
+        return 0
+    fi
+    if [ -n "${SUDO_USER:-}" ]; then
+        if h=$(sudo -u "$SUDO_USER" git rev-parse HEAD 2>/dev/null); then
+            sudo -u "$SUDO_USER" git diff --quiet 2>/dev/null || h="${h}-dirty"
+            printf '%s\n' "$h"
+            return 0
+        fi
+    fi
+    return 1
 }
 
 populate_slot() { # $1 = mounted rootfs

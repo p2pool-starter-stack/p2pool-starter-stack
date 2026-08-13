@@ -9307,8 +9307,27 @@ out=$(vtc "$VTC_TMP/nostamp.tar")
 assert_eq "a tarball with no BUILD_COMMIT stamp is refused" "$out" "rc=2"
 assert_contains "the refusal says no stamp was found" "$(cat "$VTC_TMP/err")" "no BUILD_COMMIT stamp"
 
+# A checkout git cannot read (sudo on another user's tree, once the SUDO_USER fallback also
+# fails) must refuse rather than silently skip the freshness check — fail closed, with the
+# same explicit escape. Run from a non-repo dir with the fallback neutralized to simulate it.
+vtc_norepo() { # $1=tarball -> prints "rc=<n>"; stderr to $VTC_TMP/err
+    (
+        cd "$VTC_TMP" || exit
+        # shellcheck disable=SC1091
+        . "$ROOT/os/rauc/populate-slot.sh"
+        set +e
+        SUDO_USER="" GIT_DIR="$VTC_TMP/no-such-repo" verify_tarball_commit "$1" 2>"$VTC_TMP/err"
+        echo "rc=$?"
+    )
+}
+out=$(vtc_norepo "$VTC_TMP/fresh.tar")
+assert_eq "an unreadable working tree refuses (fail closed, never skip)" "$out" "rc=2"
+assert_contains "the refusal explains git could not be read" "$(cat "$VTC_TMP/err")" "cannot read the working tree's commit"
+out=$(PITHEAD_STALE_TARBALL_OK=1 vtc_norepo "$VTC_TMP/fresh.tar")
+assert_eq "PITHEAD_STALE_TARBALL_OK=1 overrides the unreadable-tree refusal" "$out" "rc=0"
+
 rm -rf "$VTC_TMP"
-unset -f mk_vtc_fixture vtc
+unset -f mk_vtc_fixture vtc vtc_norepo
 unset VTC_TMP VTC_HEAD_SHA VTC_HEAD
 
 # --- mkbundle metadata validation (fails fast, before the multi-minute image build) ---
