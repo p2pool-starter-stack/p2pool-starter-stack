@@ -214,6 +214,34 @@ the cap is visible — the marker names it, and the dashboard logs a warning.
 
 ---
 
+## Archiving the XvB winners feed
+
+`scripts/xvb-winners-archive.sh` saves a dated snapshot of the public XvB winners feed
+(`https://xmrvsbeast.com/p2pool/winners_recent_full_pub.txt`) — the full round schedule with
+per-round prize hashrates and qualifier counts — before the feed's ~45-day rolling window drops
+the oldest rounds. The fetch runs inside the dashboard container, so it rides the stack's Tor
+SOCKS like every other XvB call; the feed is public and carries no wallet. The stack must be
+running.
+
+This is optional. The reason to run it: the dashboard's XvB earnings estimate rests on a
+measured delivery band — the fraction of the advertised prize that actually arrives on-chain,
+measured once in the [XvB delivery study](research/xvb-delivery-study/README.md) (Jun–Aug 2026:
+point 0.33, 95% CI 0.28–0.39). XvB can change its payout behaviour at any time, and the winners
+feed is the raw material for re-running that measurement; without an archive, anything older
+than ~45 days is gone.
+
+Run it daily from cron on the deploy box:
+
+```
+10 0 * * * $HOME/mining/current/scripts/xvb-winners-archive.sh
+```
+
+Snapshots land in `xvb-winners-archive/` in the stack directory as `winners-YYYYMMDD.txt`
+(UTC date); pass a different directory as the only argument. Each snapshot is ~90 KB, so a
+daily archive grows about 3 MB a month.
+
+---
+
 ## Updating the stack
 
 The update path depends on how you installed (see [Getting Started](getting-started.md#2-get-the-code)).
