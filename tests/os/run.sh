@@ -322,6 +322,17 @@ phase_boot() {
     }
     ok "wizard serves the token gate ($ip)"
 
+    # Hugepages are load-bearing (the RandomX dataset must land in hugetlbfs, not the cgroup —
+    # the Dockerfile's own words): the baked sysctl reserves 3072 2M pages, and a boot that
+    # silently lost them starves the miner while everything else looks healthy.
+    local hp
+    hp=$(_ssh "awk '/^HugePages_Total/{print \$2}' /proc/meminfo" 2>/dev/null) || hp=""
+    if [ -n "$hp" ] && [ "$hp" -ge 3072 ]; then
+        ok "hugepage pool reserved at boot ($hp pages)"
+    else
+        bad "hugepage pool missing or short at boot (HugePages_Total: ${hp:-unreadable}, want >= 3072)"
+    fi
+
     # #895: machine-id must be assigned once and then STAY. An empty-baked image with no
     # restore-from-/data unit regenerates a new transient id on EVERY boot (systemd's own
     # first-boot semantics on a permanently read-only /etc) — worse than the bug being fixed.
@@ -835,7 +846,8 @@ phase_install() {
                  test -e \"\$T/pithead/reinstall-sentinel\" && s=\$s,USER-DATA-SURVIVED
                  umount \"\$T\" 2>&1 || s=\$s,UMOUNT-FAILED
                  echo \"verdict=\$s\"" 2>&1)
-    if printf '%s' "$wout" | grep -q "verdict=OK"; then
+    # Anchored: "verdict=OK,USER-DATA-SURVIVED" must NOT pass — the suffix flags are the failure.
+    if printf '%s' "$wout" | grep -qx "verdict=OK"; then
         ok "wipe=data KEPT both chains and dropped the user data"
     else
         bad "wipe=data got the split wrong: $(printf '%s' "$wout" | tr '\n' ' ' | cut -c1-300)"
@@ -1830,12 +1842,17 @@ phase_fault() {
     # refusal — refusing to install is correct, crashing is not, and bricking is disqualifying.
     info "fault C — install a deliberately corrupted bundle"
     _ssh "dd if=/dev/urandom of=/data/update.bundle bs=1M seek=8 count=2 conv=notrunc" >/dev/null 2>&1 || true
-    out=$(_ssh "$(_install_cmd /data/update.bundle) 2>&1" || true)
+    local corrupt_rc=0
+    out=$(_ssh "$(_install_cmd /data/update.bundle) 2>&1") || corrupt_rc=$?
     if printf '%s' "$out" | grep -qi "panic"; then
         bad "C: the updater PANICKED on a corrupt bundle instead of refusing it"
         info "  $(printf '%s' "$out" | grep -i panic | head -1 | cut -c1-150)"
+    elif [ "$corrupt_rc" -eq 0 ]; then
+        # The old check only asserted the absence of "panic" — an install that quietly ACCEPTED
+        # the tampered bundle read as a pass. The refusal itself is the assertion.
+        bad "C: a corrupted/tampered bundle was ACCEPTED (installer exited 0)"
     else
-        ok "C: a corrupt bundle is refused without crashing"
+        ok "C: a corrupt bundle is refused without crashing (exit $corrupt_rc)"
     fi
     if _wait_ssh 300; then
         ok "C: still boots after being handed a corrupt bundle (marker '$(_marker)')"

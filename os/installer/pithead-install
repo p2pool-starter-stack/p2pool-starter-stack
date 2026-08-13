@@ -114,6 +114,10 @@ wipe_data_partition() { # $1 disk, $2 mode (data|all)
     echo "==> wiping user data, preserving the synced chains"
     mnt=$(mktemp -d)
     mount "$part" "$mnt"
+    # A failed step below must not leave the partition mounted-busy for the operator's retry —
+    # the script's own EXIT trap is installed later in main(), so this window needs its own.
+    # shellcheck disable=SC2064  # expand NOW: $mnt is a local, out of scope when the trap fires
+    trap "umount '$mnt' 2>/dev/null || true; rmdir '$mnt' 2>/dev/null || true" EXIT
     keep="$mnt/.wipe-keep.$$"
     mkdir -p "$keep"
     # Same-filesystem renames: preserving a 250 GB chain must not copy it.
@@ -132,6 +136,7 @@ wipe_data_partition() { # $1 disk, $2 mode (data|all)
     rmdir "$keep" 2>/dev/null || true
     umount "$mnt"
     rmdir "$mnt"
+    trap - EXIT
 }
 
 main() {
