@@ -12,6 +12,13 @@
 # Exit: 0 all checks pass, 1 otherwise.
 set -uo pipefail
 
+# Directory-independent: this script assumes cwd == repo root for the relative paths later on
+# (./pithead, build/dashboard/...), so resolve the shared helper from the script's own location
+# instead of adding a cd that would change those.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=os/rauc/loop-wait.sh
+. "$SCRIPT_DIR/../../os/rauc/loop-wait.sh"
+
 IMAGE="${1:-}"
 MODE="${2:-}"
 [ -f "$IMAGE" ] || {
@@ -47,15 +54,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Same race as mkimage.sh: losetup -P returns before the partition nodes exist. Wait once here
-# so the checks below read the image, not the timing of udev on a busy box.
-udevadm settle 2>/dev/null || true
-for _ in {1..25}; do
-    [ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] && break
-    sleep 0.2
-done
-# Hard-fail like mkimage.sh does: a mount error two screens later names the wrong culprit.
-[ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] || {
+# Same race as mkimage.sh (see loop-wait.sh). Hard-fail like it does: a mount error two screens
+# later names the wrong culprit.
+wait_loop_partitions "$LOOP" p1 p2 || {
     echo "partition nodes never appeared on $LOOP — udev timing or a broken image" >&2
     exit 1
 }
