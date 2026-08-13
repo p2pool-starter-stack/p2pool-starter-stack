@@ -53,10 +53,6 @@ while [ $# -gt 0 ]; do
         PHASE="$2"
         shift 2
         ;;
-    --vm)
-        VM="$2"
-        shift 2
-        ;;
     -h | --help)
         sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
         exit 0

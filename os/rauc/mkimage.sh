@@ -37,6 +37,8 @@ SIZE_GIB="${PITHEAD_IMAGE_GIB:-5}"
 TARBALL="os/build/pithead-root.tar"
 # shellcheck source=os/rauc/populate-slot.sh
 . os/rauc/populate-slot.sh
+# shellcheck source=os/rauc/loop-wait.sh
+. os/rauc/loop-wait.sh
 
 [ -s "$TARBALL" ] || {
     echo "missing $TARBALL — run os/build-image.sh first to stage the rootfs" >&2
@@ -68,17 +70,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# losetup -P returns before the kernel/udev publish the partition nodes, and the gap widens
-# under loop-device churn (a KVM battery running beside a release build). Without this wait the
-# first mkfs fails with "unable to open ${LOOP}p1: No such device or address" — and a plain
-# retry succeeds, which is exactly how it stays invisible until release day. One guarded wait:
-# settle udev, then poll briefly for both nodes.
-udevadm settle 2>/dev/null || true
-for _ in {1..25}; do
-    [ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] && break
-    sleep 0.2
-done
-[ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] || {
+# See loop-wait.sh for why this wait exists.
+wait_loop_partitions "$LOOP" || {
     echo "partition nodes for $LOOP never appeared after losetup -P" >&2
     exit 1
 }
