@@ -9802,6 +9802,29 @@ fi
 [ -f "$STICK5/pithead-config.json" ] && ok "a cancelled change is not consumed — the stick still carries it" ||
     bad "a cancelled change is not consumed" "the stick's file was removed anyway"
 
+# main() must FAIL CLOSED end to end when the secret-path list can't be read: with a broken host
+# program, no diff (which could leak raw secret values) is ever shown and no config is applied.
+STICK6="$MC/stick-nosecrets"
+mkdir -p "$STICK6"
+cp "$MC/changed.json" "$STICK6/pithead-config.json"
+cp "$MC/good.json" "$RUN_CFG"
+: >"$MC/mount.log"
+(
+    export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
+    export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK6" MOUNT_LOG="$MC/mount.log"
+    # Validation still works (real pithead), but the secret-path fetch reads a DIFFERENT, broken
+    # binary — the one place masking could silently turn off.
+    export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
+    source "$ROOT/os/overlay/pithead-media-config"
+    _secret_paths_json() { return 1; }             # simulate an unreadable/broken host program
+    media_config_diff() { echo "DIFF-WAS-SHOWN"; } # would leak values if ever reached
+    media_confirm_gate() { echo apply; }
+    main
+) >"$MC/nosecrets.out" 2>&1
+assert_eq "no secret list -> the running config is never rewritten" "$(cmp -s "$MC/good.json" "$RUN_CFG" && echo same)" "same"
+assert_not_contains "no secret list -> no diff is ever displayed" "$(cat "$MC/nosecrets.out")" "DIFF-WAS-SHOWN"
+assert_contains "no secret list -> the stage refuses out loud" "$(cat "$MC/nosecrets.out")" "cannot read the secret-path list"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

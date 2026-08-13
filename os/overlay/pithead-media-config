@@ -23,8 +23,6 @@ RUNNING_CONFIG="${PITHEAD_MEDIA_CONFIG:-$PITHEAD_DIR/config.json}"
 COUNTDOWN="${PITHEAD_MEDIA_COUNTDOWN:-60}"
 STAGED_NAME="pithead-config.json"
 
-warn() { echo "pithead-media-config: $*" >&2; }
-
 # Put words in front of a human standing at the machine, on every physical console — the same
 # broadcast the wizard uses (pithead's token announcement): /dev/console is only whichever the
 # kernel cmdline named LAST, so a message sent there alone is invisible to an operator watching
