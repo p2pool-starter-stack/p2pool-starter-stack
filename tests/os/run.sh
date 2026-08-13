@@ -121,6 +121,32 @@ _dash_marker_served() {
     return 1
 }
 
+# Poll until the guest has taken a DHCP lease. No guest agent in the appliance image (by
+# design), so the lease is the source of truth. Sets the global `ip`. $1 seconds.
+_wait_dhcp_ip() {
+    local deadline=$(($(date +%s) + $1))
+    ip=""
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+        [ -n "$ip" ] && return 0
+        sleep 3
+    done
+    return 1
+}
+
+# Poll until the setup wizard's gate page answers on the global `ip`. The console announcement
+# fires when the wizard CONTAINER starts, not when the Python server inside has bound its
+# sockets, so the gate answers a little after the token prints — same retry shape everywhere
+# this file waits on it. $1 seconds.
+_wait_setup_page() {
+    local deadline=$(($(date +%s) + $1))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup" && return 0
+        sleep 5
+    done
+    return 1
+}
+
 # Build a bootable image carrying $1 as its slot marker, for the selected updater.
 _build_image() {
     [ -f "$KEY" ] || ssh-keygen -t ed25519 -N "" -f "$KEY" -q
@@ -283,14 +309,7 @@ phase_boot() {
     fi
     # Reachable on :80 from the host once the VM has a lease.
     local ip
-    # No guest agent in the appliance image (by design) — the DHCP lease is the source of truth.
-    local tries=0
-    while [ -z "${ip:-}" ] && [ "$tries" -lt 20 ]; do
-        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
-        [ -n "$ip" ] || sleep 3
-        tries=$((tries + 1))
-    done
-    [ -n "$ip" ] || {
+    _wait_dhcp_ip 60 || {
         bad "wizard not reachable — the VM never took a DHCP lease"
         return
     }
@@ -301,16 +320,11 @@ phase_boot() {
     # the gap only opens when the host is loaded, which is exactly when batteries run. A human
     # operator never sees it because reading the token and typing the URL takes longer. Same
     # retry shape as every other wizard probe in this file.
-    tries=0
-    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
-        sleep 5
-        tries=$((tries + 1))
-        [ "$tries" -lt 24 ] || {
-            bad "wizard never served the token gate ($ip)"
-            return
-        }
-    done
-    ok "wizard serves the token gate ($ip, ready after ~$((tries * 5))s)"
+    _wait_setup_page 120 || {
+        bad "wizard never served the token gate ($ip)"
+        return
+    }
+    ok "wizard serves the token gate ($ip)"
 }
 
 # Boot a raw appliance disk under OVMF and return once it has a lease. Sets the global `ip`.
@@ -330,14 +344,7 @@ _vm_boot_disk() {
         --import --disk "path=$DISK,format=raw,bus=virtio" \
         --network network=default,model=virtio --graphics none \
         --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 || return 1
-    ip=""
-    local tries=0
-    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
-        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
-        [ -n "$ip" ] || sleep 3
-        tries=$((tries + 1))
-    done
-    [ -n "$ip" ]
+    _wait_dhcp_ip 120
 }
 
 phase_update() {
@@ -532,13 +539,7 @@ phase_install() {
         bad "virt-install failed to define the installer VM"
         return
     }
-    ip=""
-    local tries=0
-    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
-        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
-        [ -n "$ip" ] || sleep 3
-        tries=$((tries + 1))
-    done
+    _wait_dhcp_ip 120
     _wait_ssh 240 || {
         bad "installer guest never answered SSH (ip: ${ip:-none})"
         return
@@ -586,15 +587,10 @@ phase_install() {
     ok "one-time token read from the installer console ($token)"
     # The token prints before the container finishes coming up — wait for the gate to SERVE
     # before authing, exactly as the provision phase does (and as a human's browser would).
-    tries2=0
-    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
-        sleep 5
-        tries2=$((tries2 + 1))
-        [ "$tries2" -lt 24 ] || {
-            bad "installer wizard never served its gate page"
-            return
-        }
-    done
+    _wait_setup_page 120 || {
+        bad "installer wizard never served its gate page"
+        return
+    }
     jar=$(mktemp)
     curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
         grep -q "wizard_session" "$jar" || {
@@ -650,13 +646,7 @@ phase_install() {
         bad "virt-install failed to define the installed VM"
         return
     }
-    ip=""
-    tries=0
-    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
-        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
-        [ -n "$ip" ] || sleep 3
-        tries=$((tries + 1))
-    done
+    _wait_dhcp_ip 120
     _wait_ssh 300 || {
         bad "installed system never answered SSH (ip: ${ip:-none})"
         return
@@ -692,15 +682,7 @@ phase_install() {
     else
         bad "/data on the target is '${data_gib:-none}' GiB — repart did not size it to the disk"
     fi
-    _wizard_up() { # shared by both legs — first boots must load the wizard image first
-        local wtries=0
-        while [ "$wtries" -lt 36 ]; do
-            curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup" && return 0
-            sleep 5
-            wtries=$((wtries + 1))
-        done
-        return 1
-    }
+    _wizard_up() { _wait_setup_page 180; } # shared by both legs — first boots load the wizard image first
     # The staged config makes the first boot HEADLESS: the machine provisions itself and no
     # second wizard ever serves. The full stack-up is the provision phase's job; here we prove
     # the config arrived and provisioning began.
@@ -750,13 +732,7 @@ phase_install() {
         bad "virt-install failed for the reinstall boot"
         return
     }
-    ip=""
-    tries=0
-    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
-        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
-        [ -n "$ip" ] || sleep 3
-        tries=$((tries + 1))
-    done
+    _wait_dhcp_ip 120
     _wait_ssh 240 || {
         bad "installer guest never answered SSH for the reinstall leg"
         return
@@ -896,13 +872,7 @@ phase_install() {
         bad "virt-install failed for the newer-stick keep-reinstall boot"
         return
     }
-    ip=""
-    tries=0
-    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
-        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
-        [ -n "$ip" ] || sleep 3
-        tries=$((tries + 1))
-    done
+    _wait_dhcp_ip 120
     _wait_ssh 240 || {
         bad "newer stick never answered SSH for the keep leg"
         return
@@ -927,15 +897,10 @@ phase_install() {
         return
     }
     # Fresh boot: the token prints before the wizard container finishes coming up.
-    tries2=0
-    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
-        sleep 5
-        tries2=$((tries2 + 1))
-        [ "$tries2" -lt 36 ] || {
-            bad "the newer stick's wizard never served its gate page"
-            return
-        }
-    done
+    _wait_setup_page 180 || {
+        bad "the newer stick's wizard never served its gate page"
+        return
+    }
     jar=$(mktemp)
     curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
         grep -q "wizard_session" "$jar" || {
@@ -980,13 +945,7 @@ phase_install() {
         bad "virt-install failed for the reinstalled system"
         return
     }
-    ip=""
-    tries=0
-    while [ -z "$ip" ] && [ "$tries" -lt 40 ]; do
-        ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
-        [ -n "$ip" ] || sleep 3
-        tries=$((tries + 1))
-    done
+    _wait_dhcp_ip 120
     _wait_ssh 300 || {
         bad "reinstalled system never answered SSH"
         return
@@ -1053,15 +1012,10 @@ phase_provision() {
         return
     }
     ok "one-time token read from the console ($token)"
-    tries=0
-    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
-        sleep 5
-        tries=$((tries + 1))
-        [ "$tries" -lt 24 ] || {
-            bad "wizard gate never served on :80"
-            return
-        }
-    done
+    _wait_setup_page 120 || {
+        bad "wizard gate never served on :80"
+        return
+    }
 
     jar=$(mktemp)
     # https, and PROVE the cookie landed: auth against :80 once hit the new TLS redirect, whose
@@ -1183,7 +1137,22 @@ phase_provision() {
     # absence let a leaking appliance ship green: it FAILS against the orphaned-chain code and
     # PASSES once the nft table is installed. monerod sits on mining_net (172.28.0.x) and syncs
     # regardless of the mining hold, so it is the honest origin for the dial.
-    if _ssh "podman exec monerod sh -c 'command -v curl' >/dev/null 2>&1"; then
+    # monerod's baked archive is the largest and loads last — dashboard+caddy answering (above)
+    # does not mean monerod exists yet. A `podman exec` against a missing container fails exactly
+    # like a missing curl binary, which used to blame the wrong thing (#887). Wait for it first.
+    local monerod_deadline=$(($(date +%s) + 300)) monerod_present=0
+    while [ "$(date +%s)" -lt "$monerod_deadline" ]; do
+        case "$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null)" in
+        *monerod*)
+            monerod_present=1
+            break
+            ;;
+        esac
+        sleep 5
+    done
+    if [ "$monerod_present" -ne 1 ]; then
+        bad "monerod container never came up — cannot assert the Tor-only egress drop (the #855 backstop is unverified)"
+    elif _ssh "podman exec monerod sh -c 'command -v curl' >/dev/null 2>&1"; then
         # NEGATIVE — a direct clearnet dial by IP must be DROPPED (curl times out, non-zero).
         if _ssh "podman exec monerod curl -s -o /dev/null -m 8 http://1.1.1.1/" 2>/dev/null; then
             bad "clearnet egress is FAIL-OPEN — monerod reached 1.1.1.1 directly, bypassing Tor (the firewall is not enforced)"
@@ -1212,7 +1181,7 @@ phase_provision() {
             ok "mining_net is IPv4-only (no global v6 in the container) — v6 clearnet dial not possible, backstop not exercised"
         fi
     else
-        bad "monerod lacks curl — cannot assert the Tor-only egress drop (the #855 backstop is unverified)"
+        bad "curl missing from the monerod image — cannot assert the Tor-only egress drop (the #855 backstop is unverified)"
     fi
 
     # ---- local-miner leg (#796): enable -> xmrig up -> wired to the machine's own stratum ---
@@ -1546,15 +1515,10 @@ phase_rig() {
         bad "no one-time token ever appeared on the console"
         return
     }
-    tries=0
-    while ! curl -fsSk -m 5 "https://$ip/" 2>/dev/null | grep -qi "Pithead setup"; do
-        sleep 5
-        tries=$((tries + 1))
-        [ "$tries" -lt 24 ] || {
-            bad "wizard gate never served"
-            return
-        }
-    done
+    _wait_setup_page 120 || {
+        bad "wizard gate never served"
+        return
+    }
     jar=$(mktemp)
     curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null || {
         bad "token was not accepted"
