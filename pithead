@@ -1583,6 +1583,29 @@ firstboot_consume_restore() { # <spool-dir>
         fi
     fi
 
+    # Path-safety audit BEFORE staging: the accepted tree is copied to "/" below, so a member with
+    # an absolute path, a ".." component, or a symlink/hardlink could write outside the restore
+    # set (a symlink extracted first, then written through). Modern tar refuses these, but the
+    # destination is the filesystem root — do not trust the tar version. A Pithead backup carries
+    # only regular files and dirs under known prefixes, so any escaping path or link is corruption
+    # or an attack: fail closed. Lists names (whole-line, absolute/".." check) and the verbose
+    # form (link check) separately, because a name with spaces is unparseable from `tar -tv`.
+    local rnames rlinks
+    if [ "$encrypted" -eq 1 ]; then
+        rnames=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") | tar -tz 2>/dev/null)
+        rlinks=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") | tar -tvz 2>/dev/null)
+    else
+        rnames=$(tar -tzf "$archive" 2>/dev/null)
+        rlinks=$(tar -tvzf "$archive" 2>/dev/null)
+    fi
+    if printf '%s\n' "$rnames" | grep -qE '^/|(^|/)\.\.(/|$)' ||
+        printf '%s\n' "$rlinks" | grep -qE '^l| -> | link to '; then
+        rm -f "$archive"
+        pass=""
+        printf 'archive contains unsafe paths or links — refusing to restore' >"$spool/error.txt"
+        return 1
+    fi
+
     tmp=$(mktemp -d) || {
         printf 'could not stage the restore' >"$spool/error.txt"
         rm -f "$archive"

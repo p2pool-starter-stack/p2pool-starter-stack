@@ -3871,7 +3871,28 @@ assert_contains "malformed archive names the problem" "$(cat "$RSPOOL/error.txt"
 assert_eq "malformed archive leaves config.json untouched" "$([ -f "$RS/config.json" ] || echo gone)" "gone"
 rm -f "$RSPOOL/error.txt"
 
-# 6) Nothing to consume.
+# 6) Path-traversal / symlink defense: a well-formed gzip archive (passes the magic + integrity
+# checks) whose members escape the restore set must be refused BEFORE anything is staged to "/".
+# A Pithead backup is only regular files under known prefixes, so a symlink or a ".." member is an
+# attack. Built with real tar so the guard faces the exact bytes it would on a box.
+MAL="$RS/mal"
+mkdir -p "$MAL/pithead"
+printf 'CADDY-ORIG\n' >"$RS/Caddyfile"     # live file the escape would try to clobber via symlink
+ln -s /etc/shadow "$MAL/pithead/Caddyfile" # symlink escape
+(cd "$MAL" && tar -czf "$RSPOOL/restore-archive" pithead) 2>/dev/null
+out=$(run_sourced "$RS" firstboot_consume_restore "$RSPOOL" || echo "rc$?")
+assert_contains "a symlink member is refused" "$out" "rc1"
+assert_contains "the symlink refusal names the cause" "$(cat "$RSPOOL/error.txt" 2>/dev/null)" "unsafe paths or links"
+assert_eq "a symlink archive touches nothing" "$(cat "$RS/Caddyfile")" "CADDY-ORIG"
+rm -f "$RSPOOL/error.txt" "$RSPOOL/restore-passphrase"
+# Absolute-path member (stored with a leading slash via -P): would land at /… on cp -a.
+printf 'EVIL\n' >"$MAL/evil"
+(cd "$MAL" && tar -Pczf "$RSPOOL/restore-archive" "$MAL/evil") 2>/dev/null
+out=$(run_sourced "$RS" firstboot_consume_restore "$RSPOOL" || echo "rc$?")
+assert_contains "an absolute-path member is refused" "$out" "rc1"
+rm -f "$RSPOOL/error.txt"
+
+# 7) Nothing to consume.
 out=$(run_sourced "$RS" firstboot_consume_restore "$RSPOOL" || echo "rc$?")
 assert_contains "empty spool is rc2" "$out" "rc2"
 rm -rf "$RS"
