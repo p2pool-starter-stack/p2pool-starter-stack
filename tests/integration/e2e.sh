@@ -8,8 +8,9 @@
 # What it does, end to end, then puts everything back the way it found it:
 #   1. Provisions a DEDICATED checkout on the test bench (/srv/code/pithead-e2e) — the canonical
 #      /srv/code/pithead is the baseline and is never git-touched.
-#   2. Fetches + checks out <branch> there, and seeds it with the canonical config.json/.env so
-#      it has the same wallet / secrets / onion keys / shared chains (just the branch's code).
+#   2. Fetches + checks out <branch> there, and seeds it with the LIVE release bundle's config.json/.env
+#      (falling back to the canonical checkout's if there's no live bundle) so it has the same wallet /
+#      secrets / onion keys / shared chains (just the branch's code).
 #   3. Takes a `pithead backup` of the live stack (the rollback anchor).
 #   4. Borrows a miner (set MINER_HOST): backs up its xmrig config and repoints it at the test bench so
 #      the live matrix has a real worker mining through this stack.
@@ -332,10 +333,34 @@ provision() {
     head="$(on_bench "git -C '$E2E_DIR' rev-parse --short HEAD")"
     ok "e2e checkout on $BRANCH @ $head"
 
-    step "seeding the e2e checkout with the canonical config.json/.env (same wallet/secrets/chains)"
-    on_bench "cp -a '$CANONICAL_DIR/config.json' '$E2E_DIR/config.json' && cp -a '$CANONICAL_DIR/.env' '$E2E_DIR/.env'" ||
-        die "Failed to seed config.json/.env into $E2E_DIR."
-    ok "config seeded (data dirs point at the shared chains)"
+    # Seed from the LIVE release bundle when one exists (#880): the canonical checkout's config can
+    # drift far behind what's actually deployed (a release bumps config.json/.env in the bundle dir,
+    # not in CANONICAL_DIR), so seeding from canonical silently exercises + deploys a stale config.
+    # The bundle lives at the "current" symlink sibling of CANONICAL_DIR (e.g. /srv/code/current).
+    local live_link live_cfg=""
+    live_link="$(dirname "$CANONICAL_DIR")/current"
+    on_bench "test -e '$live_link/config.json' -a -e '$live_link/.env'" && live_cfg="$live_link"
+    if [ -n "$live_cfg" ]; then
+        step "seeding the e2e checkout with the live bundle's config.json/.env ($live_cfg)"
+        on_bench "cp -a '$live_cfg/config.json' '$E2E_DIR/config.json' && cp -a '$live_cfg/.env' '$E2E_DIR/.env'" ||
+            die "Failed to seed config.json/.env from $live_cfg into $E2E_DIR."
+        ok "config seeded from the live bundle (data dirs point at the shared chains)"
+        # Cheap drift check, not a full config differ: canonical is read-only and can lag the bundle
+        # for months, so a top-level-key diff is enough to catch a whole feature silently missing.
+        local live_keys canon_keys key_diff
+        live_keys="$(on_bench "jq -r 'keys[]' '$live_cfg/config.json' 2>/dev/null | sort")"
+        canon_keys="$(on_bench "jq -r 'keys[]' '$CANONICAL_DIR/config.json' 2>/dev/null | sort")"
+        key_diff="$(diff <(echo "$live_keys") <(echo "$canon_keys") 2>/dev/null)"
+        if [ -n "$key_diff" ]; then
+            warn "canonical config.json's top-level keys differ from the live bundle's ($live_cfg) — canonical is drifting:"
+            echo "$key_diff" | sed 's/^/      /' >&2
+        fi
+    else
+        warn "no live bundle at $live_link — seeding from the canonical checkout ($CANONICAL_DIR) instead (may be stale)."
+        on_bench "cp -a '$CANONICAL_DIR/config.json' '$E2E_DIR/config.json' && cp -a '$CANONICAL_DIR/.env' '$E2E_DIR/.env'" ||
+            die "Failed to seed config.json/.env into $E2E_DIR."
+        ok "config seeded from the canonical checkout (data dirs point at the shared chains)"
+    fi
 }
 
 # --- Phase 2: safety backup of the live stack -------------------------------

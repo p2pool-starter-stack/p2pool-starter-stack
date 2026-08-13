@@ -454,6 +454,38 @@ done
 if [ ! -e "$_gt/stray-cruft" ]; then it_pass "clean removes untracked cruft"; else it_fail "clean removes untracked cruft" "stray-cruft survived"; fi
 rm -rf "$_gt"
 
+echo "== provision: seeds from the live bundle when one exists, else falls back to canonical (#880) =="
+# Mirrors e2e.sh provision()'s config-seeding selection + drift check, with plain dirs standing in
+# for the on_bench SSH calls — the selection/diff logic itself is pure and needs no bench.
+_sd="$(mktemp -d)"
+_canon="$_sd/canonical"
+_live="$_sd/current"
+_e2e="$_sd/e2e"
+mkdir -p "$_canon" "$_live" "$_e2e"
+echo '{"monero":{},"dashboard":{}}' >"$_canon/config.json"
+echo canon-env >"$_canon/.env"
+echo '{"monero":{},"dashboard":{},"telegram":{}}' >"$_live/config.json" # live has a key canonical lacks
+echo live-env >"$_live/.env"
+
+seed_from() { # <cfg_dir> -> copies into $_e2e, mirroring the cp -a pair in provision()
+    cp -a "$1/config.json" "$_e2e/config.json" && cp -a "$1/.env" "$_e2e/.env"
+}
+
+# Live bundle present: seeds from it, and a top-level-key diff is non-empty (the drift signal).
+seed_from "$_live"
+assert_eq "seeds config.json from the live bundle" "$(cat "$_e2e/config.json")" "$(cat "$_live/config.json")"
+assert_eq "seeds .env from the live bundle" "$(cat "$_e2e/.env")" "live-env"
+_kd="$(diff <(jq -r 'keys[]' "$_live/config.json" | sort) <(jq -r 'keys[]' "$_canon/config.json" | sort))"
+if [ -n "$_kd" ]; then it_pass "drift check flags canonical missing a live key"; else it_fail "drift check flags canonical missing a live key" "no diff reported"; fi
+
+# No live bundle (symlink missing/broken): falls back to canonical, and there's nothing to diff.
+rm -rf "$_live"
+[ -e "$_live/config.json" ] && [ -e "$_live/.env" ] && it_fail "no-live-bundle detection" "should be absent" || it_pass "no-live-bundle detection treats missing dir as absent"
+seed_from "$_canon"
+assert_eq "falls back to seeding config.json from canonical" "$(cat "$_e2e/config.json")" "$(cat "$_canon/config.json")"
+assert_eq "falls back to seeding .env from canonical" "$(cat "$_e2e/.env")" "canon-env"
+rm -rf "$_sd"
+
 # --- Tally ------------------------------------------------------------------
 echo ""
 echo "selftest: $IT_PASS passed, $IT_FAIL failed"
