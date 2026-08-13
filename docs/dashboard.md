@@ -198,16 +198,18 @@ serves them as `blocks`, `disk_growth`, and `xvb_history`, range-filtered the sa
 overlay reads `xvb_history`; only `disk_growth` is persistence and API exposure alone, no
 renderer yet.
 
-While a node is down, the dashboard rejects workers so they fail over to the backup pools you've
+While monerod is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.
-monerod is required to mine, so a monerod outage always rejects. Whether a Tari outage rejects
-follows [`dashboard.tari_required`](configuration.md): `true` (default) rejects on a Tari outage;
-`false` keeps mining Monero through it. Rejection never triggers for a remote monerod, since the
-stack doesn't manage that node. Readmission waits for monerod to be confirmed healthy; a required
-Tari holds it back only if Tari has actually answered since the dashboard started — a Tari whose
-gRPC has never come up (it can take many minutes after a boot) can't keep workers off a healthy
-monerod.
+monerod is required to mine, so a monerod outage always rejects; rejection never triggers for a
+remote monerod, since the stack doesn't manage that node. Readmission waits for monerod to be
+confirmed healthy, not merely no-longer-down, so a dashboard restart mid-outage doesn't wave
+workers back onto a stack that still can't mine.
+
+A Tari outage never rejects workers, regardless of [`dashboard.tari_required`](configuration.md):
+p2pool keeps mining Monero through a Tari-only outage, so kicking workers to their backup pools
+over Tari alone would trade partial revenue for none. The outage still shows up — the Tari panel
+and its alerts track it independently — but the fleet keeps mining.
 
 **Non-blocking Tari.** With `tari_required: false`, a Tari-only (re)sync doesn't take over the
 screen: the operational view stays up, mining continues, and a `Tari syncing` badge shows Tari's

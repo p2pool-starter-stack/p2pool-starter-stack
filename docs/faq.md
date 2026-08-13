@@ -122,9 +122,11 @@ if your wallet is rejected or registration is failing; see
 
 Tari (the [Minotari](https://www.tari.com/) node) is a chain that's merge-mined alongside Monero
 through P2Pool; you earn on both at once for the same RandomX work. You do need a Tari payout
-address, but you don't have to let Tari problems hold up Monero mining. Set
-`dashboard.tari_required: false` to keep mining Monero through a Tari outage or resync, with Tari
-catching up in the background. See [Configuration › `dashboard.tari_required`](configuration.md#configuration-reference).
+address, but a Tari outage never holds up Monero mining — p2pool keeps mining through it, with
+Tari catching up in the background, no matter how `dashboard.tari_required` is set. That flag only
+covers Tari's *sync* holds: set it to `false` to also skip waiting for Tari's initial sync and to
+keep the normal dashboard (instead of the full-screen Sync view) during a Tari resync. See
+[Configuration › `dashboard.tari_required`](configuration.md#configuration-reference).
 
 ### Can I use my existing synced Monero node?
 

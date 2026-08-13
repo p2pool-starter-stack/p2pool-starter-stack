@@ -65,10 +65,10 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 |---|---|---|
 | monerod down → **reject workers** (stop `xmrig-proxy`) | unreachable ≥ `NODE_DOWN_AFTER_SEC` | 1 ✅ · 3 ▶ · 4 ▶ |
 | monerod busy / mid-reorg (HTTP 200, `status≠OK`) → **reject workers** | RPC answers but distrusted | 1 ✅ · 3 ▶ |
-| Tari down + required → reject; Tari down + non-blocking → **ignore** | `tari_down ∧ TARI_REQUIRED?` | 1 ✅ · 3 ▶ |
-| Recovery hysteresis — readmit only after stable `NODE_RECOVERY_AFTER_SEC` | reachable again | 1 ✅ |
+| Tari down (required or not) → **never rejects**; p2pool keeps mining Monero (#897) | `tari_down` | 1 ✅ · 3 ▶ |
+| Recovery hysteresis — readmit only after monerod stable `NODE_RECOVERY_AFTER_SEC` | reachable again | 1 ✅ |
 | Transient blip / never-reachable → **no** false reject | debounce / `ever_up` | 1 ✅ |
-| Double outage; readmit only when **both** healthy | both down → both up | 1 ✅ (added) · 3 ▶ |
+| Double outage; readmit follows monerod alone — Tari's state doesn't gate it either way | both down → monerod up | 1 ✅ (added) · 3 ▶ |
 | #35 latch × #31 failover coexist after release | down post-release | 1 ✅ (added) · 3 ▶ |
 | Stop/start fails → retry next cycle (idempotent) | docker error | 1 ✅ |
 | `dashboard.fail_closed` (#490): default off never holds on an unrecoverable failure (alert-only); `true` holds (reusing #35's stop/start), releases once it clears (not a one-way latch), no-op before the sync gate releases | `is_db_unrecoverable() ∨ containers.is_confirmed_bad("dashboard")` | 1 ✅ · 3 ▶ |
@@ -300,15 +300,17 @@ tier 3/4:
   was a silent no-op end-to-end. Setting `LOCAL_MONERO_HOST` to the fake's hostname fixed the wiring;
   scenarios 6/7 down/readmit the real `itest-xmrig-proxy` container against it. The tier-4
   `--fault-injection` box run still covers the real binary/real kernel leg.
-- **Non-blocking-Tari "ignore" path with real containers.** ✅ Mini-stack scenario 11: recreates the
-  stack with `dashboard.tari_required=false` (baked in at container boot, so it needs its own
-  compose cycle) and asserts `itest-xmrig-proxy` stays running through a Tari outage — the path that
-  silently kills yield if it regresses to a reject.
+- **Required Tari outage keeps mining, with real containers.** ✅ Mini-stack scenario 4: with the
+  default `dashboard.tari_required=true`, asserts `itest-xmrig-proxy` stays running through a Tari
+  outage — the path that silently killed 22 measured minutes of revenue before it was fixed.
+- **Non-blocking-Tari sync-gate path with real containers.** ✅ Mini-stack scenario 11: recreates
+  the stack with `dashboard.tari_required=false` (baked in at container boot, so it needs its own
+  compose cycle) and asserts the sync gate releases on monerod alone.
 - **monerod busy / mid-reorg failover.** ✅ Mini-stack scenario 8: the fake's `busy` mode (HTTP 200,
   `status≠OK`) drives the same reject/readmit cycle as a clean outage.
-- **Double outage, both-must-recover.** ✅ Mini-stack scenario 9: both monerod and Tari down →
-  rejected; recovering only Tari leaves it rejected; recovering monerod too readmits — the recovery
-  ordering proven end-to-end, not just at the unit level.
+- **Double outage, readmission follows monerod alone.** ✅ Mini-stack scenario 9: monerod and Tari
+  both down → rejected; recovering monerod readmits immediately even with Tari still down — proven
+  end-to-end, not just at the unit level.
 - **Partial-start / stop-failure idempotency.** The control loop's "container fails to start/stop →
   retry next cycle" is unit-only; no tier-3/4 scenario injects a docker start/stop error.
 - **`pithead doctor` on a real box.** ✅ The `--check` phase now runs `doctor` and asserts exit 0

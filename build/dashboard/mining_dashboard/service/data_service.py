@@ -682,21 +682,21 @@ class DataService:
             self.workers_rejected = bool(self.latest_data.get("workers_rejected", False))
             self.miner_released = bool(self.latest_data.get("miner_released", False))
 
-    async def _apply_worker_rejection(self, monero_down, tari_down):
+    async def _apply_worker_rejection(self, monero_down):
         """
-        Reject workers (stop the proxy) when a node we care about is DOWN so miners fail over
-        to their backup pools; readmit them (start the proxy) once those nodes are confirmed
-        healthy.
+        Reject workers (stop the proxy) when monerod is DOWN so miners fail over to their
+        backup pools; readmit them (start the proxy) once monerod is confirmed healthy again.
 
-        monerod is required to mine, so a monerod outage always rejects. Tari is only merge-
-        mining gravy: a Tari outage rejects only when `TARI_REQUIRED` (dashboard.tari_required),
-        so a non-blocking Tari can go down without kicking miners off Monero. Only acts on
-        transitions (tracked by `workers_rejected`), and Docker treats a repeat stop/start as
-        already-done (HTTP 304), so it's safe every cycle.
+        monerod is required to mine, so a monerod outage always rejects. Tari never rejects
+        workers (Issue #897): it's merge-mining gravy, and p2pool keeps mining Monero through
+        a Tari-only outage, so stopping the proxy over Tari alone traded partial revenue for
+        none. `TARI_REQUIRED` (dashboard.tari_required) still gates the initial-sync hold and
+        the full-screen sync view (see `_apply_sync_gate`); a Tari outage still surfaces
+        through the Tari panel and alerts. Only acts on transitions (tracked by
+        `workers_rejected`), and Docker treats a repeat stop/start as already-done (HTTP 304),
+        so it's safe every cycle.
         """
-        should_reject = monero_down or (tari_down and TARI_REQUIRED)
-
-        if should_reject and not self.workers_rejected:
+        if monero_down and not self.workers_rejected:
             logger.warning(
                 f"Required node unreachable — stopping {REJECT_WORKERS_CONTAINER} so workers "
                 f"fail over to their backup pools."
@@ -706,17 +706,9 @@ class DataService:
             return
 
         # Readmit once monerod is confirmed healthy (not merely 'not down'), so a dashboard
-        # restart mid-outage doesn't bring workers back to a stack that can't mine. Tari's
-        # health is ignored when it's non-blocking; when it IS blocking, a Tari that has been
-        # reachable and healthy readmits, and so does one that has NEVER been reachable this
-        # run — the mirror of the monitor's ever-up guard. Without that escape, a required
-        # Tari whose gRPC isn't listening yet (it takes many minutes after a boot) held the
-        # proxy stopped indefinitely after a monerod blip: neither down nor healthy, it
-        # blocked readmission forever on a node that never caused the stop, and a shell-less
-        # appliance mined nothing until someone intervened.
-        recovered = self.monero_health.healthy and (
-            (not TARI_REQUIRED) or self.tari_health.healthy or not self.tari_health.ever_up
-        )
+        # restart mid-outage doesn't bring workers back to a stack that can't mine. Tari can no
+        # longer be the reason workers were rejected, so its health plays no part in readmission.
+        recovered = self.monero_health.healthy
         if self.workers_rejected and recovered:
             logger.info(
                 f"Required nodes recovered — starting {REJECT_WORKERS_CONTAINER} to readmit workers."
@@ -1464,7 +1456,7 @@ class DataService:
 
                     # 3. Node-down detection + worker rejection (Issue #31). Debounce each
                     # node's live reachability into a stable DOWN flag; monerod-down always
-                    # rejects, Tari-down rejects only when required (handled in the helper).
+                    # rejects, Tari-down never does — Tari stays visible in its own panel/alerts.
                     monero_down = self.monero_health.update(monero_sync.get("reachable", True))
                     tari_down = self.tari_health.update(tari_sync.get("reachable", True))
                     monero_sync["down"] = monero_down
@@ -1479,7 +1471,7 @@ class DataService:
                         monero_synced and (tari_synced or not TARI_REQUIRED)
                     )
                     if self.miner_released:
-                        await self._apply_worker_rejection(monero_down, tari_down)
+                        await self._apply_worker_rejection(monero_down)
 
                     # 5. Operator alerts (Issues #121/#45): push debounced node/worker/sync/host
                     # edges to Telegram. Consumes the flags computed above; worker presence is only
