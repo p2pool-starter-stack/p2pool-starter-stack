@@ -10,7 +10,8 @@ regexTarget = "line"
 # pattern-match crypto-token rules. The archives must stay byte-identical to their recorded
 # checksums, so the redaction that would normally fix a finding is impossible by design.
 paths = [
-  '''docs/research/xvb-delivery-study/data/sources/.*''',
+  # both path forms exist in history: pre-move (research/...) and current (docs/research/...)
+  '''(docs/)?research/xvb-delivery-study/data/sources/.*''',
 ]
 # curl auth assembled from shell ENV VARS (e.g. `-u "${USER:-}:${PASS:-wallet}"`) is not a hardcoded
 # secret — the upstream `curl-auth-user` rule can't distinguish `${VAR}` from a literal credential.
