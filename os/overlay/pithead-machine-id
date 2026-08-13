@@ -4,27 +4,35 @@
 # must land before systemd-networkd (DHCP DUID) and systemd-journal-flush (the persistent
 # journal directory name) observe /etc/machine-id, and after /data is mounted.
 #
-# Why a plain write here works: the image ships /etc/machine-id EMPTY, and on this appliance
-# /etc is an overlay whose upper is a volatile tmpfs. PID 1's own first-boot handling (long
-# before any unit, ours included, runs) either writes a freshly generated transient id straight
-# into that writable upper, or — if it judged /etc unwritable — ro-bind-mounts the id from
-# /run/machine-id over the file instead; machine-id(5) describes both shapes. Either way the
-# upper is discarded at power-off, so without the restore below the machine would pick a NEW
-# random id on every single boot — worse than the bug being fixed. The umount guard below
-# covers the bind-mount shape and is a silent no-op on the plain-overlay one.
+# The image ships /etc/machine-id EMPTY, and /etc's overlay upper is a volatile tmpfs, so PID 1
+# runs first-boot machine-id handling on EVERY boot (long before any unit): it writes a fresh
+# transient id into the writable /etc, or — on a read-only root — bind-mounts a WRITABLE file
+# from /run over /etc/machine-id (machine-id(5) — the mount exists so the id can be written).
+# Either way that layer is discarded at power-off, so without the restore below the machine would
+# pick a NEW random id every boot, churning the DHCP lease. We write THROUGH that writable layer;
+# an earlier version unmounted it first and hit the read-only lower image on a post-A/B-swap slot,
+# so the write failed, machine-id stayed empty, and networkd never brought up DHCP.
 set -eu
 
-ID_FILE="/data/pithead/machine-id"
+ID_FILE="${PITHEAD_MACHINE_ID_FILE:-/data/pithead/machine-id}"
+ETC_ID="${PITHEAD_MACHINE_ID_ETC:-/etc/machine-id}"
 mkdir -p "$(dirname "$ID_FILE")"
 
 if [ -s "$ID_FILE" ]; then
-    umount /etc/machine-id 2>/dev/null || true
-    cat "$ID_FILE" >/etc/machine-id
-    echo "pithead-machine-id: restored persisted machine-id from $ID_FILE"
+    if cat "$ID_FILE" >"$ETC_ID" 2>/dev/null; then
+        echo "pithead-machine-id: restored persisted machine-id from $ID_FILE"
+    else
+        # /etc/machine-id was read-only with no writable layer over it — provide one ourselves,
+        # exactly as systemd would, rather than let the box boot with an empty id and no network.
+        cp "$ID_FILE" /run/pithead-machine-id
+        umount "$ETC_ID" 2>/dev/null || true
+        mount --bind /run/pithead-machine-id "$ETC_ID"
+        echo "pithead-machine-id: restored persisted machine-id via bind mount ($ID_FILE)"
+    fi
 else
     # First boot with nothing on /data yet: adopt whatever systemd already generated for THIS
     # boot rather than minting a second one — one machine, one id, chosen once.
-    cp /etc/machine-id "$ID_FILE"
+    cp "$ETC_ID" "$ID_FILE"
     chmod 444 "$ID_FILE"
     echo "pithead-machine-id: adopted this boot's machine-id and persisted it to $ID_FILE"
 fi

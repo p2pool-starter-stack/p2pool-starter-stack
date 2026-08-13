@@ -9532,6 +9532,31 @@ assert_eq "no marker + /data mounts clean -> skip (fail-safe: never touch a heal
 assert_eq "no marker + /data wedged after fsck -> reformat-wedged (recovery)" "$(decide "$DR/no-marker" fail)" "reformat-wedged"
 assert_eq "no marker + fsck repairs the mount -> skip (recoverable /data is never wiped)" "$(decide "$DR/no-marker" repair)" "skip"
 
+echo "== unit: pithead-machine-id — restore writes THROUGH /etc/machine-id, never unmounts it =="
+# The regression this pins: an earlier version unmounted /etc/machine-id before writing, which on
+# a read-only-root A/B slot exposed the lower image and the write failed — leaving an empty id and
+# a dead DHCP lease. The write must land in the (writable) target as-is. ETC + ID_FILE are
+# overridable so this runs without touching the real /etc.
+MID="$SANDBOX/machine-id"
+mkdir -p "$MID"
+# 1) Restore: /data holds an id, /etc has a different (systemd-transient) one -> /etc takes /data's.
+printf 'fa85bfc69f0b451d95bbacf897e431ce\n' >"$MID/data-id"
+printf 'ffffffffffffffffffffffffffffffff\n' >"$MID/etc-id"
+(
+    export PITHEAD_MACHINE_ID_FILE="$MID/data-id" PITHEAD_MACHINE_ID_ETC="$MID/etc-id"
+    sh "$ROOT/os/overlay/pithead-machine-id"
+) >/dev/null 2>&1
+assert_eq "restore overwrites /etc/machine-id with the persisted id" "$(cat "$MID/etc-id")" "fa85bfc69f0b451d95bbacf897e431ce"
+assert_eq "restore leaves the persisted id unchanged" "$(cat "$MID/data-id")" "fa85bfc69f0b451d95bbacf897e431ce"
+# 2) Adopt: /data has none yet -> adopt this boot's /etc id and persist it read-only.
+rm -f "$MID/data-id"
+printf 'abc0000000000000000000000000def0\n' >"$MID/etc-id"
+(
+    export PITHEAD_MACHINE_ID_FILE="$MID/data-id" PITHEAD_MACHINE_ID_ETC="$MID/etc-id"
+    sh "$ROOT/os/overlay/pithead-machine-id"
+) >/dev/null 2>&1
+assert_eq "adopt persists this boot's id to /data" "$(cat "$MID/data-id" 2>/dev/null)" "abc0000000000000000000000000def0"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
