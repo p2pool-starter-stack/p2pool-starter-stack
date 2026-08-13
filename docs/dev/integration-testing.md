@@ -129,6 +129,7 @@ Useful flags (full list in `run.sh --help`):
 | `--readiness` | Non-destructive: assess whether the box is fit to be a release/validation server (synced chains reusable, snapshot-capable FS, disk headroom, secrets owner-only, dashboard localhost-only). See [Release Server](release-server.md). |
 | `--scenario <name>` | Run just one scenario. |
 | `--workers <n>` | Miners expected online while mining (default `2`). |
+| `--no-mining-asserts` | Skip the two mining assertions — workers online ≥ `--workers` and stratum total hashes > 0 — with a logged notice, for a box that has no miner connected. Every other assertion stays binding. `e2e.sh --no-miner` passes this automatically ([#905](https://github.com/p2pool-starter-stack/pithead/issues/905)). |
 | `--remote-monero-host <h>` | External node endpoint for the `remote` scenario. |
 | `--pruned-data-dir` / `--full-data-dir` | Synced alt DB to enable the opposite prune mode. |
 | `--lifecycle` | Also run the lifecycle phase (restart, apply secret-preservation). |
@@ -159,6 +160,13 @@ tests/integration/e2e.sh claude/my-feature --mode check    # non-destructive smo
 tests/integration/e2e.sh claude/my-feature --mode matrix   # full config sweep (opt-in, pre-release)
 ```
 
+Pre-flight, before anything is locked or borrowed: both chains must read `done` on the bench
+dashboard's sync panels. Otherwise it prints each chain's current/target height and aborts — a
+bench that starts hours behind tip fails the required-sync assertions as environment noise, not
+a regression, and burns the borrowed-rig hour finding out
+([#914](https://github.com/p2pool-starter-stack/pithead/issues/914)). `--skip-preflight`
+overrides.
+
 What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` trap):
 
 1. Dedicated checkout. Provisions `/srv/code/pithead-e2e` (clone-once, then `git fetch`) and checks
@@ -169,11 +177,21 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
    is never git-touched. Because the Compose project name is pinned to `pithead`, the two checkouts
    drive the same containers and the same shared chains. They're two code copies of one stack, run one
    at a time, so borrow→test→restore is a fast code/image swap, never a re-sync.
-2. Seeds the e2e checkout with the canonical `config.json`/`.env` (same wallet, secrets, onion keys,
-   and shared `monero/tari/p2pool` data dirs), so only the branch's code differs.
+2. Seeds the e2e checkout's `config.json`/`.env` from the live release bundle when one exists —
+   the `current ->` symlink next to `CANONICAL_DIR` (e.g. `/srv/code/current`), resolved with
+   `readlink -f` — falling back to the canonical checkout's copies otherwise
+   ([#880](https://github.com/p2pool-starter-stack/pithead/issues/880); a release bumps the
+   bundle's config, not canonical's, so canonical can lag for months). When both configs exist it
+   always prints a key-level diff summary (full dotted paths via `jq`, nested keys included), so
+   drift is loud instead of a stale config being deployed silently. Either way the seed carries
+   the same wallet, secrets, onion keys, and shared `monero/tari/p2pool` data dirs — only the
+   branch's code differs.
 3. Safety backup (`pithead backup`) as the rollback anchor.
 4. Borrows a miner (default the configured miner): backs up its xmrig config and repoints it at the
    bench so the matrix has a real worker mining through this stack (1 worker → run with `--workers 1`).
+   With `--no-miner` nothing is borrowed, and the harness runs with `--no-mining-asserts`: the
+   workers-online and stratum-hashes assertions skip with a logged notice while every other
+   assertion stays binding ([#905](https://github.com/p2pool-starter-stack/pithead/issues/905)).
 5. Deploys the branch (`pithead upgrade` — re-renders the generated configs and rebuilds the
    first-party images from `build/`, so a Dockerfile or entrypoint change is actually under test;
    `apply` never builds and would reuse whatever images were last built on the box,

@@ -44,6 +44,7 @@ GIT_REMOTE_URL="${GIT_REMOTE_URL:-https://github.com/p2pool-starter-stack/pithea
 MODE="targeted" # targeted (default, lean) | check | matrix (full sweep, opt-in)
 WORKERS=1
 BORROW_MINER=1
+SKIP_PREFLIGHT=0
 KEEP=0
 BRANCH=""
 
@@ -92,7 +93,10 @@ OPTIONS:
   --workers <n>     workers expected mining through the stack (default: 1 — the borrowed miner)
   --bench <host>    SSH host of the test bench to deploy onto (or set BENCH_HOST)
   --miner <host>    SSH host of the miner to borrow (or set MINER_HOST)
-  --no-miner        don't borrow a miner (mining assertions will be skipped/limited)
+  --no-miner        don't borrow a miner; the harness skips its two mining assertions
+                    (workers online, stratum hashes) with a logged notice — everything else binds
+  --skip-preflight  skip the bench-chains-synced pre-flight (a cold bench then fails the
+                    required-sync assertions as environment noise — use knowingly)
   --keep            don't restore at the end (leave the branch deployed + miner repointed — debugging)
   -h, --help        this help
 
@@ -126,6 +130,10 @@ while [ $# -gt 0 ]; do
         ;;
     --no-miner)
         BORROW_MINER=0
+        shift
+        ;;
+    --skip-preflight)
+        SKIP_PREFLIGHT=1
         shift
         ;;
     --keep)
@@ -292,6 +300,24 @@ preflight() {
     else
         warn "couldn't resolve the live stack's working dir — restore will use CANONICAL_DIR=$CANONICAL_DIR."
     fi
+    # Chains at tip BEFORE anything is locked or borrowed (#914): a bench that starts hours
+    # behind fails the required-sync assertions as environment noise — not a regression — and
+    # burns the borrowed-rig hour finding out. Same dashboard sync signal wait_synced polls.
+    if [ "$SKIP_PREFLIGHT" = "1" ]; then
+        warn "--skip-preflight: not checking the bench chains are synced."
+    else
+        local sync_line mst mheights tst theights
+        sync_line="$(on_bench "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '$E2E_SYNC_SUMMARY_JQ' 2>/dev/null" || true)"
+        [ -n "$sync_line" ] || die "Cannot read the bench dashboard's sync state (127.0.0.1:8000/api/state on $BENCH_HOST) — is the stack up? --skip-preflight overrides."
+        read -r mst mheights tst theights <<<"$sync_line"
+        if [ "$mst" = "done" ] && [ "$tst" = "done" ]; then
+            ok "bench chains synced (monero done, tari done)"
+        else
+            warn "monero: $mst (current/target $mheights)"
+            warn "tari:   $tst (current/target $theights)"
+            die "Bench chains are not at tip — the required-sync assertions would fail on the environment, not the branch (#914). Let the bench catch up, or pass --skip-preflight to run anyway."
+        fi
+    fi
     if [ "$BORROW_MINER" = "1" ]; then
         on_miner 'echo ok >/dev/null' || die "Cannot SSH to miner '$MINER_HOST' (use --no-miner to skip)."
         on_miner "test -f '$MINER_XMRIG_CONFIG'" || die "No xmrig config at $MINER_XMRIG_CONFIG on $MINER_HOST."
@@ -336,24 +362,29 @@ provision() {
     # Seed from the LIVE release bundle when one exists (#880): the canonical checkout's config can
     # drift far behind what's actually deployed (a release bumps config.json/.env in the bundle dir,
     # not in CANONICAL_DIR), so seeding from canonical silently exercises + deploys a stale config.
-    # The bundle lives at the "current" symlink sibling of CANONICAL_DIR (e.g. /srv/code/current).
+    # The bundle lives at the "current" symlink sibling of CANONICAL_DIR (e.g. /srv/code/current) —
+    # readlink -f so the log names the real per-version bundle dir this run seeded from.
     local live_link live_cfg=""
     live_link="$(dirname "$CANONICAL_DIR")/current"
-    on_bench "test -e '$live_link/config.json' -a -e '$live_link/.env'" && live_cfg="$live_link"
+    live_cfg="$(on_bench "readlink -f '$live_link' 2>/dev/null" || true)"
+    [ -n "$live_cfg" ] && on_bench "test -e '$live_cfg/config.json' -a -e '$live_cfg/.env'" || live_cfg=""
     if [ -n "$live_cfg" ]; then
         step "seeding the e2e checkout with the live bundle's config.json/.env ($live_cfg)"
         on_bench "cp -a '$live_cfg/config.json' '$E2E_DIR/config.json' && cp -a '$live_cfg/.env' '$E2E_DIR/.env'" ||
             die "Failed to seed config.json/.env from $live_cfg into $E2E_DIR."
         ok "config seeded from the live bundle (data dirs point at the shared chains)"
-        # Cheap drift check, not a full config differ: canonical is read-only and can lag the bundle
-        # for months, so a top-level-key diff is enough to catch a whole feature silently missing.
+        # Drift diff (#880), ALWAYS printed when both configs exist: canonical is read-only and can
+        # lag the bundle for months. Full dotted key paths, not just top-level keys — the drift that
+        # bit dropped nested keys (monero.view_key, dashboard.energy) whose parents exist in both.
         local live_keys canon_keys key_diff
-        live_keys="$(on_bench "jq -r 'keys[]' '$live_cfg/config.json' 2>/dev/null | sort")"
-        canon_keys="$(on_bench "jq -r 'keys[]' '$CANONICAL_DIR/config.json' 2>/dev/null | sort")"
-        key_diff="$(diff <(echo "$live_keys") <(echo "$canon_keys") 2>/dev/null)"
+        live_keys="$(on_bench "jq -r '$CONFIG_KEY_PATHS_JQ' '$live_cfg/config.json' 2>/dev/null")"
+        canon_keys="$(on_bench "jq -r '$CONFIG_KEY_PATHS_JQ' '$CANONICAL_DIR/config.json' 2>/dev/null")"
+        key_diff="$(diff <(echo "$live_keys") <(echo "$canon_keys") 2>/dev/null | grep '^[<>]')"
         if [ -n "$key_diff" ]; then
-            warn "canonical config.json's top-level keys differ from the live bundle's ($live_cfg) — canonical is drifting:"
+            warn "bundle vs canonical config drift ('<' = bundle only, '>' = canonical only):"
             echo "$key_diff" | sed 's/^/      /' >&2
+        else
+            ok "bundle vs canonical config: no key-level drift"
         fi
     else
         warn "no live bundle at $live_link — seeding from the canonical checkout ($CANONICAL_DIR) instead (may be stale)."
@@ -434,6 +465,11 @@ run_harness() {
     # its control API opted in. matrix only (it mutates config + dials the rig); each leg self-skips
     # loudly when its prerequisite is missing, so this stays safe on a bench without the descriptor.
     [ "$BORROW_MINER" = "1" ] && [ "$MODE" = "matrix" ] && phases="$phases --rigforge-control"
+    # #905: no borrowed miner means no worker will ever appear — tell the harness to SKIP its two
+    # mining assertions (workers online, stratum hashes) instead of failing a healthy stack.
+    local no_mining=""
+    [ "$BORROW_MINER" = "1" ] || no_mining="--no-mining-asserts"
+    phases="$phases $no_mining"
     log "Running the live harness on $BENCH_HOST (mode=$MODE, detached so an SSH drop can't kill it)"
     step "phases: $phases  (workers=$WORKERS)"
 
@@ -455,7 +491,7 @@ RUNNER
     # For non-check modes, run the safe readiness + current-state assertions inline first (fast,
     # gives early signal), then the destructive phases detached.
     if [ "$MODE" != "check" ]; then
-        on_bench "cd '$E2E_DIR' && bash tests/integration/run.sh --local --dir '$E2E_DIR' --readiness --check" ||
+        on_bench "cd '$E2E_DIR' && bash tests/integration/run.sh --local --dir '$E2E_DIR' --readiness --check $no_mining" ||
             warn "readiness/check reported issues (see above) — continuing to the destructive phases"
     fi
 
