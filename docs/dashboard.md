@@ -431,8 +431,9 @@ figures.
 The card is split into tabs — **Monero**, **Tari**, **XvB**, and **Energy** — driven by one
 **what-if hashrate** input that sits above the tabs, so switching tabs keeps the value you entered.
 Monero holds the XMR estimate, time-to-share, and block reward; Tari holds the solo time-to-block,
-per-block reward, and long-run average; XvB holds the tier/cost block, the current tier's published
-expected reward, and the per-tier payout comparison. The XvB tab appears only when XvB is enabled,
+per-block reward, and long-run average; XvB holds the tier/cost block, the current tier's expected
+reward (tempered by measured delivery — see the decision table below), and the per-tier payout
+comparison. The XvB tab appears only when XvB is enabled,
 and the Energy tab only when the fleet reports power (see [Energy & profit](#energy--profit)).
 
 Every tab presents its rate estimate in the same **Day / Month / Year** table: the coin figure,
@@ -495,7 +496,7 @@ current draw) is always there; three optional prices add the money columns:
 | Config | Adds |
 |---|---|
 | `dashboard.energy.cost_per_kwh` | The **Power Cost** column (`kWh × price`). |
-| `dashboard.energy.xmr_price`    | The **Revenue (est.)** and **Net** columns: P2Pool XMR earnings × your XMR price, gross and then minus power cost. Needs `cost_per_kwh` set too — without a power cost there is no net for revenue to lead into. Also values the current-tier XvB expected reward (an estimate) into both when XvB has a fresh figure. |
+| `dashboard.energy.xmr_price`    | The **Revenue (est.)** and **Net** columns: P2Pool XMR earnings × your XMR price, gross and then minus power cost. Needs `cost_per_kwh` set too — without a power cost there is no net for revenue to lead into. Also values the current-tier XvB expected reward (an estimate, tempered by measured delivery — never XvB's face value) into both when XvB has a fresh figure. |
 | `dashboard.energy.tari_price`   | Folds Tari merge-mining earnings into that same revenue and net, at your Tari price. Requires `xmr_price` to be set too. |
 
 All three are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no
@@ -507,13 +508,17 @@ when power costs more than it earns.
 Net profit counts **P2Pool XMR**, plus **Tari** merge-mining earnings once a Tari price is also
 known (Tari's contribution uses the same what-if Tari/day estimate the Tari tab already shows), plus
 the **XvB** raffle's expected reward for the tier you currently hold, valued at your XMR price. The
-whole net is already probabilistic, so it stays one figure — but the XvB slice is an **estimate**:
-it is XvB's published expected reward for your current tier (the lower of your credited 1h and 24h
-averages), and the raffle draw is random among qualifiers, so it is not a payout you are owed. The
-card's heading and the Net column's tooltip label it `XvB (est.)` and say exactly what the figure counts,
-so it is never silently partial. XvB folds in only while its published estimate is fresh (the same
-staleness rule as the *XvB Donation Stats* card) and you clear a donor tier; otherwise it is left
-out rather than guessed, and the label reverts to P2Pool (and Tari, if priced) alone.
+whole net is already probabilistic, so it stays one figure — but the XvB slice is an **estimate**,
+and never XvB's face value: the published expected reward for your current tier (the lower of your
+credited 1h and 24h averages) is **tempered by measured delivery** — scaled to what your own wins
+measurably paid once enough wins have confirmed payouts, else by the midpoint of the measured
+delivery band (28–39% of face value — the
+[XvB delivery study](research/xvb-delivery-study/PAPER.md)). The raffle draw is random among
+qualifiers, so it is not a payout you are owed either way. The card's heading and the Net column's
+tooltip label it `XvB (est.)` and say exactly what the figure counts, so it is never silently
+partial. XvB folds in only while its published estimate is fresh (the same staleness rule as the
+*XvB Donation Stats* card) and you clear a donor tier; otherwise it is left out rather than
+guessed, and the label reverts to P2Pool (and Tari, if priced) alone.
 
 Prices come from one of two places, and the card always says which:
 
