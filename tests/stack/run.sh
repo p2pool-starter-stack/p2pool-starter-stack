@@ -3771,6 +3771,111 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out=$(run_sourced "$SANDBOX" render_quadlet_units "$SANDBOX/no-such.env" "$SANDBOX/quadlet-none" 2>&1)
 assert_contains "render-quadlet missing env errors" "$out" "env file not found"
 
+echo "== unit: firstboot_consume_restore — restore-at-setup (#909, #786 sub-issue B) =="
+# A genuine encrypted backup (the same `pithead backup` #908 rides), fed through the wizard's
+# restore-consume exactly as the host loop would: decrypt, verify BEFORE anything is touched,
+# validate the embedded config through a copy, and land it as a normal accepted config.json —
+# the SAME contract firstboot_consume_spool gives a typed submission. Physical path (#695): see
+# the backup/restore black-box block above for why `pwd -P` matters here too.
+RS="$(cd "$SANDBOX" && pwd -P)/restore-consume"
+mkdir -p "$RS/build/tari" "$RS/data/tor" "$RS/data/dashboard" "$RS/bin"
+cp "$STACK" "$RS/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$RS/build/tari/"
+cat >"$RS/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "compose ps --status running -q") exit 0 ;; # empty output -> stack treated as not running
+esac
+exit 0
+EOF
+cat >"$RS/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "chown" ] && exit 0
+exec "$@"
+EOF
+chmod +x "$RS/bin/docker" "$RS/bin/sudo"
+cat >"$RS/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=RSTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$RS/config.json"
+printf 'CADDY-ORIG\n' >"$RS/Caddyfile"
+printf 'ONIONKEY-ORIG\n' >"$RS/data/tor/hs_ed25519_secret_key"
+printf 'DBDATA-ORIG\n' >"$RS/data/dashboard/dashboard.db"
+out="$(cd "$RS" && PATH="$RS/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y 2>&1)"
+rc=$?
+assert_rc "restore fixture: backup exits 0" "$rc" "0"
+rarchive="$(ls "$RS"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+{ [ -n "$rarchive" ] && [ -f "$rarchive" ]; } && ok "restore fixture: encrypted archive created" || bad "restore fixture: encrypted archive created" "no .enc archive"
+
+RSPOOL="$RS/data/firstboot-test"
+mkdir -p "$RSPOOL"
+rm -f "$RS/config.json"
+
+# 1) Accept: the right passphrase decrypts, verifies, validates and lands config.json — settings,
+# the Tor identity and the dashboard database all come back, and neither the archive nor the
+# passphrase survive the attempt.
+cp "$rarchive" "$RSPOOL/restore-archive"
+printf 'hunter2' >"$RSPOOL/restore-passphrase" # test fixture, not a real secret
+out=$(cd "$RS" && PATH="$RS/bin:$PATH" run_sourced "$RS" firstboot_consume_restore "$RSPOOL" && echo rc0)
+assert_contains "valid restore accepted" "$out" "rc0"
+assert_eq "valid restore installs config.json" "$([ -f "$RS/config.json" ] && echo yes)" "yes"
+assert_contains "valid restore carries the original wallet" "$(cat "$RS/config.json" 2>/dev/null)" "$WALLET"
+assert_eq "valid restore brings back the Caddyfile" "$(cat "$RS/Caddyfile" 2>/dev/null)" "CADDY-ORIG"
+assert_eq "valid restore brings back the dashboard db" "$(cat "$RS/data/dashboard/dashboard.db" 2>/dev/null)" "DBDATA-ORIG"
+assert_eq "applied marker set" "$([ -f "$RSPOOL/applied" ] && echo yes)" "yes"
+assert_eq "the archive is consumed" "$([ -f "$RSPOOL/restore-archive" ] || echo gone)" "gone"
+assert_eq "the passphrase is never retained" "$([ -f "$RSPOOL/restore-passphrase" ] || echo gone)" "gone"
+rm -f "$RSPOOL/applied" "$RS/config.json" # clean slate for the rejection cases below
+
+# 2) Bad passphrase: rejected before anything is touched.
+printf 'CORRUPTED\n' >"$RS/Caddyfile"
+cp "$rarchive" "$RSPOOL/restore-archive"
+printf 'not-the-passphrase' >"$RSPOOL/restore-passphrase" # test fixture
+out=$(run_sourced "$RS" firstboot_consume_restore "$RSPOOL" || echo "rc$?")
+assert_contains "wrong passphrase rejected" "$out" "rc1"
+assert_contains "wrong passphrase names the cause" "$(cat "$RSPOOL/error.txt" 2>/dev/null)" "assphrase"
+assert_eq "wrong passphrase leaves live files untouched" "$(cat "$RS/Caddyfile")" "CORRUPTED"
+assert_eq "the archive is consumed even on rejection" "$([ -f "$RSPOOL/restore-archive" ] || echo gone)" "gone"
+assert_eq "the passphrase is never retained even on rejection" "$([ -f "$RSPOOL/restore-passphrase" ] || echo gone)" "gone"
+printf 'CADDY-ORIG\n' >"$RS/Caddyfile"
+rm -f "$RSPOOL/error.txt"
+
+# 3) Encrypted archive, no passphrase supplied at all.
+cp "$rarchive" "$RSPOOL/restore-archive"
+out=$(run_sourced "$RS" firstboot_consume_restore "$RSPOOL" || echo "rc$?")
+assert_contains "missing passphrase rejected" "$out" "rc1"
+assert_contains "missing passphrase names the cause" "$(cat "$RSPOOL/error.txt" 2>/dev/null)" "passphrase"
+rm -f "$RSPOOL/error.txt"
+
+# 4) Oversize: refused on SIZE alone, before any decrypt/extract — content is irrelevant.
+truncate -s 67108865 "$RSPOOL/restore-archive"
+printf 'hunter2' >"$RSPOOL/restore-passphrase" # test fixture
+out=$(run_sourced "$RS" firstboot_consume_restore "$RSPOOL" || echo "rc$?")
+assert_contains "oversize archive rejected" "$out" "rc1"
+assert_contains "oversize archive names the cap" "$(cat "$RSPOOL/error.txt" 2>/dev/null)" "too large"
+rm -f "$RSPOOL/error.txt"
+
+# 5) Malformed: neither the encrypted magic nor gzip's — falls back exactly like a rejected
+# config, never blocking setup.
+printf 'garbage-not-an-archive' >"$RSPOOL/restore-archive"
+printf 'hunter2' >"$RSPOOL/restore-passphrase" # test fixture
+out=$(run_sourced "$RS" firstboot_consume_restore "$RSPOOL" || echo "rc$?")
+assert_contains "malformed archive rejected" "$out" "rc1"
+assert_contains "malformed archive names the problem" "$(cat "$RSPOOL/error.txt" 2>/dev/null)" "not a Pithead backup archive"
+assert_eq "malformed archive leaves config.json untouched" "$([ -f "$RS/config.json" ] || echo gone)" "gone"
+rm -f "$RSPOOL/error.txt"
+
+# 6) Nothing to consume.
+out=$(run_sourced "$RS" firstboot_consume_restore "$RSPOOL" || echo "rc$?")
+assert_contains "empty spool is rc2" "$out" "rc2"
+rm -rf "$RS"
+
 echo "== black-box: doctor --json + support-bundle (#77 phase 1) =="
 # doctor --json: valid JSON on stdout, the human report on stderr, counters consistent with the
 # check list (info lines are context, not verdicts).

@@ -72,6 +72,12 @@ readonly REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 readonly APP_UID=1000
 readonly APP_GID=1000
 
+# Upper bound on a wizard-time restore upload (#909): a Pithead backup holds only config,
+# keys and the dashboard database, never the blockchains — 64 MiB is generous headroom over
+# that. Mirrored in wizard.py's own cap (client + server, per the spool contract); the two
+# can't share a literal across languages, so keep the VALUE in step by hand.
+readonly RESTORE_MAX_BYTES=67108864
+
 REBOOT_REQUIRED=false
 SKIP_OPTIMIZE=0
 SKIP_DEPS=0
@@ -1506,6 +1512,119 @@ firstboot_consume_rig() { # <spool-dir>
     return 0
 }
 
+# Consume a restore-at-setup submission (#909, #786 sub-issue B): an uploaded encrypted backup
+# archive + its emergency-kit passphrase, in place of the config form. Same decrypt/verify
+# machinery as `stack_restore` (magic-byte format check, full-stream integrity verify BEFORE
+# anything is touched), but staged through a COPY like consume_preseed_config — the exact
+# validate-through-a-copy idiom this codebase already uses for "never mutate real state until
+# accepted" — because a wizard-time restore must be able to fail clean and fall back to the
+# form, not leave a half-restored Tor identity or dashboard database behind for a follow-up
+# manual submit to inherit. rc: 0 landed (config.json + $spool/applied, identical to a typed
+# submission — the caller falls into the SAME accept path), 1 rejected (error.txt written), 2
+# none. The passphrase is read once and deleted immediately either way — it never outlives
+# this call.
+firstboot_consume_restore() { # <spool-dir>
+    local spool="$1" archive="$1/restore-archive" passfile="$1/restore-passphrase"
+    local pass="" size magic encrypted=0 tmp staged_cfg err
+    [ -f "$archive" ] || return 2
+    { set +x; } 2>/dev/null # xtrace would print the passphrase below
+    pass=$(cat "$passfile" 2>/dev/null || true)
+    rm -f "$passfile" # never persisted beyond this attempt, accepted or not
+
+    # Server-side cap already refused an oversize upload before it reached the spool; checked
+    # again here so a spool file dropped by any other means gets the same honest refusal.
+    size=$(wc -c <"$archive" 2>/dev/null || echo 0)
+    if [ "$size" -gt "$RESTORE_MAX_BYTES" ]; then
+        printf 'backup archive is too large (max %s MB) — a Pithead backup holds only config, keys and the dashboard database, never the blockchains' "$((RESTORE_MAX_BYTES / 1048576))" >"$spool/error.txt"
+        rm -f "$archive"
+        return 1
+    fi
+
+    magic=$(head -c 8 "$archive" | od -An -tx1 | tr -d ' \n')
+    case "$magic" in
+    53616c7465645f5f) encrypted=1 ;; # "Salted__"
+    1f8b*) ;;                        # gzip
+    *)
+        printf 'not a Pithead backup archive' >"$spool/error.txt"
+        rm -f "$archive"
+        return 1
+        ;;
+    esac
+
+    if [ "$encrypted" -eq 1 ]; then
+        if [ -z "$pass" ]; then
+            printf 'this archive is encrypted — enter its passphrase' >"$spool/error.txt"
+            rm -f "$archive"
+            return 1
+        fi
+        local plain_magic
+        plain_magic=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
+            head -c 2 | od -An -tx1 | tr -d ' \n') || true
+        if [ "$plain_magic" != "1f8b" ]; then
+            printf 'wrong passphrase or corrupt archive' >"$spool/error.txt"
+            rm -f "$archive"
+            pass=""
+            return 1
+        fi
+        if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
+            tar -tzf - >/dev/null 2>&1; then
+            printf 'archive fails integrity verification (tampered or truncated)' >"$spool/error.txt"
+            rm -f "$archive"
+            pass=""
+            return 1
+        fi
+    else
+        if ! tar -tzf "$archive" >/dev/null 2>&1; then
+            printf 'archive fails integrity verification (tampered or truncated)' >"$spool/error.txt"
+            rm -f "$archive"
+            return 1
+        fi
+    fi
+
+    tmp=$(mktemp -d) || {
+        printf 'could not stage the restore' >"$spool/error.txt"
+        rm -f "$archive"
+        return 1
+    }
+    if [ "$encrypted" -eq 1 ]; then
+        openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") | tar -xzf - -C "$tmp"
+    else
+        tar -xzf "$archive" -C "$tmp"
+    fi
+    pass=""
+    rm -f "$archive"
+
+    # The archive stores paths relative to "/" (same convention `stack_backup`/`stack_restore`
+    # use), so the staged config lands at exactly $PWD/$CONFIG_FILE underneath $tmp.
+    staged_cfg="$tmp/${PWD#/}/$CONFIG_FILE"
+    if [ ! -f "$staged_cfg" ] || ! jq -e . "$staged_cfg" >/dev/null 2>&1; then
+        rm -rf "$tmp"
+        printf 'archive does not contain a usable configuration' >"$spool/error.txt"
+        return 1
+    fi
+    # Validated through the COPY — parse_and_validate_config fills in generated fields as it
+    # goes (consume_preseed_config's own reasoning), and only a config that survives this is
+    # ever promoted to the real config.json.
+    if ! err=$(PITHEAD_CONFIG_FILE="$staged_cfg" bash -c "source '${BASH_SOURCE[0]}' && parse_and_validate_config" 2>&1); then
+        rm -rf "$tmp"
+        printf '%s' "$err" | tail -n 2 | tr -d '[:cntrl:]' | tail -c 240 >"$spool/error.txt"
+        return 1
+    fi
+
+    # Commit: everything the archive carried (config.json, .env, Caddyfile, the Tor data dir,
+    # the dashboard database) lands at its real absolute path in one move — the same
+    # destination `tar -xzf archive -C /` would use directly, just proven safe first.
+    # prepare_directories (run by the `setup` this feeds) unconditionally re-chowns every data
+    # dir afterwards, so ownership here does not need fixing up by hand.
+    cp -a "$tmp"/. /
+    rm -rf "$tmp"
+    touch "$spool/applied"
+    return 0
+}
+
 # --- disk installer (appliance only) -------------------------------------------------------
 # The appliance can boot from the installation medium itself. When it does, the wizard leads with
 # a disk picker instead of the setup form: the operator installs first, reboots, and configures
@@ -1901,7 +2020,8 @@ firstboot_wizard() {
         # failed-provisioning path just wrote for the reopened page.
         rm -f "$spool/handoff.json" "$spool/handoff-ack" "$spool/installing" \
             "$spool/installed" "$spool/applied" "$spool/install-request" \
-            "$spool/rig-request.json" "$spool/role"
+            "$spool/rig-request.json" "$spool/role" \
+            "$spool/restore-archive" "$spool/restore-passphrase"
         # A pre-seeded token is the operator's own choice and stays fixed across restarts of
         # this loop; without one, mint a fresh secret every round.
         token=$(preseed_token) || token=$(wizard_mint_token)
@@ -2057,7 +2177,19 @@ firstboot_wizard() {
                 provision_rig_miner || true
                 return 0
             fi
-            if firstboot_consume_spool "$spool"; then
+            # The restore-from-backup alternative (#909) travels its own spool channel, same as
+            # the rig role above — but on acceptance it has ALREADY written config.json and
+            # touched applied (firstboot_consume_restore does the whole job, staged through a
+            # copy), so a successful restore short-circuits straight into the identical accept
+            # path a typed submission takes, below.
+            local rec=0
+            firstboot_consume_restore "$spool" || rec=$?
+            if [ "$rec" -eq 1 ]; then
+                warn "Restore rejected — the page shows the reason."
+                sleep 2
+                continue
+            fi
+            if [ "$rec" -eq 0 ] || firstboot_consume_spool "$spool"; then
                 # Reachability before commitment: a remote node that cannot be dialed fails HERE,
                 # on the page, with the attempt kept for editing — not minutes into provisioning.
                 local pf_err

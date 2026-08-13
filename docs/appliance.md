@@ -298,6 +298,36 @@ pithead factory-reset
 Both ask you to type the reset name before they do anything. The machine reboots itself
 into setup when the reset is done.
 
+## Recovering from a backup
+
+Fresh flash, restore, done — if the machine is gone (dead disk, stolen, dropped), a backup
+taken beforehand provisions a replacement in one page, with nothing retyped.
+
+**Take a backup before you need it.** From the machine's console (or a checkout with SSH
+access):
+
+```
+pithead backup
+```
+
+This writes an encrypted archive under `backups/`: config, wallets, the Tor identity, and the
+dashboard's history — never the blockchain, which re-syncs. Type a passphrase when prompted, or
+set `PITHEAD_BACKUP_PASSPHRASE` for an unattended run. Copy the resulting
+`pithead-backup-*.tar.gz.enc` off the machine and keep the passphrase somewhere else — the
+archive is useless without it, and the machine you are backing up is exactly the thing you
+might lose next.
+
+**Restore it at setup.** Write a fresh image, boot the machine, and on the setup page choose
+"Restoring an existing Pithead? Upload its backup instead." above the form. Upload the archive
+and its passphrase; the machine decrypts, validates, and provisions itself from what it
+restores — the same wallets, the same Tor onion address, the same dashboard login and history,
+on hardware that has never seen them. This works on the installation medium's combined page
+too, alongside the disk choice.
+
+A wrong passphrase or a damaged archive is rejected with the reason, and the page falls back to
+the normal form — restore never blocks setup. Restore only runs at first setup, on a machine
+that has no configuration yet; it does not restore over a running install.
+
 ## If something goes wrong
 
 **The machine will not boot from the stick.** Almost always Secure Boot — disable it in
@@ -324,6 +354,10 @@ characters. If the message says the checksum failed — for either the Monero or
 address — at least one character is wrong: re-copy it from your wallet rather than fixing
 it by eye. A Tari address rejected as the wrong network came from a testnet wallet; the
 stack mines mainnet.
+
+**"Wrong passphrase or corrupt archive."** Confirm you copied the whole `.tar.gz.enc` file (a
+partial copy fails the same way) and typed the passphrase exactly as it was set when you ran
+`pithead backup`. Nothing is written until this check passes — retry from the same page.
 
 **It came back on the old version after an update.** That is the safety mechanism working:
 the new version did not come up healthy, so the machine reverted. Nothing is lost. Check

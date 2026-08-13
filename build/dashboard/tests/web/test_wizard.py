@@ -10,7 +10,7 @@ frontend: node --test over configsync.mjs.
 import json
 
 import pytest
-from aiohttp import web
+from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
 from mining_dashboard import wizard
@@ -789,3 +789,92 @@ async def test_an_unknown_auth_mode_is_ignored(client, seeded):
     cfg = {"monero": {"wallet_address": "4XYZ"}, "tari": {"wallet_address": "t"}}
     await client.post("/submit", data={"config": json.dumps(cfg), "auth_mode": "whatever"})
     assert not (seeded / "auth-mode").exists()
+
+
+# --- restore-at-setup (#909, #786 sub-issue B): archive + passphrase cross the spool ----------
+# The HOST decrypts/validates/extracts (firstboot_consume_restore, tested at the shell tier);
+# this server only asks — the same "container asks, host decides" split every other channel here
+# takes.
+
+
+def _archive_form(data=b"Salted__fixture-ciphertext", passphrase="hunter2", **extra):  # noqa: S107
+    form = FormData()
+    form.add_field(
+        "archive", data, filename="backup.tar.gz.enc", content_type="application/octet-stream"
+    )
+    form.add_field("passphrase", passphrase)
+    for k, v in extra.items():
+        form.add_field(k, v)
+    return form
+
+
+async def test_restore_writes_the_archive_and_passphrase_and_clears_a_previous_error(
+    client, seeded
+):
+    seeded.joinpath("error.txt").write_text("old error")
+    await _auth(client)
+    r = await client.post("/submit-restore", data=_archive_form())
+    assert r.status == 200
+    assert (seeded / "restore-archive").read_bytes() == b"Salted__fixture-ciphertext"
+    assert (seeded / "restore-passphrase").read_text() == "hunter2"
+    assert not (seeded / "error.txt").exists()
+
+
+async def test_restore_requires_an_uploaded_archive(client, seeded):
+    await _auth(client)
+    form = FormData()
+    form.add_field("passphrase", "hunter2")  # noqa: S106
+    r = await client.post("/submit-restore", data=form)
+    assert r.status == 400
+    assert "archive" in (await r.json())["error"]
+    assert not (seeded / "restore-archive").exists()
+
+
+async def test_restore_oversize_upload_is_refused_without_spooling(client, seeded, monkeypatch):
+    monkeypatch.setattr(wizard, "RESTORE_MAX_BYTES", 8)
+    await _auth(client)
+    r = await client.post("/submit-restore", data=_archive_form(data=b"more than eight bytes"))
+    assert r.status == 400
+    assert "too large" in (await r.json())["error"]
+    assert not (seeded / "restore-archive").exists()
+
+
+async def test_restore_unauthed_redirects_and_writes_nothing(client, seeded):
+    r = await client.post("/submit-restore", data=_archive_form(), allow_redirects=False)
+    assert r.status == 302
+    assert not (seeded / "restore-archive").exists()
+
+
+async def test_aiohttp_itself_refuses_a_body_over_client_max_size(spool, monkeypatch):
+    # The explicit RESTORE_MAX_BYTES check above covers OUR refusal on a small, easy-to-build
+    # body; this proves the OTHER half of the cap — aiohttp's own client_max_size (set from
+    # the same constant, plus multipart-overhead slack, in make_app) answers 413 while the
+    # body is still being READ, before submit_restore's own check ever runs. RESTORE_MAX_BYTES
+    # is patched tiny so the slack-inclusive limit (~1 MiB) is crossable by an ordinary payload
+    # rather than the real 64 MiB default.
+    monkeypatch.setattr(wizard, "RESTORE_MAX_BYTES", 8)
+    app = wizard.make_app()
+    c = TestClient(TestServer(app))
+    await c.start_server()
+    try:
+        await _auth(c)
+        r = await c.post("/submit-restore", data=_archive_form(data=b"x" * 2_000_000))
+        assert r.status == 413
+    finally:
+        await c.close()
+
+
+async def test_restore_on_the_installer_takes_the_same_disk_gates(client, installer):
+    # Identical erase discipline to a typed submission: an offered target, the exact retype.
+    await _auth(client)
+    r = await client.post(
+        "/submit-restore", data=_archive_form(disk="sdz", confirm="sdz", wipe="keep")
+    )
+    assert r.status == 400
+    assert not (installer / "restore-archive").exists()
+    r = await client.post(
+        "/submit-restore", data=_archive_form(disk="nvme0n1", confirm="nvme0n1", wipe="keep")
+    )
+    assert r.status == 200
+    assert (installer / "install-request").read_text() == "nvme0n1\tkeep"
+    assert (installer / "restore-archive").exists()

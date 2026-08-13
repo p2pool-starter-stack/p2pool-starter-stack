@@ -44,6 +44,11 @@ const FIELDS = {
   dashPassword: { path: "dashboard.auth.password" },
 };
 
+// Restore-at-setup (#909, #786 sub-issue B): mirrors the pithead script's and wizard.py's own
+// cap — a Pithead backup holds only config, keys and the dashboard database, never the
+// blockchains. Three languages, one number kept in step by hand (no shared source across them).
+const RESTORE_MAX_BYTES = 64 * 1024 * 1024;
+
 const TIMEZONES = [
   "auto",
   "UTC",
@@ -162,6 +167,25 @@ export const InstallSection = ({
 </div>`;
 };
 
+// Restore-at-setup (#909): the config form's alternative — an uploaded encrypted backup +
+// its emergency-kit passphrase. Validation is host-side (the same "container asks, host
+// decides" split as everything else here); this just carries the two answers up.
+export const RestoreSection = ({ file, passphrase, onFile, onPassphrase }) => html`<div>
+    <h3>Restore from a backup</h3>
+    <${Note}>Upload the encrypted backup archive and its emergency-kit passphrase — shown once,
+    when the backup was made. This restores settings, wallets, keys and the dashboard's history;
+    the machine then provisions itself from what it restores, exactly as if you had filled in
+    the form.<//>
+    <${Field} label="Backup archive">
+        <input type="file" accept=".enc,.tar.gz" onChange=${onFile} />
+    <//>
+    ${file && html`<p class="text-muted">${file.name} (${Math.round(file.size / 1024)} KB)</p>`}
+    <${Field} label="Passphrase">
+        <input type="password" value=${passphrase} onInput=${onPassphrase}
+            autocomplete="off" placeholder="the emergency-kit passphrase" />
+    <//>
+</div>`;
+
 export const Installing = ({ status }) => html`<div class="card">
     <p><strong>Installing.</strong> Takes a few minutes. Do not power it off.</p>
     ${
@@ -244,6 +268,12 @@ export class WizardApp extends Component {
     rigWorker: "",
     rigPassword: "",
     rigDefaults: {},
+    // Restore-at-setup (#909): an alternative to the whole form above, toggled independently
+    // of role/install-target — an uploaded backup replaces the config the operator would
+    // otherwise type in.
+    restoreMode: false,
+    restoreFile: null,
+    restorePassphrase: "",
     status: "",
     handoff: null,
   };
@@ -419,6 +449,53 @@ export class WizardApp extends Component {
     this.poll();
   };
 
+  // The restore-at-setup alternative (#909): an uploaded archive + passphrase instead of the
+  // typed config. Multipart, not URLSearchParams — the archive is a file, not a form field.
+  // Validation is entirely host-side; the client only enforces the size cap it can check
+  // without a round trip.
+  submitRestore = async (e) => {
+    e.preventDefault();
+    if (!this.state.restoreFile) {
+      this.setState({ error: "Choose a backup archive to upload." });
+      return;
+    }
+    if (this.state.restoreFile.size > RESTORE_MAX_BYTES) {
+      this.setState({
+        error: `Archive is too large (max ${RESTORE_MAX_BYTES / (1024 * 1024)} MB) — a Pithead backup holds only config, keys and the dashboard database, never the blockchains.`,
+      });
+      return;
+    }
+    const body = new FormData();
+    body.append("archive", this.state.restoreFile);
+    body.append("passphrase", this.state.restorePassphrase);
+    if (this.state.installer) {
+      if (!this.state.chosen) {
+        this.setState({ error: "Choose the disk to install onto." });
+        return;
+      }
+      if (this.state.confirm !== this.state.chosen) {
+        this.setState({ error: `Type ${this.state.chosen} exactly to confirm the erase.` });
+        return;
+      }
+      body.append("disk", this.state.chosen);
+      body.append("confirm", this.state.confirm);
+      body.append("wipe", this.state.wipe);
+    }
+    const res = await fetch("/submit-restore", { method: "POST", body });
+    if (!res.ok) {
+      let msg = "Restore failed — check the archive and passphrase, and retry.";
+      try {
+        msg = (await res.json()).error || msg;
+      } catch {}
+      this.setState({ error: msg });
+      return;
+    }
+    // Same in-place wait as a typed submission: no optimistic page swap, the server's stage
+    // moves the page when it actually does.
+    this.setState({ submitting: true, error: "" });
+    this.poll();
+  };
+
   ack = async () => {
     await fetch("/handoff-ack", { method: "POST" });
     await this.loadState(); // the server drops out of the handoff stage; the view follows
@@ -457,7 +534,43 @@ export class WizardApp extends Component {
         it appears by this name in the Pithead's Workers view.<//>`;
   }
 
+  // Restore-at-setup (#909): its own small card, reached by the toggle at the top of the
+  // normal form and left by the "back" link here — independent of role/disk state, which
+  // this branch handles on its own (the install target still needs picking on the medium).
+  renderRestore() {
+    const { error, installer, disks, chosen, confirm, wipe, restorePassphrase, submitting } =
+      this.state;
+    const diskPicked = !installer || Boolean(chosen);
+    return html`<div class="card">
+        <p>Upload an encrypted Pithead backup instead of filling in the form below. The machine
+        decrypts, validates and provisions itself from what it restores.</p>
+        <${Err}>${error}<//>
+        <form onSubmit=${this.submitRestore}>
+            ${
+              installer &&
+              html`<${InstallSection} disks=${disks} chosen=${chosen} confirm=${confirm}
+                wipe=${wipe} allowStick=${false}
+                onPick=${(e) => this.setState({ chosen: e.target.value, wipe: "keep" })}
+                onConfirm=${(e) => this.setState({ confirm: e.target.value })}
+                onWipe=${(e) => this.setState({ wipe: e.target.value })} />`
+            }
+            ${
+              diskPicked &&
+              html`<${RestoreSection} file=${this.state.restoreFile} passphrase=${restorePassphrase}
+                onFile=${(e) => this.setState({ restoreFile: e.target.files[0] || null })}
+                onPassphrase=${(e) => this.setState({ restorePassphrase: e.target.value })} />
+            <button type="submit" disabled=${submitting}>
+                ${submitting ? "Validating…" : "Restore and provision"}</button>`
+            }
+        </form>
+        <button type="button" class="wizard-link"
+            onClick=${() => this.setState({ restoreMode: false, error: "" })}>
+            Back to the setup form</button>
+    </div>`;
+  }
+
   renderSetup() {
+    if (this.state.restoreMode) return this.renderRestore();
     const { cfg, error, jsonText, jsonError } = this.state;
     const v = (name) => pathGet(cfg, FIELDS[name].path);
     const on = (name) => this.edit(FIELDS[name].path);
@@ -499,6 +612,9 @@ export class WizardApp extends Component {
                   : html`Only the answers that cannot be guessed for you. Everything else keeps
                 its documented default and stays editable from the dashboard.`
         }</p>
+        <p><button type="button" class="wizard-link"
+            onClick=${() => this.setState({ restoreMode: true, error: "" })}>
+            Restoring an existing Pithead? Upload its backup instead.</button></p>
         <${Err}>${error}<//>
         <form onSubmit=${this.submit}>
             <${Field} label="What is this machine?">
