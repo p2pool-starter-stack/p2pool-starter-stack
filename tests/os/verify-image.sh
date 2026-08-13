@@ -95,6 +95,11 @@ chk "avahi is IPv4-only (no unreachable-AAAA stall)" 'grep -q "^use-ipv6=no" "$R
 # commit. podman-restart started the stack into its own cgroup and SIGKILLed it on unit stop.
 chk "pithead-boot unit enabled" 'test -L "$ROOT/etc/systemd/system/multi-user.target.wants/pithead-boot.service"'
 chk "pithead-boot script present and executable" 'test -x "$ROOT/usr/local/sbin/pithead-boot"'
+# Physical-presence config channel (#786 sub-issue D): pithead-boot's one stage before render,
+# no unit of its own.
+chk "pithead-media-config script present and executable" 'test -x "$ROOT/usr/local/sbin/pithead-media-config"'
+chk "pithead-boot calls the media-config channel before render" \
+    'grep -q "pithead-media-config" "$ROOT/usr/local/sbin/pithead-boot"'
 chk "podman-restart retired (it killed the stack it started)" '[ ! -e "$ROOT/etc/systemd/system/multi-user.target.wants/podman-restart.service" ] && [ ! -e "$ROOT/etc/systemd/system/podman-restart.service.d" ]'
 chk "kernel + initrd in the slot" '[ -s "$ROOT/vmlinuz" ] || [ -L "$ROOT/vmlinuz" ]'
 

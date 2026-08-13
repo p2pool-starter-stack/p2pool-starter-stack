@@ -59,6 +59,13 @@ fi
 # per archive, and 'up' below recreates on the image-id change.
 ./pithead load-images
 
+# Physical-presence configuration channel (#786 sub-issue D): a removable stick carrying a
+# validated pithead-config.json is applied here, before render, so a changed config drives the
+# rest of this boot. Credential-less by design (hands on the machine is the whole authorization —
+# see docs/appliance.md and pithead-media-config's own header) and never fatal to boot: a missing
+# stick, a rejected file, or an operator-cancelled change all fall through to the normal path.
+/usr/local/sbin/pithead-media-config
+
 ./pithead render || exit 1
 
 # The migration hold (#851): os-update leaves a marker when the installed bundle declares a

@@ -50,10 +50,16 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
   provisioned rig commits the moment its miner is up, so the uncommitted window closes by
   design.) A rig serves no dashboard, so one that silently never mines is invisible to
   everything except this.
+- **media** — the physical-presence configuration channel (#786 sub-issue D): provisions via the
+  ESP pre-seed path, then attaches a second removable stick carrying a changed `config.json` and
+  reboots. Asserts the exact diff appears on the console (the changed wallet address in full, a
+  changed secret only named, never shown), the countdown applies the change, the changed setting
+  takes effect, and the stick is consumed so it cannot re-apply. A second reboot proves pulling
+  the stick mid-countdown cancels the change instead. Opt-in, like `fault`.
 - **fault** — power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is
   disqualifying. Opt-in: `all` runs the five phases above, not this one.
 
-`--keep` leaves the VM and disks for inspection; `--phase boot|update|install|provision|rig|fault|all`
+`--keep` leaves the VM and disks for inspection; `--phase boot|update|install|provision|rig|media|fault|all`
 scopes the run. A failed assertion is recorded and the run carries on, so one bench boot collects
 the whole battery; the run exits non-zero if anything failed.
 

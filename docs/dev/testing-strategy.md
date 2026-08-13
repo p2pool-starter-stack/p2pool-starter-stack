@@ -182,6 +182,8 @@ no VM needed, run on every image build.
 | Restore leg: a real encrypted backup off a live machine, uploaded instead of the form on a fresh install, wallet + Tor identity restored not regenerated | battery `--phase install` | 4 (added — unverified until the next battery run) |
 | Wizard's real HTTP flow provisions the STACK (images verified, Tor-only egress enforced, miner up); unaided reboot return; commit-gate honesty both ways; the migration hold starts the chain only post-commit | battery `--phase provision` | 4 ✅ |
 | Rig role: no containers, mines from the baked binary, takes an A/B update like a coordinator | battery `--phase rig` | 4 ✅ |
+| Physical-presence config channel (#786 sub-issue D): identical-config short-circuit, diff building + secret masking, consumed-marker, the abort/apply state machine (media removed, keypress, countdown timeout, absence of input is not abort) | `tests/stack/run.sh` (sourced, stubbed lsblk/mount) | 1 ✅ |
+| Physical-presence config channel: exact diff on the console, countdown applies, the changed setting takes effect, the stick is consumed, pulling the stick mid-countdown cancels | battery `--phase media` (opt-in) | 4 (added — not yet run at the release gate) |
 | Power cuts mid-write and mid-commit; corrupt bundle — a brick is disqualifying | battery `--phase fault` (opt-in) | 4 ✅ |
 
 ## Running each tier
