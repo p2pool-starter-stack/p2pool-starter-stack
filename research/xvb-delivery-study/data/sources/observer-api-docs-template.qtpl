@@ -1,0 +1,1208 @@
+{% import cmdutils "git.gammaspectra.live/P2Pool/observer-cmd-utils/utils" %}
+
+{% code
+type ApiPage struct {
+	// inherit from base page, so its' title is used in error page.
+	BasePage
+
+	PoolInfoExample cmdutils.PoolInfoResult
+}
+%}
+
+{% func (p *ApiPage) Style() %}
+{%= p.BasePage.Style() %}
+pre {
+    padding: 2px;
+    border: 1px dashed #BBB;
+}
+{% endfunc %}
+
+{% func (p *ApiPage) Title() %}
+{%= p.BasePage.Title() %} - API Documentation
+{% endfunc %}
+
+{% func (p *ApiPage) Content() %}
+
+<div class="center" style="min-width: 800px; width: 50%">
+    <div>
+        <h2>API Documentation</h2>
+        <p>This site and API is in development. As such, returned data could be different, or methods be deprecated / replaced anytime. Though it will be avoided if possible without affecting performance :)</p>
+        <p>All the data showed on this site comes from the API, P2Pool or Monero. So if new features are added on site, it's possible to do so via the API.</p>
+        <p>At the moment there is no broad rate-limiting. If abuse is detected, temporary rate limits can be put in place. You can always run your own instance of this site / API / consensus, see <a href="{%s p.Context().GetUrl("git.gammaspectra.live") %}/P2Pool/observer">source code</a>.</p>
+        <p>Some historical data could be incomplete. Some block records do not exist.</p>
+        <p>In general, mandatory parameters are specified on the path, optional parameters on query.</p>
+        <p><strong>Knowledge of P2Pool internals is strongly advised.</strong> Feel free to ask questions on IRC or Matrix.</p>
+        <p>Unless specified, all returned data is JSON with status code 200. A not found error will issue a status code 404 and JSON of <code>{"error": "not_found"}</code> or similar.</p>
+    </div>
+    
+    <div>
+        <h3>Common types and fields</h3>
+        <p>
+            Fields within JSON objects may be omitted if marked as <em>omitempty</em> or <em>omitzero</em> on its definition within the source code. An empty/zero representation is assumed.
+            </br>
+            For example, a types.Hash marked as <em>omitempty</em> or <em>omitzero</em> would represent the value <span class="smaller mono">0000000000000000000000000000000000000000000000000000000000000000</span>.
+            </br>
+            For pointers/structs, the zero or nil value is considered empty. In lists, an empty / length of zero is assumed when empty.
+            </br>
+            Refer to source code to check the struct definition when in doubt.
+        </p>
+
+        <h4>types.Hash</h4>
+        <p>Represents a 256-bit hash value. This can refer to a block template id, main id, parents, transaction ids, proof of work hashes or any other value.</p>
+        <p>This value is encoded as 64 hexadecimal characters.</p>
+
+        <h4>crypto.PublicKeyBytes / crypto.PrivateKeyBytes</h4>
+        <p>Represents an <em>edwards25519</em> Point or Scalar in binary form. Encoded as a 256-bit value. This can refer to a public keys on a block, transaction keys or any other value.</p>
+        <p>This value is encoded as 64 hexadecimal characters.</p>
+
+        <h4>address.Address</h4>
+        <p>Represents a Monero address. Includes valid checksums.</p>
+        <p>This value is encoded using special base58.</p>
+
+        <h4>types.Difficulty</h4>
+        <p>Represents a 128-bit unsigned integer value. This can refer to weight, block difficulty or cumulative difficulty.</p>
+        <p>This value is encoded as a 64-bit unsigned integer when the highest 64-bits are not set. Otherwise, it is encoded as 32 hexadecimal characters.</p>
+    </div>
+
+    <hr/>
+
+    <div>
+        <h3 class="mono">/api/pool_info</h3>
+        <p>Response contains general information on the current status of the P2Pool sidechain and Monero network, release versions, and other parameters.</p>
+        <pre class="smaller">
+[Live result. Has been cut due to size, relevant portions shown]
+curl --silent https://{%s p.Context().NetServiceAddress %}/api/pool_info
+{%= encodeJson(p.PoolInfoExample, true) %}
+        </pre>
+    </div>
+
+    <hr/>
+
+    <div>
+        <h3 class="mono">/api/miner_info/&lt;id|address&gt;</h3>
+        <p>Response contains general information on a specific miner, referred by its internal <em>id</em> or known Monero <em>address</em>.</p>
+        <p>If you do not need the precise count of shares please pass the <em>?shareEstimates</em> parameter.</p>
+        <pre class="smaller">
+curl --silent https://{%s p.Context().NetServiceAddress %}/api/miner_info/47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw
+{
+    "id": 3,
+    "address": "47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+    "shares": [
+        {
+            "shares": 1022,
+            "uncles": 0,
+            "last_height": 4371641
+        },
+        {
+            "shares": 559294,
+            "uncles": 17861,
+            "last_height": 4868281
+        },
+        {
+            "shares": 69,
+            "uncles": 0,
+            "last_height": 4624653
+        }
+    ],
+    "last_share_height": 4868281,
+    "last_share_timestamp": 1681256979
+}
+        </pre>
+    </div>
+
+    <hr/>
+
+    <div>
+        <h3 class="mono">/api/side_blocks_in_window?window=[window_size]&from=[height][&noMainStatus][&noUncles][&noMiners]</h3>
+        <p>Response contains SideChain Blocks on specified range window. Optional parameters are <em>height</em>, denoting the Tip where the window gets measured from, and <em>window_size</em>, max SIDECHAIN_PPLNS_WINDOW * 4 * 7</p>
+        <p>By default it will return current window blocks, from current tip.</p>
+        <pre class="smaller">
+[result has been cut due to size, relevant portions shown]
+curl --silent https://{%s p.Context().NetServiceAddress %}/api/side_blocks_in_window
+[
+    {
+        "main_id": "61c6463961c31584617f2ffd322fd32f91cef4a956b3ac431c128ab1ef8342c8",
+        "main_height": 2863488,
+        "template_id": "8782465759db40c11f64e78a26df4ec6221fb91202cc19a3beaef61acb8e1a50",
+        "side_height": 4882215,
+        "parent_template_id": "2ee8e55e2d0696d715049f5958c300c10b01d0a30b607c82afb8885a76f00d71",
+        "miner": 3,
+        "effective_height": 4882215,
+        "nonce": 3691022871,
+        "extra_nonce": 1665655721,
+        "timestamp": 1681402700,
+        "software_id": 0,
+        "software_version": 196610,
+        "window_depth": 294,
+        "window_outputs": 30,
+        "transaction_count": 2,
+        "difficulty": 2107950958,
+        "cumulative_difficulty": 7610896210501088,
+        "pow_difficulty": 3167867138,
+        "pow_hash": "3e19a8e6c1db97bae77fb19b68b5bf6c927e3b212063ee219e26155b01000000",
+        "inclusion": 1,
+        "miner_address": "47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+        "main_difficulty": 310626726029
+    },
+    {
+        "main_id": "30e8afa1c6961afae7686f4c9c2ee5ad77bd87bdcbf7da00958af53b3349264a",
+        "main_height": 2863488,
+        "template_id": "2ee8e55e2d0696d715049f5958c300c10b01d0a30b607c82afb8885a76f00d71",
+        "side_height": 4882214,
+        "parent_template_id": "e0b745e8e3004832d95ef7eb6aa5f43dd0f86a491b6edb8ccd8e8dfbf92f6768",
+        "miner": 2,
+        "effective_height": 4882214,
+        "nonce": 3791814950,
+        "extra_nonce": 610282123,
+        "timestamp": 1681402699,
+        "software_id": 0,
+        "software_version": 196610,
+        "window_depth": 293,
+        "window_outputs": 30,
+        "transaction_count": 2,
+        "difficulty": 2108162718,
+        "cumulative_difficulty": 7610894102550130,
+        "pow_difficulty": 5140029450,
+        "pow_hash": "591082e76b158724c0a1a3ea8ffdec93eaa33a8d371eda2ad85ae9d500000000",
+        "inclusion": 1,
+        "miner_address": "435QwkC3fJ4YeX929gmaBMeuUwR1wdmRrQBNyoKfpJdHKDbqnukHJeA768yt8ngnS7UTHRJ2yJmnWP8gCz6s3kkiBX8C363",
+        "uncles": [
+            {
+                "template_id": "4005ede80787679e83d269f09f6435ac4952d9c2cf2fadf999620ed81a948d40",
+                "miner": 77,
+                "side_height": 4882213,
+                "difficulty": 2109635914
+            }
+        ],
+        "main_difficulty": 310626726029
+    },
+    {
+        "main_id": "6d1865f59d8cd38f5de6a498a2a5465040194f63122187b6e439743913aac202",
+        "main_height": 2863487,
+        "template_id": "4005ede80787679e83d269f09f6435ac4952d9c2cf2fadf999620ed81a948d40",
+        "side_height": 4882213,
+        "parent_template_id": "985d621e565da6da1f772dffef4b1154678cc724b6b18eff6edde5e68136a45d",
+        "miner": 77,
+        "uncle_of": "2ee8e55e2d0696d715049f5958c300c10b01d0a30b607c82afb8885a76f00d71",
+        "effective_height": 4882214,
+        "nonce": 3326443597,
+        "extra_nonce": 3803058762,
+        "timestamp": 1681402680,
+        "software_id": 0,
+        "software_version": 196610,
+        "window_depth": 294,
+        "window_outputs": 31,
+        "transaction_count": 0,
+        "difficulty": 2109635914,
+        "cumulative_difficulty": "0000000000000000001b0a106401568a",
+        "pow_difficulty": 2153295646,
+        "pow_hash": 7610889884751498,
+        "inclusion": 1,
+        "miner_address": "457fCKqWYSacjDRLjqah9kTga8KCQRNwL4WP7EfBNQKghYF3RZunjGHCoPSd6F7Y6mVRpT6eCgkEtin3cKvSCf11AqcP33g",
+        "main_difficulty": 310568847048
+    },
+    {
+        "main_id": "f5582e27b94a34713b607d0f47821142c8b88f8a3335d5b2b1d679c909a9651f",
+        "main_height": 2863486,
+        "template_id": "e0b745e8e3004832d95ef7eb6aa5f43dd0f86a491b6edb8ccd8e8dfbf92f6768",
+        "side_height": 4882213,
+        "parent_template_id": "985d621e565da6da1f772dffef4b1154678cc724b6b18eff6edde5e68136a45d",
+        "miner": 18,
+        "effective_height": 4882213,
+        "nonce": 3506931857,
+        "extra_nonce": 1625389436,
+        "timestamp": 1681402674,
+        "software_id": 0,
+        "software_version": 196610,
+        "window_depth": 294,
+        "window_outputs": 31,
+        "transaction_count": 115,
+        "difficulty": 2109635914,
+        "cumulative_difficulty": 7610889884751498,
+        "pow_difficulty": 3604028547,
+        "pow_hash": "1d01609ded322d6665fb96410042cc5cc9604be078b77967a818143101000000",
+        "inclusion": 1,
+        "miner_address": "4BBb6ZBPPPWivZnx2m3m7YUUGQv54F9HfjPWurf2Xy2UDQwwPyb956dGQ3p9whrxNJ568zc3Ygfr9McVT1UJyRKtLi1jcMb",
+        "main_difficulty": 310847993727
+    }
+]
+        </pre>
+    </div>
+
+    <hr/>
+
+    <div>
+        <h3 class="mono">/api/side_blocks_in_window/&lt;id|address&gt;?window=[window_size]&from=[height][&noMainStatus][&noUncles][&noMiners]</h3>
+        <p>Response contains SideChain Blocks on specified range window for a specific miner. Optional parameters are <em>height</em>, denoting the Tip where the window gets measured from, and <em>window_size</em>, max SIDECHAIN_PPLNS_WINDOW * 4 * 7</p>
+        <p>By default it will return current window blocks, from current tip.</p>
+        <pre class="smaller">
+[result has been cut due to size, relevant portions shown]
+curl --silent https://{%s p.Context().NetServiceAddress %}/api/side_blocks_in_window/47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw
+[
+        {
+        "main_id": "b41a9e78f11b9f7eaed30a4211f43ae7201f7c77031839f3e484b59c32088028",
+        "main_height": 2863492,
+        "template_id": "ce8de3ca5a9a066c0b4f5d5068783b17ace476f56236c65f5c949b9039c0ca3e",
+        "side_height": 4882250,
+        "parent_template_id": "a0cb288e467f5a4069603f4047c8607f1721a4b62fc8e2f794a5a942828fdf32",
+        "miner": 3,
+        "effective_height": 4882250,
+        "nonce": 2046825740,
+        "extra_nonce": 1477203696,
+        "timestamp": 1681403097,
+        "software_id": 0,
+        "software_version": 196610,
+        "window_depth": 296,
+        "window_outputs": 28,
+        "transaction_count": 75,
+        "difficulty": 2099479471,
+        "cumulative_difficulty": 7610976044280876,
+        "pow_difficulty": 2770364525,
+        "pow_hash": "ea3d41d8874fb1de05aee76a0fb6df7267b07e34ee95cdf1f924e28c01000000",
+        "inclusion": 1,
+        "miner_address": "47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+        "main_difficulty": 311336952550
+    },
+    {
+        "main_id": "fea4ee3769b350f2aad0571ff54eb555dbdf7f0cb811c19dea66bef286b041c4",
+        "main_height": 2863492,
+        "template_id": "74caf5d6ba885d05adbb4e4d611edabb55f0e05dcbb20cd3105d2adbcf4cdd1b",
+        "side_height": 4882248,
+        "parent_template_id": "3378e835d72a821b5157d8bebaf4f2193ebaf9cb86c93a106fc4fbbb1921c158",
+        "miner": 3,
+        "effective_height": 4882248,
+        "nonce": 3456175326,
+        "extra_nonce": 2803310737,
+        "timestamp": 1681403084,
+        "software_id": 0,
+        "software_version": 196610,
+        "window_depth": 296,
+        "window_outputs": 28,
+        "transaction_count": 73,
+        "difficulty": 2103245329,
+        "cumulative_difficulty": 7610971844410631,
+        "pow_difficulty": 5249306449,
+        "pow_hash": "4ab091d18ac65c212feff8f1a971aee1da50c177620827326b5d75d100000000",
+        "inclusion": 1,
+        "miner_address": "47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+        "main_difficulty": 311336952550
+    },
+    {
+        "main_id": "277a19bf024b4895553bbefc047eeb7733b95a97df6d8422759ec874d2d626c1",
+        "main_height": 2863492,
+        "template_id": "52ad4bb20d62b0e9d7762bab8d27de05563be6147cf3367d9bc79688f794217c",
+        "side_height": 4882246,
+        "parent_template_id": "40865b24eb4fbd1428ff1444d21b4337c8922b60b63a3ab6bdfef2586775390b",
+        "miner": 3,
+        "effective_height": 4882246,
+        "nonce": 754974898,
+        "extra_nonce": 2953378118,
+        "timestamp": 1681403082,
+        "software_id": 0,
+        "software_version": 196610,
+        "window_depth": 296,
+        "window_outputs": 28,
+        "transaction_count": 72,
+        "difficulty": 2104858109,
+        "cumulative_difficulty": 7610967638144376,
+        "pow_difficulty": 4514527717,
+        "pow_hash": "fc127598502b38c4977f7faef3f7db6bab11bab42353baed9ab58cf300000000",
+        "inclusion": 1,
+        "miner_address": "47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+        "uncles": [
+            {
+                "template_id": "ab07fe1e4a6a00ae799bedc637c1b642b4938d302ec16db5b513923937614abe",
+                "miner": 7,
+                "side_height": 4882244,
+                "difficulty": 2105207888
+            }
+        ],
+        "main_difficulty": 311336952550
+    },
+    {
+        "main_id": "ff68eedc72252289e066d2dd59c209dc1502500d2cf4501fb69a91b69e2415b8",
+        "main_height": 2863492,
+        "template_id": "4764acc29d604f1491d600504d2802fea156a47ad691420b63d2c52924570925",
+        "side_height": 4882241,
+        "parent_template_id": "12f8b044e315669904f81caa055eac84f9a7d30d93bdd446cf304d38f18097cf",
+        "miner": 3,
+        "effective_height": 4882241,
+        "nonce": 4026633700,
+        "extra_nonce": 2755066571,
+        "timestamp": 1681403011,
+        "software_id": 0,
+        "software_version": 196610,
+        "window_depth": 296,
+        "window_outputs": 29,
+        "transaction_count": 47,
+        "difficulty": 2099621378,
+        "cumulative_difficulty": 7610955003350240,
+        "pow_difficulty": 5985480395,
+        "pow_hash": "6e0cc4b1e989a18a8f7a65c5aa5ad252a071cd57d877cac4f14bb2b700000000",
+        "inclusion": 1,
+        "miner_address": "47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+        "main_difficulty": 311336952550
+    }
+]
+        </pre>
+    </div>
+
+    <hr/>
+
+    <div>
+        <h3 class="mono">/api/payouts/&lt;id|address&gt;?search_limit=[search_limit]</h3>
+        <p>Response contains payouts received by this miner due to blocks on Monero network. Optional parameters are <em>search_limit</em>, maximum amount of records to return, set 0 to return all. Defaults to 10</p>
+        <p><em>.[].coinbase_private_key</em> can be used to prove the payout is correct.</p>
+        <pre class="smaller">
+[result has been cut due to size, relevant portions shown]
+curl --silent https://{%s p.Context().NetServiceAddress %}/api/payouts/47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw
+[
+    {
+        "miner": 3,
+        "template_id": "cebb0c11be67c43c1a01cf2ac43e6bafe745a92012bbbb04be03842f56c5cc78",
+        "side_height": 5428093,
+        "main_id": "8e0c7b08f92be1bdc5c4153f7a8c3e536f1353aff898684477cc6ba857b8510e",
+        "main_height": 2910747,
+        "timestamp": 1687085695,
+        "coinbase_id": "e1b20914f4ff768277c19daa65ef5f2ace7cda6f3f2586caf569c3008b7510b1",
+        "coinbase_reward": 3400854816,
+        "coinbase_private_key": "9438ef07d1bb10ae05e68cdf900938807fe8639acf7dab27feedc08119072b02",
+        "coinbase_output_index": 26,
+        "global_output_index": 75393989,
+        "including_height": 5427726
+    },
+    {
+        "miner": 3,
+        "template_id": "9bab936c12790d7e006ef1e97bf00572e85eb2f5647ce6320491fc93ba47f6a0",
+        "side_height": 5427897,
+        "main_id": "8bf0f5f17c53a68e5fb36a89781acd84c5936c4b06287aad09c038dac8b52860",
+        "main_height": 2910737,
+        "timestamp": 1687083786,
+        "coinbase_id": "413b6cac611c49d543d058a7d4ea908ba8a3774ced6781c2fdcdbbc0b187f24a",
+        "coinbase_reward": 103013108631,
+        "coinbase_private_key": "4344896bdacc7c58758090b955c7fd098f7414cdf773ec39fd12808f1fb4090f",
+        "coinbase_output_index": 11,
+        "global_output_index": 75393229,
+        "including_height": 5427531
+    },
+    {
+        "miner": 3,
+        "template_id": "566257bf73bc937a7b5bb6c3b6c1a2008db078a56d4fcbb2e34bde6f2b847d55",
+        "side_height": 5427764,
+        "main_id": "d74f9c0201c248911d6c306f7e6b5d58dea469ecf40ffd891e59dd0f6d082aea",
+        "main_height": 2910725,
+        "timestamp": 1687082281,
+        "coinbase_id": "561ed794fbdf5502fbd934fe7d7e4b9f4ccd4a8f7436fb93bc51c1e6dd431357",
+        "coinbase_reward": 170359596687,
+        "coinbase_private_key": "0332c944b6919f8e284993c35f810ce6b0c43cbf5f743f339fd4aaa197787109",
+        "coinbase_output_index": 14,
+        "global_output_index": 75392201,
+        "including_height": 5427402
+    }
+]
+        </pre>
+    </div>
+
+    <hr/>
+
+    <div>
+        <h3 class="mono">/api/found_blocks?limit=[limit]&miner=[id|address]</h3>
+        <p>Response contains last found block records on the Monero network by P2Pool. Optional parameters are <em>limit</em>, maximum amount of records to return, defaults to 50, max 1000. Additionally, you can pass the <em>miner</em> parameter to select blocks from that miner only. <em>coinbase</em> parameter can also be used here to decode coinbase outputs.</p>
+        <pre class="smaller">
+curl --silent https://{%s p.Context().NetServiceAddress %}/api/found_blocks?limit=2
+[
+    {
+        "main_block": {
+            "id": "be284c7fc784ca83f92c2f1eac2e02524a99a63876179dae6c370a199d533d95",
+            "height": 2942191,
+            "timestamp": 1690866882,
+            "reward": 600373170000,
+            "coinbase_id": "691eb1e5b9222df2c667a481370acdd751c7f5f3cd0345ac9fc0f1feea396f7c",
+            "difficulty": 260315236919,
+            "side_template_id": "b76318caa4822826573ceebcabbd0309d2a710dd83700cb5d0cae206d9835cb4",
+            "coinbase_private_key": "5cdea4c89482c19588527238d32bdad97151c4e40800882183222d080ff5f203"
+        },
+        "side_height": 5789985,
+        "miner": 2915,
+        "effective_height": 5789985,
+        "window_depth": 438,
+        "window_outputs": 41,
+        "transaction_count": 2,
+        "difficulty": 1301336116,
+        "cumulative_difficulty": 9202373148639334,
+        "inclusion": 1,
+        "miner_address": "42HEEF3NM9cHkJoPpDhNyJHuZ6DFhdtymCohF9CwP5KPM1Mp3eH2RVXCPRrxe4iWRogT7299R8PP7drGvThE8bHmRDq1qWp"
+    },
+    {
+        "main_block": {
+            "id": "ac6ae3cfe0f241e22aae6b7a165e7254f380d50c5a690994aa462120c00c4f16",
+            "height": 2942190,
+            "timestamp": 1690866866,
+            "reward": 608015760000,
+            "coinbase_id": "a7f784cc724f9e172d3bea13a18569b339e96d218b3fa54f9189abacbeb349ae",
+            "difficulty": 260396879898,
+            "side_template_id": "be9e779f4f8b2cd96c6e30a94c28c6d36af261ecf7cc195394471f112b850c49",
+            "coinbase_private_key": "896cde95bf6713d60b7ed4bafa88018e7418cd55db9232db08dc2de174cebd0b"
+        },
+        "side_height": 5789983,
+        "miner": 2915,
+        "effective_height": 5789983,
+        "window_depth": 438,
+        "window_outputs": 41,
+        "transaction_count": 49,
+        "difficulty": 1301263505,
+        "cumulative_difficulty": 9202370546222535,
+        "inclusion": 1,
+        "miner_address": "42HEEF3NM9cHkJoPpDhNyJHuZ6DFhdtymCohF9CwP5KPM1Mp3eH2RVXCPRrxe4iWRogT7299R8PP7drGvThE8bHmRDq1qWp"
+    }
+]
+        </pre>
+    </div>
+
+
+    <hr/>
+
+    <div>
+        <h3 class="mono">/api/shares?limit=[limit]&miner=[id|address][&onlyBlocks][&noMainStatus][&noUncles][&noMiners]</h3>
+        <p>Response contains last found SideChain block records on P2Pool. Optional parameters are <em>limit</em>, maximum amount of records to return, defaults to 50, max SIDECHAIN_PPLNS_WINDOW. Additionally, you can pass the <em>miner</em> parameter to select shares from that miner only. <em>onlyBlocks</em> can be set to not receive uncle share entries.</p>
+        <pre class="smaller">
+curl --silent https://{%s p.Context().NetServiceAddress %}/api/shares?limit=2
+[
+   {
+       "main_id": "7717e2e59fb345ce3e5c5585b51632f32db2e98bb0a69b64a0b91f7b370be3b7",
+       "main_height": 2942216,
+       "template_id": "7f0ce404ab3d576d97dc4affacb5e443fb4c1f36f1bb09feed5b9af3dcca0169",
+       "side_height": 5790240,
+       "parent_template_id": "7070785f6ac7c486ab2ae7df443e6afc31010f87206b44c90be1339cd2ecfc70",
+       "miner": 2915,
+       "effective_height": 5790240,
+       "nonce": 1660977225,
+       "extra_nonce": 2706560389,
+       "timestamp": 1690869415,
+       "software_id": 0,
+       "software_version": 196613,
+       "window_depth": 424,
+       "window_outputs": 40,
+       "difficulty": 1327149158,
+       "cumulative_difficulty": 9202726518962104,
+       "pow_difficulty": 1720691274,
+       "pow_hash": "36685a8106e8b6a7450820f97cba0fa3cd2aa017fb4119f3737ffe7e02000000",
+       "inclusion": 1,
+       "transaction_count": 9,
+       "miner_address": "42HEEF3NM9cHkJoPpDhNyJHuZ6DFhdtymCohF9CwP5KPM1Mp3eH2RVXCPRrxe4iWRogT7299R8PP7drGvThE8bHmRDq1qWp",
+       "main_difficulty": 260565791438
+   },
+   {
+       "main_id": "9ce6483c303ada746b9e969c65235bcba0433865f6afd11153e94fb0e6d41046",
+       "main_height": 2942216,
+       "template_id": "7070785f6ac7c486ab2ae7df443e6afc31010f87206b44c90be1339cd2ecfc70",
+       "side_height": 5790239,
+       "parent_template_id": "d7477275674bd90bba39e4604cf2539ae99460856567895369cda165370ba081",
+       "miner": 5695,
+       "effective_height": 5790239,
+       "nonce": 460496,
+       "extra_nonce": 346986124,
+       "timestamp": 1690869412,
+       "software_id": 0,
+       "software_version": 196612,
+       "window_depth": 425,
+       "window_outputs": 40,
+       "difficulty": 1326689571,
+       "cumulative_difficulty": 9202725191812946,
+       "pow_difficulty": 1929563612,
+       "pow_hash": "1ba49ad252103dc9e5eba606a3c1fac0875e01b6163201d6b6f0d23902000000",
+       "inclusion": 1,
+       "transaction_count": 9,
+       "miner_address": "48bSCfGTKE4Kb3Fe3YWYgmNjgxjGqxZsP4mwHEQDVUQST2HxRGEX2566LbfmBE5bW2JcByTnjsWZiQZWj6f8XSpX4EDE9Gj",
+       "main_difficulty": 260565791438
+   }
+]
+        </pre>
+    </div>
+
+
+    <hr/>
+
+    <div>
+        <h3 class="mono">/api/block_by_id/&lt;blockId&gt;[/full|/light|/raw|/info|/payouts|/coinbase]</h3>
+        <p>Response contains a block/share record on P2Pool by Template, Main Id, or Coinbase Id. You can select the JSON version or the binary format, or the full/light JSON format of the raw share.</p>
+        <p>Using <em>/payouts</em> you can query all payouts that include weights by this share.</p>
+        <p>Using <em>/coinbase</em> you can query all possible outputs and ownership for found and not found blocks.</p>
+        <pre class="smaller">
+curl --silent https://{%s p.Context().NetServiceAddress %}/api/block_by_id/179cf9d77c7d198dc4d9a5deb03561b6121336fe9ea72fbda00fbf6eea34a34d
+{
+    "main_id": "abf18da3388c1c5c8ca372ac4804c6b1b2adb511d6a6cc5f781d883211568eb0",
+    "main_height": 2863113,
+    "template_id": "179cf9d77c7d198dc4d9a5deb03561b6121336fe9ea72fbda00fbf6eea34a34d",
+    "side_height": 4877733,
+    "parent_template_id": "ffd6a96ce3131f043f273582a69d1eaa42b7557f47f7b241140cb22af9fbf556",
+    "miner": 3,
+    "effective_height": 4877733,
+    "nonce": 1694662668,
+    "extra_nonce": 2797508428,
+    "timestamp": 1681355864,
+    "software_id": 0,
+    "software_version": 196610,
+    "window_depth": 327,
+    "window_outputs": 33,
+    "difficulty": 1956175240,
+    "cumulative_difficulty": 7601017513575704,
+    "pow_difficulty": 1301275836828,
+    "pow_hash": "602d39809af709405eb8660028fdfa5bf80e71e6a4ec1fbb924ed80000000000",
+    "inclusion": 1,
+    "transaction_count": 5,
+    "mined_main_at_height": true,
+    "miner_address": "47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+    "main_difficulty": 332971955880
+}
+        </pre>
+    </div>
+
+
+
+    <hr/>
+
+    <div>
+        <h3 class="mono">/api/block_by_height/&lt;blockHeight&gt;[/full|/light|/raw|/info|/payouts|/coinbase]</h3>
+        <p>Response contains a block/share record on P2Pool by SideChain height. You can select the JSON version or the binary format, or the full/light JSON format of the raw share.</p>
+        <p>Using <em>/payouts</em> you can query all payouts that include weights by this share.</p>
+        <p>Using <em>/coinbase</em> you can query all possible outputs and ownership for found and not found blocks.</p>
+        <pre class="smaller">
+curl --silent https://{%s p.Context().NetServiceAddress %}/api/block_by_height/4868351
+{
+    "main_id": "5b468e062dc4aa1570f956e6314f6d0634a772aa8d2905d8ab9c83026a7ac6af",
+    "main_height": 2862309,
+    "template_id": "09d1974eea6de73d3cb95bc495b0b24a7b6f6405eaada53c4ec1ad3f513a4cc8",
+    "side_height": 4868351,
+    "parent_template_id": "b74acca03b7593386dd54b8132bf79522c9861b41f7797d0ce4f2af5f35cc170",
+    "miner": 1,
+    "effective_height": 4868351,
+    "nonce": 3271624915,
+    "extra_nonce": 1072029533,
+    "timestamp": 1681257577,
+    "software_id": 0,
+    "software_version": 196609,
+    "window_depth": 323,
+    "window_outputs": 30,
+    "difficulty": 2002581944,
+    "cumulative_difficulty": 7579715115168858,
+    "pow_difficulty": 3782914221,
+    "pow_hash": "fe471ad3fbd112fabe2abebafeccd2cb8eb0077864e7cfe939eaa62201000000",
+    "inclusion": 1,
+    "transaction_count": 28,
+    "miner_address": "4ApeMQzcRS7huBW8HEGkug2e5kQxhhC2Ub9y8F9bc7arKHsCktAV24n5ezKM9PjX5yS3Pv4PPNMXT8rTAFVuKCRi1jEqJZd",
+    "main_difficulty": 326506434325
+}
+        </pre>
+    </div>
+
+
+    <hr/>
+    <div>
+        <h3><span class="mono">/api/events</span> WebSocket Event API</h3>
+        <p>
+            Connect to this using a WebSocket library. Produces a stream of JSON events for new blocks (type <em>side_block</em>), found blocks (type <em>found_block</em>), orphaned blocks (type <em>orphaned_block</em>).
+            <pre class="smaller">
+[result has been cut due to size, relevant portions shown]
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"77d54ef67b566439c7df43614928ee6a503d82fb16f69720ed2ca0852b4ea5b6",
+      "main_height":2871492,
+      "template_id":"7c5db68e5af86e66df94d03688a8f61d7e7cd4544dbadc3f4d2f7972c0c72b17",
+      "side_height":4973833,
+      "parent_template_id":"10e2b50eb5c688bea4852f25b0d3550fe0e4e8192ea0602a373fb48454496e20",
+      "miner":19,
+      "uncle_of":"372ee3a80d8ab9131878a56e5e2802aa3f797a55d38f76871f1eeeafd60cd828",
+      "effective_height":4973834,
+      "nonce":4127591028,
+      "extra_nonce":3737539655,
+      "timestamp":1682358001,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":333,
+      "window_outputs":31,
+      "transaction_count":2,
+      "difficulty":1902041368,
+      "cumulative_difficulty":"0000000000000000001ba95c40814041",
+      "pow_difficulty":39725018671,
+      "pow_hash":"f6ddc7bdb80b6050fc7dd9fea1ad009434b7bcda3e3cb309a295ad1b00000000",
+      "inclusion":1,
+      "miner_address":"4B4mXWBqrFYGk9W8t1J3UifSdnU723HHKf8VaWGSZGzLZUncHRJetPCjbDUha1udPd2ZpJrwYCmPv1jzvg3NCf7Z1YViuoa",
+      "main_difficulty":344857075709
+   }
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"808c9c2a413b8480cc5b445575580a6edd5d237cc120f18a668c6f602dff9c1b",
+      "main_height":2871492,
+      "template_id":"372ee3a80d8ab9131878a56e5e2802aa3f797a55d38f76871f1eeeafd60cd828",
+      "side_height":4973834,
+      "parent_template_id":"8d691190875157d160c8bc8787ab140b1855c1afcc7b8f3076bc3366711bb085",
+      "miner":2,
+      "effective_height":4973834,
+      "nonce":402718979,
+      "extra_nonce":3611692200,
+      "timestamp":1682358008,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":2,
+      "difficulty":1900059444,
+      "cumulative_difficulty":"0000000000000000001ba95d2320b48d",
+      "pow_difficulty":4388053454,
+      "pow_hash":"727019817d63c52ac2ce2067652804cbfc8d3be778fe5548d0bf91fa00000000",
+      "inclusion":1,
+      "miner_address":"435QwkC3fJ4YeX929gmaBMeuUwR1wdmRrQBNyoKfpJdHKDbqnukHJeA768yt8ngnS7UTHRJ2yJmnWP8gCz6s3kkiBX8C363",
+      "uncles":[
+         {
+            "template_id":"7c5db68e5af86e66df94d03688a8f61d7e7cd4544dbadc3f4d2f7972c0c72b17",
+            "miner":19,
+            "side_height":4973833,
+            "difficulty":1902041368
+         }
+      ],
+      "main_difficulty":344857075709
+   }
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"220534c981f71a7d2d935825b5cf479d960345177387eb7fcd196a762b018453",
+      "main_height":2871492,
+      "template_id":"320a1a1d8849d48243670938efa640a271b289fae392ea35eb1a7daf88d3e2c8",
+      "side_height":4973835,
+      "parent_template_id":"372ee3a80d8ab9131878a56e5e2802aa3f797a55d38f76871f1eeeafd60cd828",
+      "miner":3,
+      "effective_height":4973835,
+      "nonce":3825436994,
+      "extra_nonce":2417583792,
+      "timestamp":1682358009,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":3,
+      "difficulty":1899187725,
+      "cumulative_difficulty":"0000000000000000001ba95d9454029a",
+      "pow_difficulty":4870458263,
+      "pow_hash":"d6b5911b6b13e6258e2f1d23ab5256cf9b3c4a002e0722f15b4cc0e100000000",
+      "inclusion":1,
+      "miner_address":"47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+      "main_difficulty":344857075709
+   }
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"3e735ce653c2f1c312125309367ad6016e3f55c80834efd63fdb94d0929d017a",
+      "main_height":2871492,
+      "template_id":"3f089efbc7fd31eb98705665acbbe1e7d3b290866cb94f39a0d2e072f2a11f14",
+      "side_height":4973836,
+      "parent_template_id":"320a1a1d8849d48243670938efa640a271b289fae392ea35eb1a7daf88d3e2c8",
+      "miner":9,
+      "effective_height":4973836,
+      "nonce":132358,
+      "extra_nonce":1448692177,
+      "timestamp":1682358019,
+      "software_id":0,
+      "software_version":196609,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":7,
+      "difficulty":1896666403,
+      "cumulative_difficulty":"0000000000000000001ba95e0560d7bd",
+      "pow_difficulty":15371353282,
+      "pow_hash":"cf9774d250b905729cb988b24437ac5f27ccc55d78d6388ca7a8874700000000",
+      "inclusion":1,
+      "miner_address":"4AxaapsBMRYMJHFV5uApnFJth7stf4GiK9sqnLAH8SizguBbZ8YYtE2C3aF3UGVbh3ATRKdtd7ai1Hi1zfzMkdqmAZLqaGN",
+      "main_difficulty":344857075709
+   }
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"3ecbfae652abf9ecfd043d8921b3c18f9acc6f08a8521bd4a06c46b8ff5181f9",
+      "main_height":2871492,
+      "template_id":"ba8514bd7403c16a61b7e20f34981d9cb72de09a7b0593d55ef14d55bff1908e",
+      "side_height":4973837,
+      "parent_template_id":"3f089efbc7fd31eb98705665acbbe1e7d3b290866cb94f39a0d2e072f2a11f14",
+      "miner":2,
+      "effective_height":4973837,
+      "nonce":1879082776,
+      "extra_nonce":1309685883,
+      "timestamp":1682358030,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":8,
+      "difficulty":1897117455,
+      "cumulative_difficulty":"0000000000000000001ba95e76748ecc",
+      "pow_difficulty":4828639998,
+      "pow_hash":"979dbacd27e0c15bfa93a72bda30f9e4e472ab86cfc9bc5f71ceb4e300000000",
+      "inclusion":1,
+      "miner_address":"435QwkC3fJ4YeX929gmaBMeuUwR1wdmRrQBNyoKfpJdHKDbqnukHJeA768yt8ngnS7UTHRJ2yJmnWP8gCz6s3kkiBX8C363",
+      "main_difficulty":344857075709
+   }
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"f7aab8fda85491a5b3847435fa16ae925d55b60791c01faf5a23c6d5365ef6ca",
+      "main_height":2871492,
+      "template_id":"19278cd3a3022a25edf4b91a5544a88b8c8f6f78f84e862b01781de493b562c8",
+      "side_height":4973838,
+      "parent_template_id":"ba8514bd7403c16a61b7e20f34981d9cb72de09a7b0593d55ef14d55bff1908e",
+      "miner":3,
+      "effective_height":4973838,
+      "nonce":2868937852,
+      "extra_nonce":869103007,
+      "timestamp":1682358036,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":8,
+      "difficulty":1894821734,
+      "cumulative_difficulty":"0000000000000000001ba95ee7653e32",
+      "pow_difficulty":2019716446,
+      "pow_hash":"2d03c8818798cb1bde4a6d2d64d0a59a04b8228e94aff841599c632002000000",
+      "inclusion":1,
+      "miner_address":"47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+      "main_difficulty":344857075709
+   }
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"877b4df53e2347e19d94ba52e04522601d461c0dc5d0439e8ec87a5ecb58a31f",
+      "main_height":2871492,
+      "template_id":"000c39fc469e4062fe4da6fc8444c3c990ad817397c94abe13c46720a4c9ab75",
+      "side_height":4973839,
+      "parent_template_id":"19278cd3a3022a25edf4b91a5544a88b8c8f6f78f84e862b01781de493b562c8",
+      "miner":2,
+      "effective_height":4973839,
+      "nonce":822086856,
+      "extra_nonce":1665899192,
+      "timestamp":1682358038,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":10,
+      "difficulty":1893298342,
+      "cumulative_difficulty":"0000000000000000001ba95f583eaed8",
+      "pow_difficulty":29696623614,
+      "pow_hash":"b1aa60a163d39b0524f7448954f770de8cbb873e346b63e37659062500000000",
+      "inclusion":1,
+      "miner_address":"435QwkC3fJ4YeX929gmaBMeuUwR1wdmRrQBNyoKfpJdHKDbqnukHJeA768yt8ngnS7UTHRJ2yJmnWP8gCz6s3kkiBX8C363",
+      "main_difficulty":344857075709
+   }
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"b6516743e3693824f0d8eceab7109c4242661f78e498f78e42a57bd602b7b167",
+      "main_height":2871493,
+      "template_id":"af88e464df1f31761996031f5c851f1a59d6ecb4b6e917407e1164ce6a569a07",
+      "side_height":4973840,
+      "parent_template_id":"000c39fc469e4062fe4da6fc8444c3c990ad817397c94abe13c46720a4c9ab75",
+      "miner":19,
+      "effective_height":4973840,
+      "nonce":1543602719,
+      "extra_nonce":2911703055,
+      "timestamp":1682358053,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":0,
+      "difficulty":1893967043,
+      "cumulative_difficulty":"0000000000000000001ba95fc922539b",
+      "pow_difficulty":1157101996504,
+      "pow_hash":"d855eed5d88837eb44c3d0a80457981fd39e9af67e8b58a03142f30000000000",
+      "inclusion":1,
+      "miner_address":"4B4mXWBqrFYGk9W8t1J3UifSdnU723HHKf8VaWGSZGzLZUncHRJetPCjbDUha1udPd2ZpJrwYCmPv1jzvg3NCf7Z1YViuoa",
+      "mined_main_at_height":true,
+      "main_difficulty":344633368046
+   }
+}
+{
+   "type":"found_block",
+   "found_block":{
+      "main_block":{
+         "id":"b6516743e3693824f0d8eceab7109c4242661f78e498f78e42a57bd602b7b167",
+         "height":2871493,
+         "timestamp":1682358053,
+         "reward":600000000000,
+         "coinbase_id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "difficulty":344633368046,
+         "side_template_id":"af88e464df1f31761996031f5c851f1a59d6ecb4b6e917407e1164ce6a569a07",
+         "coinbase_private_key":"1331ab860507192987e98497b971daac66e8804c51ad115ab6b2bf3d2abd270d"
+      },
+      "side_height":4973840,
+      "miner":19,
+      "effective_height":4973840,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":0,
+      "difficulty":1893967043,
+      "cumulative_difficulty":"0000000000000000001ba95fc922539b",
+      "inclusion":1,
+      "miner_address":"4B4mXWBqrFYGk9W8t1J3UifSdnU723HHKf8VaWGSZGzLZUncHRJetPCjbDUha1udPd2ZpJrwYCmPv1jzvg3NCf7Z1YViuoa"
+   },
+   "main_coinbase_outputs":[
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":0,
+         "global_output_index":72132937,
+         "miner":30,
+         "value":1747977812,
+         "miner_address":"47J5KAEgevN8TKMhstn85mbASkhpZq5BtSt9afcseHPEVtDggZ8uBdxgoTRjdP2ooS4Px1y1pXeryhr9UFQqaykY5J4Ev85"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":1,
+         "global_output_index":72132938,
+         "miner":195,
+         "value":1736642632,
+         "miner_address":"47goCBjSdpqAGUFkc1nM9F7gNcSfSjtKuTqcLxGpEUn6DgboSZMpn2CMRkQ2JKWbxRJvHy2fbSJxtFqXVDbQqs5wPpxgbYD"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":2,
+         "global_output_index":72132939,
+         "miner":10,
+         "value":1737989471,
+         "miner_address":"46vavwU3QDmK2Jdw6CgezsB5538rbwFGi67EPWqkEBfvWuuiFTNaPVQPNSbxVc1UNbN6E7xakVkCxCnttvgyohaN4U9F7kf"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":3,
+         "global_output_index":72132940,
+         "miner":1,
+         "value":3139170892,
+         "miner_address":"4ApeMQzcRS7huBW8HEGkug2e5kQxhhC2Ub9y8F9bc7arKHsCktAV24n5ezKM9PjX5yS3Pv4PPNMXT8rTAFVuKCRi1jEqJZd"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":4,
+         "global_output_index":72132941,
+         "miner":47,
+         "value":1751320020,
+         "miner_address":"47Eqp7fsvVnPPSU4rsXrKJhyAme6LhDRZDzFky9xWsWUS9pd6FPjJCMDCNX1NnNiDzTwfbAgGMk2N6A1aucNcrkhLffta1p"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":5,
+         "global_output_index":72132942,
+         "miner":26,
+         "value":6966089461,
+         "miner_address":"42yAHAH5at9ZHvMXvb1xPV2aKnoibjZWCfTgQg2HdxumFx857g3DK75GbDKzmvu8QMW8CnWxuPAYyfQADjwKw6dy78x2gbp"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":6,
+         "global_output_index":72132943,
+         "miner":6,
+         "value":1739307539,
+         "miner_address":"4AzyJ87Tp3yLXjA3E5v9iAEnTTLu6UTeSdatiwto92n91z7NE11QmpV4YGatwS3ihvFsmvTfz85bfKMLBBAsZMGFKcJJ8jG"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":7,
+         "global_output_index":72132944,
+         "miner":18,
+         "value":11494230879,
+         "miner_address":"4BBb6ZBPPPWivZnx2m3m7YUUGQv54F9HfjPWurf2Xy2UDQwwPyb956dGQ3p9whrxNJ568zc3Ygfr9McVT1UJyRKtLi1jcMb"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":8,
+         "global_output_index":72132945,
+         "miner":19,
+         "value":39395535008,
+         "miner_address":"4B4mXWBqrFYGk9W8t1J3UifSdnU723HHKf8VaWGSZGzLZUncHRJetPCjbDUha1udPd2ZpJrwYCmPv1jzvg3NCf7Z1YViuoa"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":9,
+         "global_output_index":72132946,
+         "miner":842,
+         "value":3477271817,
+         "miner_address":"457Ht8LpLt2iq8y5HShzySduWTC58JvGLj6eWiURzUxNVXrDBWJc9jd3niHHLZ4o6hHYpufyd8zhL9EMktn3p3EdHQ6LAkj"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":10,
+         "global_output_index":72132947,
+         "miner":1104,
+         "value":1746268557,
+         "miner_address":"48LszLe98KgS1H4ELW9rmEH6dTar1uWdZDx7ttDHNSZvcANADw9PUbDU3KWREmgozxMbzofNmj8m5ZuieukEsj7aHjfo3in"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":11,
+         "global_output_index":72132948,
+         "miner":445,
+         "value":1748663264,
+         "miner_address":"44XavwVX8pP2U5NxtwGusU2obpoK55nNVBBqWLC2aJBX2yhAozsC1tvVG8NcC2PEQy2SRmBuB4WqTfVgfBCS3NkY1wYHZ3T"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":12,
+         "global_output_index":72132949,
+         "miner":156,
+         "value":1755605809,
+         "miner_address":"42FUiB6725E4UDkVXMJ3nZ21dhV9atHP9Z1yqxMGfNhnDkJUhdxDaTGaCej35H346eS5vcbEVY4kzdLVhKM63LjNJxFYMUF"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":13,
+         "global_output_index":72132950,
+         "miner":23,
+         "value":1749533284,
+         "miner_address":"46aSNdCK35w9fdX3iCwk3GLt3iZ4hnR34j2mJtxE14MWLXB5JRXxvzmjMUoz2mmFZk9mkqQRpCbPd2TbFqcQxqGkHxJPHUK"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":14,
+         "global_output_index":72132951,
+         "miner":61,
+         "value":3491378711,
+         "miner_address":"44YdBost8RfFjVT9W712c5KN1ZeTq5rPC6Uu12D4nBkUMBHxeb7TxKfGnAGLbfsvbaKtBvwzqKLqBWf7cpU7d2nZ55pXeCU"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":15,
+         "global_output_index":72132952,
+         "miner":647,
+         "value":24776511644,
+         "miner_address":"4AQ3YkqG2XdWsPHEgrDGdyQLq1qMMGFqWTFJfrVQW99qPmCzZKvJqzxgf5342KC17o9bchfJcUzLhVW9QgNKTYUBLg876Gt"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":16,
+         "global_output_index":72132953,
+         "miner":11,
+         "value":1739154107,
+         "miner_address":"42safVv7VKVLrGc1RWEgVqi9YJRV8XiUeFViStfLPWE8FAH1i4HvovcXntT8k5MvVuKkpYLcjELwL4Azrcb65MZC2AkoDoJ"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":17,
+         "global_output_index":72132954,
+         "miner":4,
+         "value":82984625360,
+         "miner_address":"4ADyLD6c7hzT5gCYxWnw7k2q5RPDxwqNTMsHcz9n91ir22YJbjBQ4LjGZgcLUVV7tyG33vXfB5SR1iCWaCjEQ7BNJUg6SyJ"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":18,
+         "global_output_index":72132955,
+         "miner":111,
+         "value":1741890162,
+         "miner_address":"45vMeqsvpW5UoQ4HQDjbUoLpmrLkhyVKgiSeR9WwuCpLV9egZtkwGGYPJ5HDvdAVtgF4bcu93dzEc6mLFbYRqVJzAQWHRnL"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":19,
+         "global_output_index":72132956,
+         "miner":8,
+         "value":5240626741,
+         "miner_address":"47oeGVdUWXDPSqjgFd2dQS57S3W4KPGnneq1o8hAdGE2ZwMZzKHeLFhiQoguKMFq4jScJ2qL7jrHoiP8xh2Su6SuFtxk3Da"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":20,
+         "global_output_index":72132957,
+         "miner":5283,
+         "value":1750270617,
+         "miner_address":"45j2xT1JbU27Mv8ScdumCC5bg3P9EU1HEE2DKZ9TzVje6wVE8kKqviwFuvwaoNywwzh7uiJoxfpWe4jp5HvYDZgyKdU2iEt"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":21,
+         "global_output_index":72132958,
+         "miner":179,
+         "value":1749846757,
+         "miner_address":"42TUuapMMbs4taYHYFnFTeFAM57WzVKDNXn4yeAQcJcgHq1m6q993EedsF2ebd7WP5Gjixw3NPu6ncH7WFWfsPDiPSWEnr9"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":22,
+         "global_output_index":72132959,
+         "miner":639,
+         "value":3497561198,
+         "miner_address":"49bNJ3mdVBfGjr3vWTVhXNig75gCxHQCwNG2FyvRErxs7U4A1c8K6Pn39Tq8oZAxtbXsfNsBtyKzT8apMkYD67QTS2v42oW"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":23,
+         "global_output_index":72132960,
+         "miner":15,
+         "value":5247959737,
+         "miner_address":"44N5jui2nbtQaxWjs9hoJBX5ELrCk5ftja7Zu3QCGTA1FftJhDKrEDL92Rw12j8FALHKnJEUb6KZ45SAncJ6iqKN6nShj2S"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":24,
+         "global_output_index":72132961,
+         "miner":2161,
+         "value":1750436503,
+         "miner_address":"44WHz1PGu8mYWxVE1p6vVtXDtvKtkd7eY23DdXncavA9Ybb6kP9i6BrhZschXpxGCHdTfBoLDznv55SYUqDhoCyJJxV84tD"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":25,
+         "global_output_index":72132962,
+         "miner":91,
+         "value":2100792894,
+         "miner_address":"48tdvJBtQN5Vt3jmLDTTYX7dpS9oDXATAdD8XFhuE1CshWUdShUsEif6UivD5iGsroKGEKqxGqA1aFA2XVx8rtmiFAqKT6E"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":26,
+         "global_output_index":72132963,
+         "miner":2,
+         "value":125897735171,
+         "miner_address":"435QwkC3fJ4YeX929gmaBMeuUwR1wdmRrQBNyoKfpJdHKDbqnukHJeA768yt8ngnS7UTHRJ2yJmnWP8gCz6s3kkiBX8C363"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":27,
+         "global_output_index":72132964,
+         "miner":5190,
+         "value":1741473336,
+         "miner_address":"49trSMSTsAmE2uMeCo1MmEUvfk6i9DWF15skLn9hut11ehcq1vLHkYi9sTujrcDG61dLFk61LeWMafa3EkamaGEUD1fSvRe"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":28,
+         "global_output_index":72132965,
+         "miner":9,
+         "value":50246935661,
+         "miner_address":"4AxaapsBMRYMJHFV5uApnFJth7stf4GiK9sqnLAH8SizguBbZ8YYtE2C3aF3UGVbh3ATRKdtd7ai1Hi1zfzMkdqmAZLqaGN"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":29,
+         "global_output_index":72132966,
+         "miner":4990,
+         "value":15680539194,
+         "miner_address":"4B4aCvEcZr6GcusVJfEds2LXixCeJ2dQBaDUCguWmzi5L7PW5tVXfAnE4cn1mQdiNzH6zWcEPMQTiYTsNcX44ryxCJWZKZH"
+      },
+      {
+         "id":"9ba3e0449f6ff3a108a877f2f37eedf0b87f811ff5725634e109ba0d2789d479",
+         "index":30,
+         "global_output_index":72132967,
+         "miner":3,
+         "value":190176655762,
+         "miner_address":"47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw"
+      }
+   ]
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"5594278518615f55a7e911cca93280fd0c3d2dff1d1fd184db6602e0afb69e0b",
+      "main_height":2871494,
+      "template_id":"0ef3e5ddcb0c4f6398eb833361b3749f92fc232a049c52052c5da956c9bbc868",
+      "side_height":4973841,
+      "parent_template_id":"af88e464df1f31761996031f5c851f1a59d6ecb4b6e917407e1164ce6a569a07",
+      "miner":4,
+      "effective_height":4973841,
+      "nonce":2466322468,
+      "extra_nonce":893603150,
+      "timestamp":1682358055,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":0,
+      "difficulty":1894526953,
+      "cumulative_difficulty":"0000000000000000001ba9603a0e8384",
+      "pow_difficulty":11901446960,
+      "pow_hash":"bbe4a67f6a9bca4028ca1faa940d692f834978d10ed18e34d07b625c00000000",
+      "inclusion":1,
+      "miner_address":"4ADyLD6c7hzT5gCYxWnw7k2q5RPDxwqNTMsHcz9n91ir22YJbjBQ4LjGZgcLUVV7tyG33vXfB5SR1iCWaCjEQ7BNJUg6SyJ",
+      "main_difficulty":344205037143
+   }
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"6c50a9aa027a09b41c56f965f8e21041649c1638a956576fc3fc350441e0f4ab",
+      "main_height":2871494,
+      "template_id":"5f72a35b571746ac3835b204020e548e65a7350d84d5d7a7aa3a749dc058f7ad",
+      "side_height":4973842,
+      "parent_template_id":"0ef3e5ddcb0c4f6398eb833361b3749f92fc232a049c52052c5da956c9bbc868",
+      "miner":19,
+      "effective_height":4973842,
+      "nonce":1090620480,
+      "extra_nonce":162834581,
+      "timestamp":1682358073,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":1,
+      "difficulty":1893992163,
+      "cumulative_difficulty":"0000000000000000001ba960aaf28a67",
+      "pow_difficulty":4704880707,
+      "pow_hash":"bc26c47392a94004bc736822520f67bbf56dfba432e6d75aa12ab2e900000000",
+      "inclusion":1,
+      "miner_address":"4B4mXWBqrFYGk9W8t1J3UifSdnU723HHKf8VaWGSZGzLZUncHRJetPCjbDUha1udPd2ZpJrwYCmPv1jzvg3NCf7Z1YViuoa",
+      "main_difficulty":344205037143
+   }
+}
+{
+   "type":"side_block",
+   "side_block":{
+      "main_id":"617ea6fe4a47a3e7f51c8cc719a5158b88a4ca2583cd2f0cd5ed0b006bca3564",
+      "main_height":2871494,
+      "template_id":"b95dcd9d440fcd49a050c76f006189c01e1857d11bfc0b41f3fa560c15a4750f",
+      "side_height":4973843,
+      "parent_template_id":"5f72a35b571746ac3835b204020e548e65a7350d84d5d7a7aa3a749dc058f7ad",
+      "miner":3,
+      "effective_height":4973843,
+      "nonce":4026630147,
+      "extra_nonce":2353672144,
+      "timestamp":1682358101,
+      "software_id":0,
+      "software_version":196610,
+      "window_depth":332,
+      "window_outputs":31,
+      "transaction_count":15,
+      "difficulty":1895322145,
+      "cumulative_difficulty":"0000000000000000001ba9611beadc88",
+      "pow_difficulty":6105552648,
+      "pow_hash":"5c06f2ebd7fc22dca35bed2a0faa9e1aad7e36a5c89af94d587915b400000000",
+      "inclusion":1,
+      "miner_address":"47ab14EokGgCTX7RYoVhrNMjVA7GfW1jyMAmL7qBQz9fa4RZ6ZsBUgeRGuPWjqeM1wLptSJH5xuX2H4mAepMYvu6JqWMsGw",
+      "main_difficulty":344205037143
+   }
+}
+    </pre>
+        </p>
+    </div>
+
+    <hr/>
+    <div>
+        <h3>Redirect APIs</h3>
+        <p>Several endpoints are available that redirect/forward your request via <em>Location</em> HTTP header to the relevant API listed above.</p>
+        <p>
+            <h4 class="mono">/api/last_found[/raw|...]?...</h4>
+            Redirects to the <em>/api/block_by_id/...</em> record for the last block found on the Monero network by P2Pool.
+        </p>
+        <p>
+        <h4 class="mono">/api/tip[/raw|...]?...</h4>
+        Redirects to the <em>/api/block_by_id/...</em> record for the last share found by P2Pool.
+        </p>
+    </div>
+</div>
+
+{% endfunc %}

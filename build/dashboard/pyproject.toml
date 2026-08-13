@@ -32,13 +32,13 @@ test = [
   "pytest-cov>=5",
   "pytest-aiohttp>=1.0",
   # diff-cover (#286): patch-coverage gate — new/changed lines must be >=90% covered.
-  "diff-cover>=10.4.1",
+  "diff-cover>=10.5.0",
   # hypothesis (#284): property-based tests asserting invariants on the money/numeric logic.
-  "hypothesis>=6.163.0",
+  "hypothesis>=6.165.2",
 ]
 # Developer tooling (Wave 7, #280). Pinned so local, pre-commit, and CI all run the SAME ruff
 # — lint output is version-sensitive, so a floor would let CI and a contributor disagree.
-dev = ["ruff==0.16.0", "pre-commit>=4.6.1"]
+dev = ["ruff==0.16.2", "pre-commit>=4.6.1"]
 
 [tool.setuptools.packages.find]
 include = ["mining_dashboard*"]
@@ -70,7 +70,10 @@ exclude_also = ["if __name__ == .__main__.:", "raise NotImplementedError"]
 target-version = "py311"
 line-length = 100
 # Generated Tari gRPC stubs aren't ours to style — already omitted from coverage too.
-extend-exclude = ["mining_dashboard/client/tari/generated"]
+extend-exclude = [
+  "mining_dashboard/client/tari/generated",
+  "../../research",
+] # research/: verbatim study-record scripts, kept byte-identical to the archived raw copy
 
 [tool.ruff.lint]
 # E/F/W pycodestyle+pyflakes · I import-sort · B bugbear · UP pyupgrade ·

@@ -1,0 +1,21 @@
+Raffle HR: 4133.04 kH/s
+Raffle Reward: 113.38 XMR/year
+
+Round vip: 0.52 XMR/year
+Round: vip Player: 0.0030 XMR/year
+
+Round mvp: 2.10 XMR/year
+Round: mvp Player: 0.525 XMR/year
+
+Round: donor: 4.20 XMR/year
+Round: donor Player: 0.064 XMR/year
+
+Round: donor_vip: 21.00 XMR/year
+Round: donor_vip Player: 0.81 XMR/year
+
+Round: donor_whale: 35.69 XMR/year
+Round: donor_whale Player: 4.67 XMR/year
+
+Round: donor_mega: 49.87 XMR/year
+Round: donor_mega Player: 54.54 XMR/year
+

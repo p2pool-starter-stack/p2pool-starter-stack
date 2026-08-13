@@ -306,37 +306,61 @@ export function computeXvbTier(hashrateHs, calc) {
   return best && { tier: best.name, threshold: best.threshold, cost: best.threshold };
 }
 
-// XvB per-tier payout comparison (#118, made honest by #872). Weighs XvB's expected reward for a
-// tier against what donating that tier costs in foregone P2Pool earnings: cost = threshold H/s ×
-// the daily P2Pool rate (`coeffDay`, same `earnings.coeff_day` the card already uses) × 365.
-// TWO reward figures: `expected` is XvB's published face value (prices every bonus hash at full
-// block reward — measured wallets collect a fraction), `realized` is that figure × the wallet's
-// own measured win realization (server-computed, null until enough wins measure it). The
-// actionable net prefers realized — the published face value once flipped the net's SIGN on a
-// production box (+2.97 shown, −1.8 measured, #872). Either figure null (unavailable/stale/
-// unmeasured) => its net is null: we never fabricate the reward. This is a raffle-tier
-// comparison, NOT a claim that donating more within a tier helps.
-export function xvbTierComparison(tier, coeffDay) {
-  const cost =
-    tier && tier.threshold > 0 && coeffDay > 0 ? tier.threshold * coeffDay * DAYS_PER_YEAR : null;
-  const expected =
-    tier && Number.isFinite(tier.expected_reward_year) ? tier.expected_reward_year : null;
-  const realized =
-    tier && Number.isFinite(tier.realized_reward_year) ? tier.realized_reward_year : null;
-  // The measured-prior band for unmeasured boxes (#872): published × [low, high] realization.
-  // Server-emitted only while no local measurement exists, so realizedNet and assumedNetRange
-  // are mutually exclusive by construction.
-  const assumed =
-    tier &&
-    Array.isArray(tier.assumed_reward_year_range) &&
-    tier.assumed_reward_year_range.every(Number.isFinite)
-      ? tier.assumed_reward_year_range
-      : null;
-  const net = expected !== null && cost !== null ? expected - cost : null;
-  const realizedNet = realized !== null && cost !== null ? realized - cost : null;
-  const assumedNetRange =
-    assumed !== null && cost !== null ? [assumed[0] - cost, assumed[1] - cost] : null;
-  return { expected, cost, net, realized, realizedNet, assumedNetRange };
+// XvB tier decision rows (#872, study-final). ONE row per donor tier with everything a miner
+// needs to choose a direction, all from measured or operator-published data:
+//   odds       — how often this tier's rounds pay out and among how many qualifiers (live feed)
+//   cost       — P2Pool earnings forgone donating the threshold (threshold x coeffDay x 365)
+//   xvbSays    — XvB's published face-value reward (their number, shown as theirs)
+//   study      — [lo, hi]: xvbSays x the measured delivery band (server-emitted; on-chain study
+//                constant, 25 rounds: 32% of face, CI 27-38%, margin-invariant)
+//   yours      — xvbSays x THIS wallet's measured realization, when >=5 wins exist (supersedes)
+//   net        — the actionable verdict: (yours ?? study ?? face) minus cost; [lo,hi] when a band
+// A tier the what-if hashrate cannot sustain is flagged, its net withheld (an unreachable payout
+// must not render as reachable). Pure + unit-tested; the component only renders these rows.
+export function xvbDecisionRows(calc, coeffDay, hr) {
+  if (!calc || !calc.enabled) return [];
+  const rows = [];
+  for (const t of calc.tiers || []) {
+    const cost = t.threshold > 0 && coeffDay > 0 ? t.threshold * coeffDay * DAYS_PER_YEAR : null;
+    const xvbSays = Number.isFinite(t.expected_reward_year) ? t.expected_reward_year : null;
+    const yours = Number.isFinite(t.realized_reward_year) ? t.realized_reward_year : null;
+    const study =
+      Array.isArray(t.assumed_reward_year_range) &&
+      t.assumed_reward_year_range.every(Number.isFinite)
+        ? t.assumed_reward_year_range
+        : null;
+    const sustainable = hr > 0 && t.threshold <= hr * (calc.max_fraction || 0);
+    let mode = "none";
+    let net = null;
+    if (cost !== null && yours !== null) {
+      mode = "yours";
+      net = [yours - cost, yours - cost];
+    } else if (cost !== null && study !== null) {
+      mode = "study";
+      net = [study[0] - cost, study[1] - cost];
+    } else if (cost !== null && xvbSays !== null) {
+      mode = "face";
+      net = [xvbSays - cost, xvbSays - cost];
+    }
+    // Verdict colour: red only when even the optimistic end loses; green only when even the
+    // pessimistic end profits; a zero-spanning band stays neutral.
+    const cls = net === null ? "" : net[1] < 0 ? "status-bad" : net[0] > 0 ? "status-ok" : "";
+    rows.push({
+      name: t.name,
+      threshold: t.threshold,
+      sustainable,
+      oddsPer30d: t.win_odds_day > 0 ? t.win_odds_day * 30 : null,
+      players: t.players_avg > 0 ? t.players_avg : null,
+      cost,
+      xvbSays,
+      study,
+      yours,
+      net,
+      mode,
+      cls,
+    });
+  }
+  return rows;
 }
 
 // Decimal places for a coin amount: more for small amounts (a day's earnings can be a tiny
