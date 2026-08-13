@@ -180,13 +180,15 @@ starts. Host identity survives A/B updates and reboots by construction (it never
 system slot to begin with); the reset tiers classify it like everything else on `/data` — a
 keep-everything reinstall keeps it, a fresh-start or full wipe deletes it.
 
+**Fixed — a provisioning failure now surfaces its own reason on the reopened wizard.**
+Setup failures move the config aside as `config.json.failed` and re-mint a token; the
+reopened page used to make an operator dig the reason out of the console. It no longer
+does: `pithead` writes the last `[ERROR]` line to `error.txt` and the failed config to
+`last-attempt.json` before reopening, and `wizard.py`/`wizard.mjs` surface both — the
+reason as the page's error text, the config as the retry prefill.
+
 ## Open
 
-- **A provisioning failure reopens the wizard, but the failed config needs surfacing.**
-  Setup failures move the config aside as `config.json.failed` and re-mint a token; the
-  console explains, but the fresh wizard page does not yet show WHY the last attempt
-  failed. Plumbing the failure reason into the reopened form is UX work worth doing
-  before GA.
 - **Installing to a disk still needs a human.** Pre-seeding (`pithead-token.txt` /
   `pithead-config.json` on the ESP) covers configuration headlessly and the installer carries
   both onto the target, so a fleet can be flashed and provisioned from one file. Choosing
