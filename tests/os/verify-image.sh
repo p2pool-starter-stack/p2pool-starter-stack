@@ -109,6 +109,17 @@ chk "RebootWatchdogSec set (reboot itself is watched)" 'grep -q "^RebootWatchdog
 chk "cpu-governor unit present" '[ -s "$ROOT/etc/systemd/system/pithead-cpu-governor.service" ]'
 chk "cpu-governor unit enabled" 'test -L "$ROOT/etc/systemd/system/multi-user.target.wants/pithead-cpu-governor.service"'
 chk "cpu-governor asks for performance" 'grep -q "frequency-set -g performance" "$ROOT/etc/systemd/system/pithead-cpu-governor.service"'
+# The factory-reset / wedged-/data recovery path: every other boot-path unit is pinned here, and
+# this one is the last resort an operator has on a shell-less box — a build that drops it ships a
+# machine that cannot recover itself.
+chk "data-reset unit shipped" '[ -s "$ROOT/etc/systemd/system/pithead-data-reset.service" ]'
+chk "data-reset unit enabled (local-fs transaction)" 'test -L "$ROOT/etc/systemd/system/local-fs.target.wants/pithead-data-reset.service"'
+chk "data-reset script present and executable" 'test -x "$ROOT/usr/local/sbin/pithead-data-reset"'
+chk "data-reset ordered before /data mounts (a mounted partition cannot be reformatted)" \
+    'grep -q "^Before=data.mount local-fs.target" "$ROOT/etc/systemd/system/pithead-data-reset.service"'
+# Hugepages: the sysctl the Dockerfile calls load-bearing for the memory caps.
+chk "hugepage reservation baked (RandomX dataset must land in hugetlbfs)" \
+    'grep -q "vm.nr_hugepages=3072" "$ROOT/etc/sysctl.d/99-pithead-hugepages.conf"'
 
 echo "==> docker-export artefacts (all six members)"
 chk "no /.dockerenv" '[ ! -e "$ROOT/.dockerenv" ]'
