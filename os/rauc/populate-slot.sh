@@ -81,6 +81,39 @@ render_bundle_manifest() { # $1 os_version, $2 variant, $3 data_migration, $4 mi
     printf '\n[image.rootfs]\nfilename=rootfs.ext4\n'
 }
 
+# Refuse a present-but-stale rootfs tarball. A bench deploy once bundled the PREVIOUS session's
+# leftover os/build/pithead-root.tar — mkbundle's only guard was `[ -s ]`, existence, not freshness
+# — and RAUC installed it, the appliance booted it, every service came up green, and only a manual
+# /opt/pithead/BUILD_COMMIT check on the box caught that the fix under test was never on it. The
+# tarball already carries that same stamp (written by build-image.sh from the tree it built), so
+# compare it against the working tree instead of trusting that a stale artifact looks fine.
+#
+#   $1 = tarball path
+#
+# Both mkimage.sh and mkbundle.sh consume the SAME tarball, so the check lives here once rather
+# than drifting between two copies. Fail-closed like the version/variant/signing guards above:
+# mismatch (or a dirty-tree stamp the tree has since moved past) refuses by default, naming both
+# commits, with PITHEAD_STALE_TARBALL_OK=1 as the explicit escape for a deliberate stale rebuild.
+verify_tarball_commit() {
+    local tarball="$1" stamped head
+    stamped=$(tar -xOf "$tarball" opt/pithead/BUILD_COMMIT 2>/dev/null) || stamped=""
+    head=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+    git diff --quiet 2>/dev/null || head="${head}-dirty"
+    [ -n "$stamped" ] || stamped="(no BUILD_COMMIT stamp in the tarball)"
+
+    if [ "$stamped" = "$head" ]; then
+        return 0
+    fi
+    if [ "${PITHEAD_STALE_TARBALL_OK:-0}" = 1 ]; then
+        echo "==> PITHEAD_STALE_TARBALL_OK=1: proceeding with $tarball (stamped $stamped) while the working tree is at $head" >&2
+        return 0
+    fi
+    echo "refusing to use a stale rootfs tarball: $tarball was built from commit $stamped but the" \
+        "working tree is now at $head — rerun os/build-image.sh, or set PITHEAD_STALE_TARBALL_OK=1" \
+        "to use it anyway" >&2
+    return 2
+}
+
 populate_slot() { # $1 = mounted rootfs
     local root="$1"
 

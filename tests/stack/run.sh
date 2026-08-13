@@ -9254,6 +9254,63 @@ unset -f ourun
 rm -rf "$OUSB"
 unset OUSB
 
+# --- os/rauc stale-tarball guard (verify_tarball_commit in populate-slot.sh). A present-but-stale
+# os/build/pithead-root.tar looks identical to a fresh one to `[ -s ]` — a bench deploy once
+# bundled a leftover tarball from a previous session and every downstream check came up green with
+# the old code running. The guard extracts the tarball's own opt/pithead/BUILD_COMMIT stamp and
+# compares it to the working tree, proven here with a fabricated fixture tarball (no image build).
+echo "== unit: os/rauc stale-tarball guard =="
+VTC_TMP=$(mktemp -d)
+# The same commit+dirty-suffix computation verify_tarball_commit does, so the "match" fixture is
+# honest about the state of THIS working tree (it may itself be dirty mid-change).
+VTC_HEAD_SHA=$(cd "$ROOT" && git rev-parse HEAD)
+VTC_HEAD="$VTC_HEAD_SHA"
+(cd "$ROOT" && git diff --quiet) || VTC_HEAD="${VTC_HEAD_SHA}-dirty"
+
+# Build a fixture tarball with the single member the guard reads: opt/pithead/BUILD_COMMIT.
+# $2=NONE fabricates a tarball with the directory but no stamp file (an old/broken build).
+mk_vtc_fixture() { # $1=out-path $2=stamp-content|NONE
+    local d
+    d=$(mktemp -d)
+    mkdir -p "$d/opt/pithead"
+    [ "$2" = NONE ] || printf '%s\n' "$2" >"$d/opt/pithead/BUILD_COMMIT"
+    tar -cf "$1" -C "$d" opt
+    rm -rf "$d"
+}
+vtc() { # $1=tarball -> prints "rc=<n>"; stderr goes to $VTC_TMP/err
+    (
+        cd "$ROOT" || exit
+        # shellcheck disable=SC1090
+        . os/rauc/populate-slot.sh
+        set +e
+        verify_tarball_commit "$1" 2>"$VTC_TMP/err"
+        echo "rc=$?"
+    )
+}
+
+mk_vtc_fixture "$VTC_TMP/fresh.tar" "$VTC_HEAD"
+assert_eq "a tarball stamped with the current HEAD is accepted" "$(vtc "$VTC_TMP/fresh.tar")" "rc=0"
+
+mk_vtc_fixture "$VTC_TMP/stale.tar" "deadbeefcafef00dfeedfacebeeff00ddeadbeef"
+out=$(vtc "$VTC_TMP/stale.tar")
+assert_eq "a tarball stamped with a foreign commit is refused" "$out" "rc=2"
+err="$(cat "$VTC_TMP/err")"
+assert_contains "the refusal names the tarball's stamped commit" "$err" "deadbeefcafef00dfeedfacebeeff00ddeadbeef"
+assert_contains "the refusal names the working tree's commit" "$err" "$VTC_HEAD_SHA"
+assert_contains "the refusal points at the override env var" "$err" "PITHEAD_STALE_TARBALL_OK"
+
+out=$(PITHEAD_STALE_TARBALL_OK=1 vtc "$VTC_TMP/stale.tar")
+assert_eq "PITHEAD_STALE_TARBALL_OK=1 overrides a stale-commit refusal" "$out" "rc=0"
+
+mk_vtc_fixture "$VTC_TMP/nostamp.tar" NONE
+out=$(vtc "$VTC_TMP/nostamp.tar")
+assert_eq "a tarball with no BUILD_COMMIT stamp is refused" "$out" "rc=2"
+assert_contains "the refusal says no stamp was found" "$(cat "$VTC_TMP/err")" "no BUILD_COMMIT stamp"
+
+rm -rf "$VTC_TMP"
+unset -f mk_vtc_fixture vtc
+unset VTC_TMP VTC_HEAD_SHA VTC_HEAD
+
 # --- mkbundle metadata validation (fails fast, before the multi-minute image build) ---
 echo "== unit: mkbundle compatibility-metadata validation =="
 out=$(cd "$ROOT" && PITHEAD_DATA_MIGRATION=maybe bash os/rauc/mkbundle.sh /dev/null 2>&1)
