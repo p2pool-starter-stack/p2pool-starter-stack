@@ -10,8 +10,10 @@ Secrets, wallets, and the onion address are replaced with `rendered-*` /
 the fixes the spike forced (`TimeoutStartSec=infinity`, tmpfs `mode=` instead of
 `uid=`/`gid=`, the 1g p2pool cap that holds once hugepages are reserved).
 
-These files are fixtures, not deployable configuration. Nothing consumes them yet, and
-the appliance never hand-edits units — `pithead` renders them from `config.json`. The
+These files are fixtures, not deployable configuration. They are consumed only as the
+parity test's expected output (`tests/stack/run.sh`, `render_quadlet_units()` diffed
+byte-for-byte against `quadlet/`, `quadlet/local/` and `quadlet/payout/`) — never
+deployed directly; the appliance always renders its own units from `config.json`. The
 translation rules the spike established, with evidence, live in
 [`docs/dev/dual-distribution-plan.md`](../docs/dev/dual-distribution-plan.md)
 (Runtime architecture) and on issue #78.

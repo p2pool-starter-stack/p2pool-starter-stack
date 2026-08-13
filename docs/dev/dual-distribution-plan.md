@@ -297,11 +297,16 @@ unattended soak on a #54 bench box with zero manual interventions, plus the
 fault-injection rollback demo below. That is the phase 2 exit bar; everything else
 in this phase can slip a release without slipping the milestone.
 
-Rugix Bakery project (x86_64 EFI, rootfs from a Docker-exported tarball), data
-partition + labeled mounts + mount guards, `pithead` ↔ `rugix-ctrl` commit glue
-(consuming `doctor --json`), clean-state-on-version-change, factory reset, watchdog.
-A/B + rollback demo proven on a #54 bench box: apply a good update (commits), apply a
-deliberately broken one (falls back).
+RAUC A/B slots (x86_64 EFI, rootfs from a Docker-exported tarball), `systemd-repart`
+for partition creation/sizing, a hand-written GRUB slot-selector script (`_OK`/`_TRY`
+counters — the surface the bake-off's five defects actually landed on, see
+[Verdict](#verdict-2026-07-25-rauc-on-stability-grounds--conditional-on-fault-injection)),
+data partition + labeled mounts + mount guards, `pithead` ↔ RAUC commit glue
+(`os/overlay/pithead-boot`: a `localhost` curl plus `doctor --json` gate `rauc status
+mark-good`), two-tier reset since RAUC ships no integrated state reset of its own
+(`pithead config-reset` / `factory-reset`), watchdog. A/B + rollback demo proven on
+the #54 bench box, `tests/os/run.sh --phase update`: apply a good update (commits),
+apply a deliberately broken one (falls back).
 
 `doctor` grows engine-aware host checks here, before it becomes the commit gate.
 Three of its checks are Docker-shaped — daemon reachable, `docker` group
@@ -319,17 +324,19 @@ services never start pre-commit — the same minimum-version pattern the
 worker-upgrade contract already uses (rig gate ≥ v1.11.2).
 
 **DIY → appliance migration is a supported, documented path**: `pithead backup` on
-the old box → flash the appliance → restore in the wizard. Chains are excluded by
+the old box → flash the appliance → restore. Chains are excluded by
 default and resync (or are copied manually, best-effort documented) — the backup
 already covers exactly the right set. Auto-update policy: default-on with
 commit-or-revert protection, maintenance-window setting, and `pithead backup` run
 before apply. **Backup/restore is not new work**: `pithead backup`/`restore` already
 exist — encrypted by default (AES-256 + PBKDF2), covering config.json, .env,
 Caddyfile, Tor onion keys, and the dashboard database, with chains excluded unless
-`--with-chains` (`pithead:1149`). The appliance surfaces the existing
-commands as dashboard buttons (export to a download / restore from an upload), so
-"fresh flash → restore → done" is a supported recovery path with one backup format
-across all channels.
+`--with-chains` (`pithead:1149`). What the appliance still lacks is a way to reach
+them without a host terminal, since it has none by default: the plan is to surface
+the existing commands as dashboard buttons (export to a download / restore from an
+upload), so "fresh flash → restore → done" becomes a supported recovery path with
+one backup format across all channels — the sharpest gap in the host-CLI-only list
+(#786), not yet built.
 
 ### Phase 3 — the pre-sync setup wizard (both channels)
 
@@ -385,10 +392,15 @@ default; SSH is a wizard opt-in) — a broken wizard must never brick the box.
 
 ### Phase 4 — release pipeline + channels
 
-`release.sh` grows an `os-image` lane (Bakery build → full + delta bundles →
-checksum + sign → GitHub Release) alongside the bundle lane the installer consumes.
-Release channels: stable + beta (tag convention). Tier-4 validation: boot-test the
-image per cut on the #54 matrix, same mandate as the targeted e2e.
+The image ships through its own manual process, not through `release.sh`: bump
+`VERSION` → `os/build-image.sh && os/rauc/mkimage.sh && os/rauc/mkbundle.sh`, signed
+with the release RAUC key (never the throwaway `--dev` chain) → `verify-image.sh`
+pinned to the built commit → the manual hardware battery (M1–M10) → publish image +
+bundle + checksums to a GitHub Release. `release.sh` keeps its own, separate bundle
+lane for the DIY channel; cosign there is already mandatory (phase 1). Full mechanics
+in [`appliance-release.md`](appliance-release.md#cutting-a-release). Release channels:
+stable + beta (tag convention). Tier-4 validation: `tests/os/run.sh --phase all` on
+the #54 matrix per cut, same mandate as the targeted e2e.
 
 ## Support policy
 
