@@ -22,11 +22,14 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
 
 - **boot** — flash the image to a scratch disk, boot it under OVMF, assert the kernel/systemd
   banner reaches the serial console, the first-boot wizard announces its URL + one-time token,
-  and the token gate answers.
+  and the token gate answers. Also asserts machine-id is stable across a plain reboot (#895) —
+  the empty-baked image with no restore mechanism would regenerate a new one every boot.
 - **update** — build a v2 bundle, `rauc install` it, boot the spare slot, and assert the whole
   A/B contract: an uncommitted slot auto-rolls-back, `rauc status mark-good` makes the update
   stick across a reboot, and `rauc status mark-bad booted` still rolls off a committed version.
-  Also asserts `/data` grew to fill the disk.
+  Also asserts `/data` grew to fill the disk, and that host identity (SSH host-key fingerprint,
+  machine-id) survives the A/B swap (#894/#895) — both live on `/data`, untouched by the slot
+  swap.
 - **install** — boot the image as removable media beside a blank disk, run the disk installer,
   then boot the target and prove the copied system is COMPLETE — the `/var` overlay made an
   incomplete copy easy to produce and invisible to every other phase. Then the reinstall leg:

@@ -225,6 +225,25 @@ if [ -f ./pithead ] && [ -f build/dashboard/mining_dashboard/wizard.py ]; then
     rm -rf "$WIZ_TMP"
 fi
 
+echo "==> host identity never ships baked (#894/#895)"
+# Both variants — a debug image is not exempt: its baked authorized_keys is USER auth, and the
+# host identity underneath it must be exactly as per-machine as a release image's.
+chk "no SSH host keys baked (extractable + shared across every machine otherwise)" \
+    '! ls "$ROOT"/etc/ssh/ssh_host_* >/dev/null 2>&1'
+chk "machine-id ships empty (systemd's own read-only-root first-boot semantics)" \
+    '[ ! -s "$ROOT/etc/machine-id" ]'
+chk "SSH host-key generator baked and executable" '[ -x "$ROOT/usr/local/sbin/pithead-ssh-host-keys" ]'
+chk "ssh.service host-key drop-in orders after /data" \
+    'grep -q "RequiresMountsFor=/data" "$ROOT/etc/systemd/system/ssh.service.d/pithead-host-keys.conf"'
+chk "sshd points at the /data host key" \
+    'grep -q "^HostKey /data/ssh/ssh_host_ed25519_key" "$ROOT/etc/ssh/sshd_config.d/pithead-host-keys.conf"'
+chk "machine-id restore script baked and executable" '[ -x "$ROOT/usr/local/sbin/pithead-machine-id" ]'
+chk "machine-id restore unit enabled" \
+    'test -L "$ROOT/etc/systemd/system/sysinit.target.wants/pithead-machine-id.service"'
+chk "machine-id restore orders before networkd (DHCP DUID) and the journal flush" \
+    'grep -q "systemd-networkd.service" "$ROOT/etc/systemd/system/pithead-machine-id.service" &&
+     grep -q "systemd-journal-flush.service" "$ROOT/etc/systemd/system/pithead-machine-id.service"'
+
 echo "==> test material"
 # The variant stamp must MATCH the material, not just exist: a debug image stamped "release"
 # defeats the os-update guard that keeps a debug box from silently dropping its own SSH.

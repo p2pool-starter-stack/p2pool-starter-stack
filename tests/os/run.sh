@@ -311,6 +311,28 @@ phase_boot() {
         }
     done
     ok "wizard serves the token gate ($ip, ready after ~$((tries * 5))s)"
+
+    # #895: machine-id must be assigned once and then STAY. An empty-baked image with no
+    # restore-from-/data unit regenerates a new transient id on EVERY boot (systemd's own
+    # first-boot semantics on a permanently read-only /etc) — worse than the bug being fixed.
+    local id_before id_after
+    id_before=$(_ssh cat /etc/machine-id)
+    if [ -n "$id_before" ]; then
+        _ssh reboot >/dev/null 2>&1 || true
+        sleep 10
+        if _wait_ssh 240; then
+            id_after=$(_ssh cat /etc/machine-id)
+            if [ -n "$id_after" ] && [ "$id_before" = "$id_after" ]; then
+                ok "machine-id stable across a reboot ($id_before)"
+            else
+                bad "machine-id changed across a reboot (before: $id_before, after: ${id_after:-none})"
+            fi
+        else
+            bad "guest never returned after the machine-id reboot check"
+        fi
+    else
+        bad "could not read machine-id before the reboot check (test SSH unreachable)"
+    fi
 }
 
 # Boot a raw appliance disk under OVMF and return once it has a lease. Sets the global `ip`.
@@ -360,6 +382,11 @@ phase_update() {
             return
         }
     ok "v1 test image boots and answers test SSH ($ip)"
+    # #894/#895 baseline, compared after the committed A/B swap below (leg 2) proves SURVIVAL,
+    # not mere presence — /data (where both identities live) is untouched by a slot swap.
+    local id_v1 hostkey_fp_v1
+    id_v1=$(_ssh cat /etc/machine-id)
+    hostkey_fp_v1=$(_ssh ssh-keygen -lf /data/ssh/ssh_host_ed25519_key 2>/dev/null | awk '{print $2}')
     [ "$(_ssh cat /etc/pithead-test-marker)" = "v1" ] && ok "marker v1 on the initial slot" ||
         {
             bad "marker v1 missing on the initial slot"
@@ -475,6 +502,21 @@ phase_update() {
     marker=$(_ssh cat /etc/pithead-test-marker)
     [ "$marker" = "v2" ] && ok "COMMIT: a committed update persists across reboot" ||
         bad "expected v2 after commit, got '$marker'"
+    # #894/#895: host identity must survive the A/B swap — it lives on /data, which an update
+    # never touches, unlike the system slot an update replaces wholesale.
+    local id_v2 hostkey_fp_v2
+    id_v2=$(_ssh cat /etc/machine-id)
+    hostkey_fp_v2=$(_ssh ssh-keygen -lf /data/ssh/ssh_host_ed25519_key 2>/dev/null | awk '{print $2}')
+    if [ -n "$id_v1" ] && [ "$id_v1" = "$id_v2" ]; then
+        ok "machine-id survived the A/B swap ($id_v1)"
+    else
+        bad "machine-id changed across the A/B swap (v1: ${id_v1:-none}, v2: ${id_v2:-none})"
+    fi
+    if [ -n "$hostkey_fp_v1" ] && [ "$hostkey_fp_v1" = "$hostkey_fp_v2" ]; then
+        ok "SSH host-key fingerprint survived the A/B swap ($hostkey_fp_v1)"
+    else
+        bad "SSH host-key fingerprint changed across the A/B swap (v1: ${hostkey_fp_v1:-none}, v2: ${hostkey_fp_v2:-none})"
+    fi
     # THE stale-container assertion: the OS slot saying v2 is not enough — an A/B update that
     # ships a new dashboard must end with the NEW image answering, without any wizard
     # involvement. The tag never changes and podman's store survives on /data, so only the
