@@ -1,0 +1,30 @@
+#!/bin/sh
+# Restore this machine's persisted machine-id from /data, or adopt-and-persist the one this boot
+# already has if /data holds none yet (#895). Ordering: see pithead-machine-id.service — this
+# must land before systemd-networkd (DHCP DUID) and systemd-journal-flush (the persistent
+# journal directory name) observe /etc/machine-id, and after /data is mounted.
+#
+# Why a plain write here works: the image ships /etc/machine-id EMPTY, and on this appliance
+# /etc is an overlay whose upper is a volatile tmpfs. PID 1's own first-boot handling (long
+# before any unit, ours included, runs) either writes a freshly generated transient id straight
+# into that writable upper, or — if it judged /etc unwritable — ro-bind-mounts the id from
+# /run/machine-id over the file instead; machine-id(5) describes both shapes. Either way the
+# upper is discarded at power-off, so without the restore below the machine would pick a NEW
+# random id on every single boot — worse than the bug being fixed. The umount guard below
+# covers the bind-mount shape and is a silent no-op on the plain-overlay one.
+set -eu
+
+ID_FILE="/data/pithead/machine-id"
+mkdir -p "$(dirname "$ID_FILE")"
+
+if [ -s "$ID_FILE" ]; then
+    umount /etc/machine-id 2>/dev/null || true
+    cat "$ID_FILE" >/etc/machine-id
+    echo "pithead-machine-id: restored persisted machine-id from $ID_FILE"
+else
+    # First boot with nothing on /data yet: adopt whatever systemd already generated for THIS
+    # boot rather than minting a second one — one machine, one id, chosen once.
+    cp /etc/machine-id "$ID_FILE"
+    chmod 444 "$ID_FILE"
+    echo "pithead-machine-id: adopted this boot's machine-id and persisted it to $ID_FILE"
+fi

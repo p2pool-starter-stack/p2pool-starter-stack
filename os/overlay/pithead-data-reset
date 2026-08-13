@@ -21,6 +21,10 @@ MARKER_NAME="pithead-reset"
 # /var overlay's upperdir/workdir must exist before /var mounts, or the box boots with no writable
 # /var. Keep this list in lockstep with 40-data.conf.
 SEED_DIRS="/overlay/var /overlay/var-work /pithead"
+# Deliberately NOT reseeded: /data/ssh (SSH host key, #894) and /data/pithead/machine-id (#895).
+# This is the deep reset tier (factory-reset or a wedged partition) — mkfs.ext4 below already
+# destroys them along with everything else, and both regenerate fresh on the next boot the same
+# way they would on a brand-new machine. A handed-over box must not keep the old owner's identity.
 
 # stderr, not stdout: data_reset_decision's STDOUT is its verdict and the caller captures it with
 # $(...). A progress line on stdout would ride along inside the captured value, match no `case`

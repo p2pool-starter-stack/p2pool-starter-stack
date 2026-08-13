@@ -190,7 +190,31 @@ COPY os/overlay/pithead-data-reset /usr/local/sbin/pithead-data-reset
 # CPU governor: hold the cores at performance every boot (mining appliance tuning). Oneshot, and
 # a no-op on a box with no cpufreq — see the unit for the RigForge co-location note.
 COPY os/overlay/pithead-cpu-governor.service /etc/systemd/system/pithead-cpu-governor.service
-RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-data-reset /usr/lib/systemd/system-generators/pithead-mount-generator
+# Host identity (#894/#895): neither SSH host keys nor machine-id may ship CONCRETE — both were
+# baked by their packages' own postinst during this build (openssh-server, systemd), which made
+# them extractable from a published release and identical across every machine flashed from one.
+# Deleting/emptying them here is only half the fix; the other half is the boot-time mechanism
+# below that generates (once) and persists them on /data, the single persistence root.
+COPY os/overlay/pithead-ssh-host-keys.conf /etc/systemd/system/ssh.service.d/pithead-host-keys.conf
+COPY os/overlay/pithead-ssh-host-keys /usr/local/sbin/pithead-ssh-host-keys
+COPY os/overlay/pithead-machine-id.service /etc/systemd/system/pithead-machine-id.service
+COPY os/overlay/pithead-machine-id /usr/local/sbin/pithead-machine-id
+RUN mkdir -p /etc/ssh/sshd_config.d \
+    && printf 'HostKey /data/ssh/ssh_host_ed25519_key\n' > /etc/ssh/sshd_config.d/pithead-host-keys.conf \
+    && rm -f /etc/ssh/ssh_host_* \
+    && : > /etc/machine-id
+# An empty machine-id makes systemd treat EVERY boot as a first boot (the volatile /etc upper
+# resets it each power cycle), and on first boot PID 1 applies preset-all in enable-only mode.
+# Debian ships no preset files, and systemd's no-preset fallback is "enable" — which would
+# quietly re-enable every installable unit, ssh.service included, on a RELEASE image. The
+# blanket disable-* preset turns that pass into a no-op; the enable symlinks written at build
+# below live in the image's /etc and presets never touch existing state. systemd-firstboot
+# would likewise re-run per boot and can prompt on the console for anything it finds unset —
+# masked: this image bakes its own locale/timezone, and the console password is pithead's.
+RUN mkdir -p /etc/systemd/system-preset \
+    && printf 'disable *\n' > /etc/systemd/system-preset/00-pithead.preset \
+    && systemctl mask systemd-firstboot.service
+RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-data-reset /usr/local/sbin/pithead-ssh-host-keys /usr/local/sbin/pithead-machine-id /usr/lib/systemd/system-generators/pithead-mount-generator
 # The updater is chosen per image. RAUC is a Debian package, so it is installed here when
 # selected; leaving PITHEAD_UPDATER empty builds the same rootfs with no updater at all.
 ARG PITHEAD_UPDATER=""
@@ -225,7 +249,7 @@ RUN sed -i 's/^#\?use-ipv6=.*/use-ipv6=no/' /etc/avahi/avahi-daemon.conf
 RUN systemctl enable podman.socket pithead-boot.service pithead-cpu-governor.service avahi-daemon \
         systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
-        pithead-data-reset.service \
+        pithead-data-reset.service pithead-machine-id.service \
     && systemctl disable ssh
 # systemd-repart.service is static — it is pulled in by sysinit.target, and `systemctl enable` on a
 # static unit is an error that would fail the build. Assert it is present instead.

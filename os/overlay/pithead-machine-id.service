@@ -1,0 +1,30 @@
+[Unit]
+Description=Restore or persist machine-id on /data, before networkd/journald observe it
+# Ordering is the entire point of this unit (#895):
+#   - RequiresMountsFor=/data pulls in and orders after data.mount automatically — the same
+#     primitive the SSH host-key drop-in (pithead-ssh-host-keys.conf) uses for /data/ssh.
+#   - DefaultDependencies=no + WantedBy=sysinit.target/Before=sysinit.target keeps this in the
+#     EARLY boot transaction, alongside pithead-data-reset, rather than waiting for
+#     basic.target/multi-user.target.
+#   - Before=systemd-networkd.service: networkd derives its DHCP DUID from machine-id when it
+#     starts, so the restore must land before that — a late restore rotates the DHCP lease every
+#     boot instead of only on an image rebuild (the exact bug #895 reports).
+#   - Before=systemd-journal-flush.service: that unit is what copies the runtime journal into
+#     /var/log/journal/<machine-id> — restoring after it runs would still fragment the machine's
+#     own journal history across ids every boot.
+# Deliberately NOT Before=systemd-journald.service itself: journald starts far earlier than
+# /data can be mounted, and ordering ahead of the daemon (rather than just its later flush unit)
+# would stall the service half of early boot logs through.
+DefaultDependencies=no
+RequiresMountsFor=/data
+Before=sysinit.target systemd-networkd.service systemd-journal-flush.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/pithead-machine-id
+
+[Install]
+WantedBy=sysinit.target
