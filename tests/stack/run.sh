@@ -9552,7 +9552,11 @@ EOF
 # concern; the decision logic (which device, which flag, what gets removed) is not.
 cat >"$MC/bin/mount" <<'EOF'
 #!/usr/bin/env bash
-dev="$3" mnt="$4"
+# Flag-agnostic: the channel mounts with pinned-type/hardening options (-t vfat -o ro,nosuid,...),
+# so device and mountpoint are simply the last two arguments.
+argv=("$@")
+n=${#argv[@]}
+dev="${argv[n - 2]}" mnt="${argv[n - 1]}"
 [ "$dev" = "${MOUNT_DEVICE:-/dev/fake1}" ] || exit 1
 mkdir -p "$mnt"
 cp -a "${MOUNT_SRC:-/dev/null}"/. "$mnt"/ 2>/dev/null
@@ -9640,6 +9644,7 @@ EOF
 diffout=$(
     export PITHEAD_MEDIA_BIN="$MC/pithead"
     source "$ROOT/os/overlay/pithead-media-config"
+    SECRET_PATHS_JSON=$(_secret_paths_json) # the real fetch, against the sandboxed pithead copy
     media_config_diff "$MC/good.json" "$MC/changed.json"
 )
 assert_contains "the payout wallet change shows old -> new in full (that IS the point)" "$diffout" "$VALID_PRIMARY -> 44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
@@ -9649,6 +9654,7 @@ assert_not_contains "a changed secret never shows the new value" "$diffout" "a-n
 rc=$(
     export PITHEAD_MEDIA_BIN="$MC/pithead"
     source "$ROOT/os/overlay/pithead-media-config"
+    SECRET_PATHS_JSON=$(_secret_paths_json)
     media_config_identical "$MC/good.json" "$MC/good.json"
     echo $?
 )
@@ -9656,10 +9662,33 @@ assert_eq "identical configs -> media_config_identical true" "$rc" "0"
 rc=$(
     export PITHEAD_MEDIA_BIN="$MC/pithead"
     source "$ROOT/os/overlay/pithead-media-config"
+    SECRET_PATHS_JSON=$(_secret_paths_json)
     media_config_identical "$MC/good.json" "$MC/changed.json"
     echo $?
 )
 assert_eq "a real change -> media_config_identical false" "$rc" "1"
+
+# Masking fails CLOSED: with no secret-path list there is no diff and no "identical" verdict —
+# an earlier draft fell back to an empty list, which printed raw secret values to the console.
+rc=$(
+    export PITHEAD_MEDIA_BIN="$MC/does-not-exist"
+    source "$ROOT/os/overlay/pithead-media-config"
+    _secret_paths_json >/dev/null 2>&1
+    echo $?
+)
+assert_eq "an unreadable host program -> _secret_paths_json refuses (rc 1, never '[]')" "$rc" "1"
+out=$(
+    source "$ROOT/os/overlay/pithead-media-config"
+    SECRET_PATHS_JSON="" media_config_diff "$MC/good.json" "$MC/changed.json"
+    echo "rc=$?"
+)
+assert_eq "no secret list -> no diff output, distinct rc" "$out" "rc=2"
+rc=$(
+    source "$ROOT/os/overlay/pithead-media-config"
+    SECRET_PATHS_JSON="" media_config_identical "$MC/good.json" "$MC/good.json"
+    echo $?
+)
+assert_eq "no secret list -> identical is NOT assumed (fail closed)" "$rc" "1"
 
 echo "== unit: media_confirm_gate (abort/apply state machine, no real 60s wait) =="
 gate() { # $1 device-present override rc, $2 key sequence (space-separated, 'timeout' = no key)

@@ -57,7 +57,11 @@ media_find_config() {
     while IFS= read -r part; do
         [ -n "$part" ] || continue
         mnt=$(mktemp -d) || continue
-        if mount -o ro "$part" "$mnt" 2>/dev/null; then
+        # Attacker-controlled media: pin the filesystem parser (-t vfat — an auto-probed type
+        # would let an arbitrary disk pick which kernel parser runs against its content) and
+        # mount it inert, the same hardening prefill_from_previous_install applies to the same
+        # class of unauthenticated external partition.
+        if mount -t vfat -o ro,nosuid,nodev,noexec "$part" "$mnt" 2>/dev/null; then
             if [ -f "$mnt/$STAGED_NAME" ]; then
                 out=$(mktemp) || out=""
                 if [ -n "$out" ] && ! cp "$mnt/$STAGED_NAME" "$out" 2>/dev/null; then
@@ -103,8 +107,14 @@ media_validate_config() { # <candidate-json>
 
 # CONTROL_SECRET_PATHS as JSON, read from pithead itself — the single host-side list of secret
 # leaf paths (#440), so this channel's masking can never drift from the control channel's.
+# FAIL-CLOSED: rc 1 unless the fetch produced a non-empty JSON array. An earlier draft fell back
+# to '[]' on any sourcing error, which silently turned masking OFF — the diff would then print
+# raw secret values to every console and the journal. Unknown must mean "refuse", never "show".
 _secret_paths_json() {
-    bash -c "source '$PITHEAD_BIN' && printf '%s' \"\$CONTROL_SECRET_PATHS\"" 2>/dev/null || printf '[]'
+    local out
+    out=$(bash -c "source '$PITHEAD_BIN' && printf '%s' \"\$CONTROL_SECRET_PATHS\"" 2>/dev/null) || return 1
+    printf '%s' "$out" | jq -e 'type == "array" and length > 0' >/dev/null 2>&1 || return 1
+    printf '%s' "$out"
 }
 
 # The exact-diff line list between two config.json files, one line per changed leaf. Secret
@@ -112,9 +122,12 @@ _secret_paths_json() {
 # also masks) show that they changed and nothing else — never the value, in or out. Every other
 # leaf, including the wallet addresses, shows old -> new: verifying the payout address is the
 # whole point of this display. Empty output means the two configs are identical.
-media_config_diff() { # <old-json> <new-json>
+media_config_diff() { # <old-json> <new-json> — requires SECRET_PATHS_JSON (set by main / a test)
     local old="$1" new="$2"
-    jq -n -r --slurpfile o "$old" --slurpfile n "$new" --argjson secret "$(_secret_paths_json)" '
+    # No secret list, no diff: rc 2 and no output. media_config_identical treats that as
+    # NOT-identical, and main aborts the stage before ever calling this without the list.
+    [ -n "${SECRET_PATHS_JSON:-}" ] || return 2
+    jq -n -r --slurpfile o "$old" --slurpfile n "$new" --argjson secret "$SECRET_PATHS_JSON" '
         def is_secret($p):
             ($secret | any(. == $p))
             or ($p[0:2] == ["workers","list"] and $p[-1] == "token")
@@ -136,13 +149,22 @@ media_config_diff() { # <old-json> <new-json>
 }
 
 media_config_identical() { # <old-json> <new-json>
-    [ -z "$(media_config_diff "$1" "$2")" ]
+    # Fail closed: a diff that cannot be computed is not proof of anything — treat as different.
+    local d
+    d=$(media_config_diff "$1" "$2") || return 1
+    [ -z "$d" ]
 }
 
 # Override points for the confirmation gate — real hardware checks in production, canned
 # sequences in tests (see tests/stack/run.sh). Kept as separate one-line functions so a test can
 # redefine just one without reimplementing the wait loop.
-media_device_present() { [ -b "$1" ]; } # $1: partition device
+# $1: partition device, $2 (optional): the filesystem UUID captured when the config was found —
+# a bare [ -b ] only proves SOME device reuses the kernel name, not that it is the same stick
+# that was validated; a swap during the countdown must read as "removed", not "present".
+media_device_present() {
+    [ -b "$1" ] || return 1
+    [ -z "${2:-}" ] || [ "$(blkid -s UUID -o value "$1" 2>/dev/null)" = "$2" ]
+}
 media_read_key() {                      # $1: timeout seconds -> prints one char, rc 1 on timeout
     local tty="${PITHEAD_MEDIA_TTY:-/dev/tty1}" k=""
     [ -r "$tty" ] || {
@@ -159,10 +181,10 @@ media_read_key() {                      # $1: timeout seconds -> prints one char
 # (a/A applies now; n/N/c/C cancels now; anything else, including no keyboard at all, is ignored
 # and the countdown keeps running — absence of input is never treated as an abort). Prints
 # "apply" or "abort".
-media_confirm_gate() { # <partition> <countdown-seconds>
-    local dev="$1" seconds="$2" elapsed=0 key
+media_confirm_gate() { # <partition> <countdown-seconds> [<fs-uuid>]
+    local dev="$1" seconds="$2" uuid="${3:-}" elapsed=0 key
     while [ "$elapsed" -lt "$seconds" ]; do
-        media_device_present "$dev" || {
+        media_device_present "$dev" "$uuid" || {
             echo abort
             return 0
         }
@@ -179,7 +201,7 @@ media_confirm_gate() { # <partition> <countdown-seconds>
         esac
         elapsed=$((elapsed + 1))
     done
-    media_device_present "$dev" || {
+    media_device_present "$dev" "$uuid" || {
         echo abort
         return 0
     }
@@ -189,23 +211,29 @@ media_confirm_gate() { # <partition> <countdown-seconds>
 # Remove the staged file from the medium so it cannot re-apply on a later boot — the same
 # consumed-pre-seed hygiene as the installer's own pre-seed (pithead deletes, rather than keeping
 # a renamed copy, a plaintext-credential-bearing file on a stick that may travel to other
-# machines). Best-effort: an unmountable/read-only stick still leaves the change applied.
+# machines). rc 0 only when the file is verifiably gone; the caller decides how loudly to say
+# otherwise — a silent best-effort here left the operator with no durable signal at all.
 media_consume() { # <partition>
-    local part="$1" mnt
+    local part="$1" mnt ok=1
     mnt=$(mktemp -d) || return 1
-    if mount -o rw "$part" "$mnt" 2>/dev/null; then
-        rm -f "$mnt/$STAGED_NAME" 2>/dev/null ||
-            warn "could not remove the consumed configuration from $part — it may hold credentials; delete it by hand."
+    if mount -t vfat -o rw,nosuid,nodev,noexec "$part" "$mnt" 2>/dev/null; then
+        rm -f "$mnt/$STAGED_NAME" 2>/dev/null || true
+        [ ! -e "$mnt/$STAGED_NAME" ] && ok=0
         umount "$mnt" 2>/dev/null || true
     fi
     rmdir "$mnt" 2>/dev/null || true
+    return "$ok"
 }
 
 main() {
-    local found part cand validated decision errf
+    local found part cand validated decision errf media_uuid
     found=$(media_find_config) || return 0
     part=${found%%$'\t'*}
     cand=${found#*$'\t'}
+    # The stick's filesystem UUID, captured NOW: the confirm gate re-checks it so a different
+    # device reusing the same kernel name mid-countdown reads as removal, not presence. An
+    # unreadable UUID degrades to presence-only (documented in media_device_present).
+    media_uuid=$(blkid -s UUID -o value "$part" 2>/dev/null) || media_uuid=""
     errf=$(mktemp)
 
     if ! validated=$(media_validate_config "$cand" 2>"$errf"); then
@@ -216,6 +244,17 @@ main() {
         return 0
     fi
     rm -f "$errf" "$cand"
+
+    # Fail closed on the masking list: with no authoritative secret-path set, the diff below
+    # could print raw secret values to every console and the journal. Refuse the whole stage.
+    if [ -z "${SECRET_PATHS_JSON:-}" ]; then
+        SECRET_PATHS_JSON=$(_secret_paths_json) || {
+            _console "" "Media configuration channel: cannot read the secret-path list from the host program —" \
+                "refusing to display or apply the staged configuration. Continuing boot unchanged."
+            rm -f "$validated"
+            return 0
+        }
+    fi
 
     if [ ! -f "$RUNNING_CONFIG" ] || media_config_identical "$RUNNING_CONFIG" "$validated"; then
         _console "" "Media configuration channel: the staged configuration matches the running one — continuing boot."
@@ -228,7 +267,7 @@ main() {
         "Applying automatically in ${COUNTDOWN}s. Remove the media now to cancel." \
         "On a keyboard: 'a' applies immediately, 'n' cancels." ""
 
-    decision=$(media_confirm_gate "$part" "$COUNTDOWN")
+    decision=$(media_confirm_gate "$part" "$COUNTDOWN" "$media_uuid")
     if [ "$decision" != apply ]; then
         _console "Media configuration channel: cancelled — no changes applied."
         rm -f "$validated"
@@ -241,8 +280,13 @@ main() {
         return 0
     fi
     rm -f "$validated"
-    media_consume "$part"
-    _console "Media configuration channel: applied. Continuing boot with the new configuration."
+    if media_consume "$part"; then
+        _console "Media configuration channel: applied. Continuing boot with the new configuration."
+    else
+        _console "Media configuration channel: applied — but the staged file could NOT be removed from the media (write-protected?)." \
+            "It may hold credentials in plain text: delete pithead-config.json from the stick by hand." \
+            "It will not re-apply while the running configuration still matches it."
+    fi
     return 0
 }
 
