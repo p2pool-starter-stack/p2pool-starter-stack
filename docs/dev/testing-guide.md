@@ -77,6 +77,40 @@ Add a scenario to `tests/integration/mini-stack/run-mini-stack.sh`: drive the fa
 `/control` endpoints (`set_monerod`/`set_tari`) and assert real container state with
 `assert_state` / `assert_stays`. `make test-mini-stack` (needs docker).
 
+### Visual check (frontend, pre-PR)
+
+The `node --test` frontend suite renders components as strings, so it cannot see a layout bug —
+an overflowing table, a wrapped stat, a broken breakpoint. Before a PR that touches the
+dashboard's look, render the real frontend in a real browser against a canned `/api/state`
+payload — no docker, no stack. The fixture half lives in the repo:
+`tests/frontend/fixtures/_gen_state.py` writes `state.json`, a real `build_state()` payload (the
+exact contract the client renders). Regenerate it whenever the payload contract changes, then
+serve the real app around it:
+
+```bash
+cd build/dashboard
+uv run --extra test python tests/frontend/fixtures/_gen_state.py
+python3 - <<'EOF'
+import http.server, mimetypes
+from pathlib import Path
+mimetypes.add_type("text/javascript", ".mjs")
+web, fix = Path("mining_dashboard/web"), Path("tests/frontend/fixtures/state.json")
+class H(http.server.SimpleHTTPRequestHandler):
+    def translate_path(self, path):
+        p = path.split("?")[0]
+        if p.startswith("/api/state"): return str(fix)
+        if p.startswith("/static/"): return str(web / p.lstrip("/"))
+        return str(web / "templates/index.html")
+http.server.ThreadingHTTPServer(("127.0.0.1", 8000), H).serve_forever()
+EOF
+```
+
+Open `http://127.0.0.1:8000` and eyeball the page at a desktop and a phone width (the browser's
+device toolbar is enough). Only `/api/state` is served — every other API call fails, which the
+page tolerates; the main view is the point. This is a manual pre-PR step, not a test tier: it has
+caught real bugs (a "≈ 0.0 blocks" display, a WebKit table overflow) that the string-render tests
+structurally cannot.
+
 ## Conventions
 
 - Determinism, no sleep-and-hope. Wait on a real signal with a timeout (`wait_for`,
@@ -106,9 +140,12 @@ now baked into the tests.
   28081/28152 so it can't collide with — or control — a real deployment on the same host. A fake
   server inside a container must bind `0.0.0.0`; binding `127.0.0.1` makes it unreachable from peer
   containers, which once broke release in the mini-stack.
-- monerod-down failover isn't simulated in the mini-stack. The dashboard's monerod down-path
-  log-scrapes a real `monerod` container the fake stack lacks; it's covered on real hardware by
-  `run.sh --fault-injection`. Tari-down is simulated there cleanly.
+- monerod-down failover IS simulated in the mini-stack (scenarios 6–9: outage, readmit,
+  busy/mid-reorg, double outage) — but only because the fake compose sets `LOCAL_MONERO_HOST` to
+  the fake monerod's hostname. If it doesn't match `MONERO_NODE_HOST`, the dashboard treats
+  monerod as "remote" and never probes it for reachability, so an outage becomes a silent no-op —
+  the original wiring bug. The tier-4 `run.sh --fault-injection` run still proves the
+  real-binary leg on real hardware.
 - Run `--check` first. Against any real box, `run.sh --check` asserts the current live state
   non-destructively (no config change). It's the safe way to validate before the config-churning
   matrix.

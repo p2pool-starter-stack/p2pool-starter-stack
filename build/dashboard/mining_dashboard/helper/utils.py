@@ -94,14 +94,11 @@ def format_disk_size(used_gb, total_gb):
     return f"{used:.1f}", f"{total:.1f}", "GB"
 
 
-def format_xmr(amount):
-    """Format an XMR amount with magnitude-adaptive precision — 4 decimal places at >= 1 XMR,
-    6 at >= 0.001, 8 below that — so a small daily estimate isn't truncated to zeros.
-
-    Mirrors ``formatXmr`` in ``web/static/logic.mjs`` (the dashboard earnings card) so the same
-    estimate reads the same on every surface (#387). Returns "0 XMR" for zero and an em dash for
-    non-numeric input.
-    """
+def _format_coin(amount, symbol):
+    """Magnitude-adaptive coin formatting — 4 decimal places at >= 1, 6 at >= 0.001, 8 below —
+    so a small daily estimate isn't truncated to zeros. Mirrors ``formatXmr``/``formatXtm`` in
+    ``web/static/logic.mjs`` so the same estimate reads the same on every surface (#387).
+    Returns "0 <symbol>" for zero and an em dash for non-numeric input."""
     try:
         val = float(amount)
     except (ValueError, TypeError):
@@ -109,27 +106,19 @@ def format_xmr(amount):
     if not math.isfinite(val):
         return "—"
     if val == 0:
-        return "0 XMR"
+        return f"0 {symbol}"
     dp = 4 if val >= 1 else 6 if val >= 0.001 else 8
-    return f"{val:.{dp}f} XMR"
+    return f"{val:.{dp}f} {symbol}"
+
+
+def format_xmr(amount):
+    """XMR face of :func:`_format_coin`."""
+    return _format_coin(amount, "XMR")
 
 
 def format_xtm(amount):
-    """Format an XTM amount, the Tari sibling of :func:`format_xmr` — same magnitude-adaptive
-    precision, same "0 XTM" / em-dash edge cases.
-
-    Mirrors ``formatXtm`` in ``web/static/logic.mjs`` so a confirmed Tari total reads identically
-    in the bot and on the dashboard card (#387)."""
-    try:
-        val = float(amount)
-    except (ValueError, TypeError):
-        return "—"
-    if not math.isfinite(val):
-        return "—"
-    if val == 0:
-        return "0 XTM"
-    dp = 4 if val >= 1 else 6 if val >= 0.001 else 8
-    return f"{val:.{dp}f} XTM"
+    """XTM (Tari) face of :func:`_format_coin`."""
+    return _format_coin(amount, "XTM")
 
 
 def format_duration(seconds):
