@@ -610,7 +610,7 @@ stack_upgrade() {
     # #546: and regenerate the Caddyfile + restart caddy, exactly like apply's capture — the render
     # preamble above ran while the address was still the placeholder, so without this the HTTPS onion
     # vhost (#360) would never appear (the next apply no-ops on an unchanged config).
-    if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && { [ -z "${DASHBOARD_ONION:-}" ] || [ "${DASHBOARD_ONION:-}" == "placeholder" ]; }; then
+    if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && onion_missing "${DASHBOARD_ONION:-}"; then
         if provision_dashboard_onion && render_env; then
             generate_caddyfile
             docker compose restart caddy
@@ -1212,7 +1212,7 @@ doctor() {
                 continue
             fi
             onion=$(env_get "$k")
-            if [ -z "$onion" ] || [ "$onion" == "placeholder" ]; then
+            if onion_missing "$onion"; then
                 dr_warn "$k is not provisioned (value: '${onion:-empty}') — re-run './pithead setup' to generate Tor hidden services."
             else
                 dr_ok "$k set."
@@ -5741,7 +5741,7 @@ provision_onion_client_auth() {
         fi
         return 0
     fi
-    if [ -z "$DASHBOARD_ONION_CLIENT_PUBKEY" ] || [ "$DASHBOARD_ONION_CLIENT_PUBKEY" == "placeholder" ]; then
+    if onion_missing "$DASHBOARD_ONION_CLIENT_PUBKEY"; then
         local kp
         kp=$(generate_onion_client_keypair) ||
             error "Could not generate the Tor onion client-auth keypair (need openssl built with x25519, plus od + awk)."
@@ -8021,7 +8021,7 @@ apply() {
     # Caddyfile + restart caddy so the HTTPS onion vhost (#360) actually appears this run instead of
     # never (#546): a re-render off the committed .env sees no change and no-ops before ever reaching
     # generate_caddyfile above.
-    if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && { [ -z "${DASHBOARD_ONION:-}" ] || [ "${DASHBOARD_ONION:-}" == "placeholder" ]; }; then
+    if [ "${DASHBOARD_ONION_ENABLED:-false}" == "true" ] && onion_missing "${DASHBOARD_ONION:-}"; then
         if provision_dashboard_onion && render_env; then
             generate_caddyfile
             docker compose restart caddy
