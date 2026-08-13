@@ -60,7 +60,7 @@ Add a `healthchecks` block with your ping URL — that URL is the on switch (see
 }
 ```
 
-`enabled` and `ping_url` are all you need; everything else has a sensible default.
+`ping_url` is the only key — setting it turns the monitor on, blank keeps it off.
 
 ### 4. Apply
 

@@ -16,7 +16,7 @@ stack. The other guides cover individual topics once you're running.
 | [Monitoring & Alerting](monitoring.md) | Optional Healthchecks.io dead-man's switch — get alerted when your host goes down (power loss, crash), even when it can't tell you itself — plus the Prometheus `/metrics` endpoint for Grafana or any scraper. |
 | [Telegram Bot](telegram.md) | Push operator alerts (node down/recovered, worker offline/back, sync finished) to Telegram and query stack status on demand (`/status`, `/hashrate`, `/workers`, `/sync`) — creating a bot, finding your chat id, per-event toggles, and the command list. |
 | [Connecting Miners](workers.md) | Pointing any existing rig at the stack, plus [RigForge](https://github.com/p2pool-starter-stack/rigforge) for setting up new miners. |
-| [Architecture](architecture.md) | The nine services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
+| [Architecture](architecture.md) | The eleven services, how they fit together, the privacy model, and the algorithmic XvB switching engine. |
 | [Privacy & Network Egress](privacy.md) | Every connection the stack makes off-box: what's Tor-routed, what's clearnet today, and how to harden each path. |
 | [Operations & Maintenance](operations.md) | The full `pithead` command reference (including command chaining and tab-completion), upgrades, encrypted backups, rotating the internal secrets, watching for intruders, and troubleshooting. |
 | [FAQ](faq.md) | Common questions, plus why Pithead vs. doing it yourself or Gupax. |
@@ -35,6 +35,11 @@ Docs for working on Pithead itself live in [`dev/`](dev/). Operators don't need 
 | [Releasing](dev/releasing.md) | How Pithead is versioned and released: one product, one version, the `VERSION` source of truth, and the GHCR stage→promote pipeline. |
 | [Release / Validation Server](dev/release-server.md) | Why end-to-end validation needs a dedicated server (and what GitHub Actions does free on every PR), how to provision and harden it, and the safe self-hosted-runner setup. |
 | [Test Server Architecture](dev/test-server-architecture.md) | How the reference test/build box is structured and how to recreate it. |
+| [Dual-distribution plan](dev/dual-distribution-plan.md) | The ratified #77/#78 architecture decision record: how one release ships as the Compose stack, the flashable appliance image, and a git clone — and the rejected alternatives. |
+
+Published research lives in [`research/`](research/): the
+[XvB delivery study](research/xvb-delivery-study/PAPER.md) is the measured evidence behind the
+dashboard's XvB "Study est." figures.
 
 ## Quick links
 

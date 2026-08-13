@@ -646,7 +646,7 @@ the whole choice is visible at once:
 | **Odds / 30d** | How often this tier's rounds pay out and among how many qualifiers, computed from XvB's public winners feed. The draw is random among qualifiers — donating above a threshold buys no extra odds. |
 | **Cost / yr** | The P2Pool earnings given up by donating the tier threshold for a year, at your current rate. |
 | **XvB says / yr** | XvB's own published expected reward — **face value**: it prices every bonus hash at full block reward. Shown as their number, never blended. |
-| **Study est. / yr** | The same figure scaled by the **measured delivery band**: across 25 audited won rounds, verified on-chain across all three P2Pool sidechains (June–August 2026), winners received 33% of the advertised prize work (95% CI 28–39%; single-wallet on-chain audit, corroborated by a 14-winner public crawl), with at most a small margin effect. Once this box has enough measured wins of its own, the column becomes **Yours (N% × M wins)** and uses your wallet's measured figure instead. |
+| **Study est. / yr** | The same figure scaled by the **measured delivery band**: across 25 audited won rounds, verified on-chain across all three P2Pool sidechains (June–August 2026), winners received 33% of the advertised prize work (95% CI 28–39%; single-wallet on-chain audit, corroborated by a 14-winner public crawl), with at most a small margin effect. Once this box has enough measured wins of its own, the column becomes **Yours (N% × M wins)** and uses your wallet's measured figure instead. The full record — method, data, and scripts — is the [XvB delivery study](research/xvb-delivery-study/PAPER.md). |
 | **Net / yr** | The verdict: estimated reward minus the cost. **Red** when even the optimistic end of the band loses; **green** when even the pessimistic end profits; neutral when the band spans zero. Withheld (with a ⚠ on the tier) when your hashrate cannot sustain the tier — an unreachable payout must never look reachable. |
 
 A fiat line prices the best sustainable tier's net at your configured XMR price.
@@ -707,7 +707,7 @@ Two edit modes build the same candidate config and submit it through the same pi
   & thresholds, System / advanced — instead of one section per top-level `config.json` key, so a
   grab-bag key like `dashboard` (auth, remote access, the energy calculator, alert thresholds, …)
   splits across the sections its fields actually belong to. Each section is a collapsed `<details>`
-  as before; within **Notifications**, the 26 `telegram.events` toggles, the ntfy/webhook sinks,
+  as before; within **Notifications**, the 27 `telegram.events` toggles, the ntfy/webhook sinks,
   and Healthchecks each nest one level deeper into their own collapsed sub-group
   ([#612](https://github.com/p2pool-starter-stack/pithead/issues/612)) instead of dominating the
   section's field list. Rows in a section whose fields span more than one top-level key carry their

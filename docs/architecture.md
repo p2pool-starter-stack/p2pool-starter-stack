@@ -1,7 +1,7 @@
 # Architecture
 
-The stack runs nine containerized services under Docker Compose. This doc lists each service and how
-they connect.
+The stack runs eleven containerized services under Docker Compose — two of them opt-in view-only
+wallets for payout confirmation. This doc lists each service and how they connect.
 
 The services provide a Monero full node, P2Pool sidechain mining, Tari merge-mining, a single worker
 endpoint, and a monitoring dashboard. All node P2P and transaction traffic routes over Tor; no public
@@ -20,6 +20,8 @@ port forwarding is required.
 | 7 | **Docker Proxy** | A **read-only** proxy onto the Docker socket so the dashboard can read container stats/logs — no write access. |
 | 8 | **Docker Control** | A second, minimal socket proxy scoped to **only** `start`/`stop` (nothing else — not create/kill/exec/reads), so the dashboard can reject workers when a node is down (Issue #31), hold p2pool + xmrig-proxy until the chains finish syncing (Issue #35), switch a clearnet-syncing node back to Tor once it's synced (Issue #234), and, opt-in via `dashboard.fail_closed`, hold p2pool + xmrig-proxy again on an unrecoverable dashboard health failure (Issue #490). Kept separate so its write grant can't widen the read-only proxy. |
 | 9 | **Caddy** | A reverse proxy that serves the dashboard over HTTPS (automatic local TLS) on the LAN. |
+| 10 | **Monero Wallet-RPC** | Opt-in: runs only when `monero.view_key` is set (compose profile `payout_confirm`). A view-only `monero-wallet-rpc` against the local node, so the dashboard can confirm P2Pool payouts on-chain. See [Dashboard › Payout confirmation](dashboard.md#payout-confirmation). |
+| 11 | **Tari Console Wallet** | Opt-in: runs only when `tari.view_key` is set (compose profile `tari_payout_confirm`). A view-only `minotari_console_wallet` against the local Tari node, confirming merge-mine payouts on-chain. See [Dashboard › Payout confirmation](dashboard.md#payout-confirmation). |
 
 ## High-level diagram
 

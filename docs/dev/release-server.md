@@ -287,8 +287,9 @@ Treat the box as production-sensitive. It holds keys and it's the thing that sig
 2. Pre-release (or on-demand for a reviewed PR) → a maintainer dispatches the release-gate
    workflow on the dedicated server: `make test` (tiers 1–2 on the trusted box) plus the tier-4
    live matrix against the real synced nodes (`run.sh --safety-backup`), then per
-   [Releasing](releasing.md) the staging smoke test (pull the GHCR images on a clean host, real
-   `setup → up → status → mine` check).
+   [Releasing](releasing.md) the staging smoke test: pull each staged image back from GHCR and
+   verify its version label and target platforms — no stack is started; a functional run against
+   the staged tag is opt-in via `RELEASE_SMOKE_CMD`.
 3. Nothing is tagged or published until that's green, and promotion is by digest, so the version
    users get is the exact bundle the server validated.
 

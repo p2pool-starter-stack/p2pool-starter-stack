@@ -174,8 +174,12 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
 3. Safety backup (`pithead backup`) as the rollback anchor.
 4. Borrows a miner (default the configured miner): backs up its xmrig config and repoints it at the
    bench so the matrix has a real worker mining through this stack (1 worker → run with `--workers 1`).
-5. Deploys the branch (`pithead apply` builds the branch's images) and runs `run.sh` detached on the
-   box (survives an SSH drop on a long matrix), streaming a heartbeat and the full log at the end.
+5. Deploys the branch (`pithead upgrade` — re-renders the generated configs and rebuilds the
+   first-party images from `build/`, so a Dockerfile or entrypoint change is actually under test;
+   `apply` never builds and would reuse whatever images were last built on the box,
+   [#272](https://github.com/p2pool-starter-stack/pithead/issues/272)) and runs
+   `run.sh` detached on the box (survives an SSH drop on a long matrix), streaming a heartbeat and
+   the full log at the end.
 6. Restores the miner's original pool config and the baseline stack. Restore targets the directory
    the live stack actually ran from — read at preflight off the running container's
    `com.docker.compose.project.working_dir` label — which on a release box is the per-version bundle
