@@ -10,6 +10,7 @@ BANNED='leverage|robust|seamless|powerful|effortlessly|comprehensive|elevate|str
 # test-inventory is git-ignored now, so `git ls-files` never surfaces it — no exclusion needed, #414.)
 files=$(git ls-files '*.md' |
     grep -vxE 'docs/dev/STYLE\.md|CHANGELOG\.md|THIRD_PARTY_LICENSES\.md|CODE_OF_CONDUCT\.md' |
+    grep -vE '^research/' | # verbatim research records: quoted sources and audit trails, not house prose
     grep -vE '(^|/)(vendor|node_modules)/' || true)
 
 if [ -z "$files" ]; then
