@@ -424,8 +424,8 @@ it:
 
 - **RigForge's tuning is host-global.** It sets a `performance` CPU governor and may reserve
   HugePages box-wide, which affects every workload on the machine, not just the miner. That is fine
-  on a dedicated appliance; weigh it on a shared home server (see [deployment
-  models](getting-started.md)).
+  on a dedicated appliance; weigh it on a shared home server (see
+  [Co-hosting on a shared server](configuration.md#co-hosting-on-a-shared-server)).
 - **The stack always wins.** Cap the miner's thread count in RigForge so mining never starves the
   node's sync or share submission. The mining path is plain stratum over loopback, so it carries no
   privacy impact.

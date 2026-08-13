@@ -266,8 +266,8 @@ smoke_upgrade() {
         '{id:$id, action:"upgrade", actor:$a, version:$v}' >"$spool/requests/$id.json"
     ok "Enqueued upgrade intent $id ($TAG) into the control spool."
 
-    # Drive the runner exactly as the systemd path unit does (docs/dev/releasing.md documents the manual
-    # `control-run-pending` drain).
+    # Drive the runner exactly as the systemd path unit does (docs/operations.md documents the
+    # pithead-control units and the manual `control-run-pending` drain).
     (cd "$dir" && ./pithead control-run-pending) || die "control-run-pending failed — see the output above."
 
     # Poll the result spool for this id (an upgrade pulls a whole release of images first).

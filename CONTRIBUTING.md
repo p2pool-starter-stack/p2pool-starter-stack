@@ -29,7 +29,8 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
 ## Development workflow
 
 1. Fork the repo and create a branch off `develop` (the integration branch; `main` holds released
-   commits only).
+   commits only — how releases move `develop` → `main` and back is in
+   [Releasing › Branch mechanics](docs/dev/releasing.md#branch-mechanics)).
 2. Make your change. Keep it focused: one logical change per PR.
 3. Run the full test suite locally:
 

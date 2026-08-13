@@ -447,7 +447,7 @@ throughout and beyond the hour). Fig. 3: experiment-round chain composition vs a
 
 ## 6. Data availability
 
-Two layouts exist. **Public (repository, `research/xvb-delivery-study/`)**: this paper, the
+Two layouts exist. **Public (repository, `docs/research/xvb-delivery-study/`)**: this paper, the
 figures, every analysis script, the archived external sources with checksums
 (`data/sources/MANIFEST.md`), and the public winners-feed schedule snapshots — everything
 needed to audit the method and to reproduce the delivery measurement for any wallet from

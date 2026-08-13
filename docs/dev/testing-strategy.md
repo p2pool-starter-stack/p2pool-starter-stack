@@ -322,12 +322,11 @@ tier 3/4:
 - **Tor-container-down partial start.** ✅ Now a tier-4 `--fault-injection` case (#563, TOP PRIVACY
   PRIORITY): `docker compose stop tor` and assert BOTH no clearnet egress leak appears (reuses
   `bench-verify-egress.sh`'s `/proc/net/tcp` proof, the same one the steady-state battery runs) and
-  that `doctor` flags the outage loudly rather than passing silently, then restart tor and re-assert
-  both the egress proof and `pithead status`. The doctor-loud-failure leg is the harness *proving*
-  the gap: `check_egress_firewall_installed` and `check_tor_clearnet_egress` both currently SKIP
-  (not FAIL) when the tor container isn't running, so this assertion is expected to fail against
-  today's `doctor` until it gains an explicit tor-down verdict — filed as a follow-up, not silently
-  softened here.
+  that `doctor` fails loudly — its dedicated `check_tor_running` verdict FAILs with a non-zero exit
+  while the tor container is down and the mining stack runs, never a silent all-clear — then
+  restart tor and re-assert both the egress proof and `pithead status`.
+  (`check_egress_firewall_installed` and `check_tor_clearnet_egress` still info-skip without a
+  running tor container, by design: the dedicated verdict already fails the outage.)
 - **Insecure + main matrix row.** `dashboard.secure=false` only ever pairs with `p2pool.pool=nano`,
   so the Caddy-scheme / bind assertions for insecure mode are entangled with the nano path; an
   insecure+main regression has no row.
