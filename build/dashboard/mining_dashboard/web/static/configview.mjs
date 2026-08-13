@@ -39,13 +39,15 @@ const POLL_MS = 2000;
 const POLL_MAX = 90; // 3 minutes — a commit recreates containers, which can take a while
 const UPGRADE_POLL_MAX = 450; // 15 minutes — an upgrade pulls a whole release of images first
 
-// Poll /api/control/result until a terminal result lands; shared by the Configuration view and
-// the Upgrade button (#59). `skip` ignores an intermediate status under the same id (the
-// still-present "previewed" result while a commit runs; "running" while an upgrade runs). Both
-// flows recreate the dashboard container itself, so a fetch here can transiently fail — either a
-// dropped connection (proxy down) or a 502/503/504 (proxy up, upstream mid-restart, #622). Ride
-// both out and keep polling until the result file answers.
-async function pollResult(id, skip, max = POLL_MAX) {
+// Poll /api/control/result until a terminal result lands; shared by the Configuration view, the
+// Upgrade button (#59), and the Backup card (#908). `skip` ignores an intermediate status under
+// the same id (the still-present "previewed" result while a commit runs; "running" while an
+// upgrade or backup runs). Commit/upgrade/backup all briefly recreate or stop+restart the stack
+// — commit/upgrade take the dashboard container itself down, backup takes the whole compose
+// project down and back up — so a fetch here can transiently fail: a dropped connection (proxy
+// down too, for backup) or a 502/503/504 (proxy up, upstream mid-restart, #622). Ride both out
+// and keep polling until the result file answers.
+export async function pollResult(id, skip, max = POLL_MAX) {
   for (let i = 0; i < max; i++) {
     await new Promise((r) => setTimeout(r, POLL_MS));
     let res;

@@ -182,6 +182,8 @@ class TestControlRoutesDisabled:
         assert (await client.post("/api/control/commit", json={})).status == 404
         assert (await client.post("/api/control/upgrade", json={})).status == 404
         assert (await client.get("/api/control/result?id=x")).status == 404
+        assert (await client.post("/api/control/backup")).status == 404
+        assert (await client.get("/api/control/backup-download?id=x")).status == 404
         # The config-change audit view is a control-channel artifact — absent with it (#349).
         assert (await client.get("/api/audit")).status == 404
 
@@ -256,7 +258,12 @@ class TestControlRoutesEnabled:
 
     async def test_post_without_control_header_forbidden(self, control_client):
         # The custom header forces a CORS preflight cross-site, which is never granted (CSRF).
-        for path in ("/api/control/preview", "/api/control/commit", "/api/control/upgrade"):
+        for path in (
+            "/api/control/preview",
+            "/api/control/commit",
+            "/api/control/upgrade",
+            "/api/control/backup",
+        ):
             resp = await control_client.post(path, json={"config": {}})
             assert resp.status == 403, path
 
@@ -408,6 +415,73 @@ class TestControlRoutesEnabled:
         )
         assert resp.status == 500
         assert "nonexistent" not in json.dumps(await resp.json())
+
+    async def test_backup_submits_bare_intent_and_returns_pending(
+        self, control_client, control_spool
+    ):
+        # No body, unlike commit/upgrade: the host picks its own passphrase, never the container's.
+        resp = await control_client.post(
+            "/api/control/backup", headers={**CONTROL_HEADERS, "X-Auth-User": "admin"}
+        )
+        assert resp.status == 202
+        body = await resp.json()
+        assert body["status"] == "pending"
+        req = json.loads((control_spool / "requests" / f"{body['id']}.json").read_text())
+        # Closed shape: exactly these keys — no config leg, no passphrase field to smuggle one in.
+        assert req == {"id": body["id"], "action": "backup", "actor": "admin"}
+
+    async def test_backup_spool_failure_is_sanitized(self, control_client, monkeypatch):
+        monkeypatch.setattr(control_service.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests")
+        resp = await control_client.post("/api/control/backup", headers=CONTROL_HEADERS)
+        assert resp.status == 500
+        assert "nonexistent" not in json.dumps(await resp.json())
+
+    async def test_backup_download_rejects_bad_id(self, control_client):
+        resp = await control_client.get("/api/control/backup-download?id=..%2Fx")
+        assert resp.status == 400
+
+    async def test_backup_download_404_without_a_result(self, control_client):
+        resp = await control_client.get(f"/api/control/backup-download?id={uuid.uuid4()}")
+        assert resp.status == 404
+
+    async def test_backup_download_404_when_not_applied(self, control_client, control_spool):
+        rid = str(uuid.uuid4())
+        (control_spool / "results" / f"{rid}.json").write_text(
+            json.dumps({"status": "failed", "error": "boom"})
+        )
+        resp = await control_client.get(f"/api/control/backup-download?id={rid}")
+        assert resp.status == 404
+
+    async def test_backup_download_404_when_archive_missing_on_disk(
+        self, control_client, control_spool
+    ):
+        # The result names an archive but the file itself is gone — 404, not a 500/traceback.
+        rid = str(uuid.uuid4())
+        (control_spool / "results" / f"{rid}.json").write_text(
+            json.dumps({"status": "applied", "archive": "pithead-backup-x.tar.gz.enc"})
+        )
+        resp = await control_client.get(f"/api/control/backup-download?id={rid}")
+        assert resp.status == 404
+
+    async def test_backup_download_streams_the_archive(self, control_client, control_spool):
+        rid = str(uuid.uuid4())
+        (control_spool / "results" / f"{rid}.json").write_text(
+            json.dumps(
+                {
+                    "status": "applied",
+                    "archive": "pithead-backup-20260101-000000.tar.gz.enc",
+                    "passphrase": None,  # already redacted; the download must not depend on it
+                }
+            )
+        )
+        (control_spool / "results" / f"{rid}.tar.gz.enc").write_bytes(b"ENCRYPTED-ARCHIVE-BYTES")
+        resp = await control_client.get(f"/api/control/backup-download?id={rid}")
+        assert resp.status == 200
+        assert await resp.read() == b"ENCRYPTED-ARCHIVE-BYTES"
+        assert (
+            'filename="pithead-backup-20260101-000000.tar.gz.enc"'
+            in resp.headers["Content-Disposition"]
+        )
 
     async def test_config_read_failure_is_sanitized(self, control_client, monkeypatch):
         monkeypatch.setattr(control_service.config, "HOST_CONFIG_PATH", "/nonexistent/config.json")

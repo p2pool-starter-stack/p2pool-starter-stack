@@ -1450,6 +1450,14 @@ button.upgrade-btn {
   white-space: pre-wrap;
 }
 
+/* Backup emergency kit (#908): the one-time passphrase reveal — same box recipe as
+ * .config-error-tail, larger and breaking mid-word so a long alnum passphrase never overflows. */
+.kit-passphrase {
+  font-size: 1rem;
+  word-break: break-all;
+  margin: 8px 0;
+}
+
 /* Worker Inspect (#185): a native <dialog> opened from a worker name in the Workers Alive table.
  * Shows the rig's live telemetry, a writable-config editor, and the change history. showModal()
  * gives Escape-to-close and focus trapping for free; ::backdrop replaces the old overlay div. */

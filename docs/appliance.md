@@ -270,6 +270,29 @@ install-then-fall-back protection as any other update. The practical consequence
 an old image keeps running fine, but it keeps the old image's known holes too. The base
 system is Debian 13, which receives security support upstream into 2030.
 
+## Backing up your data
+
+The machine holds state a resync cannot rebuild: your wallet settings, the Tor onion
+keys that give it its address, and the dashboard's history. There is no filesystem to
+copy from a shell-less box, so the dashboard's **Configuration → Backup** card exports it
+for you as one encrypted file.
+
+Click **Back up now** and the machine stops the stack, archives `config.json`, `.env`,
+the Tor onion-service keys and the dashboard database into a single file, and starts the
+stack again — mining pauses for the archive's duration. The blockchains are left out; they
+resync from the network on their own.
+
+The archive is encrypted, and the machine picks the passphrase for you: a long, random
+one, shown exactly once, right after the archive is ready. There is no way to see it
+again — the page shows it inside a downloadable kit (the passphrase, the archive's name,
+and what it contains), and warns you before it moves on. Save the kit and download the
+archive together, and keep them somewhere other than this machine. Without the
+passphrase, the archive cannot be opened.
+
+**NOTE:** restoring from a backup is not available yet. Exporting a backup off the
+machine closes the "a dead box loses everything" gap; a guided restore back onto a fresh
+install is separate, coming work.
+
 ## Starting over: the two resets
 
 There are two ways to reset the machine, and the difference between them is days of your

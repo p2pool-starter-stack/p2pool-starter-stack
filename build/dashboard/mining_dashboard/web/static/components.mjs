@@ -3,6 +3,7 @@
 // (variant: "ok"/"purple"/"accent"/"muted", level: "high"/"ok"); the client maps those to
 // classes — it does no number formatting or business logic of its own.
 
+import { BackupPanel } from "./backupview.mjs";
 import { ChartCard } from "./chart.mjs";
 import { ConfigView, UpgradeControl } from "./configview.mjs";
 import {
@@ -1246,7 +1247,7 @@ function DashboardView({
         <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />
         ${
           configView
-            ? html`<div class="card-stack"><${ConfigView} /><${SecurityPanel} /></div>`
+            ? html`<div class="card-stack"><${ConfigView} /><${BackupPanel} enabled=${state.control_enabled} /><${SecurityPanel} /></div>`
             : null
         }
         ${

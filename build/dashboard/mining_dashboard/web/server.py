@@ -3,6 +3,7 @@ import math
 import mimetypes
 import os
 import re
+import uuid
 
 from aiohttp import web
 
@@ -212,6 +213,45 @@ async def handle_control_upgrade(request):
         logger.exception("Error submitting control upgrade")
         return web.json_response({"error": "Failed to submit the upgrade request."}, status=500)
     return web.json_response({"id": rid, "status": "pending"}, status=202)
+
+
+async def handle_control_backup(request):
+    """Ask the host runner for an encrypted backup archive + a one-time emergency kit (#908).
+
+    No body: unlike commit/upgrade this verb takes no operator input — the host generates its own
+    passphrase and never accepts one from the container (encrypted-only, refused otherwise). The
+    archive/openssl work and the brief stack stop+restart stack_backup performs can take a while,
+    so — like upgrade — this returns 202 immediately and the client polls /api/control/result."""
+    _require_control_header(request)
+    try:
+        rid = control_service.submit("backup", actor=request.headers.get("X-Auth-User", ""))
+    except Exception:
+        logger.exception("Error submitting backup request")
+        return web.json_response({"error": "Failed to submit the backup request."}, status=500)
+    return web.json_response({"id": rid, "status": "pending"}, status=202)
+
+
+async def handle_backup_download(request):
+    """Stream the archive an applied backup produced (#908).
+
+    Read-only, no CSRF header required (matches the other GET routes) — a cross-site GET can
+    trigger this but can't read a cross-origin response, and the archive is useless without the
+    passphrase shown once in the kit. The id must resolve to an "applied" result naming an
+    archive; anything else 404s rather than hinting whether some OTHER id exists."""
+    try:
+        rid = str(uuid.UUID(request.query.get("id", "")))
+    except ValueError:
+        raise web.HTTPBadRequest(text="'id' must be a UUID.") from None
+    res = control_service.result(rid)
+    archive_name = (res or {}).get("archive")
+    if not res or res.get("status") != "applied" or not archive_name:
+        raise web.HTTPNotFound(text="No completed backup for that id.")
+    # FileResponse stats the path itself and answers 404 if the archive isn't there — no need to
+    # check twice.
+    path = os.path.join(config.CONTROL_RESULTS_DIR, f"{rid}.tar.gz.enc")
+    return web.FileResponse(
+        path, headers={"Content-Disposition": f'attachment; filename="{archive_name}"'}
+    )
 
 
 def _record_worker_result(state_mgr, worker, changes, res):
@@ -489,6 +529,10 @@ def create_app(state_manager, latest_data_ref):
                 # One-click rig upgrade (#597): spools name + confirmed version only; the host
                 # re-derives the real target and dials the rig. Same gate as the rest.
                 web.post("/api/control/worker-upgrade", handle_worker_upgrade),
+                # Encrypted backup + one-time emergency kit (#908): trigger, then stream the
+                # archive the host produced for the id it names in its result.
+                web.post("/api/control/backup", handle_control_backup),
+                web.get("/api/control/backup-download", handle_backup_download),
             ]
         )
 
