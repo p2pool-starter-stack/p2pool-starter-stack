@@ -31,3 +31,14 @@
   padding-left: 0.75rem;
   border-left: 2px solid var(--border);
 }
+
+/* The restore-at-setup toggle and its "back" link (#909): a plain button styled as text. */
+.wizard-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}

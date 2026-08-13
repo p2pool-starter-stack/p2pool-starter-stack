@@ -1048,7 +1048,167 @@ phase_install() {
     else
         bad "the reinstalled machine still serves the old dashboard image (got: $dm)"
     fi
-    rm -f "$target_disk"
+
+    # ---- restore-at-setup leg (#909, #786 sub-issue B) -----------------------------------
+    # A genuine encrypted backup pulled off THIS live, fully-provisioned machine seeds a
+    # totally fresh disk through the wizard's upload path instead of the config form — the
+    # disaster-recovery loop #908 (export) opens and this closes. Real archive, real upload
+    # over curl -F, real decrypt+extract on the guest, and the identity (wallet, Tor onion)
+    # must survive — proof the "restored config drives provisioning as if pre-seeded" promise
+    # actually holds, which nothing below tier 4 can prove.
+    local restore_archive="/tmp/pithead-os-restore-test.tar.gz.enc"
+    local restore_pass="pithead-os-restore-test-passphrase" # fixture value, not real secret material
+    rm -f "$restore_archive"
+    if _ssh "cd /data/pithead && PITHEAD_BACKUP_PASSPHRASE=$restore_pass ./pithead backup -y >/tmp/restore-backup.log 2>&1"; then
+        ok "restore leg: took a real encrypted backup off the live machine"
+    else
+        bad "restore leg: could not take the source backup"
+        rm -f "$target_disk"
+        return
+    fi
+    local remote_archive
+    remote_archive=$(_ssh "ls /data/pithead/backups/pithead-backup-*.tar.gz.enc" | tail -1)
+    scp -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -q \
+        "root@$ip:$remote_archive" "$restore_archive" || {
+        bad "restore leg: could not pull the backup archive off the guest"
+        rm -f "$target_disk"
+        return
+    }
+    local orig_onion
+    orig_onion=$(_ssh "grep MONERO_ONION_ADDRESS /data/pithead/.env" | cut -d= -f2)
+    _ssh "systemctl poweroff" 2>/dev/null || true
+    sleep 8
+    vm_destroy
+
+    local restore_target="/srv/code/bench-vm/pithead-restore-target.img"
+    rm -f "$restore_target"
+    qemu-img create -f raw "$restore_target" 30G >/dev/null
+    img=$(_build_image v1) || {
+        bad "restore leg: image build failed"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    cp "$img" "$DISK"
+    qemu-img resize "$DISK" 16G >/dev/null 2>&1 || true
+    : >"$SERIAL"
+    virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
+        --osinfo debian12 \
+        --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
+        --import \
+        --disk "path=$DISK,format=raw,bus=usb,removable=on,boot.order=1" \
+        --disk "path=$restore_target,format=raw,bus=virtio,boot.order=2" \
+        --network network=default,model=virtio --graphics none \
+        --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 || {
+        bad "restore leg: virt-install failed for the fresh installer boot"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    _wait_dhcp_ip 120
+    _wait_ssh 240 || {
+        bad "restore leg: installer guest never answered SSH"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    _ssh "for i in \$(seq 36); do [ -s /data/pithead/data/firstboot/disks.tsv ] && exit 0; sleep 5; done; exit 1" || {
+        bad "restore leg: installer never reached installer mode"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    token=""
+    tries2=0
+    while [ -z "$token" ] && [ "$tries2" -lt 40 ]; do
+        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$token" ] || sleep 3
+        tries2=$((tries2 + 1))
+    done
+    [ -n "$token" ] || {
+        bad "restore leg: no one-time token on the installer console"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    _wait_setup_page 120 || {
+        bad "restore leg: wizard never served its gate page"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    jar=$(mktemp)
+    curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
+        grep -q "wizard_session" "$jar" || {
+        bad "restore leg: auth failed"
+        rm -f "$jar" "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    # The combined leg: ONE upload carries the archive, its passphrase, AND the disk choice —
+    # the same _gate_install_request every other installer submission takes.
+    scode=$(curl -sSk -b "$jar" \
+        -F "archive=@$restore_archive" -F "passphrase=$restore_pass" \
+        -F "disk=vda" -F "confirm=vda" -F "wipe=keep" \
+        "https://$ip/submit-restore" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    [ "$scode" = "200" ] || {
+        bad "restore leg: upload did not return 200 (got ${scode:-none})"
+        rm -f "$jar" "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    ok "restore leg: uploaded the backup archive instead of the form"
+    tries2=0
+    while [ "$tries2" -lt 24 ]; do
+        curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"' && break
+        sleep 5
+        tries2=$((tries2 + 1))
+    done
+    [ "$tries2" -lt 24 ] || {
+        bad "restore leg: no credentials card after the restore — the restored config never drove provisioning"
+        rm -f "$jar" "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    ok "restore leg: the restored config drove provisioning to a credentials card"
+    curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null
+    rm -f "$jar"
+    tries2=0
+    while [ "$tries2" -lt 60 ]; do
+        [ "$(virsh domstate "$VM" 2>/dev/null)" = "shut off" ] && break
+        sleep 5
+        tries2=$((tries2 + 1))
+    done
+    if [ "$(virsh domstate "$VM" 2>/dev/null)" = "shut off" ]; then
+        ok "restore leg: installed and switched itself off"
+    else
+        bad "restore leg: never powered off after the ack"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    fi
+    vm_destroy
+    : >"$SERIAL"
+    virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
+        --osinfo debian12 \
+        --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
+        --import --disk "path=$restore_target,format=raw,bus=virtio" \
+        --network network=default,model=virtio --graphics none \
+        --serial "file,path=$SERIAL" --noautoconsole >/dev/null 2>&1 || {
+        bad "restore leg: virt-install failed for the restored machine"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    _wait_dhcp_ip 120
+    _wait_ssh 300 || {
+        bad "restore leg: restored machine never answered SSH"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    }
+    ok "restore leg: the restored machine boots from the fresh disk"
+    if _ssh "grep -q \"$HARNESS_WALLET\" /data/pithead/config.json"; then
+        ok "restore leg: restored machine carries the ORIGINAL wallet address, not a fresh one"
+    else
+        bad "restore leg: restored machine's config does not carry the original wallet"
+    fi
+    local new_onion
+    new_onion=$(_ssh "grep MONERO_ONION_ADDRESS /data/pithead/.env" | cut -d= -f2)
+    if [ -n "$new_onion" ] && [ "$new_onion" = "$orig_onion" ]; then
+        ok "restore leg: restored machine kept the ORIGINAL Tor identity, not a regenerated one"
+    else
+        bad "restore leg: onion address changed ($orig_onion -> ${new_onion:-none}) — identity was not restored"
+    fi
+    rm -f "$target_disk" "$restore_archive" "$restore_target"
 }
 
 phase_provision() {

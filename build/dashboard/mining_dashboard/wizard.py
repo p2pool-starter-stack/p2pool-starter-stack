@@ -33,6 +33,11 @@ from aiohttp import web
 
 MAX_FAILURES = 5
 EXIT_TOKEN_LOCKOUT = 3
+# Restore-at-setup upload cap (#909): a Pithead backup holds only config, keys and the
+# dashboard database, never the blockchains — 64 MiB is generous headroom over that. Mirrored
+# in the pithead script's own RESTORE_MAX_BYTES (client + server, per the spool contract); the
+# two can't share a literal across languages, so keep the VALUE in step by hand.
+RESTORE_MAX_BYTES = 64 * 1024 * 1024
 
 COOKIE = "wizard_session"
 
@@ -303,6 +308,16 @@ def _spool_write_text(name: str, text: str) -> None:
     os.replace(tmp, os.path.join(sd, name))
 
 
+def _spool_write_bytes(name: str, data: bytes) -> None:
+    """Binary twin of _spool_write_text — the uploaded archive, never decoded as text."""
+    sd = spool_dir()
+    os.makedirs(sd, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=sd, prefix=f".{name}.")
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    os.replace(tmp, os.path.join(sd, name))
+
+
 def _spool_write_config(cfg: dict) -> None:
     _spool_clear_error()
     _spool_write_text("config.json", json.dumps(cfg, indent=2))
@@ -423,6 +438,43 @@ async def submit(request: web.Request) -> web.Response:
     return web.json_response({"status": "accepted"})
 
 
+async def submit_restore(request: web.Request) -> web.Response:
+    """Restore-at-setup (#909, #786 sub-issue B): an uploaded encrypted backup archive + its
+    emergency-kit passphrase, in place of the config form. This server only asks — the archive
+    and passphrase cross the SAME spool the rest of the wizard uses, and the HOST decrypts,
+    validates and extracts (firstboot_consume_restore, reusing stack_restore's own machinery).
+    A rejected archive falls back to the form with the reason, exactly like a rejected config;
+    the passphrase is written once and the host deletes it immediately either way."""
+    if not _authed(request):
+        raise web.HTTPFound("/")
+    # aiohttp enforces client_max_size (set in make_app) itself, answering 413 before this
+    # body even finishes reading — no try/except needed to turn that into a response.
+    form = await request.post()
+    upload = form.get("archive")
+    if not isinstance(upload, web.FileField):
+        return web.json_response({"error": "choose a backup archive to upload"}, status=400)
+    data = upload.file.read()
+    if len(data) > RESTORE_MAX_BYTES:
+        return web.json_response(
+            {
+                "error": f"archive too large (max {RESTORE_MAX_BYTES // (1024 * 1024)} MB) — "
+                "a Pithead backup holds only config, keys and the dashboard database, "
+                "never the blockchains"
+            },
+            status=400,
+        )
+    # On the installation medium, disk + wipe ride beside the archive — the SAME gate a typed
+    # submission takes (see _gate_install_request), so a restore can install too.
+    if installer_mode():
+        err = _gate_install_request(dict(form))
+        if err:
+            return web.json_response({"error": err}, status=400)
+    _spool_clear_error()
+    _spool_write_bytes("restore-archive", data)
+    _spool_write_text("restore-passphrase", str(form.get("passphrase", "")))
+    return web.json_response({"status": "accepted"})
+
+
 async def handoff(request: web.Request) -> web.Response:
     """The credentials card, once the host publishes it: dashboard login, dashboard URL, and the
     stratum address. Authed, over the same TLS the operator typed secrets into — a 32-character
@@ -478,7 +530,9 @@ def make_app(exit_fn=sys.exit) -> web.Application:
     # server.py — the wizard serves the same static tree.
     mimetypes.add_type("text/javascript", ".mjs")
     mimetypes.add_type("text/javascript", ".js")
-    app = web.Application()
+    # aiohttp's default (1 MiB) refuses a restore upload before submit_restore's own, clearer
+    # cap gets a chance to run; a little slack over RESTORE_MAX_BYTES covers multipart overhead.
+    app = web.Application(client_max_size=RESTORE_MAX_BYTES + 1_048_576)
     app["failures"] = 0
     app["exit"] = exit_fn
     app.add_routes(
@@ -489,6 +543,7 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.post("/auth", auth),
             web.get("/api/wizard-state", wizard_state),
             web.post("/submit", submit),
+            web.post("/submit-restore", submit_restore),
             web.get("/api/handoff", handoff),
             web.post("/handoff-ack", handoff_ack),
             web.get("/status", status),

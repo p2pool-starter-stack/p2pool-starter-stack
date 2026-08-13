@@ -112,6 +112,38 @@ dashboard and answers on no port, so there is nothing to log into and change. Bo
 beside it and install with the wipe, and it is a blank machine that can pick any role again. A
 *keep* reinstall deliberately leaves it a rig — keep means keep whatever the role says.
 
+## Restore-at-setup
+
+A third spool channel, beside the config candidate and the rig request: an uploaded encrypted
+backup (`pithead backup`'s own archive format) plus its passphrase, as an alternative to the
+config form. `POST /submit-restore` writes `restore-archive` (binary) and `restore-passphrase`
+(plain, read once) — on the installation medium the disk/wipe fields ride beside them through
+the SAME `_gate_install_request` a typed submission takes.
+
+`firstboot_consume_restore` (host-side) does the whole job in one call, staged through a COPY —
+the same "validate before mutating real state" idiom `consume_preseed_config` already uses:
+
+1. Magic-byte format check, then a full-stream integrity verify (decrypt + `tar -tzf`) —
+   identical to `stack_restore`'s own pre-flight — BEFORE anything is extracted.
+2. Extract to a `mktemp -d` staging tree, not to the real filesystem yet.
+3. Validate the staged `config.json` through the same fresh-process `parse_and_validate_config`
+   call `firstboot_consume_spool` uses.
+4. Only on success: `cp -a` the whole staged tree onto `/` (config, `.env`, Caddyfile, the Tor
+   data dir, the dashboard database — never the chains, which `stack_backup` excludes by
+   default) and touch `applied` — the exact contract a typed submission leaves. The firstboot
+   loop short-circuits straight into that acceptance path; `prepare_directories` (run by the
+   `setup` it feeds) unconditionally re-chowns every data dir, so restore does not need to.
+
+A rejected archive (bad passphrase, wrong format, failed integrity, unparseable config) writes
+`error.txt` and returns 1 — nothing is extracted, nothing already on disk is touched, and the
+page falls back to the form exactly like a rejected typed config. The passphrase file is deleted
+at the top of the call, accepted or not; it never outlives the attempt.
+
+Deliberately reuses `stack_backup`'s archive format (#786 sub-issue A) rather than inventing a
+second one, and deliberately does NOT reuse `stack_restore` directly — that CLI command mutates
+real state immediately (no staging) and is written for an operator who already has a shell,
+which the wizard's pre-provisioning trust level does not assume.
+
 ## The certificate lifecycle
 
 **One certificate for the machine's whole life**, at `appliance_tls_dir()`
@@ -271,10 +303,11 @@ had a gap between it and the next one.
 | pure logic | `tests/frontend/configsync.test.mjs` | path access, typed coercion, address/pair guidance |
 | view rendering | `tests/frontend/wizard.test.mjs` (probes) | each view given its props |
 | **app orchestration** | `tests/frontend/wizard.test.mjs` (stubbed server) | **stage mapping, the handoff arriving through the poll, refresh-mid-provision, rejection round-trip, request bodies** |
-| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, the digest-keyed image loader, reinstall pre-fill (secret strip + fail-open), the local-miner legs (derived config, sync seeding, boot-leg wiring), the rig-role legs (pool discovery publisher, rig request consumption, the role marker, the rig boot leg's derived config + prebuilt-first + volatile journal + refusals, and both unit conditions) |
+| host logic | `tests/stack/run.sh` | cert minting + idempotence, remote-node preflight, pre-seed, install requests, the digest-keyed image loader, reinstall pre-fill (secret strip + fail-open), the local-miner legs (derived config, sync seeding, boot-leg wiring), the rig-role legs (pool discovery publisher, rig request consumption, the role marker, the rig boot leg's derived config + prebuilt-first + volatile journal + refusals, and both unit conditions), restore-at-setup (`firstboot_consume_restore`: accept against a genuine backup archive, wrong passphrase, missing passphrase, oversize, malformed archive, empty spool) |
 | the artifact | `tests/os/verify-image.sh` | both role paths present in the shipped image: the boot script's fork, the unit conditions that admit each role, the baked prebuilt, no swap anywhere |
 | the real thing | `tests/os/run.sh --phase provision` | token from the console → submit → handoff → ack → running stack → built-in miner up and its shares accepted → reboot through a corrupted Caddyfile → no failed units → slot self-commit → miner back |
 | the other real thing | `tests/os/run.sh --phase rig` | the same page answered `RigForge` → rig card with no login → mining from the byte-identical baked binary → **no containers at all** → reboot owned by `pithead-boot`, wizard closed → slot self-commit on an unanswered pool → A/B install, uncommitted rollback, self-commit, persistence |
+| the restore leg | `tests/os/run.sh --phase install` | a real encrypted backup taken off a live, fully-provisioned machine, pulled to the harness, uploaded through `/submit-restore` on a FRESH installer boot instead of the form — the wallet address and the Tor onion identity prove restored, not regenerated |
 
 The orchestration row is the one that was missing. pytest proved the endpoint published the
 credentials; a render probe proved the card renders given them; nothing proved the app *asked*.
