@@ -247,6 +247,14 @@ chk "machine-id ships empty (systemd's own read-only-root first-boot semantics)"
 chk "SSH host-key generator baked and executable" '[ -x "$ROOT/usr/local/sbin/pithead-ssh-host-keys" ]'
 chk "ssh.service host-key drop-in orders after /data" \
     'grep -q "RequiresMountsFor=/data" "$ROOT/etc/systemd/system/ssh.service.d/pithead-host-keys.conf"'
+# Debian's own unit runs `sshd -t` as ExecStartPre, and drop-in entries APPEND — without the
+# reset, the config test runs before the generator, finds no key on a first boot, and
+# ssh.service can never start (KVM-battery find). The reset line + generator-first order is
+# load-bearing, so pin all three lines and their order.
+chk "host-key generator runs BEFORE the distro's sshd -t (reset + reorder)" \
+    '[ "$(grep "^ExecStartPre" "$ROOT/etc/systemd/system/ssh.service.d/pithead-host-keys.conf" | head -1)" = "ExecStartPre=" ] &&
+     grep -qxF "ExecStartPre=/usr/local/sbin/pithead-ssh-host-keys" "$ROOT/etc/systemd/system/ssh.service.d/pithead-host-keys.conf" &&
+     grep -qxF "ExecStartPre=/usr/sbin/sshd -t" "$ROOT/etc/systemd/system/ssh.service.d/pithead-host-keys.conf"'
 chk "sshd points at the /data host key" \
     'grep -q "^HostKey /data/ssh/ssh_host_ed25519_key" "$ROOT/etc/ssh/sshd_config.d/pithead-host-keys.conf"'
 chk "machine-id restore script baked and executable" '[ -x "$ROOT/usr/local/sbin/pithead-machine-id" ]'
