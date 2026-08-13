@@ -8877,6 +8877,30 @@ control_lifecycle() { # <verb: restart|apply> <id> <actor> <control-dir>
 # stay: it is ciphertext, useless without the passphrase, so it remains downloadable.
 # ponytail: TTL, not a container->host ack request (a "backup-ack" verb through requests/ would be
 # more precise but is a whole extra verb) — add one if this window proves too tight/loose live.
+# Backstop for control_backup's one-time kit: null the passphrase in any kit JSON whose `ts` is
+# older than the TTL but which still carries one — the case where the runner was killed during the
+# self-redaction sleep (a reboot racing the window) and left a wallet-grade secret in plaintext on
+# /data. Run at the top of every drain, so the fresh runner after such a reboot cleans it up. A
+# generous margin over the TTL (2x, floor 120s) so this never races the in-band redaction of a kit
+# whose window is still open.
+control_redact_stale_kits() { # <results-dir>
+    local results="$1" f now cutoff ts
+    [ -d "$results" ] || return 0
+    now=$(date +%s)
+    cutoff=$((2 * ${CONTROL_BACKUP_KIT_TTL_S:-20}))
+    [ "$cutoff" -lt 120 ] && cutoff=120
+    for f in "$results"/*.json; do
+        [ -f "$f" ] || continue
+        # Cheap gate first: only kits that still hold a passphrase are candidates.
+        jq -e '.passphrase // "" | length > 0' "$f" >/dev/null 2>&1 || continue
+        ts=$(jq -r '.ts // 0' "$f" 2>/dev/null)
+        [ "$((now - ts))" -ge "$cutoff" ] || continue
+        jq '.passphrase = null | .note = "The passphrase was shown once and is no longer available on this host — back up again if you did not save it."' \
+            "$f" >"$results/.$(basename "$f").tmp" 2>/dev/null &&
+            mv "$results/.$(basename "$f").tmp" "$f"
+    done
+}
+
 control_backup() { # <id> <actor> <control-dir>
     local id="$1" actor="$2" cdir="$3" rc=0
     local results="$cdir/results" auditf="$cdir/audit/control.log"
@@ -9354,6 +9378,12 @@ control_run_pending() {
     # "$claim"` below (an errexit gap, e.g.) leaves a `.claim.<pid>` file sitting directly in
     # $cdir forever. Same age cutoff — a claim in flight never lives past a single drain.
     find "$cdir" -maxdepth 1 -type f -name '.claim.*' -mmin +60 -delete 2>/dev/null || true
+    # Stale backup-kit passphrases: control_backup's one-time kit self-redacts after a blocking
+    # TTL, but a runner killed mid-sleep (a reboot racing the window) would leave a wallet-grade
+    # passphrase in results/ in plaintext on /data indefinitely. This backstop — a fresh runner
+    # after that reboot runs it — nulls the passphrase in any kit older than the TTL that still
+    # carries one. Belt to the TTL's braces; the passphrase is only ever meant for the live window.
+    control_redact_stale_kits "$cdir/results"
     local names name req claim n=0
     # Per-run cap (#33 hardening): a single trigger drains at most this many intents, so a flood in
     # the spool can't hold the root runner for an unbounded stretch — the leftovers wait for the

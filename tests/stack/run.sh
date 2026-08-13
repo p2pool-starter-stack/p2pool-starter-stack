@@ -7746,7 +7746,24 @@ printf '{"id":"%s","action":"backup","actor":"admin","passphrase":"leaked"}\n' "
 run_sourced "$SANDBOX" control_process_request "$BKC/req5.json" "$BKC" >/dev/null 2>&1
 assert_contains "a request carrying a passphrase field is refused outright (unexpected keys)" \
     "$(jq -r .error "$BKC/results/$bid5.json")" "unexpected keys"
-unset PITHEAD_SELF SELF_LOG PASS_LOG FAKE_ARCHIVE CONTROL_BACKUP_KIT_TTL_S bid1 bid2 bid3 bid4 bid5 pass1
+
+# Backstop: a kit whose runner was KILLED mid-TTL keeps a plaintext passphrase on /data. The next
+# drain's control_redact_stale_kits must null it once past the TTL, while leaving a still-in-window
+# kit and a non-kit result alone.
+export CONTROL_BACKUP_KIT_TTL_S=20 # cutoff = max(2x, 120) = 120s
+old_ts=$(($(date +%s) - 3600))     # an hour stale
+now_ts=$(date +%s)                 # fresh
+jq -n --argjson t "$old_ts" '{status:"applied",passphrase:"STRANDED-SECRET",archive:"a.enc",ts:$t}' >"$BKC/results/stale.json"
+jq -n --argjson t "$now_ts" '{status:"applied",passphrase:"LIVE-SECRET",archive:"b.enc",ts:$t}' >"$BKC/results/fresh.json"
+jq -n --argjson t "$old_ts" '{status:"applied",change_id:"c",ts:$t}' >"$BKC/results/other.json" # not a kit
+run_sourced "$SANDBOX" control_redact_stale_kits "$BKC/results" >/dev/null 2>&1
+assert_eq "a stranded kit passphrase (runner died mid-TTL) is redacted on the next drain" \
+    "$(jq -r '.passphrase // "null"' "$BKC/results/stale.json")" "null"
+assert_eq "a kit still inside its window keeps its passphrase" \
+    "$(jq -r '.passphrase' "$BKC/results/fresh.json")" "LIVE-SECRET"
+assert_eq "a non-kit result is left untouched" \
+    "$(jq -r '.change_id' "$BKC/results/other.json")" "c"
+unset PITHEAD_SELF SELF_LOG PASS_LOG FAKE_ARCHIVE CONTROL_BACKUP_KIT_TTL_S bid1 bid2 bid3 bid4 bid5 pass1 old_ts now_ts
 
 # ---------------------------------------------------------------------------
 echo "== unit: config.reference.json stays a complete superset of every path pithead reads (#561) =="
