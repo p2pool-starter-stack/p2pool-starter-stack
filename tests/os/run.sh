@@ -86,6 +86,10 @@ ip=""
 # only checks the shape, so the crash is the first honest verdict. XMRig's public donation
 # address: obviously not ours, plainly labelled, and any share it ever earned would be a donation.
 HARNESS_WALLET="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
+# A real base58 Tari address: the wizard now decodes + checksum-validates it host-side, so a
+# made-up placeholder is (correctly) rejected before the flow ever reaches the credentials
+# handoff. Same throwaway address the stack suite uses.
+HARNESS_TARI="126J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5BJ"
 
 _ssh() {
     ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
@@ -321,6 +325,15 @@ phase_boot() {
         return
     }
     ok "wizard serves the token gate ($ip)"
+
+    # SSH is a host service that finishes starting a little after the wizard container's HTTP gate
+    # answers, so the first _ssh here must wait it out — a single-shot probe raced ssh.service and
+    # misread a healthy boot as "SSH unreachable". Every other _ssh probe in this file is already
+    # retry-wrapped; these two #895 assertions were the exceptions.
+    _wait_ssh 120 || {
+        bad "host SSH never came up after the wizard gate — cannot read hugepages/machine-id"
+        return
+    }
 
     # Hugepages are load-bearing (the RandomX dataset must land in hugetlbfs, not the cgroup —
     # the Dockerfile's own words): the baked sysctl reserves 3072 2M pages, and a boot that
@@ -648,7 +661,7 @@ phase_install() {
         return
     }
     local body
-    body="monero_wallet=$HARNESS_WALLET&tari_wallet=harness-dummy-tari-address&pool=mini&disk=vda&confirm=vda&wipe=keep"
+    body="monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini&disk=vda&confirm=vda&wipe=keep"
     scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
         bad "combined submit (config + disk) did not return 200 (got ${scode:-none})"
@@ -1088,7 +1101,7 @@ phase_provision() {
     # Everything else keeps its default — which is itself part of what this proves.
     # local_miner=true: the Both role (#796) — the same submit must also light the built-in
     # RigForge worker, asserted in the local-miner leg below.
-    body="monero_wallet=$HARNESS_WALLET&tari_wallet=harness-dummy-tari-address&pool=mini&local_miner=true"
+    body="monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini&local_miner=true"
     scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
         bad "config submit did not return 200 (got ${scode:-none} — a 30x means the session was not accepted)"
