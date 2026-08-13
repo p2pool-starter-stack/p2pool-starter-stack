@@ -326,11 +326,14 @@ phase_boot() {
     }
     ok "wizard serves the token gate ($ip)"
 
-    # SSH is a host service that finishes starting a little after the wizard container's HTTP gate
-    # answers, so the first _ssh here must wait it out — a single-shot probe raced ssh.service and
-    # misread a healthy boot as "SSH unreachable". Every other _ssh probe in this file is already
-    # retry-wrapped; these two #895 assertions were the exceptions.
-    _wait_ssh 120 || {
+    # SSH is a host service that finishes starting after the wizard container's HTTP gate answers,
+    # so the first _ssh here must wait it out — a single-shot probe raced ssh.service and misread a
+    # healthy boot as "SSH unreachable". The budget is the update phase's own first-boot figure
+    # (_vm_boot_disk + _wait_ssh 240): this is the VERY FIRST cold-host VM of the run — 6 GiB of
+    # hugepages reserved, systemd-repart growing /data to ~24 GiB, the wizard image loading, the
+    # host key generating — and 120 s clipped it (SSH came up just after, per the failed-run
+    # forensics). An equally unprovisioned update-phase guest reaches SSH within 240 s.
+    _wait_ssh 240 || {
         bad "host SSH never came up after the wizard gate — cannot read hugepages/machine-id"
         return
     }
