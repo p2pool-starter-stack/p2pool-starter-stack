@@ -327,9 +327,9 @@ and what it contains), and warns you before it moves on. Save the kit and downlo
 archive together, and keep them somewhere other than this machine. Without the
 passphrase, the archive cannot be opened.
 
-**NOTE:** restoring from a backup is not available yet. Exporting a backup off the
-machine closes the "a dead box loses everything" gap; a guided restore back onto a fresh
-install is separate, coming work.
+Putting a backup to use is the [Recovering from a backup](#recovering-from-a-backup)
+section below: a fresh install accepts the archive and its passphrase in place of the
+setup form.
 
 ## Starting over: the two resets
 
@@ -364,19 +364,22 @@ into setup when the reset is done.
 Fresh flash, restore, done — if the machine is gone (dead disk, stolen, dropped), a backup
 taken beforehand provisions a replacement in one page, with nothing retyped.
 
-**Take a backup before you need it.** From the machine's console (or a checkout with SSH
-access):
+**Take a backup before you need it.** The dashboard's **Configuration → Backup** card is
+the machine's own way to do that ([Backing up your data](#backing-up-your-data) above): the
+archive it downloads and the passphrase from its kit are exactly what restore asks for. The
+console works too — log in as `root` with the dashboard password and run:
 
 ```
 pithead backup
 ```
 
-This writes an encrypted archive under `backups/`: config, wallets, the Tor identity, and the
-dashboard's history — never the blockchain, which re-syncs. Type a passphrase when prompted, or
-set `PITHEAD_BACKUP_PASSPHRASE` for an unattended run. Copy the resulting
-`pithead-backup-*.tar.gz.enc` off the machine and keep the passphrase somewhere else — the
-archive is useless without it, and the machine you are backing up is exactly the thing you
-might lose next.
+This writes the same kind of encrypted archive under `backups/`, with a passphrase you type
+(or set `PITHEAD_BACKUP_PASSPHRASE` for an unattended run). Either way the archive holds
+config, wallets, the Tor identity, and the dashboard's history — never the blockchain, which
+re-syncs — and restore opens it with whichever passphrase sealed it: the kit's, or yours.
+Copy the archive off the machine and keep the passphrase somewhere else — the archive is
+useless without it, and the machine you are backing up is exactly the thing you might lose
+next.
 
 **Restore it at setup.** Write a fresh image, boot the machine, and on the setup page choose
 "Restoring an existing Pithead? Upload its backup instead." above the form. Upload the archive
