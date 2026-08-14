@@ -163,7 +163,7 @@ The defaults assume a self-hosted, pruned, HugePages-tuned local node. You can t
 | Skip the initial sync wait | [Reuse an existing synced chain](configuration.md#reusing-an-existing-node) | Hours–days + sync bandwidth |
 | Free the 6 GB HugePages reservation | `./pithead setup --skip-optimize` | ~6 GB RAM (at the cost of RandomX performance) |
 | Free RAM for other apps | Lower `tari.mem_limit` (e.g. `"4g"`) | Caps Tari's ceiling lower |
-| Keep mining when Tari has issues | `dashboard.tari_required: false` | Tari outages/syncs stop blocking Monero mining |
+| Keep mining while Tari resyncs | `dashboard.tari_required: false` | A Tari resync stops blocking Monero mining (Tari outages never block it, either setting) |
 
 > Remote-node mode still runs Tari, P2Pool, the proxy, dashboard, and Tor locally; it only drops
 > `monerod`. The remote node must be one you control with ZMQ publishing enabled; public "open node"

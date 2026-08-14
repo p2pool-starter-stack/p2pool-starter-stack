@@ -197,20 +197,23 @@ assert_state "released: itest-xmrig-proxy running" itest-xmrig-proxy running 90
 log "scenario 3b: the dashboard fires a real healthchecks heartbeat"
 wait_hc "healthchecks: real loop fired a liveness heartbeat" '^/ph$' 40
 
-# 4. Tari down while required → reject workers (stop the proxy); itest-p2pool keeps running. (#31)
-log "scenario 4: rejects workers when required Tari is down"
+# 4. Tari down while required must NOT reject workers (#897): p2pool keeps mining Monero through
+#    a Tari-only outage, so a required Tari going down must not fail workers over to their backup
+#    pools. Both itest-p2pool and itest-xmrig-proxy keep running.
+log "scenario 4: Tari down while required does not reject workers (#897)"
 set_tari down
-assert_state "rejected on Tari outage: itest-xmrig-proxy stopped" itest-xmrig-proxy exited 90
+assert_stays "Tari outage (required) does not stop itest-xmrig-proxy" itest-xmrig-proxy running 8
 if [ "$(cstate itest-p2pool)" = "running" ]; then
-    c_ok "rejection leaves itest-p2pool running (only the proxy fails over)"
+    c_ok "Tari outage (required) leaves itest-p2pool running"
 else
-    c_bad "rejection leaves itest-p2pool running" "itest-p2pool is '$(cstate itest-p2pool)'"
+    c_bad "Tari outage (required) leaves itest-p2pool running" "itest-p2pool is '$(cstate itest-p2pool)'"
 fi
 
-# 5. Tari recovers → readmit (after the recovery-hysteresis window).
-log "scenario 5: readmits workers when Tari recovers"
+# 5. Tari recovers — restores steady state for the scenarios below. Nothing to readmit: Tari
+#    never rejected workers in the first place.
+log "scenario 5: Tari recovers back to synced (steady state for later scenarios)"
 set_tari synced
-assert_state "readmitted after Tari recovery: itest-xmrig-proxy running" itest-xmrig-proxy running 90
+assert_stays "itest-xmrig-proxy still running after Tari recovers" itest-xmrig-proxy running 4
 
 # 6. monerod down → reject workers (stop the proxy); itest-p2pool keeps running. (#31/#564)
 #    Needs LOCAL_MONERO_HOST == MONERO_NODE_HOST in the compose env — otherwise the dashboard
@@ -238,16 +241,16 @@ assert_state "rejected on monerod busy: itest-xmrig-proxy stopped" itest-xmrig-p
 set_monerod synced
 assert_state "readmitted after monerod busy clears: itest-xmrig-proxy running" itest-xmrig-proxy running 90
 
-# 9. Double outage — monerod AND Tari both down → rejected; recovering only Tari must NOT
-#    readmit (monerod is still down); recovering monerod too readmits both.
-log "scenario 9: double outage — readmits only once BOTH nodes recover"
+# 9. Double outage — rejection and readmission both follow monerod alone now (#897); Tari's
+#    state plays no part in either direction. Recovering monerod readmits immediately even
+#    while Tari is still down.
+log "scenario 9: double outage — readmission follows monerod alone, Tari down or not (#897)"
 set_monerod down
 set_tari down
 assert_state "rejected on double outage: itest-xmrig-proxy stopped" itest-xmrig-proxy exited 90
-set_tari synced
-assert_stays "still rejected with only Tari recovered" itest-xmrig-proxy exited 8
 set_monerod synced
-assert_state "readmitted once both nodes recovered: itest-xmrig-proxy running" itest-xmrig-proxy running 90
+assert_state "readmitted once monerod recovers, even with Tari still down" itest-xmrig-proxy running 90
+set_tari synced
 
 # 10. Dashboard restart after release → the one-way latch is persisted, so the miner is NOT
 #     re-held: both containers stay running across the restart. (#35 persistence)
@@ -261,12 +264,11 @@ done
 assert_stays "itest-p2pool stays up across restart" itest-p2pool running 6
 assert_stays "itest-xmrig-proxy stays up across restart" itest-xmrig-proxy running 6
 
-# 11. Tari OPTIONAL (dashboard.tari_required=false) → a Tari outage must NOT reject workers;
-#     Monero mining keeps going. (#562 — the silent-yield-loss path: unit-tested at
-#     test_data_service.py::test_tari_down_ignored_when_non_blocking; this drives the same
-#     decision through real containers.) TARI_REQUIRED is baked into the dashboard container at
-#     boot, so this needs its own compose cycle rather than a live toggle.
-log "scenario 11: Tari-optional — a Tari outage does not reject workers (#562)"
+# 11. Tari OPTIONAL (dashboard.tari_required=false) → the sync gate releases on monerod alone,
+#     and (as with scenario 4, now true either way) a Tari outage does not reject workers.
+#     TARI_REQUIRED is baked into the dashboard container at boot, so this needs its own compose
+#     cycle rather than a live toggle.
+log "scenario 11: Tari-optional — sync gate releases on monerod alone; Tari outage does not reject workers"
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 TARI_REQUIRED=false compose up -d >/dev/null 2>&1
 api_up=0

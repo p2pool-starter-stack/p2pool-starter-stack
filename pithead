@@ -6271,10 +6271,12 @@ render_env() {
     xvb_donation_level=$(jq -r '.xvb.donation_level // empty' "$CONFIG_FILE")
     [ -z "$xvb_donation_level" ] && xvb_donation_level="auto"
 
-    # How much Tari blocks the stack (#31/#35/#51). monerod is required and not configurable
-    # (a monerod outage always rejects workers; the miner always waits for monerod's sync).
-    # tari_required (default true): a Tari outage rejects workers, the miner waits for Tari's
-    # sync, and a Tari-only sync drives full Sync Mode. false = non-blocking Tari.
+    # How much Tari blocks the stack (#31/#35/#51/#897). monerod is required and not
+    # configurable (a monerod outage always rejects workers; the miner always waits for
+    # monerod's sync). A Tari outage never rejects workers, regardless of this flag — p2pool
+    # keeps mining Monero through it. tari_required (default true) still decides the rest:
+    # the miner waits for Tari's sync too, and a Tari-only sync drives full Sync Mode. false =
+    # non-blocking Tari for those two.
     local tari_required
     tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
