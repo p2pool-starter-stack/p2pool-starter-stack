@@ -9,7 +9,17 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
-## [1.18.0] - 2026-08-13
+## [1.18.1] - 2026-08-14
+
+Supersedes 1.18.0, withdrawn before general adoption. Investigating its missing bundle signature
+surfaced the real state: release signing (#376) had never engaged — the key pair was generated on
+the release box but `cosign.pub` was never committed, so every release to date shipped its bundle
+unsigned and no install holds a key to verify with. 1.18.1 draws the line: it commits
+`cosign.pub`, carries every 1.18.0 change, and is the first release signed end to end. Installs
+that upgrade to it come out holding the key and verify every release after; immutable release
+assets mean 1.18.0 itself can never be amended, hence the new number.
+
+## [1.18.0] - 2026-08-13 (withdrawn — unsigned install bundle; use 1.18.1)
 
 ### Added
 
