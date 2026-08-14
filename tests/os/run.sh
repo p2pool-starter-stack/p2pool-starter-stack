@@ -1079,7 +1079,7 @@ phase_provision() {
     }
     ok "one-time token read from the console ($token)"
     _wait_setup_page 120 || {
-        bad "wizard gate never served on :80"
+        bad "wizard gate never served"
         return
     }
 
@@ -1986,7 +1986,7 @@ phase_reset() {
         return
     }
     _wait_setup_page 120 || {
-        bad "wizard gate never served on :80"
+        bad "wizard gate never served"
         return
     }
 
