@@ -29,6 +29,15 @@
   --warn: #d29922;
   --purple: #a371f7;
   --elevated: #2d333b; /* raised surface (e.g. the active theme segment): lighter than --card */
+  /* The base status colours are GitHub's FILL shades; used as 12px text on dark they fall
+   * under WCAG AA. Split the roles: -emphasis = fill that carries white text, -fg = the
+   * colour as text on --card/--bg. --ok/--bad/--warn/--purple stay for tinted fills. */
+  --accent-emphasis: #1f6feb;
+  --warn-emphasis: #9e6a03;
+  --purple-emphasis: #8957e5;
+  --ok-fg: #3fb950;
+  --bad-fg: #f85149;
+  --purple-fg: #a371f7;
 }
 
 /* Light palette — GitHub Primer light, mirroring the dark set's GitHub-dark origin. Kept in
@@ -39,13 +48,19 @@
   --card: #f6f8fa;
   --border: #d0d7de;
   --text: #1f2328;
-  --text-muted: #656d76;
-  --accent: #0969da;
+  --text-muted: #59636e;
+  --accent: #0860ca;
   --ok: #1a7f37;
   --bad: #cf222e;
-  --warn: #9a6700;
+  --warn: #805900;
   --purple: #8250df;
   --elevated: #ffffff; /* white raised thumb on the off-white --card track */
+  --accent-emphasis: #0969da;
+  --warn-emphasis: #9a6700;
+  --purple-emphasis: #8250df;
+  --ok-fg: #116329;
+  --bad-fg: #cf222e;
+  --purple-fg: #6639ba;
 }
 
 /* Auto: follow the system, but only when the user hasn't pinned dark or light. */
@@ -55,13 +70,19 @@
     --card: #f6f8fa;
     --border: #d0d7de;
     --text: #1f2328;
-    --text-muted: #656d76;
-    --accent: #0969da;
+    --text-muted: #59636e;
+    --accent: #0860ca;
     --ok: #1a7f37;
     --bad: #cf222e;
-    --warn: #9a6700;
+    --warn: #805900;
     --purple: #8250df;
     --elevated: #ffffff;
+    --accent-emphasis: #0969da;
+    --warn-emphasis: #9a6700;
+    --purple-emphasis: #8250df;
+    --ok-fg: #116329;
+    --bad-fg: #cf222e;
+    --purple-fg: #6639ba;
   }
 }
 
@@ -600,10 +621,18 @@ tr:last-child td {
   color: var(--text);
 }
 .table-scroll tbody tr.status-ok > td:first-child {
-  color: var(--ok);
+  color: var(--ok-fg);
 }
 .table-scroll tbody tr.status-bad > td:first-child {
-  color: var(--bad);
+  color: var(--bad-fg);
+}
+/* On the hovered (--elevated) surface even the -fg tints fall short of AA; the row is
+ * highlighted, so the name cell can drop its tint while the pointer is on it. The :hover
+ * in each selector outranks the tint rules above. */
+.table-scroll tbody tr:hover td,
+.table-scroll tbody tr.status-ok:hover > td:first-child,
+.table-scroll tbody tr.status-bad:hover > td:first-child {
+  color: var(--text);
 }
 
 /* The audit trail's title + its hour/day/month grouping select (#530), side by side. */
@@ -637,10 +666,10 @@ tr:last-child td {
 
 /* Components */
 .status-ok {
-  color: var(--ok);
+  color: var(--ok-fg);
 }
 .status-bad {
-  color: var(--bad);
+  color: var(--bad-fg);
 }
 .status-warn {
   color: var(--warn);
@@ -683,11 +712,11 @@ tr:last-child td {
   color: white;
 }
 .badge-purple {
-  background: var(--purple);
+  background: var(--purple-emphasis);
   color: white;
 }
 .badge-accent {
-  background: var(--accent);
+  background: var(--accent-emphasis);
   color: white;
 }
 .badge-bad {
@@ -695,7 +724,7 @@ tr:last-child td {
   color: white;
 }
 .badge-warn {
-  background: var(--warn);
+  background: var(--warn-emphasis);
   color: white;
 }
 /* Header status badges sit in a gapped row, so individual badges need no margins. */
@@ -762,9 +791,9 @@ button.upgrade-btn {
  * gauge) — reusing it for "this range/window is selected" collided with that meaning. Accent
  * matches .btn-toggle.active, the sibling Simple/Advanced control. */
 .btn-range.active {
-  background-color: var(--accent);
+  background-color: var(--accent-emphasis);
   color: #fff;
-  border-color: var(--accent);
+  border-color: var(--accent-emphasis);
 }
 .btn-reset {
   margin-left: 8px;
@@ -804,8 +833,9 @@ button.upgrade-btn {
 .legend-item:hover {
   color: var(--text);
 }
+/* Hidden series: dim only the swatch — a whole-chip fade dropped the still-clickable
+ * label below AA in both themes. The line-through already says "off". */
 .legend-item.off {
-  opacity: 0.45;
   text-decoration: line-through;
 }
 .legend-dot {
@@ -814,6 +844,9 @@ button.upgrade-btn {
   border-radius: 2px;
   display: inline-block;
   flex: none;
+}
+.legend-item.off .legend-dot {
+  opacity: 0.45;
 }
 .dot-p2pool {
   background: var(--accent);
@@ -868,7 +901,7 @@ button.upgrade-btn {
   background: rgba(128, 128, 128, 0.15);
 }
 .btn-toggle.active {
-  background: var(--accent);
+  background: var(--accent-emphasis);
   color: #fff;
   font-weight: 600;
 }
@@ -983,10 +1016,10 @@ button.upgrade-btn {
  * style-src 'unsafe-inline' and makes #43 (theming) a stylesheet change. The hexes match
  * the --ok/--purple/--accent/--text-muted variables they replace. */
 .c-ok {
-  color: var(--ok);
+  color: var(--ok-fg);
 }
 .c-purple {
-  color: var(--purple);
+  color: var(--purple-fg);
 }
 .c-accent {
   color: var(--accent);
@@ -1172,7 +1205,7 @@ button.upgrade-btn {
 
 /* Component Health & egress-posture panel (#170). */
 .c-bad {
-  color: var(--bad);
+  color: var(--bad-fg);
 }
 .egress-summary {
   font-weight: 600;
