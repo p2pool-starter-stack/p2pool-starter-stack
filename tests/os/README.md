@@ -52,8 +52,15 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
   everything except this.
 - **fault** — power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is
   disqualifying. Opt-in: `all` runs the five phases above, not this one.
+- **reset** — the shell-less box's last resort, never before run against a real disk: a
+  provisioned machine runs the real `pithead factory-reset -y`, which arms the `pithead-reset`
+  marker on the ESP and reboots; assert it comes back to the wizard with the provisioned config
+  and old container images gone, the seeded dirs back, and a FRESH host identity (SSH host-key
+  fingerprint, machine-id) — the reset tier keeps nothing of the old owner's. A second leg
+  corrupts the data partition's ext4 magic and asserts the wedged-`/data` recovery reformats it
+  rather than bricking. Opt-in, destructive: not in `all`.
 
-`--keep` leaves the VM and disks for inspection; `--phase boot|update|install|provision|rig|fault|all`
+`--keep` leaves the VM and disks for inspection; `--phase boot|update|install|provision|rig|fault|reset|all`
 scopes the run. A failed assertion is recorded and the run carries on, so one bench boot collects
 the whole battery; the run exits non-zero if anything failed.
 
