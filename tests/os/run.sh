@@ -1277,13 +1277,28 @@ phase_install() {
         return
     }
     ok "restore leg: the restored machine boots from the fresh disk"
+    # The carried restore lands during firstboot and .env only exists once render has run —
+    # wait for provisioning, don't race it.
+    if _ssh "for i in \$(seq 90); do [ -f /data/pithead/config.json ] && exit 0; sleep 2; done; exit 1"; then
+        ok "restore leg: the carried archive provisioned the machine — config.json is back"
+    else
+        bad "restore leg: no config.json ever appeared — the carried restore never landed"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    fi
     if _ssh "grep -q \"$HARNESS_WALLET\" /data/pithead/config.json"; then
         ok "restore leg: restored machine carries the ORIGINAL wallet address, not a fresh one"
     else
         bad "restore leg: restored machine's config does not carry the original wallet"
     fi
-    local new_onion
-    new_onion=$(_ssh "grep MONERO_ONION_ADDRESS /data/pithead/.env" | cut -d= -f2)
+    local new_onion=""
+    local odeadline
+    odeadline=$(($(date +%s) + 600))
+    while [ "$(date +%s)" -lt "$odeadline" ]; do
+        new_onion=$(_ssh "grep MONERO_ONION_ADDRESS /data/pithead/.env 2>/dev/null" | cut -d= -f2 | tr -d '\r')
+        [ -n "$new_onion" ] && break
+        sleep 15
+    done
     if [ -n "$new_onion" ] && [ "$new_onion" = "$orig_onion" ]; then
         ok "restore leg: restored machine kept the ORIGINAL Tor identity, not a regenerated one"
     else

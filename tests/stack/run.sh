@@ -3838,6 +3838,28 @@ assert_eq "the archive is consumed" "$([ -f "$RSPOOL/restore-archive" ] || echo 
 assert_eq "the passphrase is never retained" "$([ -f "$RSPOOL/restore-passphrase" ] || echo gone)" "gone"
 rm -f "$RSPOOL/applied" "$RS/config.json" # clean slate for the rejection cases below
 
+# 1b) Installer door (installer=1): the config surfaces for the credentials card, but the
+# machine itself is NOT restored — decrypted keys must never rest on the stick — and the
+# accepted archive + passphrase park in the carry dir for the ESP staging the install branch
+# performs (the target's first boot does the real restore).
+printf 'STICK-CADDY\n' >"$RS/Caddyfile"
+printf 'STICK-DB\n' >"$RS/data/dashboard/dashboard.db"
+cp "$rarchive" "$RSPOOL/restore-archive"
+printf 'hunter2' >"$RSPOOL/restore-passphrase" # test fixture, not a real secret
+RCARRY="$RS/carry"
+out=$(cd "$RS" && PATH="$RS/bin:$PATH" PITHEAD_RESTORE_CARRY_DIR="$RCARRY" run_sourced "$RS" firstboot_consume_restore "$RSPOOL" 1 && echo rc0)
+assert_contains "installer restore accepted" "$out" "rc0"
+assert_contains "installer restore surfaces the config for the card" "$(cat "$RS/config.json" 2>/dev/null)" "$WALLET"
+assert_eq "installer restore does NOT restore onto the stick (Caddyfile untouched)" "$(cat "$RS/Caddyfile")" "STICK-CADDY"
+assert_eq "installer restore does NOT restore onto the stick (db untouched)" "$(cat "$RS/data/dashboard/dashboard.db")" "STICK-DB"
+assert_eq "accepted archive parked for the ESP carry" "$([ -f "$RCARRY/archive" ] && echo yes)" "yes"
+assert_eq "passphrase parked beside it" "$(cat "$RCARRY/pass" 2>/dev/null)" "hunter2"
+assert_eq "installer restore consumes the spool archive" "$([ -f "$RSPOOL/restore-archive" ] || echo gone)" "gone"
+rm -rf "$RCARRY"
+rm -f "$RSPOOL/applied" "$RS/config.json"
+printf 'CADDY-ORIG\n' >"$RS/Caddyfile" # fixtures back to their case-1 state for the cases below
+printf 'DBDATA-ORIG\n' >"$RS/data/dashboard/dashboard.db"
+
 # 2) Bad passphrase: rejected before anything is touched.
 printf 'CORRUPTED\n' >"$RS/Caddyfile"
 cp "$rarchive" "$RSPOOL/restore-archive"
