@@ -54,7 +54,12 @@ boot_disk_part() { # $1: PARTLABEL ("esp" or "data") -> prints /dev/node, or not
     case "$rootsrc" in /dev/*) ;; *) return 1 ;; esac
     disk=$(lsblk -no PKNAME "$rootsrc" 2>/dev/null) || return 1
     [ -n "$disk" ] || return 1
-    lsblk -lnpo NAME,PARTLABEL "/dev/$disk" 2>/dev/null | awk -v label="$1" '$2 == label { print $1; exit }'
+    local part
+    part=$(lsblk -lnpo NAME,PARTLABEL "/dev/$disk" 2>/dev/null | awk -v label="$1" '$2 == label { print $1; exit }')
+    # awk exits 0 whether or not anything matched — an empty answer must be a FAILURE, not a
+    # silent success an unquoted caller could mistake for a device.
+    [ -n "$part" ] || return 1
+    printf '%s' "$part"
 }
 
 # Read-only probe mount (so it never dirties the fs), cleaned up either way. rc mirrors the mount.
