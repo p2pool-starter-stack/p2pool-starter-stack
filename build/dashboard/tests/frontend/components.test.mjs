@@ -593,74 +593,70 @@ test('EarningsCard provenance line reflects the live price feed (#520)', () => {
     assert.match(html, /USD 0\.000400/); // tiny XTM price keeps its precision
 });
 
-test('XvB comparison dropdown shows Expected/Cost/Net per tier, degrades on a stale estimate (#118)', () => {
+test('XvB decision table: all tiers at once, study column, coloured net verdict (#872)', () => {
     const base = clone();
     base.earnings.available = true;
-    base.earnings.coeff_day = 1e-7; // XMR per H/s per day → cost = threshold × this × 365
-    // A Whale-capable what-if default (200k × 0.85 ≥ 100k threshold) so the target tier's Net shows;
-    // the unsustainable path is asserted separately below.
+    base.earnings.coeff_day = 1e-7;
     base.earnings.p2pool_hr = 200000;
     base.earnings.p2pool_hr_str = '200.00 kH/s';
     base.xvb_calc = {
-        enabled: true,
-        max_fraction: 0.85,
-        estimates_available: true,
-        estimates_stale: false,
-        current_tier: 'None',
-        target_tier: 'Whale (100.00 kH/s+)',
-        target_threshold: 100000,
-        sustainable: true,
-        note: 'An XvB tier is raffle status, not an XMR payout.',
-        mode_note: null,
+        enabled: true, max_fraction: 0.85, estimates_available: true, estimates_stale: false,
+        current_tier: 'None', target_tier: 'Whale (100.00 kH/s+)', target_threshold: 100000,
+        sustainable: true, note: 'An XvB tier is raffle status, not an XMR payout.',
+        mode_note: null, realization_pct: null, realization_wins: null,
         tiers: [
-            { name: 'Donor (1.00 kH/s+)', threshold: 1000, expected_reward_year: 0.06 },
-            { name: 'Vip (10.00 kH/s+)', threshold: 10000, expected_reward_year: 0.81 },
-            { name: 'Whale (100.00 kH/s+)', threshold: 100000, expected_reward_year: 6.17 },
-            { name: 'Mega (1.00 MH/s+)', threshold: 1000000, expected_reward_year: 56.9 },
+            { name: 'Vip (10.00 kH/s+)', threshold: 10000, expected_reward_year: 0.81,
+              realized_reward_year: null, assumed_reward_year_range: [0.81 * 0.27, 0.81 * 0.38],
+              win_odds_day: 0.12, players_avg: 31.4 },
+            { name: 'Whale (100.00 kH/s+)', threshold: 100000, expected_reward_year: 6.17,
+              realized_reward_year: null, assumed_reward_year_range: [6.17 * 0.27, 6.17 * 0.38],
+              win_odds_day: 0.84, players_avg: 8.2 },
+            { name: 'Mega (1.00 MH/s+)', threshold: 1000000, expected_reward_year: 56.9,
+              realized_reward_year: null, assumed_reward_year_range: [56.9 * 0.27, 56.9 * 0.38],
+              win_odds_day: 9.4, players_avg: 1.0 },
         ],
     };
     const up = renderApp({ state: base });
-    // The dropdown renders all four tiers as options.
-    assert.match(up, /id="xvb-tier-select"/);
-    for (const name of ['Donor', 'Vip', 'Whale', 'Mega']) {
-        assert.match(up, new RegExp(`<option[^>]*>${name}`), `missing tier option: ${name}`);
-    }
-    // Default selection = the target tier (Whale): Expected is XvB's figure, Cost = 100000 × 1e-7 ×
-    // 365 = 3.65 XMR/yr, Net = 6.17 − 3.65 = 2.52.
-    assert.match(up, /Expected \(XvB\)/);
-    assert.match(up, /6\.1700 XMR/);   // expected
-    assert.match(up, /3\.6500 XMR/);   // cost
-    assert.match(up, /2\.5200 XMR/);   // net
-    assert.match(up, /From XvB's published per-tier estimate/);
-    assert.doesNotMatch(up, /estimate unavailable/);
-
-    // Stale/unavailable estimate: the note replaces the Expected number, cost still shows.
-    const stale = clone();
-    stale.earnings.available = true;
-    stale.earnings.coeff_day = 1e-7;
-    stale.xvb_calc = {
-        ...base.xvb_calc,
-        estimates_available: false,
-        estimates_stale: true,
-        tiers: base.xvb_calc.tiers.map((t) => ({ ...t, expected_reward_year: null })),
-    };
-    const sHtml = renderApp({ state: stale });
-    assert.match(sHtml, /estimate unavailable/);
-    assert.match(sHtml, /Expected reward estimate unavailable/);
-    assert.match(sHtml, /3\.6500 XMR/); // cost still stands
-
-    // Unsustainable tier: at the fixture's small default hashrate (~8 kH/s), the Whale target
-    // can't be held (8k × 0.85 < 100k) — the comparison must SAY so and withhold the Net rather
-    // than imply an unreachable +2.52 XMR/yr payout.
-    const small = clone();
-    small.earnings.available = true;
-    small.earnings.coeff_day = 1e-7;
-    small.xvb_calc = { ...base.xvb_calc };
-    const uHtml = renderApp({ state: small });
-    assert.match(uHtml, /Not sustainable at your hashrate/);
-    assert.match(uHtml, /6\.1700 XMR/); // XvB's expected figure still shown (it's their number)
-    assert.doesNotMatch(uHtml, /2\.5200 XMR/); // but no reachable-looking Net
+    // One table, no dropdown, every tier a row with odds, both estimates and a verdict.
+    assert.match(up, /id="xvb-decision-table"/);
+    assert.doesNotMatch(up, /id="xvb-tier-select"/);
+    assert.match(up, /XvB says \/ yr/);
+    assert.match(up, /Study est\. \/ yr/);
+    assert.match(up, /winners receiving 33% of face/);
+    // Whale row: cost 3.65; study band 1.6659…2.3446; net band negative at both ends -> red.
+    assert.match(up, /1\.6659[0-9]* XMR … 2\.3446[0-9]* XMR/);
+    assert.match(up, /-1\.98[0-9]* XMR … -1\.30[0-9]* XMR/);
+    // Mega is unsustainable at 200k×0.85: flagged, net withheld.
+    assert.match(up, /Mega \(1\.00 MH\/s\+\) ⚠/);
+    // Draw odds render per row.
+    assert.match(up, /≈ 25 wins · 8\.2 players/);
+    // XvB's face value stays visible as XvB's own number.
+    assert.match(up, /6\.1700 XMR/);
 });
+
+test('XvB decision table: local measured wins supersede the study column (#872)', () => {
+    const base = clone();
+    base.earnings.available = true;
+    base.earnings.coeff_day = 1e-7;
+    base.earnings.p2pool_hr = 200000;
+    base.earnings.p2pool_hr_str = '200.00 kH/s';
+    base.xvb_calc = {
+        enabled: true, max_fraction: 0.85, estimates_available: true, estimates_stale: false,
+        current_tier: 'Whale (100.00 kH/s+)', target_tier: 'Whale (100.00 kH/s+)',
+        target_threshold: 100000, sustainable: true, note: 'raffle status', mode_note: null,
+        realization_pct: 32, realization_wins: 9,
+        tiers: [
+            { name: 'Whale (100.00 kH/s+)', threshold: 100000, expected_reward_year: 6.17,
+              realized_reward_year: 6.17 * 0.32, assumed_reward_year_range: null,
+              win_odds_day: 0.84, players_avg: 8.2 },
+        ],
+    };
+    const up = renderApp({ state: base });
+    assert.match(up, /Yours \(32% × 9 wins\)/);
+    assert.match(up, /1\.9744[0-9]* XMR/); // 6.17 × 0.32
+    assert.match(up, /-1\.6756[0-9]* XMR/); // net = 1.9744 − 3.65, single point
+});
+
 
 test('CadenceCard shows the — placeholders on a cold stack, real figures when available (#84)', () => {
     // The base fixture has no pool difficulty → cadence.available === false → server-sent dashes.
@@ -681,6 +677,44 @@ test('CadenceCard shows the — placeholders on a cold stack, real figures when 
     assert.match(up, /1h 0m/);
     assert.match(up, /123%/);
     assert.match(up, /1,234,567/);
+});
+
+test('XvB decision table: verdict colours cover green and zero-spanning bands, stale degrades honestly (#872)', () => {
+    const base = clone();
+    base.earnings.available = true;
+    base.earnings.coeff_day = 1e-9; // tiny cost so a positive band is constructible
+    base.earnings.p2pool_hr = 200000;
+    base.earnings.p2pool_hr_str = '200.00 kH/s';
+    base.xvb_calc = {
+        enabled: true, max_fraction: 0.85, estimates_available: true, estimates_stale: false,
+        current_tier: 'None', target_tier: 'Vip (10.00 kH/s+)', target_threshold: 10000,
+        sustainable: true, note: 'raffle status', mode_note: null,
+        realization_pct: null, realization_wins: null,
+        tiers: [
+            // cost = 10000 × 1e-9 × 365 = 0.00365; band well above -> green at both ends
+            { name: 'Vip (10.00 kH/s+)', threshold: 10000, expected_reward_year: 0.81,
+              realized_reward_year: null, assumed_reward_year_range: [0.22, 0.31],
+              win_odds_day: 0.12, players_avg: 31.4 },
+            // band straddles cost -> neutral (no class)
+            { name: 'Whale (100.00 kH/s+)', threshold: 100000, expected_reward_year: 6.17,
+              realized_reward_year: null, assumed_reward_year_range: [0.03, 0.05],
+              win_odds_day: 0.84, players_avg: 8.2 },
+        ],
+    };
+    const up = renderApp({ state: base });
+    assert.match(up, /class="status-ok">0\.21635/); // green: even pessimistic end profits
+    assert.match(up, /class="">-0\.0065/); // zero-spanning: neutral cell class
+    // Stale estimates: costs still render, estimate/net columns dash, footer says costs only.
+    const stale = clone();
+    stale.earnings.available = true;
+    stale.earnings.coeff_day = 1e-7;
+    stale.earnings.p2pool_hr = 200000;
+    stale.xvb_calc = { ...base.xvb_calc, estimates_available: false, estimates_stale: true,
+        tiers: base.xvb_calc.tiers.map((t) => ({ ...t, expected_reward_year: null,
+            assumed_reward_year_range: null, realized_reward_year: null })) };
+    const sh = renderApp({ state: stale });
+    assert.match(sh, /tier costs only/);
+    assert.match(sh, /0\.365\d* XMR/); // vip cost at 1e-7
 });
 
 test('XvBStats greys the credited figures and flags the footer when the fetch is stale (#311)', () => {
@@ -1056,4 +1090,46 @@ test('ExpectedVsActualCard counts Tari blocks and windows XvB wins (#808)', () =
     // XvB off → the row disappears (no invented raffle framing on a non-XvB box).
     s.earnings_summary.xvb = { enabled: false, wins_30d: 0, last_win_ts: 0 };
     assert.doesNotMatch(renderApp({ state: s }), /XvB wins \(30d\)/);
+});
+
+test('disabled XvB de-emphasizes: no stats card, no header split line, no hero raffle slots', () => {
+    // One mention — the mode badge — is enough on a non-donating box. The stats card, the
+    // header's routed-split line, and the two hero raffle KPIs all stand down with it.
+    const s = clone();
+    assert.match(renderApp({ state: s }), /XvB Donation Stats/); // fixture has XvB on
+    assert.match(renderApp({ state: s }), /XvB \(routed\):/);
+    s.xvb_calc = { enabled: false };
+    const off = renderApp({ state: s });
+    assert.doesNotMatch(off, /XvB Donation Stats/);
+    assert.doesNotMatch(off, /XvB \(routed\):/);
+    assert.doesNotMatch(off, /Raffle Eligible/);
+    assert.doesNotMatch(off, /XvB Tier</);
+});
+
+test('raffle wins render inside the scroll-capped list wrapper', () => {
+    // The wins log is what made the XvB card the tallest in its grid row (whitespace under every
+    // neighbour) — the wrapper carries the max-height cap.
+    assert.match(renderApp({ state: clone() }), /class="raffle-wins-list"/);
+});
+
+test('ExpectedVsActualCard forecasts XvB wins from the winners feed, dash when unmeasured (#866)', () => {
+    const s = clone();
+    s.earnings_summary.xvb = {
+        enabled: true, wins_30d: 13, last_win_ts: 1735689000, expected_wins_30d: 25.2,
+    };
+    assert.match(renderApp({ state: s }), /≈ 25 wins/); // two significant digits
+    // No aggregate (missing/stale) → the dash, never a guess.
+    s.earnings_summary.xvb.expected_wins_30d = null;
+    assert.doesNotMatch(renderApp({ state: s }), /≈ .* wins<\/td>/);
+});
+
+test('ExpectedVsActualCard tooltip owns the tempered vs face-value XvB share (#866)', () => {
+    const s = clone();
+    s.earnings_summary.xmr.includes_xvb = true;
+    s.earnings_summary.xmr.xvb_realization_pct = 19;
+    s.earnings_summary.xmr.xvb_wins_measured = 15;
+    assert.match(renderApp({ state: s }), /19% of XvB(?:'|&#39;)s published face value/);
+    s.earnings_summary.xmr.xvb_realization_pct = null;
+    s.earnings_summary.xmr.xvb_wins_measured = null;
+    assert.match(renderApp({ state: s }), /face-value estimate — an upper bound/);
 });

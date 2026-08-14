@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
 import requests
 
 import mining_dashboard.client.xvb_client as xvb_mod
@@ -12,6 +13,7 @@ from mining_dashboard.client.xvb_client import (
     XvbClient,
     mask_wallet,
     parse_reward_estimates,
+    parse_round_stats,
     parse_winners,
 )
 
@@ -205,12 +207,43 @@ def test_parse_winners_bounds_hostile_input():
     assert parse_winners(tail, _WIN_WALLET) == []
 
 
+def test_parse_round_stats_aggregates_every_round():
+    stats = parse_round_stats(SAMPLE_WINNERS_TXT)
+    # ALL valid rows count — other wallets included (that is the point: the aggregate is the
+    # raffle's shape, not ours). Garbage and bad-date rows are skipped like parse_winners.
+    assert stats["types"] == {
+        "donor_mega": {"rounds": 1, "players_avg": 1.0},
+        "donor_vip": {"rounds": 1, "players_avg": 27.0},
+        "donor_whale": {"rounds": 1, "players_avg": 10.0},
+    }
+    # Span: newest (20:41:38) minus oldest (15:40:26) of the valid rows, in days.
+    assert stats["span_days"] == pytest.approx((1784407298.0 - 1784389226.0) / 86400.0)
+
+
+def test_parse_round_stats_garbage_or_empty_yields_no_types():
+    assert parse_round_stats("")["types"] == {}
+    assert parse_round_stats(None)["types"] == {}
+    assert parse_round_stats("no\ttabs here\n\n???")["types"] == {}
+    # A zero/negative players column is meaningless for odds — the row is skipped.
+    bad = "48M2j8Gj...d8KgGBwa\t2026-07-18 20:41:38\t1kH/s\t1\t\tb1\t1/1\t0\tdonor\n"
+    assert parse_round_stats(bad)["types"] == {}
+
+
+def test_parse_round_stats_bounds_hostile_input():
+    # Same line cap as parse_winners: rows beyond it are never scanned.
+    row = "48M2j8Gj...d8KgGBwa 2026-07-18 15:40:26 1kH/s 1 blk 1/1 5 donor"
+    tail = ("junk\n" * 9_999) + row
+    assert parse_round_stats(tail)["types"] == {}
+
+
 def test_get_recent_wins_success_routes_over_tor():
     client = XvbClient(_WIN_WALLET)
     resp = MagicMock(status_code=200, text=SAMPLE_WINNERS_TXT)
     with patch.object(xvb_mod, "bounded_get", return_value=resp) as mock_get:
-        wins = client.get_recent_wins()
-    assert len(wins) == 2
+        result = client.get_recent_wins()
+    assert len(result["wins"]) == 2
+    # The SAME fetched body yields the all-rounds aggregate (#866) — one request, two parses.
+    assert result["round_stats"]["types"]["donor_vip"]["rounds"] == 1
     assert mock_get.call_args.args[0].endswith("winners_recent_full_pub.txt")
     assert mock_get.call_args.kwargs["proxies"]["https"].startswith("socks5h://")
 
@@ -220,7 +253,7 @@ def test_get_recent_wins_no_wins_is_empty_list_not_none():
     client = XvbClient("49abcSOMEOTHERWALLETxyz99")
     resp = MagicMock(status_code=200, text=SAMPLE_WINNERS_TXT)
     with patch.object(xvb_mod, "bounded_get", return_value=resp):
-        assert client.get_recent_wins() == []
+        assert client.get_recent_wins()["wins"] == []
 
 
 def test_get_recent_wins_failures_return_none():

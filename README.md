@@ -46,7 +46,7 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
   [The Dashboard](docs/dashboard.md).
 - ⚙️ **One config, tuned to your setup.** A local or remote Monero node, pruned or full; the P2Pool
   tier (`main`, `mini`, or `nano`); XvB donation strategy; per-worker power and API settings; four
-  alert channels; timezone, memory limits, and every privacy toggle — around 94 keys across 13
+  alert channels; timezone, memory limits, and every privacy toggle — around 113 keys across 13
   sections, all in one `config.json` and validated on every `apply`. Most have defaults you'll never
   touch. See [Configuration](docs/configuration.md).
 - 💡 **Energy-aware earnings.** Set your electricity cost and coin prices — typed in, or fetched
@@ -119,7 +119,7 @@ Full walkthrough: [docs/getting-started.md](docs/getting-started.md)
 | **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero nodes. |
 | **[The Dashboard](docs/dashboard.md)** | Sync Mode, a tour of the live operational view, and the opt-in control channel: editing config, one-click upgrades, and the audit logs from the browser. |
 | **[Connecting Miners](docs/workers.md)** | Point any existing rig at the stack, or spin up a tuned miner with [RigForge](https://github.com/p2pool-starter-stack/rigforge). |
-| **[Architecture](docs/architecture.md)** | The nine services, the privacy model, and the algorithmic XvB switching engine. |
+| **[Architecture](docs/architecture.md)** | The eleven services, the privacy model, and the algorithmic XvB switching engine. |
 | **[Privacy & Network Egress](docs/privacy.md)** | Every off-box connection: what's Tor-routed, what's clearnet today, and how to harden it. |
 | **[Operations & Maintenance](docs/operations.md)** | Full command reference, upgrades, backups, and troubleshooting. |
 
@@ -129,10 +129,10 @@ Browse the full index at **[docs/](docs/README.md)**.
 
 ## 🏗️ How it works
 
-The stack orchestrates nine services via Docker Compose: a Monero full node, P2Pool, a Tari base
+The stack orchestrates eleven services via Docker Compose: a Monero full node, P2Pool, a Tari base
 node, an XMRig proxy (your single worker endpoint), Tor for anonymity, the dashboard plus switching
-engine, a read-only Docker socket proxy (plus a tiny start/stop-only control proxy), and Caddy for
-HTTPS.
+engine, a read-only Docker socket proxy (plus a tiny start/stop-only control proxy), Caddy for
+HTTPS, and two opt-in view-only wallets that confirm payouts on-chain.
 
 ```mermaid
 flowchart TB

@@ -17,7 +17,7 @@ import {
     normalizeChoice, normalizeSort, loadPref, savePref,
     AVG_WINDOWS, DEFAULT_AVG_WINDOW, normalizeAvgWindow,
     heroKpis, raffleCls,
-    parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, xvbTierComparison, formatXmr, formatXtm, formatTimeToShare, formatAgo,
+    parseHashrate, fmtHashrate, computeEarnings, computeXvbTier, xvbDecisionRows, formatXmr, formatXtm, formatTimeToShare, formatAgo,
     computeEnergy, formatFiat, formatFiatAmount, formatUnit, coinTriplet,
     coinFiat, formatFiatPrice, priceSourceLabel,
     DAYS_PER_MONTH, DAYS_PER_YEAR,
@@ -347,32 +347,61 @@ test('computeXvbTier: null when disabled, calc missing, empty tiers, or bad hash
     assert.equal(computeXvbTier(null, XVB_CALC), null);
 });
 
-// --- xvbTierComparison (#118) — per-tier expected vs cost vs net -------------------------
+// --- xvbDecisionRows (#872) — the per-tier decision table's pure math -------------------
 
-test('xvbTierComparison: expected − cost = net when the estimate is present', () => {
-    const tier = { name: 'Whale', threshold: 100_000, expected_reward_year: 6.17 };
-    const c = xvbTierComparison(tier, 1e-7); // cost = 100000 × 1e-7 × 365 = 3.65
-    assert.equal(c.expected, 6.17);
-    assert.ok(Math.abs(c.cost - 3.65) < 1e-9);
-    assert.ok(Math.abs(c.net - 2.52) < 1e-9);
+const _CALC = {
+    enabled: true, max_fraction: 0.85, realization_pct: null, realization_wins: null,
+    tiers: [
+        { name: 'Vip (10.00 kH/s+)', threshold: 10_000, expected_reward_year: 0.81,
+          realized_reward_year: null, assumed_reward_year_range: [0.81 * 0.27, 0.81 * 0.38],
+          win_odds_day: 0.12, players_avg: 31.4 },
+        { name: 'Whale (100.00 kH/s+)', threshold: 100_000, expected_reward_year: 6.17,
+          realized_reward_year: null, assumed_reward_year_range: [6.17 * 0.27, 6.17 * 0.38],
+          win_odds_day: 0.84, players_avg: 8.2 },
+    ],
+};
+
+test('xvbDecisionRows: study band prices the measured delivery into the net verdict', () => {
+    const rows = xvbDecisionRows(_CALC, 1e-7, 200_000); // whale cost 3.65, vip cost 0.365
+    const whale = rows[1];
+    assert.equal(whale.mode, 'study');
+    assert.ok(Math.abs(whale.cost - 3.65) < 1e-9);
+    assert.ok(Math.abs(whale.net[0] - (6.17 * 0.27 - 3.65)) < 1e-9);
+    assert.ok(Math.abs(whale.net[1] - (6.17 * 0.38 - 3.65)) < 1e-9);
+    assert.equal(whale.cls, 'status-bad'); // even the optimistic end loses
+    assert.equal(whale.sustainable, true);
+    assert.ok(Math.abs(whale.oddsPer30d - 25.2) < 1e-9);
 });
 
-test('xvbTierComparison: null expected (stale) keeps cost, nulls net — never fabricates a reward', () => {
-    const tier = { name: 'Whale', threshold: 100_000, expected_reward_year: null };
-    const c = xvbTierComparison(tier, 1e-7);
-    assert.equal(c.expected, null);
-    assert.ok(Math.abs(c.cost - 3.65) < 1e-9);
-    assert.equal(c.net, null);
+test('xvbDecisionRows: a wallet\'s own measured wins supersede the study band', () => {
+    const calc = structuredClone(_CALC);
+    calc.realization_pct = 32; calc.realization_wins = 9;
+    calc.tiers[1].realized_reward_year = 6.17 * 0.32;
+    const whale = xvbDecisionRows(calc, 1e-7, 200_000)[1];
+    assert.equal(whale.mode, 'yours');
+    assert.ok(Math.abs(whale.net[0] - (6.17 * 0.32 - 3.65)) < 1e-9);
+    assert.equal(whale.net[0], whale.net[1]); // a point, not a band
 });
 
-test('xvbTierComparison: no coeff_day (network stats down) → cost and net null', () => {
-    const tier = { name: 'Whale', threshold: 100_000, expected_reward_year: 6.17 };
-    const c = xvbTierComparison(tier, 0);
-    assert.equal(c.cost, null);
-    assert.equal(c.net, null);
-    assert.equal(c.expected, 6.17);
+test('xvbDecisionRows: unsustainable tiers are flagged; face-only falls back labeled', () => {
+    const rows = xvbDecisionRows(_CALC, 1e-7, 20_000); // whale needs 100k > 20k x 0.85
+    assert.equal(rows[1].sustainable, false);
+    assert.equal(rows[0].sustainable, true);
+    // no band and no measured -> face-value mode, net still computed (component labels it)
+    const calc = structuredClone(_CALC);
+    calc.tiers[1].assumed_reward_year_range = null;
+    const whale = xvbDecisionRows(calc, 1e-7, 200_000)[1];
+    assert.equal(whale.mode, 'face');
+    assert.ok(Math.abs(whale.net[0] - (6.17 - 3.65)) < 1e-9);
 });
 
+test('xvbDecisionRows: no coeff (network stats down) -> no cost, no net, never a guess', () => {
+    const whale = xvbDecisionRows(_CALC, 0, 200_000)[1];
+    assert.equal(whale.cost, null);
+    assert.equal(whale.net, null);
+    assert.equal(whale.mode, 'none');
+    assert.equal(xvbDecisionRows({ enabled: false }, 1e-7, 200_000).length, 0);
+});
 test('formatXmr: precision scales with magnitude; "—" for null/invalid', () => {
     assert.equal(formatXmr(2.5), '2.5000 XMR');        // >= 1 -> 4 dp
     assert.equal(formatXmr(0.1234567), '0.123457 XMR'); // >= 0.001 -> 6 dp
@@ -406,6 +435,7 @@ const _heroState = (over = {}) => ({
     shares_window: { count: 5, ok: true, ...over.shares_window },
     raffle_eligible: { applies: true, eligible: true, label: 'Yes', ...over.raffle_eligible },
     pool: { blocks: 42, ...over.pool },
+    xvb_calc: 'xvb_calc' in over ? over.xvb_calc : { enabled: true },
 });
 const _byLabel = (state) => Object.fromEntries(heroKpis(state).map((k) => [k.label, k]));
 
@@ -413,6 +443,19 @@ test('heroKpis: surfaces the six headline numbers under stable labels, in order'
     assert.deepEqual(
         heroKpis(_heroState()).map((k) => k.label),
         ['Total Hashrate', 'Shares in Window', 'Raffle Eligible', 'Blocks Found', 'XvB Tier', 'Mining Mode'],
+    );
+});
+
+test('heroKpis: the raffle slots vanish while XvB is disabled — no N/A dead weight', () => {
+    // The mode badge says XvB is off, once; the band should not repeat it as two empty KPIs.
+    assert.deepEqual(
+        heroKpis(_heroState({ xvb_calc: { enabled: false } })).map((k) => k.label),
+        ['Total Hashrate', 'Shares in Window', 'Blocks Found', 'Mining Mode'],
+    );
+    // A payload without the section at all (old server) behaves like disabled — never a crash.
+    assert.deepEqual(
+        heroKpis(_heroState({ xvb_calc: undefined })).map((k) => k.label),
+        ['Total Hashrate', 'Shares in Window', 'Blocks Found', 'Mining Mode'],
     );
 });
 

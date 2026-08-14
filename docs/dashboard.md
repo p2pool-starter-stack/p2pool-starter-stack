@@ -131,10 +131,13 @@ A strip of headline KPIs sits below the top bar:
 |---|---|
 | **Total Hashrate** | Your combined hashrate across all workers. |
 | **Shares in Window** | Shares you currently hold in the P2Pool PPLNS window (green when above zero). |
-| **Raffle Eligible** | Whether you'd actually win **and** collect an XvB raffle payout: green **Yes**, red **No**, or muted **N/A** when XvB is off. (Full definition in [Overview](#overview).) |
+| **Raffle Eligible** | Whether you'd actually win **and** collect an XvB raffle payout: green **Yes**, red **No**. (Full definition in [Overview](#overview).) |
 | **Blocks Found** | P2Pool sidechain blocks your node has found. |
 | **XvB Tier** | The donation tier you're currently holding. |
 | **Mining Mode** | What your hashrate is routed to right now: P2Pool, XvB, or a split. |
+
+While XvB is disabled the two raffle KPIs stand down entirely — the mode badge already says XvB
+is off, and a strip of **N/A** and **None** would just repeat it.
 
 ### Mine cart train
 
@@ -259,6 +262,10 @@ The summary panel pulls the key numbers together:
 | **Tari Mining** | Whether merge-mining of Tari is active and healthy. |
 | **Wallet XMR / Wallet TARI** | Your configured Monero and Tari payout addresses, one card each. |
 
+While XvB is disabled the five raffle/split tiles (Current Tier, Raffle Eligible, Target Tier,
+XvB routed averages) drop out of the card, along with the header's XvB routed line and the whole
+*XvB Donation Stats* card — one mode badge says XvB is off; nothing else repeats it.
+
 ### Earnings — Expected vs Actual
 
 One compact table, shown in **both** views, that answers "am I earning what this hashrate should?"
@@ -267,9 +274,9 @@ trailing **30-day** window:
 
 | Row | Expected | Actual |
 |---|---|---|
-| **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** XvB's published per-day estimate for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
+| **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** the XvB share for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). Once enough of your wins have confirmed payouts to measure, the XvB share is XvB's published figure **scaled to what your wins actually paid** — the tooltip names the measured percentage and sample. Until then the published face value stands, and the tooltip says it is an upper bound. | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
 | **Tari (30d)** | Expected **blocks** (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
-| **XvB wins (30d)** | — | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
+| **XvB wins (30d)** | Forecast wins for your tier, from XvB's own winners file: how often your tier's rounds are drawn ÷ how many qualifiers they have (summed with the lower donor rounds you also qualify for). While no tier is held yet — a fleet still ramping, or an operator weighing whether donating is worth it — the forecast uses your **target** tier instead. `—` while the file hasn't been read or has gone stale. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
 
 Monero and XvB share one row **on both sides** deliberately: an XvB win pays out through ordinary
 small payouts that can't be told apart from P2Pool payouts, so the confirmed actual always
@@ -619,9 +626,10 @@ Set the keys in `config.json` and run `./pithead apply`. Key reference: the `mon
 
 A block inside the earnings card, driven by the same what-if hashrate input, that answers "which
 XMRvsBeast tier could this hashrate hold, and what would it cost?". Hidden entirely while XvB is
-disabled (`xvb.enabled: false`). It shows tier status only — deliberately no raffle entries or win
-odds, because there are none to show: the raffle winner is drawn at random among everyone above
-the threshold, so donating more than the threshold buys zero extra win chance.
+disabled (`xvb.enabled: false`). The raffle winner is drawn at random among everyone above the
+threshold, so donating more than the threshold buys zero extra win chance — but the odds
+themselves are knowable: XvB's winners file publishes the qualifier count for every round, and
+the comparison below shows them.
 
 | Field | Meaning |
 |---|---|
@@ -630,17 +638,18 @@ the threshold, so donating more than the threshold buys zero extra win chance.
 | **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). |
 | **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. |
 
-Below the tier figures, a **per-tier payout comparison** dropdown weighs each donor tier three ways:
+Below the tier figures sits the **per-tier decision table** — every donor tier on one row, so
+the whole choice is visible at once:
 
-| Field | Meaning |
+| Column | Meaning |
 |---|---|
-| **Expected (XvB)** | XvB's own published expected reward for the tier, in XMR per year. This is XvB's pre-computed `reward_calc` figure for the tier's donor round, fetched over Tor from `reward_estimate_pub.txt` — the dashboard does not re-derive it. It is the raffle expectation across all qualifiers, so donating **above** the tier threshold does not raise it. `estimate unavailable` when the fetch is stale or failed — never a stale figure implied fresh. |
-| **Cost / yr** | The P2Pool earnings given up by donating the tier threshold for a year: `threshold × the P2Pool daily rate × 365`, using the same rate the Monero tab shows. |
-| **Net / yr** | Expected minus Cost. Shown only when XvB's estimate is available; otherwise the cost stands alone. |
+| **Odds / 30d** | How often this tier's rounds pay out and among how many qualifiers, computed from XvB's public winners feed. The draw is random among qualifiers — donating above a threshold buys no extra odds. |
+| **Cost / yr** | The P2Pool earnings given up by donating the tier threshold for a year, at your current rate. |
+| **XvB says / yr** | XvB's own published expected reward — **face value**: it prices every bonus hash at full block reward. Shown as their number, never blended. |
+| **Study est. / yr** | The same figure scaled by the **measured delivery band**: across 25 audited won rounds, verified on-chain across all three P2Pool sidechains (June–August 2026), winners received 33% of the advertised prize work (95% CI 28–39%; single-wallet on-chain audit, corroborated by a 14-winner public crawl), with at most a small margin effect. Once this box has enough measured wins of its own, the column becomes **Yours (N% × M wins)** and uses your wallet's measured figure instead. The full record — method, data, and scripts — is the [XvB delivery study](research/xvb-delivery-study/PAPER.md). |
+| **Net / yr** | The verdict: estimated reward minus the cost. **Red** when even the optimistic end of the band loses; **green** when even the pessimistic end profits; neutral when the band spans zero. Withheld (with a ⚠ on the tier) when your hashrate cannot sustain the tier — an unreachable payout must never look reachable. |
 
-The estimate is fetched over Tor on the same cadence and staleness rules as the XvB stats card, so
-a quiet feed degrades to `estimate unavailable` rather than showing an old number. Pick a tier to
-compare, e.g. Whale against VIP Donor, at a glance.
+A fiat line prices the best sustainable tier's net at your configured XMR price.
 
 Raffle mechanics, flat: the winner of a donor round is drawn at random among wallets above the
 tier threshold on both credited averages; a win terminates if the 1h average then drops below the
@@ -698,7 +707,7 @@ Two edit modes build the same candidate config and submit it through the same pi
   & thresholds, System / advanced — instead of one section per top-level `config.json` key, so a
   grab-bag key like `dashboard` (auth, remote access, the energy calculator, alert thresholds, …)
   splits across the sections its fields actually belong to. Each section is a collapsed `<details>`
-  as before; within **Notifications**, the 26 `telegram.events` toggles, the ntfy/webhook sinks,
+  as before; within **Notifications**, the 27 `telegram.events` toggles, the ntfy/webhook sinks,
   and Healthchecks each nest one level deeper into their own collapsed sub-group
   ([#612](https://github.com/p2pool-starter-stack/pithead/issues/612)) instead of dominating the
   section's field list. Rows in a section whose fields span more than one top-level key carry their

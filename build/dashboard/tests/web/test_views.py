@@ -59,6 +59,8 @@ from mining_dashboard.web.views import (
     rigforge_update_for,
     visible_update,
     xvb_current_tier_reward_day,
+    xvb_expected_wins_day,
+    xvb_realization,
 )
 
 # --- Metrics fixtures for the presentation builders -----------------------------------
@@ -1858,6 +1860,176 @@ class TestEarningsVsActual:
         )
 
 
+# --- XvB honest economics: forecast win rate + measured realization (#866/#872) -------
+
+
+_WINS_TIERS = {"donor": 1_000.0, "donor_vip": 10_000.0, "donor_whale": 100_000.0}
+_WINS_STATS = {
+    "stats": {
+        "types": {
+            "donor": {"rounds": 7, "players_avg": 70.0},
+            "donor_vip": {"rounds": 28, "players_avg": 28.0},
+            "donor_whale": {"rounds": 56, "players_avg": 8.0},
+        },
+        "span_days": 7.0,
+    },
+    "last_update": None,  # set fresh per test
+}
+
+
+def _round_state(stale=False):
+    ts = time.time() - (XVB_STATS_STALE_AFTER_S + 1 if stale else 0)
+    return {**_WINS_STATS, "last_update": ts}
+
+
+class TestXvbExpectedWinsDay:
+    def test_sums_every_donor_round_type_the_held_tier_qualifies_for(self):
+        # A whale qualifier also plays the vip and donor rounds beneath it: the forecast is the
+        # sum of each round type's frequency ÷ its qualifier count, not the whale rounds alone.
+        out = xvb_expected_wins_day(_round_state(), "donor_whale", _WINS_TIERS)
+        assert out == pytest.approx((56 / 7.0) / 8.0 + (28 / 7.0) / 28.0 + (7 / 7.0) / 70.0)
+        # A donor-tier fleet only plays the donor rounds.
+        assert xvb_expected_wins_day(_round_state(), "donor", _WINS_TIERS) == pytest.approx(
+            (7 / 7.0) / 70.0
+        )
+
+    def test_missing_stale_or_empty_aggregate_yields_none(self):
+        assert xvb_expected_wins_day(None, "donor_whale", _WINS_TIERS) is None
+        assert xvb_expected_wins_day(_round_state(stale=True), "donor_whale", _WINS_TIERS) is None
+        empty = {"stats": {"types": {}, "span_days": 0.0}, "last_update": time.time()}
+        assert xvb_expected_wins_day(empty, "donor_whale", _WINS_TIERS) is None
+        assert xvb_expected_wins_day(_round_state(), None, _WINS_TIERS) is None
+
+
+_REALIZATION_NOW = 1_760_000_000
+
+
+class TestXvbForecastTierKey:
+    def test_held_tier_wins_over_target(self):
+        m = _metrics(xvb_1h=100_000.0, xvb_24h=100_000.0, target_threshold=10_000.0)
+        assert views.xvb_forecast_tier_key(m, _WINS_TIERS) == "donor_whale"
+
+    def test_falls_back_to_the_target_tier_while_none_is_held(self):
+        # A fleet still ramping (or weighing whether to enable donation at all) has zero credited
+        # average — the forecast speaks to the TARGET tier instead of dashing out (#866).
+        m = _metrics(xvb_1h=0.0, xvb_24h=0.0, target_threshold=1_000.0)
+        assert views.xvb_forecast_tier_key(m, _WINS_TIERS) == "donor"
+
+    def test_none_when_neither_held_nor_targeted(self):
+        m = _metrics(xvb_1h=0.0, xvb_24h=0.0, target_threshold=0.0)
+        assert views.xvb_forecast_tier_key(m, _WINS_TIERS) is None
+        # A target threshold matching no tier (drifted config) stays None, never a KeyError.
+        m = _metrics(xvb_1h=0.0, xvb_24h=0.0, target_threshold=123.0)
+        assert views.xvb_forecast_tier_key(m, _WINS_TIERS) is None
+
+
+class TestXvbRealization:
+    NOW = _REALIZATION_NOW
+    # 6 settled wins, hourly; face value 0.016 XMR/day at 1 expected win/day => 16 mXMR face/win.
+    WINS = [{"ts": _REALIZATION_NOW - 86_400 - i * 3_600} for i in range(6)]
+
+    def _payouts(self, per_win_atomic):
+        # One payout landing 30 min after each win — squarely inside the attribution window.
+        return [{"ts": w["ts"] + 1_800, "amount_atomic": per_win_atomic} for w in self.WINS]
+
+    def test_measures_the_fraction_of_face_value_wins_actually_paid(self):
+        # 3.2 mXMR realized per win against a 16 mXMR face => 0.2, with the sample size.
+        out = xvb_realization(self._payouts(3_200_000_000), self.WINS, 0.016, 1.0, now=self.NOW)
+        assert out == (pytest.approx(0.2), 6)
+
+    def test_clamps_at_face_value_and_floors_at_zero(self):
+        # A lucky window can overshoot face value — the factor is a discount, never a bonus.
+        out = xvb_realization(self._payouts(32_000_000_000), self.WINS, 0.016, 1.0, now=self.NOW)
+        assert out[0] == 1.0
+
+    def test_too_few_wins_is_none_not_noise(self):
+        out = xvb_realization(self._payouts(3_200_000_000), self.WINS[:4], 0.016, 1.0, now=self.NOW)
+        assert out is None
+
+    def test_unsettled_wins_are_left_out_of_the_sample(self):
+        # A win still inside the settle window has payouts in flight — counting it would drag
+        # the factor down for no reason. With it excluded the sample drops below the minimum.
+        fresh = [{"ts": self.NOW - 600}] + self.WINS[:4]
+        assert (
+            xvb_realization(self._payouts(3_200_000_000), fresh, 0.016, 1.0, now=self.NOW) is None
+        )
+
+    def test_a_payout_in_two_overlapping_windows_counts_once(self):
+        # Back-to-back wins share attribution windows; the payout sum iterates payouts, not
+        # windows, so an overlapped payout cannot double-count.
+        payout = {"ts": self.WINS[0]["ts"] + 900, "amount_atomic": 3_200_000_000}
+        out = xvb_realization([payout], self.WINS, 0.016, 1.0, now=self.NOW)
+        assert out == (pytest.approx(3.2e-3 / 6 / 0.016), 6)
+
+    def test_missing_inputs_yield_none(self):
+        assert xvb_realization(None, self.WINS, 0.016, 1.0, now=self.NOW) is None
+        assert xvb_realization([], self.WINS, 0.016, 1.0, now=self.NOW) is None
+        assert xvb_realization(self._payouts(1), None, 0.016, 1.0, now=self.NOW) is None
+        assert xvb_realization(self._payouts(1), self.WINS, None, 1.0, now=self.NOW) is None
+        assert xvb_realization(self._payouts(1), self.WINS, 0.016, None, now=self.NOW) is None
+        assert xvb_realization(self._payouts(1), self.WINS, 0.016, 0.0, now=self.NOW) is None
+        # A hostile/corrupt negative published figure gives a negative face value — no factor.
+        assert xvb_realization(self._payouts(1), self.WINS, -0.016, 1.0, now=self.NOW) is None
+
+    def test_baseline_subtraction_removes_ordinary_p2pool_leak(self):
+        # Ordinary P2Pool payouts land inside win windows too; the box's linear rate over the
+        # windowed hours is subtracted so the factor measures only the wins' excess. Here the
+        # 4.8 mXMR gross per win contains 1.6 mXMR of baseline (6.4 mXMR/day × 6h): excess
+        # 3.2 mXMR against a 16 mXMR face => 0.2, not the inflated 0.3.
+        out = xvb_realization(
+            self._payouts(4_800_000_000), self.WINS, 0.016, 1.0, now=self.NOW, p2pool_day=0.0064
+        )
+        assert out == (pytest.approx(0.2), 6)
+
+
+class TestEarningsVsActualTempering:
+    NOW = 1_760_000_000
+
+    def _e(self):
+        return _summary_earnings(
+            coeff_day=1e-8,
+            xvb_day=0.016,
+            confirmed={"enabled": True, "xmr_30d": 0.28, "partial": {"30d": False}},
+        )
+
+    def test_measured_realization_tempers_the_xvb_leg(self):
+        # The published leg (0.016 × 30 = 0.48) scales to the measured fraction; the factor and
+        # its sample ride along for the tooltip. The P2Pool leg is untouched.
+        s = build_earnings_vs_actual(
+            _metrics(p2pool_30d=8000.0), self._e(), [], now=self.NOW, realization=(0.19, 15)
+        )
+        assert s["xmr"]["expected_30d"] == pytest.approx(1e-8 * 8000.0 * 30 + 0.016 * 30 * 0.19)
+        assert s["xmr"]["xvb_realization_pct"] == 19
+        assert s["xmr"]["xvb_wins_measured"] == 15
+        assert s["xmr"]["includes_xvb"] is True
+
+    def test_without_a_measured_factor_the_published_figure_stands(self):
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), self._e(), [], now=self.NOW)
+        assert s["xmr"]["expected_30d"] == pytest.approx(1e-8 * 8000.0 * 30 + 0.016 * 30)
+        assert s["xmr"]["xvb_realization_pct"] is None
+        assert s["xmr"]["xvb_wins_measured"] is None
+
+    def test_realization_without_an_xvb_leg_is_ignored(self):
+        # XvB off (or no fresh estimate): there is no leg to temper — the factor must not leak
+        # into the payload as if one existed.
+        s = build_earnings_vs_actual(
+            _metrics(p2pool_30d=8000.0, xvb_enabled=False),
+            self._e(),
+            [],
+            now=self.NOW,
+            realization=(0.19, 15),
+        )
+        assert s["xmr"]["xvb_realization_pct"] is None
+
+    def test_expected_wins_fill_the_xvb_row(self):
+        s = build_earnings_vs_actual(
+            _metrics(p2pool_30d=8000.0), self._e(), [], now=self.NOW, expected_wins_day=0.84
+        )
+        assert s["xvb"]["expected_wins_30d"] == pytest.approx(25.2)
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), self._e(), [], now=self.NOW)
+        assert s["xvb"]["expected_wins_30d"] is None
+
+
 # --- Host address beside the hostname (Issue #119) ------------------------------------
 
 
@@ -2038,12 +2210,29 @@ class TestXvbCalc:
     # XvB's published per-tier expected rewards, keyed by round-type == tier key (#118).
     _ESTIMATES = {"donor": 0.06, "donor_vip": 0.81, "donor_whale": 6.17, "donor_mega": 56.9}
 
-    def _sm(self, estimates=None, last_update=None):
+    # All-rounds aggregate from the winners file (#872): frequencies + qualifier counts over
+    # a one-week span, shaped like parse_round_stats' output.
+    _ROUND_STATS = {
+        "types": {
+            "donor": {"rounds": 7, "players_avg": 70.0},
+            "donor_vip": {"rounds": 28, "players_avg": 28.0},
+            "donor_whale": {"rounds": 56, "players_avg": 8.0},
+            "donor_mega": {"rounds": 63, "players_avg": 1.0},
+        },
+        "span_days": 7.0,
+    }
+
+    def _sm(self, estimates=None, last_update=None, round_stats=None, round_ts=None):
         sm = MagicMock()
         sm.get_tiers.return_value = self._TIERS
         est = self._ESTIMATES if estimates is None else estimates
         ts = time.time() if last_update is None else last_update
         sm.get_xvb_reward_estimates.return_value = {"estimates": est, "last_update": ts}
+        stats = self._ROUND_STATS if round_stats is None else round_stats
+        sm.get_xvb_round_stats.return_value = {
+            "stats": stats,
+            "last_update": time.time() if round_ts is None else round_ts,
+        }
         return sm
 
     def test_disabled_returns_enabled_false_only(self):
@@ -2101,6 +2290,57 @@ class TestXvbCalc:
         assert out["estimates_available"] is False
         assert out["estimates_stale"] is True
         assert all(t["expected_reward_year"] is None for t in out["tiers"])
+
+    def test_round_stats_expose_per_tier_draw_odds(self):
+        # #872: the winners file's players column makes the draw knowable — each tier carries its
+        # OWN round type's frequency ÷ qualifiers (the earnings card's forecast, by contrast,
+        # sums the lower tiers a qualifier also plays in).
+        out = build_xvb_calc(_metrics(), self._sm())
+        by_threshold = {t["threshold"]: t for t in out["tiers"]}
+        assert by_threshold[100_000]["win_odds_day"] == pytest.approx((56 / 7.0) / 8.0)
+        assert by_threshold[100_000]["players_avg"] == 8.0
+        # The single-qualifier artifact is self-evident: one Mega player, one win per draw.
+        assert by_threshold[1_000_000]["players_avg"] == 1.0
+
+    def test_stale_or_missing_round_stats_null_the_odds(self):
+        stale = self._sm(round_ts=time.time() - XVB_STATS_STALE_AFTER_S - 1)
+        assert all(t["win_odds_day"] is None for t in build_xvb_calc(_metrics(), stale)["tiers"])
+        empty = self._sm(round_stats={"types": {}, "span_days": 0.0}, round_ts=0.0)
+        assert all(t["win_odds_day"] is None for t in build_xvb_calc(_metrics(), empty)["tiers"])
+
+    def test_realization_scales_published_rewards_into_realized(self):
+        # #872: with a measured factor, every tier carries published × factor — the figure whose
+        # net can honestly be acted on — plus the factor and its sample size for the label.
+        out = build_xvb_calc(_metrics(), self._sm(), realization=(0.19, 15))
+        by_threshold = {t["threshold"]: t for t in out["tiers"]}
+        assert by_threshold[100_000]["realized_reward_year"] == pytest.approx(6.17 * 0.19)
+        assert out["realization_pct"] == 19
+        assert out["realization_wins"] == 15
+
+    def test_unmeasured_boxes_get_the_prior_band_measured_boxes_do_not(self):
+        # #872: no local measurement -> published × the measured prior band, so "should I enable
+        # this" is answerable everywhere. A measured factor supersedes it (never both), and stale
+        # estimates null both — a band cannot resurrect a stale face value.
+        out = build_xvb_calc(_metrics(), self._sm())
+        whale = next(t for t in out["tiers"] if t["threshold"] == 100_000)
+        lo, hi = views.XVB_REALIZATION_PRIOR
+        assert whale["assumed_reward_year_range"] == pytest.approx([6.17 * lo, 6.17 * hi])
+        out = build_xvb_calc(_metrics(), self._sm(), realization=(0.19, 15))
+        assert all(t["assumed_reward_year_range"] is None for t in out["tiers"])
+        stale = self._sm(last_update=time.time() - XVB_STATS_STALE_AFTER_S - 1)
+        out = build_xvb_calc(_metrics(), stale)
+        assert all(t["assumed_reward_year_range"] is None for t in out["tiers"])
+
+    def test_no_realization_leaves_realized_none(self):
+        # Unmeasured (too few wins / payout confirmation off): realized stays None so the client
+        # falls back to face value AND says so — never a fabricated factor.
+        out = build_xvb_calc(_metrics(), self._sm())
+        assert all(t["realized_reward_year"] is None for t in out["tiers"])
+        assert out["realization_pct"] is None
+        # Stale estimates null realized too — a factor cannot resurrect a stale face value.
+        sm = self._sm(last_update=time.time() - XVB_STATS_STALE_AFTER_S - 1)
+        out = build_xvb_calc(_metrics(), sm, realization=(0.5, 9))
+        assert all(t["realized_reward_year"] is None for t in out["tiers"])
 
     def test_empty_estimates_available_false_no_crash(self):
         # Never fetched / unparseable cache: available False, not "stale" (last_update 0), rewards None.
@@ -2167,6 +2407,7 @@ def _state_mgr(
     sm.get_xvb_stats.return_value = {"current_mode": mode}
     sm.get_tiers.return_value = {}
     sm.get_xvb_reward_estimates.return_value = {"estimates": {}, "last_update": 0.0}
+    sm.get_xvb_round_stats.return_value = {"stats": {}, "last_update": 0.0}
     sm.get_share_stats.return_value = share_stats or []
     sm.get_raffle_wins.return_value = []
     sm.get_xvb_standby.return_value = None  # no backup standby held (#249)

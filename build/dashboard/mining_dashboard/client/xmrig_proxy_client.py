@@ -1,4 +1,3 @@
-import json
 import logging
 
 import requests
@@ -166,41 +165,3 @@ class XMRigProxyClient:
         if response.status_code == 204 or not response.content:
             return {}
         return response.json()
-
-
-if __name__ == "__main__":
-    # Configuration
-    # Ensure xmrig-proxy is running with API enabled:
-    # ./xmrig-proxy --http-port=8080 --http-access-token=SECRET
-
-    HOST = "127.0.0.1"
-    PORT = 8080
-    TOKEN = "SECRET"  # noqa: S105 — placeholder for this __main__ usage example, not a real secret
-
-    client = XMRigProxyClient(HOST, PORT, TOKEN)
-
-    try:
-        # 1. Get Summary
-        print("--- Summary ---")
-        summary = client.get_summary()
-        print(json.dumps(summary, indent=4))
-
-        # 2. Get Workers
-        print("\n--- Worker Details ---")
-        workers = client.get_workers()
-        print(json.dumps(workers, indent=4))
-
-        # 3. Get Config
-        print("\n--- Current Config ---")
-        config = client.get_config()
-        print(json.dumps(config, indent=4))
-
-        # 4. Update Config (Example: changing donate level)
-        # print("\n--- Updating Config ---")
-        # updated_config = client.update_config({"donate-level": 1})
-        # print(json.dumps(updated_config, indent=4))
-
-    except requests.exceptions.RequestException as e:
-        print(f"HTTP Request failed: {e}")
-    except Exception as e:
-        print(f"An error occurred: {e}")

@@ -427,10 +427,17 @@ class AlgoService:
         # effective split far past the computed fraction. A *changed* decision
         # still ends the dwell — only the avg-driven override pauses.
         target_hr = self._get_target_donation_hr(stable_hr)
+        # Catch up only toward what the donation cap allows (#898). Against an explicit target
+        # the fleet cannot sustain, the raw target comparison reads avg_1h as permanently
+        # "under tier", ends every p2pool dwell at its first check tick, and the actuated
+        # donation pins near 100% of allowed time — the cap never binds (measured live:
+        # ~94% of the fleet routed under a 0.65 cap). The achievable donation is the ceiling
+        # worth catching up to; beyond it, cutting dwells short only burns the p2pool side.
+        achievable_hr = min(target_hr, stable_hr * self.max_donation_fraction)
         under_tier = (
             not self._stats_are_stale(xvb_stats)
-            and target_hr > 0
-            and xvb_stats.get("avg_1h", 0) < target_hr
+            and achievable_hr > 0
+            and xvb_stats.get("avg_1h", 0) < achievable_hr
         )
         return decision != held_decision or under_tier
 

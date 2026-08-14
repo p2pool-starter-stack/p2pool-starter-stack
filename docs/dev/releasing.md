@@ -67,6 +67,15 @@ every gate is green.
 > runners (and what does run free on every PR), and the safe self-hosted-runner setup are covered
 > in [Release / Validation Server](release-server.md).
 
+### Branch mechanics
+
+Releases are cut from `main`. Merge `develop` into `main` with a real merge commit — never a
+squash, so the released commits keep their history — and run the pipeline from `main`. After
+publishing, merge `main` back into `develop`: the release's merge commit and tag must be an
+ancestor of `develop`, or the next cut diverges. `release.sh` warns (it does not abort) when the
+working tree is on any other branch. The branch model itself is in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#development-workflow).
+
 ### Pipeline: stage → smoke-test → promote
 
 1. Preflight: clean working tree; read the product version from the top-level `VERSION` file;
@@ -84,9 +93,13 @@ every gate is green.
    `vX.Y.Z` rather than the `dev · branch @ hash` it shows for working-tree builds.
 4. Push to staging: push to a staging tag on GHCR (e.g. `:vX.Y.Z-rc.N`) and capture the
    immutable digests. Nothing user-facing points here yet.
-5. Staging smoke test (gate): on a clean host, pull the staged images from GHCR and run the real
-   user path (`setup` → up → `status`, minimal mine check). This proves the actually-pushed
-   artifacts work, not just the local build. Abort on failure.
+5. Staging smoke test (gate): pull each staged image back from GHCR and verify it resolves,
+   reports the release version in its OCI label, and carries every target platform (the v1.0.0
+   wrong-arch guard). This validates the bytes actually pushed, not the local build — but it does
+   not start a stack, which would collide with the release host's live deployment. A fuller
+   functional run is opt-in: set `RELEASE_SMOKE_CMD` to a command to run during this stage, or
+   point the [#54](https://github.com/p2pool-starter-stack/pithead/issues/54) harness at the
+   staged tag. Abort on failure.
 6. Promote by digest: re-tag the exact digests just smoke-tested to `:vX.Y.Z` and `:latest`,
    then push. Promotion is by digest (no rebuild), so the released bundle is bit-for-bit what was
    validated. Same version on every image.
@@ -113,10 +126,18 @@ a single, validated bundle.
 Two runs of the matrix are required, and the automated one is the smaller of the two:
 
 1. `release.sh` stage 2 runs the non-destructive `--readiness` assessment against the live
-   stack (via `RELEASE_INTEGRATION_ARGS`). It proves the box is fit to cut from — it does not
+   stack. Export the harness arguments on the release box before `make release`:
+
+   ```bash
+   export RELEASE_INTEGRATION_ARGS="--local --dir <live-stack-dir> --readiness"
+   ```
+
+   `--local` / `--dir` point the harness at the box's live stack install, not the checkout — the
+   same invocation the closing `--check` sweep below uses. Left unset, the cut aborts at stage 2
+   with `run.sh`'s usage error. The assessment proves the box is fit to cut from — it does not
    mine, restart anything, or touch a rig.
 2. Before cutting, run the targeted end-to-end matrix on the release candidate with a borrowed
-   loaner rig:
+   loaner rig. `release.sh` never runs this leg — run it yourself, before `make release`:
 
    ```bash
    BENCH_HOST=<bench> MINER_HOST=<loaner-rig> tests/integration/e2e.sh <ref> --mode targeted
@@ -234,6 +255,24 @@ It runs two phases:
   read better for users, and automation can come later if a commit convention is adopted.)
 - Patches: security and component bumps ship as normal patch releases, re-validated through the
   same gate.
+- Host ports: a release that adds a host-published `ports:` entry to `docker-compose.yml` must
+  call it out as **upgrade-blocking** in the release notes — a host where something else already
+  binds that port fails `pithead upgrade` at compose up, after images are pulled and config is
+  re-rendered.
+
+### Withdrawing a bad release
+
+A published `vX.Y.Z` tag is immutable: an active tag ruleset blocks deleting or re-pointing any
+`v*` tag, so a released version number can never be re-cut — the v1.6.0 withdrawal burned that
+number for good. When a published release turns out broken:
+
+1. Supersede it: bump `VERSION` and cut the next patch through the full gate. Promotion re-points
+   `:latest` at the good digests.
+2. Edit the bad GitHub Release's notes to a "Superseded by the next patch — do not use" warning,
+   and say so in `CHANGELOG.md` (the 1.0.0 tombstone and the 1.6.1 "Supersedes 1.6.0" header are
+   the precedents).
+3. Operators already on the bad version roll back per
+   [Operations › The deploy-box layout](../operations.md#the-deploy-box-layout).
 
 ## Install & upgrade
 
