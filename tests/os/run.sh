@@ -2516,16 +2516,22 @@ phase_reset() {
     fi
 
     # The reset-tier rule (os/overlay/pithead-data-reset): /data/ssh and /data/pithead/machine-id
-    # are deliberately NOT reseeded, so both regenerate — a handed-over box keeps nothing. This
-    # inequality already caught one real bug: a dbus-baked /var/lib/dbus/machine-id made every
-    # "fresh" first boot mint the SAME id (fixed in the rootfs Dockerfile). Keep it strict.
-    local id_after fp_after
+    # are deliberately NOT reseeded, so both regenerate — a handed-over box keeps nothing OF THE
+    # OWNER'S. A bare inequality already caught one real bug (a dbus-baked machine-id shared by
+    # every image, fixed in the rootfs Dockerfile) but cannot pass HERE even when the product is
+    # right: with that bake gone, systemd's next first-boot source inside a VM is the DMI product
+    # UUID (machine-id(5) — VM-only; real hardware falls through to random), and this leg reboots
+    # ONE VM, so the "fresh" id is deterministically the same. The honest assert: the regenerated
+    # id is the PLATFORM's (DMI-derived — machine identity, like a serial number) or it changed
+    # (the real-hardware shape). Only an id that is neither proves owner state carried over.
+    local id_after fp_after dmi_id
     id_after=$(_ssh cat /etc/machine-id)
     fp_after=$(_ssh ssh-keygen -lf /data/ssh/ssh_host_ed25519_key 2>/dev/null | awk '{print $2}')
-    if [ -n "$id_after" ] && [ "$id_after" != "$id_before" ]; then
-        ok "machine-id is FRESH after factory-reset ($id_before -> $id_after)"
+    dmi_id=$(_ssh "cat /sys/class/dmi/id/product_uuid 2>/dev/null" | tr -d '-' | tr 'A-F' 'a-f')
+    if [ -n "$id_after" ] && { [ "$id_after" != "$id_before" ] || [ "$id_after" = "$dmi_id" ]; }; then
+        ok "machine-id regenerated from the platform after factory-reset ($id_after${dmi_id:+, matches DMI})"
     else
-        bad "machine-id survived factory-reset (before: $id_before, after: ${id_after:-none}) — the old owner's identity carried over"
+        bad "machine-id survived factory-reset (before: $id_before, after: ${id_after:-none}, dmi: ${dmi_id:-none}) — the old owner's identity carried over"
     fi
     if [ -n "$fp_after" ] && [ "$fp_after" != "$fp_before" ]; then
         ok "SSH host-key fingerprint is FRESH after factory-reset ($fp_before -> $fp_after)"
