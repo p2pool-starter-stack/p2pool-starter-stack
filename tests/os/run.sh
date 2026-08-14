@@ -339,7 +339,10 @@ phase_boot() {
     # hugepages reserved, systemd-repart growing /data to ~24 GiB, the wizard image loading, the
     # host key generating — and 120 s clipped it (SSH came up just after, per the failed-run
     # forensics). An equally unprovisioned update-phase guest reaches SSH within 240 s.
-    _wait_ssh 240 || {
+    # 420, not the update phase's 240: this is the run's very FIRST cold boot — 6 GiB of
+    # hugepages, systemd-repart growing /data, the wizard image unpacking, host-key generation —
+    # and under full-battery host load 240 s clipped a boot that answered SSH moments later.
+    _wait_ssh 420 || {
         bad "host SSH never came up after the wizard gate — cannot read hugepages/machine-id"
         return
     }
@@ -1069,6 +1072,9 @@ phase_install() {
         ok "restore leg: took a real encrypted backup off the live machine"
     else
         bad "restore leg: could not take the source backup"
+        # The reason lives on the guest — print it, or this failure is undiagnosable after the
+        # VM is recycled (exactly what happened on its first live run).
+        printf '     guest backup log tail: %s\n' "$(_ssh "tail -c 600 /tmp/restore-backup.log 2>/dev/null" | tr '\n' ' ' | tail -c 500)"
         rm -f "$target_disk"
         return
     fi
