@@ -3972,8 +3972,8 @@ check_tor_clearnet_egress() {
 # (letters, digits, dot, hyphen, colon for IPv6). Used to validate dashboard.host before it's
 # rendered into the Caddyfile site address: anything with whitespace, a newline, or Caddy-significant
 # characters ({ } /) could break or inject into the generated Caddyfile. Length-capped at 253 (#558),
-# mirroring the worker-host charset check elsewhere in this file (control_worker_apply's host guard,
-# validate_worker_endpoints) — the max length of a DNS name.
+# mirroring the worker-host charset check elsewhere in this file (resolve_worker_target's host
+# guard, validate_worker_endpoints) — the max length of a DNS name.
 is_valid_host() {
     [[ "$1" =~ ^[A-Za-z0-9.:_-]{1,253}$ ]]
 }
@@ -9191,6 +9191,53 @@ control_backup() { # <id> <actor> <control-dir>
         mv "$results/.$id.json.tmp" "$results/$id.json"
 }
 
+# Resolve a worker name to its dial target (host + control_port + token) from the HOST's OWN
+# config.json — never the caller's intent (#122 SSRF). Shared by control_worker_apply and
+# control_worker_upgrade, which had drifted this whole resolution+validation block out of sync
+# line-for-line: the worker-name charset pin, the three WORKER_LIST_JQ lookups, and the
+# host/port/token guards. On success sets RESOLVED_HOST/RESOLVED_CPORT/RESOLVED_TOKEN and returns
+# 0. On failure sets RESOLVE_WORKER_ERR to the operator-facing rejection message (leaving the
+# RESOLVED_* vars empty) and returns 1 — the caller writes its own rejected result/audit line with
+# that message, since worker-apply and worker-upgrade audit under different action names.
+resolve_worker_target() { # <worker-name> <verb-for-the-host-missing-message, e.g. "edit"/"upgrade">
+    local worker="$1" verb="$2"
+    RESOLVED_HOST="" RESOLVED_CPORT="" RESOLVED_TOKEN="" RESOLVE_WORKER_ERR=""
+    # The worker name is a config.json lookup key AND (in name-auth) a bearer; pin its charset.
+    # LC_ALL=C so [!-~] is the printable-ASCII BYTE range: under a UTF-8 locale GNU grep reads the
+    # range by collation order and rejects ordinary names like "rig1" (caught by the release gate on a
+    # UTF-8 box; CI runs under C and missed it). jq's test() above is codepoint-based and unaffected.
+    if ! printf '%s' "$worker" | LC_ALL=C grep -qE '^[!-~]{1,128}$'; then
+        RESOLVE_WORKER_ERR="malformed or missing 'worker' name in the request."
+        return 1
+    fi
+    # Resolve the rig's ADDRESS + BEARER from the HOST's config.json — never the intent. A rig with no
+    # host or no token cannot be a target (fail closed): the rig's control path is bearer-mandatory and
+    # we only ever dial an operator-set host.
+    local host cport token
+    host=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    cport=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
+    token=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
+    if [ -z "$host" ]; then
+        RESOLVE_WORKER_ERR="worker '$worker' has no configured host in workers.list[] (or the deprecated dashboard.workers[]) — set host + control_port + token to $verb it."
+        return 1
+    fi
+    # host charset guard (#122): no port/path/userinfo can be smuggled into the URL below.
+    if ! printf '%s' "$host" | grep -qE '^[A-Za-z0-9._-]{1,253}$'; then
+        RESOLVE_WORKER_ERR="worker '$worker' has an invalid host."
+        return 1
+    fi
+    if ! is_valid_port "$cport"; then
+        RESOLVE_WORKER_ERR="worker '$worker' has an invalid control_port."
+        return 1
+    fi
+    if [ -z "$token" ]; then
+        RESOLVE_WORKER_ERR="worker '$worker' has no token in workers.list[] (or the deprecated dashboard.workers[]) — the rig's control API is bearer-mandatory."
+        return 1
+    fi
+    RESOLVED_HOST="$host" RESOLVED_CPORT="$cport" RESOLVED_TOKEN="$token"
+    return 0
+}
+
 # Worker config apply (#185): POST an operator's writable-key change to a RigForge rig's control API
 # and record the outcome for the dashboard's config history. The intent carries ONLY the worker NAME
 # and the CHANGES — never a host, port, or token: the runner resolves the rig's real address + bearer
@@ -9214,12 +9261,10 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     }
     local worker changes
     worker=$(jq -r '.worker // ""' "$file")
-    # The worker name is a config.json lookup key AND (in name-auth) a bearer; pin its charset.
-    # LC_ALL=C so [!-~] is the printable-ASCII BYTE range: under a UTF-8 locale GNU grep reads the
-    # range by collation order and rejects ordinary names like "rig1" (caught by the release gate on a
-    # UTF-8 box; CI runs under C and missed it). jq's test() above is codepoint-based and unaffected.
-    if ! printf '%s' "$worker" | LC_ALL=C grep -qE '^[!-~]{1,128}$'; then
-        _wa_reject "malformed or missing 'worker' name in the request."
+    # Resolve the rig's dial target FIRST (worker-name charset + host/port/token) — the same
+    # fail-closed gate worker-upgrade uses, so the two verbs can't drift out of sync on it.
+    if ! resolve_worker_target "$worker" "edit"; then
+        _wa_reject "$RESOLVE_WORKER_ERR"
         return 0
     fi
     # Changes must be a non-empty object whose keys are ALL writable via the rig's control path (the
@@ -9238,30 +9283,7 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
         _wa_reject "keys not writable via the control path: $badkeys"
         return 0
     fi
-    # Resolve the rig's ADDRESS + BEARER from the HOST's config.json — never the intent. A rig with no
-    # host or no token cannot be a target (fail closed): the rig's control path is bearer-mandatory and
-    # we only ever dial an operator-set host.
-    local host cport token
-    host=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
-    cport=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
-    token=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
-    if [ -z "$host" ]; then
-        _wa_reject "worker '$worker' has no configured host in workers.list[] (or the deprecated dashboard.workers[]) — set host + control_port + token to edit it."
-        return 0
-    fi
-    # host charset guard (#122): no port/path/userinfo can be smuggled into the URL below.
-    if ! printf '%s' "$host" | grep -qE '^[A-Za-z0-9._-]{1,253}$'; then
-        _wa_reject "worker '$worker' has an invalid host."
-        return 0
-    fi
-    if ! printf '%s' "$cport" | grep -qE '^[0-9]{1,5}$' || [ "$cport" -lt 1 ] || [ "$cport" -gt 65535 ]; then
-        _wa_reject "worker '$worker' has an invalid control_port."
-        return 0
-    fi
-    if [ -z "$token" ]; then
-        _wa_reject "worker '$worker' has no token in workers.list[] (or the deprecated dashboard.workers[]) — the rig's control API is bearer-mandatory."
-        return 0
-    fi
+    local host="$RESOLVED_HOST" cport="$RESOLVED_CPORT" token="$RESOLVED_TOKEN"
     # Per-drain dial budget (hardening): worker-apply is the only control action that blocks the
     # single-threaded root runner on a network round-trip (a dial + a status poll, tens of seconds).
     # Cap how many actually dial per drain so a compromised container can't queue a flood of valid
@@ -9344,9 +9366,10 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
 
 control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
     # One-click RigForge upgrade for a single rig (#597) — fuses the two existing templates:
-    # control_worker_apply's rig resolution/guards/dial (address + bearer from the HOST config,
-    # never the intent) and control_upgrade's throttled host-side target re-derivation over Tor
-    # (the container proposes a version; GitHub decides the real target; a mismatch is refused).
+    # resolve_worker_target's rig resolution/guards (address + bearer from the HOST config, never
+    # the intent, shared with control_worker_apply) and control_upgrade's throttled host-side
+    # target re-derivation over Tor (the container proposes a version; GitHub decides the real
+    # target; a mismatch is refused).
     # The rig bounds whatever tag we send with its own monotonic + ancestry guards and rolls back
     # a build that doesn't come back live — rollback coverage is rig-side (rigforge#322).
     local file="$1" id="$2" actor="$3" cdir="$4"
@@ -9362,37 +9385,16 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
     }
     local worker proposed
     worker=$(jq -r '.worker // ""' "$file")
-    # Same charset pin as worker-apply: the name is a config.json lookup key. LC_ALL=C so [!-~]
-    # is the printable-ASCII BYTE range regardless of the host locale (#185's UTF-8 lesson).
-    if ! printf '%s' "$worker" | LC_ALL=C grep -qE '^[!-~]{1,128}$'; then
-        _wu_reject "malformed or missing 'worker' name in the request."
+    # Resolve the rig's dial target FIRST (worker-name charset + host/port/token) — the same
+    # fail-closed gate worker-apply uses, so the two verbs can't drift out of sync on it.
+    if ! resolve_worker_target "$worker" "upgrade"; then
+        _wu_reject "$RESOLVE_WORKER_ERR"
         return 0
     fi
+    local host="$RESOLVED_HOST" cport="$RESOLVED_CPORT" token="$RESOLVED_TOKEN"
     proposed=$(jq -r '.version // ""' "$file")
     if ! printf '%s' "$proposed" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
         _wu_reject "malformed or missing 'version' in the upgrade request."
-        return 0
-    fi
-    # Resolve the rig's ADDRESS + BEARER from the HOST's config.json — never the intent (same
-    # fail-closed contract as worker-apply: only an operator-set host can be a target).
-    local host cport token
-    host=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .host // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
-    cport=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
-    token=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
-    if [ -z "$host" ]; then
-        _wu_reject "worker '$worker' has no configured host in workers.list[] (or the deprecated dashboard.workers[]) — set host + control_port + token to upgrade it."
-        return 0
-    fi
-    if ! printf '%s' "$host" | grep -qE '^[A-Za-z0-9._-]{1,253}$'; then
-        _wu_reject "worker '$worker' has an invalid host."
-        return 0
-    fi
-    if ! printf '%s' "$cport" | grep -qE '^[0-9]{1,5}$' || [ "$cport" -lt 1 ] || [ "$cport" -gt 65535 ]; then
-        _wu_reject "worker '$worker' has an invalid control_port."
-        return 0
-    fi
-    if [ -z "$token" ]; then
-        _wu_reject "worker '$worker' has no token in workers.list[] (or the deprecated dashboard.workers[]) — the rig's control API is bearer-mandatory."
         return 0
     fi
     # Per-drain budget: an upgrade blocks the single-threaded root runner on the rig's build
