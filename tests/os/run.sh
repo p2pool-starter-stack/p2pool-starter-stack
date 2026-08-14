@@ -1743,6 +1743,23 @@ _make_media_stick() {
     losetup -d "$loop"
 }
 
+# Hot-attach $1 to the running guest as a REMOVABLE usb stick. attach-disk cannot express
+# removable='on', and the media channel's discovery filter keys on lsblk RM=1 — exactly what a
+# physical stick reports and what the install phase's virt-install disks already declare.
+_attach_media_stick() {
+    cat >"$DISK.stick.xml" <<EOF
+<disk type='file' device='disk'>
+  <driver name='qemu' type='raw'/>
+  <source file='$1'/>
+  <target dev='sdz' bus='usb' removable='on'/>
+</disk>
+EOF
+    virsh attach-device "$VM" "$DISK.stick.xml" --config --live >/dev/null 2>&1
+}
+_detach_media_stick() {
+    virsh detach-device "$VM" "$DISK.stick.xml" --config --live >/dev/null 2>&1
+}
+
 # Does $1 (a raw disk with one FAT partition) still carry pithead-config.json at its root? Used
 # after a boot to prove the applied stick was consumed. Host-side, so the disk must already be
 # detached from the guest.
@@ -1813,7 +1830,7 @@ phase_media() {
     local new_wallet="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
     _make_media_stick "$stick1" \
         "{\"monero\":{\"wallet_address\":\"$new_wallet\"},\"tari\":{\"wallet_address\":\"$HARNESS_TARI\"},\"p2pool\":{\"pool\":\"nano\",\"stratum_password\":\"auto\"}}"
-    virsh attach-disk "$VM" "$stick1" sdz --targetbus usb --subdriver raw --config --live >/dev/null 2>&1
+    _attach_media_stick "$stick1"
     : >"$SERIAL"
     _ssh reboot >/dev/null 2>&1 || true
 
@@ -1837,7 +1854,7 @@ phase_media() {
     [ "$pool_now" = "nano" ] && ok "the changed setting took effect (p2pool.pool: mini -> nano)" ||
         bad "the changed setting did not take effect (p2pool.pool is '${pool_now:-unknown}')"
 
-    virsh detach-disk "$VM" sdz --config --live >/dev/null 2>&1
+    _detach_media_stick
     sleep 2
     if _media_stick_has_config "$stick1"; then
         bad "the applied stick still carries pithead-config.json — it would re-apply next boot"
@@ -1850,12 +1867,12 @@ phase_media() {
     local stick2="${DISK%.img}-media-abort.img"
     _make_media_stick "$stick2" \
         "{\"monero\":{\"wallet_address\":\"$HARNESS_WALLET\"},\"tari\":{\"wallet_address\":\"$HARNESS_TARI\"},\"p2pool\":{\"pool\":\"mini\",\"stratum_password\":\"auto\"}}"
-    virsh attach-disk "$VM" "$stick2" sdz --targetbus usb --subdriver raw --config --live >/dev/null 2>&1
+    _attach_media_stick "$stick2"
     : >"$SERIAL"
     _ssh reboot >/dev/null 2>&1 || true
     wait_serial "staged configuration differs from the running one" 180 || bad "no diff banner on the abort leg"
     # Pull the medium mid-countdown — the deliberate physical act that cancels a pending change.
-    virsh detach-disk "$VM" sdz --config --live >/dev/null 2>&1
+    _detach_media_stick
     wait_serial "cancelled" 90 &&
         ok "removing the media mid-countdown cancels the change" ||
         bad "no cancellation ever appeared on the console after the media was pulled"
