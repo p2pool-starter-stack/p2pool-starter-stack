@@ -22,8 +22,7 @@ per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
   Once the dashboard has confirmed enough local wins, your own measured realization replaces
   the study band. The expected-vs-actual card's XvB expectation is tempered the same way.
 - **The dashboard stands down XvB when it is disabled.** The hero raffle KPIs, the Overview
-  tiles, and the stats panel disappear instead of showing dashes; the decision table stays, so
-  a miner can still judge whether enabling is worth the donation. When XvB is on, the win
+  tiles, and the stats panel disappear instead of showing dashes. When XvB is on, the win
   forecast follows the tier the donation actually targets, not only the tier already held.
 - **The XvB delivery study ships in the repo
   ([docs/research/xvb-delivery-study](docs/research/xvb-delivery-study/PAPER.md)).** The full
