@@ -8191,7 +8191,19 @@ assert_rc "'pithead setup' exits 0 given an existing config.json" "$su_rc" "0"
 assert_contains "'pithead setup' reports completion" "$su_out" "Deployment preparation complete"
 assert_eq "'pithead setup' writes a completed .env" \
     "$(run_sourced "$SU" env_get_file "$SU/.env" DEPLOYMENT_COMPLETED)" "true"
-unset SU su_out su_rc
+
+echo "== black-box: 'pithead setup' re-run with stdin on /dev/null refuses loudly (#924) =="
+# Exactly how a systemd unit or cron invokes it (no tty, stdin /dev/null): the old
+# `read -r -p ... || true` turned the immediate EOF into an empty RERUN, read as decline, exit 0
+# — a silent FALSE SUCCESS. The fix refuses loudly with a nonzero exit instead of proceeding: an
+# unattended re-provision must never ride on the absence of a terminal, and the appliance's own
+# headless paths never reach this guard (a failed provisioning attempt is not deployed).
+su2_out="$(cd "$SU" && DOCKER_LOG=/dev/null PATH="$SU/bin:$PATH" ./pithead setup --skip-deps --skip-optimize </dev/null 2>&1)"
+su2_rc=$?
+assert_rc "headless re-run on a deployed box refuses (nonzero, no silent success)" "$su2_rc" "1"
+assert_contains "the refusal says how to proceed" "$su2_out" "run './pithead setup' from a terminal"
+assert_not_contains "the refusal never claims setup was skipped-as-success" "$su2_out" "Setup skipped"
+unset SU su_out su_rc su2_out su2_rc
 
 echo "== black-box: 'pithead setup' with stratum_tls in a hand-written config generates the keypair (#261) =="
 # The setup path reaches compose through prepare_directories, never ensure_directories — a
