@@ -163,6 +163,13 @@ Two build variants, chosen by one flag:
 The updater defaults to RAUC; an image built without it cannot take another update, and the
 only way to get one now is to set `PITHEAD_UPDATER` to something else on purpose.
 
+The rootfs Dockerfile deliberately keeps its `apt-get update` layer cached across later install
+steps (layer economy); on a warm builder cache that layer can outlive a mirror rotating a
+package, and the install then 404s on a package the stale index still thinks exists. Rerun with
+`os/build-image.sh --fresh-index` to bust only that layer — `build-image.sh` prints this same
+remedy when it recognizes the 404 signature in a failed build's output. (#929; snapshot.debian.org
+pinning is a deliberate non-goal here, tracked as a follow-up for full build reproducibility.)
+
 Then the tiered battery, lowest tier first — the same rule as
 [`testing-strategy.md`](testing-strategy.md):
 

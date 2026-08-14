@@ -9557,6 +9557,47 @@ printf 'abc0000000000000000000000000def0\n' >"$MID/etc-id"
 ) >/dev/null 2>&1
 assert_eq "adopt persists this boot's id to /data" "$(cat "$MID/data-id" 2>/dev/null)" "abc0000000000000000000000000def0"
 
+echo "== unit: os/build-image.sh — --fresh-index flag parsing + the 404 remedy hint (#929) =="
+# PITHEAD_BUILD_IMAGE_TEST makes the script return right after arg parsing (before docker), so
+# these run its real argument handling and apt_fetch_failure_hint without a build.
+build_image_test() {
+    (
+        export PITHEAD_BUILD_IMAGE_TEST=1
+        # shellcheck disable=SC1091  # path is dynamic by design
+        source "$ROOT/os/build-image.sh" "$@"
+        [ "${FRESH_INDEX:-0}" = "1" ] && echo "FRESH_INDEX=1"
+        declare -f apt_fetch_failure_hint >/dev/null && echo "HINT_FN_DEFINED"
+    )
+}
+assert_contains "--fresh-index sets FRESH_INDEX" "$(build_image_test --fresh-index)" "FRESH_INDEX=1"
+assert_not_contains "bare invocation leaves FRESH_INDEX unset" "$(build_image_test)" "FRESH_INDEX=1"
+assert_contains "apt_fetch_failure_hint is defined after sourcing" "$(build_image_test)" "HINT_FN_DEFINED"
+
+unknown_flag_out="$("$ROOT/os/build-image.sh" --bogus 2>&1 || true)"
+assert_contains "unknown argument is rejected" "$unknown_flag_out" "unknown argument: --bogus"
+assert_contains "unknown-argument error names --fresh-index" "$unknown_flag_out" "--fresh-index"
+
+# --fresh-index composes with --ssh: parsed left-to-right, then --ssh's own missing-key check
+# exits before docker, proving --fresh-index didn't swallow the next argument.
+missing_key_out="$("$ROOT/os/build-image.sh" --fresh-index --ssh "$SANDBOX/no-such-key.pub" 2>&1 || true)"
+assert_contains "--fresh-index then --ssh with a missing key still hits --ssh's own error" "$missing_key_out" "--ssh: no public key found"
+
+# Exercise the hint function directly by sourcing the same way and calling it.
+run_hint() {
+    (
+        local log="$1"
+        export PITHEAD_BUILD_IMAGE_TEST=1
+        set -- # `source file` with no args keeps the caller's $@ — clear it so build-image.sh's
+        # own arg loop doesn't try to parse the log tail as a CLI flag.
+        # shellcheck disable=SC1091  # path is dynamic by design
+        source "$ROOT/os/build-image.sh"
+        apt_fetch_failure_hint "$log" 2>&1
+    )
+}
+assert_contains "404 signature triggers the --fresh-index remedy" "$(run_hint 'E: Failed to fetch ... 404  Not Found')" "--fresh-index"
+assert_contains "'Unable to fetch' signature triggers the remedy" "$(run_hint 'E: Unable to fetch some archives, maybe run apt-get update')" "--fresh-index"
+assert_eq "an unrelated failure prints no hint" "$(run_hint 'E: some other build error')" ""
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

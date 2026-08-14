@@ -27,6 +27,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # `rauc info` extracts a bundle's manifest with unsquashfs, and without it `pithead os-update`
 # cannot read any bundle's compatibility metadata — every guard it carries was dead on the
 # appliance (found live on the bench, not by CI, whose stack tests stub rauc).
+# Cache-busts ONLY this layer (#929): a warm builder cache reuses the apt index for weeks, and
+# when the mirror rotates a package between builds the stale index 404s. build-image.sh's
+# --fresh-index flag passes a fresh value here; any other build-arg on a later layer would still
+# hit cache as normal — an ARG only invalidates the RUN steps from its declaration onward.
+ARG APT_INDEX_STAMP=0
 RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv systemd-timesyncd systemd-resolved dbus udev \
         linux-image-amd64 initramfs-tools zstd \
