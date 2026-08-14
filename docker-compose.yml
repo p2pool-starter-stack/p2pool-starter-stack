@@ -822,8 +822,9 @@ services:
       - proxy_net
 
   # --- Docker Control Proxy (start/stop only) ---
-  # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy: node-down worker
-  # failover (Issue #31) and holding the miner until the nodes finish syncing (Issue #35).
+  # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy — node-down worker
+  # failover (Issue #31), holding the miner until the nodes finish syncing (Issue #35) — plus
+  # tor (#424) and monerod after a tor heal (#972).
   # With POST=1 but every section (CONTAINERS, EXEC, IMAGES, …) left off, the v0.4.2 ruleset
   # allows exactly `POST /containers/<id>/{start,stop}` and denies everything else
   # (create/kill/exec/reads). Kept separate from the read-only proxy above so opening POST
@@ -856,7 +857,8 @@ services:
     # can't scope start/stop to specific containers, so keeping this proxy off `mining_net` and only
     # on the host loopback is what stops a compromised mining container from start/stopping the whole
     # stack. The dashboard reaches it at 127.0.0.1:12376; it only ever names p2pool/xmrig-proxy —
-    # plus tor for the opt-in guard self-heal restart (#424).
+    # plus tor for the opt-in guard self-heal restart (#424), and monerod right after a successful
+    # tor heal (#972: a tor cycle strands monerod's peers, so the heal re-dials the local node too).
     ports:
       - "127.0.0.1:12376:2375"
     networks:
