@@ -332,6 +332,23 @@ test("wipe everything (or an empty disk): the full form asks everything", async 
   assert.match(empty, /Payout addresses/);
 });
 
+test("chain size, healthchecks and time zone sit under Advanced, not the first-run form", async () => {
+  // Audit-confirmed slim first-run (Home Assistant model): these three are the only appliance
+  // questions beyond the DIY CLI's own core shortlist, so they move to day-2, not day-1.
+  const all = await appWithPick("sda", "all");
+  const advancedAt = all.indexOf("Advanced");
+  assert.ok(advancedAt > -1, "Advanced pane should render");
+  for (const label of ["Chain size", "Healthchecks.io ping URL", "Time zone"]) {
+    const at = all.indexOf(label);
+    assert.ok(at > -1, `${label} should still render (day-2 need is real)`);
+    assert.ok(at > advancedAt, `${label} should render inside the Advanced pane, not the main form`);
+  }
+  // The primary form's own headings stay above Advanced, unmoved.
+  for (const label of ["Payout addresses", "Dashboard login", "Alerts"]) {
+    assert.ok(all.indexOf(label) < advancedAt, `${label} should stay in the primary form`);
+  }
+});
+
 test("keep everything submits NO config — only the disk request", async () => {
   const { inst, restore } = await appOn([
     stateFor("installer", {
