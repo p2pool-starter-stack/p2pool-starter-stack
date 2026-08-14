@@ -1780,8 +1780,8 @@ phase_media() {
     done
     mnt=$(mktemp -d)
     mount "${loop}p1" "$mnt"
-    printf '{"monero":{"wallet_address":"%s"},"tari":{"wallet_address":"harness-dummy-tari-address"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
-        "$HARNESS_WALLET" >"$mnt/pithead-config.json"
+    printf '{"monero":{"wallet_address":"%s"},"tari":{"wallet_address":"%s"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
+        "$HARNESS_WALLET" "$HARNESS_TARI" >"$mnt/pithead-config.json"
     umount "$mnt"
     rmdir "$mnt"
     losetup -d "$loop"
@@ -1812,7 +1812,7 @@ phase_media() {
     local stick1="${DISK%.img}-media-apply.img"
     local new_wallet="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
     _make_media_stick "$stick1" \
-        "{\"monero\":{\"wallet_address\":\"$new_wallet\"},\"tari\":{\"wallet_address\":\"harness-dummy-tari-address\"},\"p2pool\":{\"pool\":\"nano\",\"stratum_password\":\"auto\"}}"
+        "{\"monero\":{\"wallet_address\":\"$new_wallet\"},\"tari\":{\"wallet_address\":\"$HARNESS_TARI\"},\"p2pool\":{\"pool\":\"nano\",\"stratum_password\":\"auto\"}}"
     virsh attach-disk "$VM" "$stick1" sdz --targetbus usb --subdriver raw --config --live >/dev/null 2>&1
     : >"$SERIAL"
     _ssh reboot >/dev/null 2>&1 || true
@@ -1849,7 +1849,7 @@ phase_media() {
     # ---- abort leg: pulling the media mid-countdown cancels the change -----------------------
     local stick2="${DISK%.img}-media-abort.img"
     _make_media_stick "$stick2" \
-        "{\"monero\":{\"wallet_address\":\"$HARNESS_WALLET\"},\"tari\":{\"wallet_address\":\"harness-dummy-tari-address\"},\"p2pool\":{\"pool\":\"mini\",\"stratum_password\":\"auto\"}}"
+        "{\"monero\":{\"wallet_address\":\"$HARNESS_WALLET\"},\"tari\":{\"wallet_address\":\"$HARNESS_TARI\"},\"p2pool\":{\"pool\":\"mini\",\"stratum_password\":\"auto\"}}"
     virsh attach-disk "$VM" "$stick2" sdz --targetbus usb --subdriver raw --config --live >/dev/null 2>&1
     : >"$SERIAL"
     _ssh reboot >/dev/null 2>&1 || true
