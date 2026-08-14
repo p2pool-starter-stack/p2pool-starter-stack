@@ -98,7 +98,10 @@ for _ in $(seq 90); do
     # unhealthy or still-booting stack just loops here without paying for a full diagnostic. doctor
     # only has to pass ONCE — a chain node that is still 'starting' fails a pass and the loop retries
     # it, so the gate waits out a slow start without ever committing on partial evidence.
-    if [ "${code:-000}" != "000" ] && ./pithead doctor --json >/dev/null 2>&1; then
+    # doctor's verdicts land in /run (volatile, no /data wear): when this gate never passes, the
+    # LAST failing run names the exact blocking check — without it a deadlock here was
+    # undiagnosable (the battery hit exactly that).
+    if [ "${code:-000}" != "000" ] && ./pithead doctor --json >/run/pithead-boot-doctor.json 2>/dev/null; then
         command -v rauc >/dev/null 2>&1 && rauc status mark-good
         echo "pithead-boot: stack is serving (HTTP $code) and doctor reports healthy — booted slot committed"
         # Post-commit, the held chain services start and the forward migration runs NOW — the
