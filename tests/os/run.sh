@@ -2400,16 +2400,21 @@ phase_reset() {
     else
         bad "reseeded dirs missing after factory-reset (/data/overlay/var, /data/overlay/var-work, /data/pithead)"
     fi
+    # The dashboard image is BAKED into the OS image (the wizard archive) and legitimately
+    # reloaded onto the fresh store by the post-reset wizard boot — its presence proves nothing.
+    # The wipe probe is an image that only ever arrives by PULL at provision time: monerod.
     local images_after
     images_after=$(_ssh "podman images --format '{{.Repository}}'" 2>/dev/null | tr '\n' ' ')
-    if printf '%s' "$images_after" | grep -q dashboard; then
+    if printf '%s' "$images_after" | grep -q monero; then
         bad "the OLD container store survived factory-reset (still has: $images_after)"
     else
-        ok "container store was recreated — no stack images survive the wipe (podman images: ${images_after:-none})"
+        ok "container store was recreated — no pulled stack images survive the wipe (podman images: ${images_after:-none})"
     fi
 
     # The reset-tier rule (os/overlay/pithead-data-reset): /data/ssh and /data/pithead/machine-id
-    # are deliberately NOT reseeded, so both regenerate — a handed-over box keeps nothing.
+    # are deliberately NOT reseeded, so both regenerate — a handed-over box keeps nothing. This
+    # inequality already caught one real bug: a dbus-baked /var/lib/dbus/machine-id made every
+    # "fresh" first boot mint the SAME id (fixed in the rootfs Dockerfile). Keep it strict.
     local id_after fp_after
     id_after=$(_ssh cat /etc/machine-id)
     fp_after=$(_ssh ssh-keygen -lf /data/ssh/ssh_host_ed25519_key 2>/dev/null | awk '{print $2}')

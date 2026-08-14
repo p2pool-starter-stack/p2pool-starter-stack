@@ -9918,6 +9918,19 @@ printf 'abc0000000000000000000000000def0\n' >"$MID/etc-id"
     sh "$ROOT/os/overlay/pithead-machine-id"
 ) >/dev/null 2>&1
 assert_eq "adopt persists this boot's id to /data" "$(cat "$MID/data-id" 2>/dev/null)" "abc0000000000000000000000000def0"
+# 3) Nothing to adopt: /etc empty AND /data empty -> refuse loudly, persist nothing. A newline
+# persisted here would satisfy [ -s ] forever and every later boot would restore garbage.
+rm -f "$MID/data-id"
+: >"$MID/etc-id"
+if (
+    export PITHEAD_MACHINE_ID_FILE="$MID/data-id" PITHEAD_MACHINE_ID_ETC="$MID/etc-id"
+    sh "$ROOT/os/overlay/pithead-machine-id"
+) >/dev/null 2>&1; then
+    bad "empty-adopt: script must refuse when there is no id anywhere"
+else
+    ok "empty-adopt: refused (non-zero exit)"
+fi
+assert_eq "empty-adopt persists nothing" "$(cat "$MID/data-id" 2>/dev/null || echo absent)" "absent"
 
 echo "== unit: pithead-media-config — physical-presence media channel (#786 sub-issue D) =="
 # Source the boot leg (functions only — its main is guarded) and drive its pieces with stubbed
