@@ -24,6 +24,10 @@ CVE-2026-56852
 CVE-2026-34040
 # Go stdlib (both binaries built with go1.26.4; clears with upstream rebuilds):
 CVE-2026-39822
+# Go stdlib net/http idna + dns/dnsmessage (2026-08 batch, fixed only in go1.25.13/1.26.6 —
+# compose v5.4.0 is still go1.26.5, cosign has no newer release; verified 2026-08-14):
+CVE-2026-39821
+CVE-2026-46600
 # google.golang.org/grpc vendored in both pinned binaries (GHSA id — Trivy gates on it like a
 # CVE; same clearing condition as the three above: upstream rebuilds on the fixed module):
 GHSA-hrxh-6v49-42gf
