@@ -251,7 +251,8 @@ main() {
     # the first reboot: the installer builds a fresh ESP, and the operator's config — the whole
     # point of pre-seeding — would stay behind on the stick.
     local seed
-    for seed in pithead-config.json pithead-token.txt pithead-rig.json; do
+    for seed in pithead-config.json pithead-token.txt pithead-rig.json \
+        pithead-restore.enc pithead-restore-pass; do
         [ -f "/boot/efi/$seed" ] && install -m 600 "/boot/efi/$seed" "$mnt/boot/efi/$seed"
     done
 

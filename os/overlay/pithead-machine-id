@@ -4,35 +4,54 @@
 # must land before systemd-networkd (DHCP DUID) and systemd-journal-flush (the persistent
 # journal directory name) observe /etc/machine-id, and after /data is mounted.
 #
-# The image ships /etc/machine-id EMPTY, and /etc's overlay upper is a volatile tmpfs, so PID 1
-# runs first-boot machine-id handling on EVERY boot (long before any unit): it writes a fresh
-# transient id into the writable /etc, or — on a read-only root — bind-mounts a WRITABLE file
-# from /run over /etc/machine-id (machine-id(5) — the mount exists so the id can be written).
-# Either way that layer is discarded at power-off, so without the restore below the machine would
-# pick a NEW random id every boot, churning the DHCP lease. We write THROUGH that writable layer;
-# an earlier version unmounted it first and hit the read-only lower image on a post-A/B-swap slot,
-# so the write failed, machine-id stayed empty, and networkd never brought up DHCP.
+# The image ships /etc/machine-id EMPTY, so PID 1 runs first-boot machine-id handling on EVERY
+# boot: on the read-only root it bind-mounts a transient id from /run over /etc/machine-id.
+# That bind is read-only (the direct write fails with EROFS), and answering it with a bind
+# mount of our own was this script's previous shape — a trap: provision_console_login() later
+# mounts a /run-backed overlay OVER all of /etc, and an overlay's lower never shows a file
+# bind mounted beneath it, so /etc/machine-id went back to reading the image's empty file
+# mid-boot. journalctl (which resolves the journal directory by the CURRENT id) then found
+# nothing — the KVM migration leg caught it. The fix is to write the id where every later
+# reader will actually look: mount that same /etc overlay OURSELVES (whoever runs first mounts
+# it, the other finds it) and write through it.
 set -eu
 
 ID_FILE="${PITHEAD_MACHINE_ID_FILE:-/data/pithead/machine-id}"
 ETC_ID="${PITHEAD_MACHINE_ID_ETC:-/etc/machine-id}"
 mkdir -p "$(dirname "$ID_FILE")"
 
+# The id PID 1 gave this boot, read BEFORE any remounting: on a first boot it lives only in the
+# transient bind mount the overlay below would hide.
+boot_id=$(cat "$ETC_ID" 2>/dev/null || true)
+
 if [ -s "$ID_FILE" ]; then
-    if cat "$ID_FILE" >"$ETC_ID" 2>/dev/null; then
-        echo "pithead-machine-id: restored persisted machine-id from $ID_FILE"
-    else
-        # /etc/machine-id was read-only with no writable layer over it — provide one ourselves,
-        # exactly as systemd would, rather than let the box boot with an empty id and no network.
-        cp "$ID_FILE" /run/pithead-machine-id
-        umount "$ETC_ID" 2>/dev/null || true
-        mount --bind /run/pithead-machine-id "$ETC_ID"
-        echo "pithead-machine-id: restored persisted machine-id via bind mount ($ID_FILE)"
-    fi
+    want=$(cat "$ID_FILE")
+    note="pithead-machine-id: restored persisted machine-id from $ID_FILE"
 else
     # First boot with nothing on /data yet: adopt whatever systemd already generated for THIS
-    # boot rather than minting a second one — one machine, one id, chosen once.
-    cp "$ETC_ID" "$ID_FILE"
+    # boot rather than minting a second one — one machine, one id, chosen once. Nothing there
+    # to adopt is a broken boot, not ours to paper over: leave loudly, retry next boot.
+    if [ -z "$boot_id" ]; then
+        echo "pithead-machine-id: no machine-id to adopt ($ETC_ID is empty) — leaving it for the next boot" >&2
+        exit 1
+    fi
+    want="$boot_id"
+    printf '%s\n' "$want" >"$ID_FILE"
     chmod 444 "$ID_FILE"
-    echo "pithead-machine-id: adopted this boot's machine-id and persisted it to $ID_FILE"
+    note="pithead-machine-id: adopted this boot's machine-id and persisted it to $ID_FILE"
 fi
+
+# A mountpoint at $ETC_ID is PID 1's read-only transient bind — writing through it would fail,
+# and a writable bind of our own would be shadowed later (header). Shadow IT instead with the
+# /etc overlay, the same one provision_console_login() otherwise mounts, and write the id into
+# the overlay upper where the rest of this boot will read it. Off the appliance (a writable
+# /etc, the test sandbox) there is no mountpoint and the plain write is the whole job.
+if mountpoint -q "$ETC_ID" 2>/dev/null; then
+    if ! findmnt -no FSTYPE /etc 2>/dev/null | grep -qx overlay; then
+        mkdir -p /run/pithead-etc/upper /run/pithead-etc/work
+        mount -t overlay overlay \
+            -o lowerdir=/etc,upperdir=/run/pithead-etc/upper,workdir=/run/pithead-etc/work /etc
+    fi
+fi
+printf '%s\n' "$want" >"$ETC_ID"
+echo "$note"

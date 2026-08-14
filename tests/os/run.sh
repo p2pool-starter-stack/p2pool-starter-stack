@@ -1059,12 +1059,81 @@ phase_install() {
     fi
 
     # ---- restore-at-setup leg (#909, #786 sub-issue B) -----------------------------------
-    # A genuine encrypted backup pulled off THIS live, fully-provisioned machine seeds a
+    # A genuine encrypted backup pulled off a live, fully-provisioned machine seeds a
     # totally fresh disk through the wizard's upload path instead of the config form — the
     # disaster-recovery loop #908 (export) opens and this closes. Real archive, real upload
     # over curl -F, real decrypt+extract on the guest, and the identity (wallet, Tor onion)
     # must survive — proof the "restored config drives provisioning as if pre-seeded" promise
     # actually holds, which nothing below tier 4 can prove.
+    #
+    # The keep-reinstalled machine above sits at the WIZARD — a reinstall always returns
+    # there (keep preserves /data, not provisioned-ness), and `pithead backup` rightly
+    # refuses without a provisioned stack (.env, onion keys). Provision it first, through
+    # the same HTTP flow a human would drive.
+    local rtoken rjar rtries
+    rtoken=""
+    rtries=0
+    while [ -z "$rtoken" ] && [ "$rtries" -lt 40 ]; do
+        rtoken=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$rtoken" ] || sleep 3
+        rtries=$((rtries + 1))
+    done
+    if [ -z "$rtoken" ]; then
+        bad "restore leg: no wizard token on the console after the keep-reinstall"
+        rm -f "$target_disk"
+        return
+    fi
+    rjar=$(mktemp)
+    curl -fsSk -c "$rjar" -d "token=$rtoken" "https://$ip/auth" -o /dev/null 2>/dev/null
+    scode=$(curl -sSk -b "$rjar" --data "monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini" \
+        "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    if [ "$scode" != "200" ]; then
+        bad "restore leg: wizard submit did not return 200 (got ${scode:-none})"
+        rm -f "$rjar" "$target_disk"
+        return
+    fi
+    # A keep-machine keeps its old login, so the credentials card (and the hold it creates)
+    # may never appear — ack it if it does, move on if it does not.
+    rtries=0
+    while [ "$rtries" -lt 12 ]; do
+        if curl -sSk -b "$rjar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"'; then
+            curl -sSk -b "$rjar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null
+            break
+        fi
+        sleep 5
+        rtries=$((rtries + 1))
+    done
+    rm -f "$rjar"
+    local rdeadline rnames
+    rdeadline=$(($(date +%s) + 1500))
+    rnames=""
+    while [ "$(date +%s)" -lt "$rdeadline" ]; do
+        rnames=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        case "$rnames" in *dashboard*caddy* | *caddy*dashboard*) break ;; esac
+        sleep 15
+    done
+    case "$rnames" in
+    *dashboard*caddy* | *caddy*dashboard*)
+        ok "restore leg: keep-reinstalled machine provisioned — a live stack to back up ($rnames)"
+        # Settle before backing up: `pithead backup` stops the RUNNING containers, but ones
+        # still being created slip past that stop and start mid-tar — "file changed as we read
+        # it" killed the pipeline once. Two identical readings 10s apart means startup is over.
+        local rprev=""
+        rtries=0
+        while [ "$rtries" -lt 30 ]; do
+            [ -n "$rnames" ] && [ "$rnames" = "$rprev" ] && break
+            rprev="$rnames"
+            sleep 10
+            rnames=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+            rtries=$((rtries + 1))
+        done
+        ;;
+    *)
+        bad "restore leg: stack never came up after provisioning (running: '${rnames:-none}')"
+        rm -f "$target_disk"
+        return
+        ;;
+    esac
     local restore_archive="/tmp/pithead-os-restore-test.tar.gz.enc"
     local restore_pass="pithead-os-restore-test-passphrase" # fixture value, not real secret material
     rm -f "$restore_archive"
@@ -1072,9 +1141,9 @@ phase_install() {
         ok "restore leg: took a real encrypted backup off the live machine"
     else
         bad "restore leg: could not take the source backup"
-        # The reason lives on the guest — print it, or this failure is undiagnosable after the
-        # VM is recycled (exactly what happened on its first live run).
-        printf '     guest backup log tail: %s\n' "$(_ssh "tail -c 600 /tmp/restore-backup.log 2>/dev/null" | tr '\n' ' ' | tail -c 500)"
+        # The reason lives on the guest — print ALL of it, or this failure is undiagnosable
+        # after the VM is recycled (a 500-char tail cut off the tar/openssl stderr once).
+        _ssh "cat /tmp/restore-backup.log 2>/dev/null" | tr -d '\r' | sed 's/^/     | /'
         rm -f "$target_disk"
         return
     fi
@@ -1208,13 +1277,28 @@ phase_install() {
         return
     }
     ok "restore leg: the restored machine boots from the fresh disk"
+    # The carried restore lands during firstboot and .env only exists once render has run —
+    # wait for provisioning, don't race it.
+    if _ssh "for i in \$(seq 90); do [ -f /data/pithead/config.json ] && exit 0; sleep 2; done; exit 1"; then
+        ok "restore leg: the carried archive provisioned the machine — config.json is back"
+    else
+        bad "restore leg: no config.json ever appeared — the carried restore never landed"
+        rm -f "$target_disk" "$restore_archive" "$restore_target"
+        return
+    fi
     if _ssh "grep -q \"$HARNESS_WALLET\" /data/pithead/config.json"; then
         ok "restore leg: restored machine carries the ORIGINAL wallet address, not a fresh one"
     else
         bad "restore leg: restored machine's config does not carry the original wallet"
     fi
-    local new_onion
-    new_onion=$(_ssh "grep MONERO_ONION_ADDRESS /data/pithead/.env" | cut -d= -f2)
+    local new_onion=""
+    local odeadline
+    odeadline=$(($(date +%s) + 600))
+    while [ "$(date +%s)" -lt "$odeadline" ]; do
+        new_onion=$(_ssh "grep MONERO_ONION_ADDRESS /data/pithead/.env 2>/dev/null" | cut -d= -f2 | tr -d '\r')
+        [ -n "$new_onion" ] && break
+        sleep 15
+    done
     if [ -n "$new_onion" ] && [ "$new_onion" = "$orig_onion" ]; then
         ok "restore leg: restored machine kept the ORIGINAL Tor identity, not a regenerated one"
     else
@@ -1743,6 +1827,23 @@ _make_media_stick() {
     losetup -d "$loop"
 }
 
+# Hot-attach $1 to the running guest as a REMOVABLE usb stick. attach-disk cannot express
+# removable='on', and the media channel's discovery filter keys on lsblk RM=1 — exactly what a
+# physical stick reports and what the install phase's virt-install disks already declare.
+_attach_media_stick() {
+    cat >"$DISK.stick.xml" <<EOF
+<disk type='file' device='disk'>
+  <driver name='qemu' type='raw'/>
+  <source file='$1'/>
+  <target dev='sdz' bus='usb' removable='on'/>
+</disk>
+EOF
+    virsh attach-device "$VM" "$DISK.stick.xml" --config --live >/dev/null 2>&1
+}
+_detach_media_stick() {
+    virsh detach-device "$VM" "$DISK.stick.xml" --config --live >/dev/null 2>&1
+}
+
 # Does $1 (a raw disk with one FAT partition) still carry pithead-config.json at its root? Used
 # after a boot to prove the applied stick was consumed. Host-side, so the disk must already be
 # detached from the guest.
@@ -1780,8 +1881,8 @@ phase_media() {
     done
     mnt=$(mktemp -d)
     mount "${loop}p1" "$mnt"
-    printf '{"monero":{"wallet_address":"%s"},"tari":{"wallet_address":"harness-dummy-tari-address"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
-        "$HARNESS_WALLET" >"$mnt/pithead-config.json"
+    printf '{"monero":{"wallet_address":"%s"},"tari":{"wallet_address":"%s"},"p2pool":{"pool":"mini","stratum_password":"auto"}}' \
+        "$HARNESS_WALLET" "$HARNESS_TARI" >"$mnt/pithead-config.json"
     umount "$mnt"
     rmdir "$mnt"
     losetup -d "$loop"
@@ -1810,10 +1911,13 @@ phase_media() {
 
     # ---- apply leg: a real change, shown, counted down, applied, consumed --------------------
     local stick1="${DISK%.img}-media-apply.img"
-    local new_wallet="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
+    # A DIFFERENT valid primary address than HARNESS_WALLET (an earlier copy-paste made them
+    # identical, so the "changed wallet" leg changed nothing and the wallet assert could never
+    # match). The Monero project's donation address: public, checksum-valid, safe as a fixture.
+    local new_wallet="44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"
     _make_media_stick "$stick1" \
-        "{\"monero\":{\"wallet_address\":\"$new_wallet\"},\"tari\":{\"wallet_address\":\"harness-dummy-tari-address\"},\"p2pool\":{\"pool\":\"nano\",\"stratum_password\":\"auto\"}}"
-    virsh attach-disk "$VM" "$stick1" sdz --targetbus usb --subdriver raw --config --live >/dev/null 2>&1
+        "{\"monero\":{\"wallet_address\":\"$new_wallet\"},\"tari\":{\"wallet_address\":\"$HARNESS_TARI\"},\"p2pool\":{\"pool\":\"nano\",\"stratum_password\":\"auto\"}}"
+    _attach_media_stick "$stick1"
     : >"$SERIAL"
     _ssh reboot >/dev/null 2>&1 || true
 
@@ -1837,7 +1941,7 @@ phase_media() {
     [ "$pool_now" = "nano" ] && ok "the changed setting took effect (p2pool.pool: mini -> nano)" ||
         bad "the changed setting did not take effect (p2pool.pool is '${pool_now:-unknown}')"
 
-    virsh detach-disk "$VM" sdz --config --live >/dev/null 2>&1
+    _detach_media_stick
     sleep 2
     if _media_stick_has_config "$stick1"; then
         bad "the applied stick still carries pithead-config.json — it would re-apply next boot"
@@ -1849,13 +1953,13 @@ phase_media() {
     # ---- abort leg: pulling the media mid-countdown cancels the change -----------------------
     local stick2="${DISK%.img}-media-abort.img"
     _make_media_stick "$stick2" \
-        "{\"monero\":{\"wallet_address\":\"$HARNESS_WALLET\"},\"tari\":{\"wallet_address\":\"harness-dummy-tari-address\"},\"p2pool\":{\"pool\":\"mini\",\"stratum_password\":\"auto\"}}"
-    virsh attach-disk "$VM" "$stick2" sdz --targetbus usb --subdriver raw --config --live >/dev/null 2>&1
+        "{\"monero\":{\"wallet_address\":\"$HARNESS_WALLET\"},\"tari\":{\"wallet_address\":\"$HARNESS_TARI\"},\"p2pool\":{\"pool\":\"mini\",\"stratum_password\":\"auto\"}}"
+    _attach_media_stick "$stick2"
     : >"$SERIAL"
     _ssh reboot >/dev/null 2>&1 || true
     wait_serial "staged configuration differs from the running one" 180 || bad "no diff banner on the abort leg"
     # Pull the medium mid-countdown — the deliberate physical act that cancels a pending change.
-    virsh detach-disk "$VM" sdz --config --live >/dev/null 2>&1
+    _detach_media_stick
     wait_serial "cancelled" 90 &&
         ok "removing the media mid-countdown cancels the change" ||
         bad "no cancellation ever appeared on the console after the media was pulled"
@@ -2400,23 +2504,34 @@ phase_reset() {
     else
         bad "reseeded dirs missing after factory-reset (/data/overlay/var, /data/overlay/var-work, /data/pithead)"
     fi
+    # The dashboard image is BAKED into the OS image (the wizard archive) and legitimately
+    # reloaded onto the fresh store by the post-reset wizard boot — its presence proves nothing.
+    # The wipe probe is an image that only ever arrives by PULL at provision time: monerod.
     local images_after
     images_after=$(_ssh "podman images --format '{{.Repository}}'" 2>/dev/null | tr '\n' ' ')
-    if printf '%s' "$images_after" | grep -q dashboard; then
+    if printf '%s' "$images_after" | grep -q monero; then
         bad "the OLD container store survived factory-reset (still has: $images_after)"
     else
-        ok "container store was recreated — no stack images survive the wipe (podman images: ${images_after:-none})"
+        ok "container store was recreated — no pulled stack images survive the wipe (podman images: ${images_after:-none})"
     fi
 
     # The reset-tier rule (os/overlay/pithead-data-reset): /data/ssh and /data/pithead/machine-id
-    # are deliberately NOT reseeded, so both regenerate — a handed-over box keeps nothing.
-    local id_after fp_after
+    # are deliberately NOT reseeded, so both regenerate — a handed-over box keeps nothing OF THE
+    # OWNER'S. A bare inequality already caught one real bug (a dbus-baked machine-id shared by
+    # every image, fixed in the rootfs Dockerfile) but cannot pass HERE even when the product is
+    # right: with that bake gone, systemd's next first-boot source inside a VM is the DMI product
+    # UUID (machine-id(5) — VM-only; real hardware falls through to random), and this leg reboots
+    # ONE VM, so the "fresh" id is deterministically the same. The honest assert: the regenerated
+    # id is the PLATFORM's (DMI-derived — machine identity, like a serial number) or it changed
+    # (the real-hardware shape). Only an id that is neither proves owner state carried over.
+    local id_after fp_after dmi_id
     id_after=$(_ssh cat /etc/machine-id)
     fp_after=$(_ssh ssh-keygen -lf /data/ssh/ssh_host_ed25519_key 2>/dev/null | awk '{print $2}')
-    if [ -n "$id_after" ] && [ "$id_after" != "$id_before" ]; then
-        ok "machine-id is FRESH after factory-reset ($id_before -> $id_after)"
+    dmi_id=$(_ssh "cat /sys/class/dmi/id/product_uuid 2>/dev/null" | tr -d '-' | tr 'A-F' 'a-f')
+    if [ -n "$id_after" ] && { [ "$id_after" != "$id_before" ] || [ "$id_after" = "$dmi_id" ]; }; then
+        ok "machine-id regenerated from the platform after factory-reset ($id_after${dmi_id:+, matches DMI})"
     else
-        bad "machine-id survived factory-reset (before: $id_before, after: ${id_after:-none}) — the old owner's identity carried over"
+        bad "machine-id survived factory-reset (before: $id_before, after: ${id_after:-none}, dmi: ${dmi_id:-none}) — the old owner's identity carried over"
     fi
     if [ -n "$fp_after" ] && [ "$fp_after" != "$fp_before" ]; then
         ok "SSH host-key fingerprint is FRESH after factory-reset ($fp_before -> $fp_after)"

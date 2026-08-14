@@ -1523,20 +1523,28 @@ firstboot_consume_rig() { # <spool-dir>
 # submission — the caller falls into the SAME accept path), 1 rejected (error.txt written), 2
 # none. The passphrase is read once and deleted immediately either way — it never outlives
 # this call.
-firstboot_consume_restore() { # <spool-dir>
-    local spool="$1" archive="$1/restore-archive" passfile="$1/restore-passphrase"
-    local pass="" size magic encrypted=0 tmp staged_cfg err
-    [ -f "$archive" ] || return 2
-    { set +x; } 2>/dev/null # xtrace would print the passphrase below
-    pass=$(cat "$passfile" 2>/dev/null || true)
-    rm -f "$passfile" # never persisted beyond this attempt, accepted or not
+# Where an installer boot parks an ACCEPTED restore for the carry to the target's ESP —
+# root-only tmpfs, gone at power-off, never mounted into any container. Overridable so the
+# shell suite can run this without root's /run.
+restore_carry_dir() { printf '%s' "${PITHEAD_RESTORE_CARRY_DIR:-/run/pithead-restore}"; }
+
+# The whole restore acceptance, shared by its two doors — the wizard's spool channel
+# (firstboot_consume_restore) and the installer-carried ESP pre-seed (consume_preseed_restore):
+# size cap, encryption detection, decrypt verification, tar integrity, path-safety audit,
+# extract-and-validate through a staging copy, then commit. One set of checks, two doors.
+# With <config-only-dest> set, the validated config is copied there and NOTHING ELSE touches
+# this machine — the installer flow, where the restored tree belongs to the TARGET and
+# decrypted keys must never rest on the stick. rc 0: done. rc 1: refused, one page-ready
+# line in <errfile>. Never deletes <archive> — the callers own their files.
+restore_apply() { # <archive> <passphrase> <errfile> [<config-only-dest>]
+    local archive="$1" pass="$2" errf="$3" cfg_dest="${4:-}"
+    local size magic encrypted=0 tmp staged_cfg err
 
     # Server-side cap already refused an oversize upload before it reached the spool; checked
-    # again here so a spool file dropped by any other means gets the same honest refusal.
+    # again here so a file dropped by any other means gets the same honest refusal.
     size=$(wc -c <"$archive" 2>/dev/null || echo 0)
     if [ "$size" -gt "$RESTORE_MAX_BYTES" ]; then
-        printf 'backup archive is too large (max %s MB) — a Pithead backup holds only config, keys and the dashboard database, never the blockchains' "$((RESTORE_MAX_BYTES / 1048576))" >"$spool/error.txt"
-        rm -f "$archive"
+        printf 'backup archive is too large (max %s MB) — a Pithead backup holds only config, keys and the dashboard database, never the blockchains' "$((RESTORE_MAX_BYTES / 1048576))" >"$errf"
         return 1
     fi
 
@@ -1545,16 +1553,14 @@ firstboot_consume_restore() { # <spool-dir>
     53616c7465645f5f) encrypted=1 ;; # "Salted__"
     1f8b*) ;;                        # gzip
     *)
-        printf 'not a Pithead backup archive' >"$spool/error.txt"
-        rm -f "$archive"
+        printf 'not a Pithead backup archive' >"$errf"
         return 1
         ;;
     esac
 
     if [ "$encrypted" -eq 1 ]; then
         if [ -z "$pass" ]; then
-            printf 'this archive is encrypted — enter its passphrase' >"$spool/error.txt"
-            rm -f "$archive"
+            printf 'this archive is encrypted — enter its passphrase' >"$errf"
             return 1
         fi
         local plain_magic
@@ -1562,23 +1568,18 @@ firstboot_consume_restore() { # <spool-dir>
             -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
             head -c 2 | od -An -tx1 | tr -d ' \n') || true
         if [ "$plain_magic" != "1f8b" ]; then
-            printf 'wrong passphrase or corrupt archive' >"$spool/error.txt"
-            rm -f "$archive"
-            pass=""
+            printf 'wrong passphrase or corrupt archive' >"$errf"
             return 1
         fi
         if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
             -pass fd:3 -in "$archive" 2>/dev/null 3< <(printf '%s' "$pass") |
             tar -tzf - >/dev/null 2>&1; then
-            printf 'archive fails integrity verification (tampered or truncated)' >"$spool/error.txt"
-            rm -f "$archive"
-            pass=""
+            printf 'archive fails integrity verification (tampered or truncated)' >"$errf"
             return 1
         fi
     else
         if ! tar -tzf "$archive" >/dev/null 2>&1; then
-            printf 'archive fails integrity verification (tampered or truncated)' >"$spool/error.txt"
-            rm -f "$archive"
+            printf 'archive fails integrity verification (tampered or truncated)' >"$errf"
             return 1
         fi
     fi
@@ -1600,15 +1601,12 @@ firstboot_consume_restore() { # <spool-dir>
     fi
     if printf '%s\n' "$rnames" | grep -qE '^/|(^|/)\.\.(/|$)' ||
         printf '%s\n' "$rlinks" | grep -qE '^l| -> | link to '; then
-        rm -f "$archive"
-        pass=""
-        printf 'archive contains unsafe paths or links — refusing to restore' >"$spool/error.txt"
+        printf 'archive contains unsafe paths or links — refusing to restore' >"$errf"
         return 1
     fi
 
     tmp=$(mktemp -d) || {
-        printf 'could not stage the restore' >"$spool/error.txt"
-        rm -f "$archive"
+        printf 'could not stage the restore' >"$errf"
         return 1
     }
     if [ "$encrypted" -eq 1 ]; then
@@ -1617,15 +1615,13 @@ firstboot_consume_restore() { # <spool-dir>
     else
         tar -xzf "$archive" -C "$tmp"
     fi
-    pass=""
-    rm -f "$archive"
 
     # The archive stores paths relative to "/" (same convention `stack_backup`/`stack_restore`
     # use), so the staged config lands at exactly $PWD/$CONFIG_FILE underneath $tmp.
     staged_cfg="$tmp/${PWD#/}/$CONFIG_FILE"
     if [ ! -f "$staged_cfg" ] || ! jq -e . "$staged_cfg" >/dev/null 2>&1; then
         rm -rf "$tmp"
-        printf 'archive does not contain a usable configuration' >"$spool/error.txt"
+        printf 'archive does not contain a usable configuration' >"$errf"
         return 1
     fi
     # Validated through the COPY — parse_and_validate_config fills in generated fields as it
@@ -1633,10 +1629,17 @@ firstboot_consume_restore() { # <spool-dir>
     # ever promoted to the real config.json.
     if ! err=$(PITHEAD_CONFIG_FILE="$staged_cfg" bash -c "source '${BASH_SOURCE[0]}' && parse_and_validate_config" 2>&1); then
         rm -rf "$tmp"
-        printf '%s' "$err" | tail -n 2 | tr -d '[:cntrl:]' | tail -c 240 >"$spool/error.txt"
+        printf '%s' "$err" | tail -n 2 | tr -d '[:cntrl:]' | tail -c 240 >"$errf"
         return 1
     fi
 
+    if [ -n "$cfg_dest" ]; then
+        # Installer door: the card and the ESP staging need the config; the tree stays in the
+        # archive for the target to restore itself.
+        install -m 600 "$staged_cfg" "$cfg_dest"
+        rm -rf "$tmp"
+        return 0
+    fi
     # Commit: everything the archive carried (config.json, .env, Caddyfile, the Tor data dir,
     # the dashboard database) lands at its real absolute path in one move — the same
     # destination `tar -xzf archive -C /` would use directly, just proven safe first.
@@ -1644,6 +1647,45 @@ firstboot_consume_restore() { # <spool-dir>
     # dir afterwards, so ownership here does not need fixing up by hand.
     cp -a "$tmp"/. /
     rm -rf "$tmp"
+    return 0
+}
+
+firstboot_consume_restore() { # <spool-dir> [<installer 0|1>]
+    local spool="$1" installer="${2:-0}" archive="$1/restore-archive" passfile="$1/restore-passphrase"
+    local pass=""
+    [ -f "$archive" ] || return 2
+    { set +x; } 2>/dev/null # xtrace would print the passphrase below
+    pass=$(cat "$passfile" 2>/dev/null || true)
+    rm -f "$passfile" # never persisted in the spool beyond this attempt, accepted or not
+
+    if [ "$installer" -eq 1 ]; then
+        # Installer boot: validate and surface the config for the card, but the restored TREE
+        # belongs to the TARGET — decrypted keys must never rest on the stick. The accepted
+        # archive and its passphrase park in tmpfs for the ESP carry the install branch stages.
+        if ! restore_apply "$archive" "$pass" "$spool/error.txt" "$PWD/config.json"; then
+            pass=""
+            rm -f "$archive"
+            return 1
+        fi
+        local carry
+        carry=$(restore_carry_dir)
+        (umask 077 && mkdir -p "$carry" &&
+            mv "$archive" "$carry/archive" &&
+            printf '%s' "$pass" >"$carry/pass") || {
+            pass=""
+            printf 'could not stage the restore for the install' >"$spool/error.txt"
+            rm -rf "$carry" "$archive" "$PWD/config.json"
+            return 1
+        }
+        pass=""
+        touch "$spool/applied"
+        return 0
+    fi
+    local rrc=0
+    restore_apply "$archive" "$pass" "$spool/error.txt" || rrc=1
+    pass=""
+    rm -f "$archive"
+    [ "$rrc" -eq 0 ] || return 1
     touch "$spool/applied"
     return 0
 }
@@ -1675,6 +1717,36 @@ preseed_token() {
     t=$(tr -dc 'A-Za-z0-9-' <"$f" 2>/dev/null | head -c 32)
     [ "${#t}" -ge 4 ] || return 1
     printf '%s' "$t"
+}
+
+# The restore pre-seed (#909): an installer boot that accepted a backup archive stages it —
+# still encrypted, passphrase beside it — on the target's ESP, and the installed machine's
+# first boot lands here to restore ITSELF: config, Tor onion keys, dashboard database, the
+# whole identity the docs promise survives. Spent on use, accepted or not — the passphrase
+# beside the archive makes the pair plaintext-equivalent and it must not outlive this boot.
+# rc: 0 restored, 1 present but rejected, 2 none.
+consume_preseed_restore() {
+    local a="$PRESEED_DIR/pithead-restore.enc" pf="$PRESEED_DIR/pithead-restore-pass" pass errf
+    [ -f "$a" ] || return 2
+    { set +x; } 2>/dev/null # xtrace would print the passphrase below
+    pass=$(cat "$pf" 2>/dev/null || true)
+    errf=$(mktemp)
+    if restore_apply "$a" "$pass" "$errf"; then
+        pass=""
+        log "Restored this machine from the carried backup archive."
+        mount -o remount,rw "$PRESEED_DIR" 2>/dev/null || true
+        rm -f "$a" "$pf" 2>/dev/null ||
+            warn "Could not remove the consumed restore archive from $PRESEED_DIR — it sits beside its passphrase; delete both."
+        rm -f "$errf"
+        return 0
+    fi
+    pass=""
+    warn "The carried restore archive was rejected — falling back to the setup page."
+    warn "  $(tail -c 200 "$errf" 2>/dev/null | tr -d '[:cntrl:]')"
+    rm -f "$errf"
+    mount -o remount,rw "$PRESEED_DIR" 2>/dev/null || true
+    rm -f "$a" "$pf" 2>/dev/null || true
+    return 1
 }
 
 # rc: 0 a valid pre-seeded config was installed, 1 one was present but rejected, 2 none.
@@ -1953,6 +2025,11 @@ firstboot_wizard() {
     # installer would burn out running a chain it can never hold. There, the pre-seed becomes
     # the pre-filled combined page instead (below).
     if ! installer_mode_available; then
+        # The carried restore first: it holds MORE than a config (keys, database), and once it
+        # lands the config pre-seed guard below sees config.json and stands down.
+        if [ ! -f "$PWD/config.json" ]; then
+            consume_preseed_restore || true
+        fi
         if [ ! -f "$PWD/config.json" ] && consume_preseed_config "$PWD/config.json"; then
             # Spent: config.json lives on /data now, and a plaintext wallet + password must not
             # sit on this machine's unencrypted ESP forever. Only on an INSTALLED machine —
@@ -2093,9 +2170,13 @@ firstboot_wizard() {
             # A keep-everything reinstall arrives as a bare install-request with no config
             # candidate: the preserved /data keeps config, login and chains, so there is
             # nothing to validate and no credentials to hand off — install and switch off.
+            # BARE means bare: a staged restore archive (#909) rides the same install-request
+            # with keep as its erase policy (restore the config, keep the synced chains), and
+            # this shortcut once swallowed it — the machine "keep"-installed a blank disk and
+            # the operator's backup never reached it. The archive must be consumed first.
             if [ "$installer" -eq 1 ] && [ -f "$spool/install-request" ] &&
                 [ "$(cut -f2 "$spool/install-request" 2>/dev/null)" = "keep" ] &&
-                [ ! -f "$spool/config.json" ]; then
+                [ ! -f "$spool/config.json" ] && [ ! -f "$spool/restore-archive" ]; then
                 touch "$spool/installing"
                 chown 1000:1000 "$spool/installing" 2>/dev/null || true
                 local irc=0
@@ -2206,8 +2287,12 @@ firstboot_wizard() {
             # copy), so a successful restore short-circuits straight into the identical accept
             # path a typed submission takes, below.
             local rec=0
-            firstboot_consume_restore "$spool" || rec=$?
+            firstboot_consume_restore "$spool" "$installer" || rec=$?
             if [ "$rec" -eq 1 ]; then
+                # The install-request goes back too: with the archive gone, leaving it staged
+                # would let the bare-keep shortcut above fire on the next pass — a typo'd
+                # passphrase must hand the form back, never quietly install without the restore.
+                rm -f "$spool/install-request"
                 warn "Restore rejected — the page shows the reason."
                 sleep 2
                 continue
@@ -2220,7 +2305,9 @@ firstboot_wizard() {
                     printf '%s' "$pf_err" | tail -c 300 >"$spool/error.txt"
                     jq -c . "$PWD/config.json" >"$spool/last-attempt.json" 2>/dev/null
                     chown 1000:1000 "$spool/error.txt" "$spool/last-attempt.json" 2>/dev/null || true
-                    rm -f "$PWD/config.json"
+                    # Same bare-keep hazard as a rejected restore: the config candidate is gone,
+                    # so a staged keep install-request would install WITHOUT it on the next pass.
+                    rm -f "$PWD/config.json" "$spool/install-request"
                     warn "Preflight failed: $pf_err"
                     sleep 2
                     continue
@@ -2275,11 +2362,25 @@ firstboot_wizard() {
                         cp /boot/efi/pithead-config.json "$preseed_orig" 2>/dev/null || preseed_orig=""
                     fi
                     mount -o remount,rw /boot/efi 2>/dev/null || true
-                    if ! install -m 600 "$PWD/config.json" /boot/efi/pithead-config.json; then
+                    # An accepted RESTORE carries the whole archive to the target instead of a
+                    # bare config: the target's first boot decrypts and restores itself, so the
+                    # Tor onion keys and the dashboard database — the identity the docs promise
+                    # survives — actually cross. Same ESP channel, same threat model as the
+                    # plaintext config pre-seed beside it: physical possession, spent on use.
+                    local carry staged_ok=1
+                    carry=$(restore_carry_dir)
+                    if [ -f "$carry/archive" ]; then
+                        install -m 600 "$carry/archive" /boot/efi/pithead-restore.enc &&
+                            install -m 600 "$carry/pass" /boot/efi/pithead-restore-pass || staged_ok=0
+                    else
+                        install -m 600 "$PWD/config.json" /boot/efi/pithead-config.json || staged_ok=0
+                    fi
+                    if [ "$staged_ok" -ne 1 ]; then
                         rm -f "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack" "$spool/install-request"
                         printf 'Could not stage the configuration for the installed system — nothing was installed.' >"$spool/error.txt"
                         chown 1000:1000 "$spool/error.txt" 2>/dev/null || true
-                        rm -f "$PWD/config.json"
+                        rm -f "$PWD/config.json" /boot/efi/pithead-restore.enc /boot/efi/pithead-restore-pass
+                        rm -rf "$carry"
                         continue
                     fi
                     local irc=0
@@ -2295,6 +2396,11 @@ firstboot_wizard() {
                     else
                         rm -f /boot/efi/pithead-config.json
                     fi
+                    # The carried restore never rides on either: the passphrase beside the
+                    # archive makes the pair plaintext-equivalent, and the target has its own
+                    # copy now.
+                    rm -f /boot/efi/pithead-restore.enc /boot/efi/pithead-restore-pass
+                    rm -rf "$carry"
                     if [ "$irc" -ne 0 ]; then
                         rm -f /boot/efi/pithead-config.json "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack"
                         jq -c . "$spool/last-attempt.json" >/dev/null 2>&1 || true
@@ -3084,28 +3190,44 @@ stack_backup() {
 
     log "Creating backup archive..."
     # Read with sudo because the Tor data dir is owned by 100:101.
-    if [ -n "$pass" ]; then
-        # Stream tar straight into openssl so no plaintext archive ever exists on disk.
-        # AES-256-CBC with PBKDF2 at 600k iterations — bare `openssl enc` would fall back to a
-        # single round of EVP_BytesToKey. The passphrase travels over fd 3 (a pipe), never argv
-        # (visible in `ps`) and never a file. pipefail is in force, so either side failing
-        # fails the whole pipeline; remove the partial ciphertext rather than leave a corrupt
-        # archive that looks like a backup.
-        if ! (umask 077 && sudo tar -czf - -C "/" "${rel[@]}" |
-            openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
-                -pass fd:3 -out "$archive" 3< <(printf '%s' "$pass")); then
-            rm -f "$archive"
-            [ "$was_running" -eq 1 ] && stack_up
-            error "Backup failed — the partial archive was removed."
+    #
+    # One bounded retry (#970): even with the stack stopped, tar can lose a race against a
+    # container teardown finishing its last flush or a startup that slipped past the running
+    # snapshot above — "file changed as we read it" is exit 1 and pipefail fails the pipeline.
+    # A second pass a few seconds later reads a quiet tree; failing twice is a real fault and
+    # stays fatal. tar's own stderr is left on the terminal both times — the failing member's
+    # name is the diagnosis.
+    local _attempt _backup_ok=0
+    for _attempt in 1 2; do
+        if [ -n "$pass" ]; then
+            # Stream tar straight into openssl so no plaintext archive ever exists on disk.
+            # AES-256-CBC with PBKDF2 at 600k iterations — bare `openssl enc` would fall back
+            # to a single round of EVP_BytesToKey. The passphrase travels over fd 3 (a pipe),
+            # never argv (visible in `ps`) and never a file.
+            if (umask 077 && sudo tar -czf - -C "/" "${rel[@]}" |
+                openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+                    -pass fd:3 -out "$archive" 3< <(printf '%s' "$pass")); then
+                _backup_ok=1
+                break
+            fi
+        else
+            if (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}"); then
+                _backup_ok=1
+                break
+            fi
         fi
-    else
         # sudo tar itself opens $archive, so a failed run can still leave a root-owned partial
-        # file behind — guard it the same way as the encrypted branch above (#551).
-        if ! (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}"); then
-            sudo rm -f "$archive"
-            [ "$was_running" -eq 1 ] && stack_up
-            error "Backup failed — the partial archive was removed."
-        fi
+        # file behind — remove it rather than leave a corrupt archive that looks like a backup
+        # (#551), on the retry exactly as on the way out.
+        sudo rm -f "$archive"
+        [ "$_attempt" -eq 1 ] && {
+            warn "Backup attempt 1 failed — retrying once on a quiet tree..."
+            sleep 5
+        }
+    done
+    if [ "$_backup_ok" -ne 1 ]; then
+        [ "$was_running" -eq 1 ] && stack_up
+        error "Backup failed — the partial archive was removed."
     fi
     sudo chown "$REAL_USER":"$REAL_USER" "$archive"
     chmod 600 "$archive"
