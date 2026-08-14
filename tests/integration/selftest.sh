@@ -455,36 +455,56 @@ if [ ! -e "$_gt/stray-cruft" ]; then it_pass "clean removes untracked cruft"; el
 rm -rf "$_gt"
 
 echo "== provision: seeds from the live bundle when one exists, else falls back to canonical (#880) =="
-# Mirrors e2e.sh provision()'s config-seeding selection + drift check, with plain dirs standing in
+# Mirrors e2e.sh provision()'s config-seeding selection + drift diff, with plain dirs standing in
 # for the on_bench SSH calls — the selection/diff logic itself is pure and needs no bench.
 _sd="$(mktemp -d)"
 _canon="$_sd/canonical"
-_live="$_sd/current"
+_bundle="$_sd/bundle-v9.9.9"
 _e2e="$_sd/e2e"
-mkdir -p "$_canon" "$_live" "$_e2e"
-echo '{"monero":{},"dashboard":{}}' >"$_canon/config.json"
+mkdir -p "$_canon" "$_bundle" "$_e2e"
+ln -s "$_bundle" "$_sd/current"
+_live="$(readlink -f "$_sd/current")" # provision() resolves the current -> symlink to the bundle dir
+# Canonicalize the expectation too: on macOS, mktemp's /var/… is itself a symlink to /private/var/….
+assert_eq "current -> symlink resolves to the bundle dir" "$_live" "$(readlink -f "$_bundle")"
+# The bundle carries a top-level key canonical lacks (telegram) AND a nested one (monero.view_key) —
+# the drift shape that actually bit: .monero exists in both, so a top-level-key diff reads clean.
+echo '{"monero":{"wallet_address":"49x"},"dashboard":{}}' >"$_canon/config.json"
 echo canon-env >"$_canon/.env"
-echo '{"monero":{},"dashboard":{},"telegram":{}}' >"$_live/config.json" # live has a key canonical lacks
+echo '{"monero":{"wallet_address":"49x","view_key":"vk"},"dashboard":{},"telegram":{}}' >"$_live/config.json"
 echo live-env >"$_live/.env"
 
 seed_from() { # <cfg_dir> -> copies into $_e2e, mirroring the cp -a pair in provision()
     cp -a "$1/config.json" "$_e2e/config.json" && cp -a "$1/.env" "$_e2e/.env"
 }
 
-# Live bundle present: seeds from it, and a top-level-key diff is non-empty (the drift signal).
+# Live bundle present: seeds from it, and the key-path diff names every drifted key.
 seed_from "$_live"
 assert_eq "seeds config.json from the live bundle" "$(cat "$_e2e/config.json")" "$(cat "$_live/config.json")"
 assert_eq "seeds .env from the live bundle" "$(cat "$_e2e/.env")" "live-env"
-_kd="$(diff <(jq -r 'keys[]' "$_live/config.json" | sort) <(jq -r 'keys[]' "$_canon/config.json" | sort))"
-if [ -n "$_kd" ]; then it_pass "drift check flags canonical missing a live key"; else it_fail "drift check flags canonical missing a live key" "no diff reported"; fi
+_kd="$(diff <(config_key_paths "$_live/config.json") <(config_key_paths "$_canon/config.json") | grep '^[<>]')"
+assert_contains "drift diff flags the missing top-level key" "$_kd" "telegram"
+assert_contains "drift diff flags the missing NESTED key" "$_kd" "monero.view_key"
+# Identical configs -> an empty diff, the "no key-level drift" arm of the always-printed summary.
+cp "$_live/config.json" "$_canon/config.json"
+_kd="$(diff <(config_key_paths "$_live/config.json") <(config_key_paths "$_canon/config.json") | grep '^[<>]')"
+assert_eq "identical configs -> empty drift diff" "$_kd" ""
 
 # No live bundle (symlink missing/broken): falls back to canonical, and there's nothing to diff.
-rm -rf "$_live"
+rm -rf "$_bundle"
 [ -e "$_live/config.json" ] && [ -e "$_live/.env" ] && it_fail "no-live-bundle detection" "should be absent" || it_pass "no-live-bundle detection treats missing dir as absent"
 seed_from "$_canon"
 assert_eq "falls back to seeding config.json from canonical" "$(cat "$_e2e/config.json")" "$(cat "$_canon/config.json")"
 assert_eq "falls back to seeding .env from canonical" "$(cat "$_e2e/.env")" "canon-env"
 rm -rf "$_sd"
+
+echo "== e2e pre-flight sync summary: the #914 jq reads the dashboard payload shape =="
+# e2e.sh aborts before the miner borrow unless both chains read done, printing current/target per
+# chain. Pin the shared filter against a representative /api/state payload so its field paths
+# can't silently drift from what build_sync serves.
+_ss='{"sync":{"monero":{"state":"done","current":3487100,"target":3487100},"tari":{"state":"syncing","current":12000,"target":12217}}}'
+assert_eq "sync summary reads state + current/target for both chains" \
+    "$(printf '%s' "$_ss" | jq -r "$E2E_SYNC_SUMMARY_JQ")" \
+    "done 3487100/3487100 syncing 12000/12217"
 
 # --- Tally ------------------------------------------------------------------
 echo ""

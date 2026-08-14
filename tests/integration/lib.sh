@@ -249,6 +249,21 @@ svc_health_of() { printf '%s' "${1##* }"; }
 # wrongly swallow it because false is falsy in jq).
 jq_get() { printf '%s' "$1" | jq -r "($2)? | values" 2>/dev/null; }
 
+# Every dotted key path of a config JSON, one per line, sorted — the #880 bundle-vs-canonical
+# drift signal. Full paths, not just top-level keys: the drift that bit on the bench dropped
+# NESTED keys (monero.view_key, dashboard.energy) whose parents exist in both configs, so a
+# top-level diff reads clean. Exposed as a constant so e2e.sh can run the same filter on the
+# bench over SSH; config_key_paths is the local/selftest wrapper.
+CONFIG_KEY_PATHS_JQ='[paths | map(tostring) | join(".")] | sort[]'
+config_key_paths() { jq -r "$CONFIG_KEY_PATHS_JQ" "$1" 2>/dev/null; }
+
+# One-line sync summary off /api/state for the #914 e2e pre-flight:
+# "<monero-state> <current>/<target> <tari-state> <current>/<target>". A constant (not a
+# function) because e2e.sh interpolates it into a remote jq call; the selftest pins it
+# against the /api/state fixture so the field paths can't drift from the dashboard payload.
+# shellcheck disable=SC2034  # consumed by e2e.sh + selftest.sh, which source this file
+E2E_SYNC_SUMMARY_JQ='"\(.sync.monero.state) \(.sync.monero.current)/\(.sync.monero.target) \(.sync.tari.state) \(.sync.tari.current)/\(.sync.tari.target)"'
+
 # Authoritative "is Monero caught up?" — query monerod's own get_info on the box (creds stay
 # on the box) and trust its `synchronized` flag / target_height 0, exactly like the sync gate.
 # This is the readiness GATE (the source of truth, and it avoids waiting on a dashboard poll cycle).
