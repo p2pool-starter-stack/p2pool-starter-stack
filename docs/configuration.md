@@ -67,6 +67,20 @@ plain HTTP, edit `config.json` and run `./pithead apply`.
 
 ---
 
+## Setup vs. day-2
+
+`./pithead setup` and the dashboard's first-run web wizard only ask for the fields listed in
+[Getting Started › Run setup](getting-started.md#3-run-setup) — wallet addresses, node mode,
+pool tier, and a handful of other high-level questions. Every other key in
+[`config.reference.json`](../config.reference.json) is day-2: not missing from either wizard,
+deliberately out of scope for a first run. Set it by editing `config.json` directly (then
+`./pithead apply`) or through the dashboard's config editor once the stack is up. Examples include
+stratum TLS and the stratum password (`p2pool.stratum_tls`, `p2pool.stratum_password`), onion
+client authentication (`dashboard.onion.client_auth`), the XvB raffle switch (`xvb.*`), energy
+pricing (`dashboard.energy.*`), and notification webhooks (`notifications.webhooks`).
+
+---
+
 ## Configuration reference
 
 > Only `monero.wallet_address` and `tari.wallet_address` are required. Everything below is optional
