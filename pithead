@@ -2093,9 +2093,13 @@ firstboot_wizard() {
             # A keep-everything reinstall arrives as a bare install-request with no config
             # candidate: the preserved /data keeps config, login and chains, so there is
             # nothing to validate and no credentials to hand off — install and switch off.
+            # BARE means bare: a staged restore archive (#909) rides the same install-request
+            # with keep as its erase policy (restore the config, keep the synced chains), and
+            # this shortcut once swallowed it — the machine "keep"-installed a blank disk and
+            # the operator's backup never reached it. The archive must be consumed first.
             if [ "$installer" -eq 1 ] && [ -f "$spool/install-request" ] &&
                 [ "$(cut -f2 "$spool/install-request" 2>/dev/null)" = "keep" ] &&
-                [ ! -f "$spool/config.json" ]; then
+                [ ! -f "$spool/config.json" ] && [ ! -f "$spool/restore-archive" ]; then
                 touch "$spool/installing"
                 chown 1000:1000 "$spool/installing" 2>/dev/null || true
                 local irc=0
@@ -2208,6 +2212,10 @@ firstboot_wizard() {
             local rec=0
             firstboot_consume_restore "$spool" || rec=$?
             if [ "$rec" -eq 1 ]; then
+                # The install-request goes back too: with the archive gone, leaving it staged
+                # would let the bare-keep shortcut above fire on the next pass — a typo'd
+                # passphrase must hand the form back, never quietly install without the restore.
+                rm -f "$spool/install-request"
                 warn "Restore rejected — the page shows the reason."
                 sleep 2
                 continue
@@ -2220,7 +2228,9 @@ firstboot_wizard() {
                     printf '%s' "$pf_err" | tail -c 300 >"$spool/error.txt"
                     jq -c . "$PWD/config.json" >"$spool/last-attempt.json" 2>/dev/null
                     chown 1000:1000 "$spool/error.txt" "$spool/last-attempt.json" 2>/dev/null || true
-                    rm -f "$PWD/config.json"
+                    # Same bare-keep hazard as a rejected restore: the config candidate is gone,
+                    # so a staged keep install-request would install WITHOUT it on the next pass.
+                    rm -f "$PWD/config.json" "$spool/install-request"
                     warn "Preflight failed: $pf_err"
                     sleep 2
                     continue

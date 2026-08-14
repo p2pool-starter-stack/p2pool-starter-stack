@@ -1115,6 +1115,18 @@ phase_install() {
     case "$rnames" in
     *dashboard*caddy* | *caddy*dashboard*)
         ok "restore leg: keep-reinstalled machine provisioned — a live stack to back up ($rnames)"
+        # Settle before backing up: `pithead backup` stops the RUNNING containers, but ones
+        # still being created slip past that stop and start mid-tar — "file changed as we read
+        # it" killed the pipeline once. Two identical readings 10s apart means startup is over.
+        local rprev=""
+        rtries=0
+        while [ "$rtries" -lt 30 ]; do
+            [ -n "$rnames" ] && [ "$rnames" = "$rprev" ] && break
+            rprev="$rnames"
+            sleep 10
+            rnames=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+            rtries=$((rtries + 1))
+        done
         ;;
     *)
         bad "restore leg: stack never came up after provisioning (running: '${rnames:-none}')"
