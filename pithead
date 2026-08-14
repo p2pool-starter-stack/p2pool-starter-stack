@@ -7618,6 +7618,10 @@ describe_change() {
         msg="Monero block-prep threads: $old → $new."
         ;;
     MONERO_OUT_PEERS)
+        # Confirm-gated (2026-08 security review): bounded 8-1024 and instantly reversible, but
+        # the biggest steady-state knob on the shared Tor daemon's CPU — one typed confirm, not
+        # free-commit.
+        flag=CONFIRM
         msg="Monero outbound peer target: $old → $new — monerod restarts; over Tor each outbound peer is roughly one circuit."
         ;;
     HEALTHCHECKS_PING_URL)
@@ -7740,10 +7744,6 @@ describe_change() {
         msg="On-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off)."
         ;;
     PAYOUT_SCAN_HEIGHT)
-        # #719 (2026-08 audit reclassification): confirm-gated — wallet-creation metadata, not a
-        # security boundary. A wrong value only re-scans from a different height on the wallet's
-        # NEXT creation; nothing is destroyed.
-        flag=CONFIRM
         msg="Payout wallet restore height: $old → $new — only affects a first-time wallet creation."
         ;;
     WALLET_RPC_USERNAME | MONERO_WALLET_RPC_URL)
@@ -7771,10 +7771,6 @@ describe_change() {
         msg="Tari on-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off)."
         ;;
     TARI_WALLET_BIRTHDAY)
-        # #719 (2026-08 audit reclassification): confirm-gated — wallet-creation metadata, not a
-        # security boundary. A wrong value only re-scans from a different height on the wallet's
-        # NEXT creation; nothing is destroyed.
-        flag=CONFIRM
         msg="Tari payout wallet birthday: $old → $new (days since the Unix epoch) — only affects a first-time wallet creation."
         ;;
     TARI_SPEND_PUBLIC_KEY | TARI_WALLET_GRPC_ADDRESS | TARI_WALLET_SECRET_FILE)
@@ -8161,8 +8157,7 @@ run_chain() {
 CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     XVB_ENABLED XVB_DONATION_LEVEL TARI_REQUIRED DASHBOARD_FAIL_CLOSED
     DASHBOARD_CHECK_UPDATES DASHBOARD_TZ
-    MONERO_MEM_LIMIT TARI_MEM_LIMIT MONERO_PREP_THREADS MONERO_OUT_PEERS
-    PROXY_DONATE_LEVEL
+    MONERO_MEM_LIMIT TARI_MEM_LIMIT MONERO_PREP_THREADS
     HASHRATE_DROP_THRESHOLD_PCT HASHRATE_DROP_MINUTES TELEGRAM_DAILY_SUMMARY_TIME
     TELEGRAM_EVENT_NODE_DOWN TELEGRAM_EVENT_NODE_RECOVERED
     TELEGRAM_EVENT_WORKER_OFFLINE TELEGRAM_EVENT_WORKER_RECOVERED
@@ -8184,16 +8179,21 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
 # that can set a field can also fill the confirm box, so this set is strictly the "expensive but
 # recoverable, not a breach" class — a data-dir move (re-sync), a stratum-port repoint (rigs
 # reconnect), a clearnet-sync enable (host IP exposed during IBD, auto-reverts), a prune enable
-# (reclaims disk), or a wallet restore-point (PAYOUT_SCAN_HEIGHT / TARI_WALLET_BIRTHDAY, 2026-08
-# audit reclassification: wallet-creation metadata, not a secret — a wrong value only re-scans
-# from a different height on the wallet's NEXT creation, nothing destroyed). describe_change flags
+# (reclaims disk), or a Tor-load repoint (MONERO_OUT_PEERS: bounded 8-1024 at validation and
+# instantly reversible, but the biggest steady-state knob on the shared Tor daemon's CPU — 2026-08
+# security review placed it here, not free-commit). The same review REVERTED three keys the
+# configurability audit had proposed: PROXY_DONATE_LEVEL (docs/privacy.md's own words — donate
+# traffic bypasses the Tor socks5, and a self-approving container could divert up to 99% of
+# revenue silently), and PAYOUT_SCAN_HEIGHT / TARI_WALLET_BIRTHDAY (a future-dated value lands at
+# the NEXT wallet creation and silently defeats the payout-confirmation tamper evidence — not the
+# recoverable class this tier is for). All three stay host-only. describe_change flags
 # each CONFIRM only in its in-scope DIRECTION — the flag carries the direction (prune DISABLE, TOR
 # data-dir move, etc. still emit DEST and stay refused); this list is the static allowlist the
 # gate's default-deny pass consults and the UI mirrors (control_service.CONFIRM_ENV_KEY_PATHS,
 # drift-guarded like CONTROL_DASHBOARD_EDITABLE_KEYS).
 CONTROL_DASHBOARD_CONFIRM_KEYS='MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR
     STRATUM_PORT MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC MONERO_PRUNE
-    PAYOUT_SCAN_HEIGHT TARI_WALLET_BIRTHDAY'
+    MONERO_OUT_PEERS'
 
 control_approval_gate() { # <staged-file> [confirm-token]
     local staged="$1" confirm="${2:-}" porcelain
