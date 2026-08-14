@@ -8,12 +8,14 @@
 
 [![CI](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pool-starter-stack/pithead/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-![Platform: Ubuntu 24.04](https://img.shields.io/badge/Platform-Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)
+![Platform: appliance image or Ubuntu 24.04](https://img.shields.io/badge/Platform-appliance%20image%20%C2%B7%20Ubuntu%2024.04-E95420)
 ![Tor](https://img.shields.io/badge/Networking-Tor--first-7D4698?logo=torproject&logoColor=white)
 
 Docker Compose stack for Monero + Tari merge-mining on [P2Pool](https://github.com/SChernykh/p2pool),
 with a [Monero](https://www.getmonero.org/) full node, [Tari](https://www.tari.com/) base node, and
 a Tor daemon. The `pithead` script renders config, provisions Tor, and drives docker-compose.
+It ships two ways: **Pithead OS**, a bootable appliance image for a machine you dedicate to
+mining, and the **Compose stack** you run on a host you manage.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./images/launch/hero.png">
@@ -71,7 +73,23 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
 
 ---
 
+## 📀 Two ways to run it
+
+| | What you get | Start here |
+|---|---|---|
+| **Pithead OS** — the appliance | A bootable USB image that installs itself on a dedicated machine: no Linux to set up, configured from a browser, updated as one signed image that falls back on failure. | [The appliance guide](docs/appliance.md) |
+| **The Compose stack** — DIY | The same stack on a host you manage (Ubuntu Server 24.04): you keep the OS, `pithead` drives Docker Compose. | The Quick Start below |
+
+Same stack, same dashboard, same configuration either way. The appliance is the short road;
+DIY is for a box that already does other things.
+
+---
+
 ## 🚀 Quick Start
+
+This is the DIY path. For the appliance, download `pithead-os-vX.Y.Z.img` from
+[Releases](https://github.com/p2pool-starter-stack/pithead/releases) and follow
+[the appliance guide](docs/appliance.md) instead — no Linux to set up, no command line to learn.
 
 ```bash
 # Grab the latest release — pulls the published, tested images (no local build)
@@ -114,7 +132,8 @@ Full walkthrough: [docs/getting-started.md](docs/getting-started.md)
 
 | Guide | What's inside |
 |---|---|
-| **[Getting Started](docs/getting-started.md)** | Prerequisites, install, first-run setup, and what to expect while the node syncs. |
+| **[Pithead OS — the appliance](docs/appliance.md)** | Write a USB stick, install on a dedicated machine, configure from a browser. The whole stack as one signed image with automatic fallback. |
+| **[Getting Started](docs/getting-started.md)** | The DIY path: prerequisites, install, first-run setup, and what to expect while the node syncs. |
 | **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the stack host (CPU, RAM, disk, network), and how to run leaner. (Miner specs live in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
 | **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero nodes. |
 | **[The Dashboard](docs/dashboard.md)** | Sync Mode, a tour of the live operational view, and the opt-in control channel: editing config, one-click upgrades, and the audit logs from the browser. |
