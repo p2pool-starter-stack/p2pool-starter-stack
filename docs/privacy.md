@@ -245,6 +245,23 @@ That's the same exposure as running any ordinary (non-Tor) full node, scoped to 
 a privacy-first deployment it's still a real disclosure, which is why it is off by default and must
 be explicitly opted into.
 
+### It needs the egress firewall turned off
+
+The trade-off above only actually happens if the clearnet dials can leave the host. The [fail-closed
+egress firewall](#enforced-fail-closed-not-just-configured-270) is on by default and DROPs any direct
+dial to the public internet from the mining bridge — including the clearnet peers, priority nodes, and
+DNS seeds a clearnet sync needs. With both left at their defaults, the sync falls back to
+whatever it can still reach over Tor: no faster, and no less private, than leaving
+`clearnet_initial_sync` off in the first place. Nothing leaks — the firewall is doing exactly its
+job — but the speed the flag promised never materializes, and nothing said so.
+
+To actually get a clearnet-speed sync, turn the firewall off for the duration:
+`network.tor_egress_firewall: false`. `pithead` warns at `apply`/`doctor` time whenever a
+`clearnet_initial_sync` flag and the egress firewall are both on, naming the choice: turn the firewall
+off for a real clearnet sync, or turn the sync flag off and accept the normal Tor-speed sync. A
+scoped exception that lets only the sync's own dials through without opening the firewall generally is
+a real feature, not yet built — for now it's an explicit either/or.
+
 ### It switches back to Tor automatically (#234)
 
 The dashboard tracks each chain's sync state. The first time a clearnet node reports fully synced, the
