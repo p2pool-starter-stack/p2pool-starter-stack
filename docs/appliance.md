@@ -172,7 +172,7 @@ That is the whole first-run form — fewer questions than the DIY install, on pu
 with a default that is right for almost every home rig lives one level down, in **Advanced**,
 not on the quick form. Today that means the Monero chain size (pruned, ~120 GB, vs. the full
 ~320 GB — only asked at all when this machine runs the node), the Healthchecks ping URL, and
-the time zone (UTC unless set). They are still there to change, just not asked outright.
+the time zone (detected from the machine unless set). They are still there to change, just not asked outright.
 
 The dashboard login is also the machine's **console login**: sit at the machine, log in as
 `root` with the dashboard password. It is set fresh at every boot and never stored on disk.
