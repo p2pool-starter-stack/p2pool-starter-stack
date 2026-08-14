@@ -271,7 +271,7 @@ test('EarningsCard leads with solo time-to-block + per-block reward, day as avg 
     assert.doesNotMatch(down, /NaN/);
 });
 
-test('EarningsCard renders the XvB tier (raffle) block when XvB is on, hides it when off (#118)', () => {
+test('EarningsCard renders the XvB tier (raffle) block on and off — off drops the live-credit cards (#938)', () => {
     const s = clone();
     s.earnings.available = true;
     s.xvb_calc = {
@@ -297,10 +297,18 @@ test('EarningsCard renders the XvB tier (raffle) block when XvB is on, hides it 
     assert.match(up, /Hashrate Cost/);
     assert.match(up, /1\.00 kH\/s/);
     assert.match(up, /not an XMR payout/);   // the required labelling rides on the card
-    // XvB disabled → the whole block disappears; the XMR calculator stays.
-    s.xvb_calc = { enabled: false };
+    assert.doesNotMatch(up, /id="xvb-disabled-note"/); // the off-explainer only shows off
+    // XvB disabled (#938): the decision aid stays — what-if cards, table, note — but the
+    // live-credit cards (Current/Target tier) stand down and the off-explainer appears.
+    s.xvb_calc = { ...s.xvb_calc, enabled: false, current_tier: 'Disabled', target_tier: 'Disabled' };
     const off = renderApp({ state: s });
-    assert.doesNotMatch(off, /XvB Tier \(raffle\)/);
+    assert.match(off, /XvB Tier \(raffle\)/);
+    assert.match(off, /Sustainable Tier/);
+    assert.match(off, /Hashrate Cost/);
+    assert.match(off, /id="xvb-disabled-note"/);
+    assert.match(off, /not an XMR payout/);
+    assert.doesNotMatch(off, /Current Tier/);
+    assert.doesNotMatch(off, /Target Tier/);
     assert.match(off, /Your P2Pool Hashrate/);
 });
 
@@ -331,14 +339,27 @@ test('EarningsCard splits into Monero / Tari / XvB tabs, Monero active by defaul
     assert.match(html, /XvB Tier \(raffle\)/);
 });
 
-test('EarningsCard drops the XvB tab entirely when XvB is disabled (#118)', () => {
+test('EarningsCard keeps the XvB tab when disabled; only a tier-less payload drops it (#938)', () => {
     const s = clone();
     s.earnings.available = true;
+    // Disabled with a tier table (what the server now always sends): the tab stays — it holds
+    // the enable/don't-enable decision aid.
+    s.xvb_calc = {
+        enabled: false, max_fraction: 0.85,
+        tiers: [{ name: 'Donor (1.00 kH/s+)', threshold: 1000 }],
+        current_tier: 'Disabled', target_tier: 'Disabled',
+        note: 'raffle status', mode_note: null,
+    };
+    let html = renderApp({ state: s });
+    assert.match(html, /id="etab-xvb"/);
+    assert.match(html, /id="epanel-xvb"/);
+    assert.match(html, /XvB Tier \(raffle\)/);
+    // A pre-#938 disabled payload carries no tiers — nothing to price, so no tab either.
     s.xvb_calc = { enabled: false };
-    const html = renderApp({ state: s });
+    html = renderApp({ state: s });
     assert.match(html, /id="etab-monero"/);
     assert.match(html, /id="etab-tari"/);
-    assert.doesNotMatch(html, /id="etab-xvb"/); // no XvB tab
+    assert.doesNotMatch(html, /id="etab-xvb"/);
     assert.doesNotMatch(html, /id="epanel-xvb"/);
     assert.doesNotMatch(html, /XvB Tier \(raffle\)/);
 });

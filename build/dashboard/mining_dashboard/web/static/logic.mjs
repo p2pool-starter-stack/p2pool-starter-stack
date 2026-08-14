@@ -295,9 +295,11 @@ export function computeEarnings(hashrateHs, earnings) {
 // helper/utils.resolve_target_threshold (get_tier_info over stable_hr × max_fraction) — a pinned
 // test shares its inputs with the Python unit test so the two can't drift silently. Cost = the
 // threshold itself: XvB qualifies a tier on BOTH the 1h and 24h credited averages, so holding it
-// costs ~threshold H/s of continuous donation. Null when no tier is sustainable or XvB is off.
+// costs ~threshold H/s of continuous donation. Null when no tier is sustainable. Not gated on
+// calc.enabled: the what-if runs from local hashrate and the published thresholds, so it answers
+// "which tier could I hold?" before XvB is ever turned on (#938).
 export function computeXvbTier(hashrateHs, calc) {
-  if (!calc || !calc.enabled || !(hashrateHs > 0)) return null;
+  if (!calc || !(hashrateHs > 0)) return null;
   let best = null;
   for (const t of calc.tiers || []) {
     if (t.threshold > 0 && hashrateHs * calc.max_fraction >= t.threshold) {
@@ -318,8 +320,10 @@ export function computeXvbTier(hashrateHs, calc) {
 //   net        — the actionable verdict: (yours ?? study ?? face) minus cost; [lo,hi] when a band
 // A tier the what-if hashrate cannot sustain is flagged, its net withheld (an unreachable payout
 // must not render as reachable). Pure + unit-tested; the component only renders these rows.
+// Not gated on calc.enabled: the table is the enable/don't-enable decision aid (#938) — the
+// server publishes the tiers either way, and a disabled box just has no live-credit context.
 export function xvbDecisionRows(calc, coeffDay, hr) {
-  if (!calc || !calc.enabled) return [];
+  if (!calc) return [];
   const rows = [];
   for (const t of calc.tiers || []) {
     const cost = t.threshold > 0 && coeffDay > 0 ? t.threshold * coeffDay * DAYS_PER_YEAR : null;
