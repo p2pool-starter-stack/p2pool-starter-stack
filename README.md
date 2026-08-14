@@ -89,7 +89,7 @@ DIY is for a box that already does other things.
 
 This is the DIY path. For the appliance, download `pithead-os-vX.Y.Z.img` from
 [Releases](https://github.com/p2pool-starter-stack/pithead/releases) and follow
-[the appliance guide](docs/appliance.md) instead — there is nothing to type at all.
+[the appliance guide](docs/appliance.md) instead — no Linux to set up, no command line to learn.
 
 ```bash
 # Grab the latest release — pulls the published, tested images (no local build)
@@ -132,7 +132,7 @@ Full walkthrough: [docs/getting-started.md](docs/getting-started.md)
 
 | Guide | What's inside |
 |---|---|
-| **[Pithead OS — the appliance](docs/appliance.md)** | Write a USB stick, install on a dedicated machine, configure from a browser. The whole stack as one signed, self-updating image. |
+| **[Pithead OS — the appliance](docs/appliance.md)** | Write a USB stick, install on a dedicated machine, configure from a browser. The whole stack as one signed image with automatic fallback. |
 | **[Getting Started](docs/getting-started.md)** | The DIY path: prerequisites, install, first-run setup, and what to expect while the node syncs. |
 | **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the stack host (CPU, RAM, disk, network), and how to run leaner. (Miner specs live in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
 | **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero nodes. |
