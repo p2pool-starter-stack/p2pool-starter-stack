@@ -32,17 +32,29 @@ SEED_DIRS="/overlay/var /overlay/var-work /pithead"
 # gets stderr from a unit exactly as it gets stdout, so nothing is lost by moving it.
 log() { echo "pithead-data-reset: $*" >&2; }
 
-# The data and ESP partitions on the disk the system booted from — the same derivation
-# pithead-mount-generator uses (never by label: every pithead disk carries the same labels, so a
-# stick + an installed disk present together make LABEL=data ambiguous). Partition numbers are
-# fixed by the layout: 1 = ESP, 4 = data.
-boot_disk_part() { # $1: partition number -> prints /dev/node, or nothing
-    local rootsrc disk sep
+# The data and ESP partitions on the disk the system booted from, resolved by PARTLABEL (#926)
+# scoped to that ONE disk — never a bare LABEL=/PARTLABEL= lookup: every pithead disk carries the
+# same labels by design, so a stick + an installed disk present together would make an unscoped
+# lookup ambiguous. Here the label is read off the disk we already resolved, so that ambiguity
+# never applies.
+#
+# Deliberately NOT pithead-mount-generator's derivation, even though both start from the same
+# boot-disk question. This runs as a plain systemd service (After=systemd-repart.service, not a
+# generator), so it can rely on lsblk the way pithead-install already does. The generator cannot:
+# systemd.generator(7) is explicit that generators run before any other unit — including
+# systemd-udevd — and "cannot rely on any external services", but lsblk's PARTLABEL column comes
+# from the udev database first (falling back to a direct blkid probe only once that database is
+# unavailable, and even then its own man page recommends a `udevadm settle` a generator has no
+# daemon left to settle against). Consolidating the generator onto lsblk would trade a
+# self-contained sed/awk derivation for one with an unprovable early-boot dependency, so it keeps
+# its own arithmetic; only this script and pithead-install share the lsblk shape.
+boot_disk_part() { # $1: PARTLABEL ("esp" or "data") -> prints /dev/node, or nothing
+    local rootsrc disk
     rootsrc=$(findmnt -no SOURCE / 2>/dev/null) || return 1
     case "$rootsrc" in /dev/*) ;; *) return 1 ;; esac
-    disk=$(printf '%s' "$rootsrc" | sed -E 's/[0-9]+$//; s/(^.*[0-9])p$/\1/')
-    case "$disk" in *[0-9]) sep="p" ;; *) sep="" ;; esac
-    printf '%s%s%s' "$disk" "$sep" "$1"
+    disk=$(lsblk -no PKNAME "$rootsrc" 2>/dev/null) || return 1
+    [ -n "$disk" ] || return 1
+    lsblk -lnpo NAME,PARTLABEL "/dev/$disk" 2>/dev/null | awk -v label="$1" '$2 == label { print $1; exit }'
 }
 
 # Read-only probe mount (so it never dirties the fs), cleaned up either way. rc mirrors the mount.
@@ -102,7 +114,7 @@ reformat_data() { # $1: data partition
 
 main() {
     local data_part esp_part esp_mnt marker verdict
-    data_part=$(boot_disk_part 4) || {
+    data_part=$(boot_disk_part data) || {
         log "could not resolve the data partition from the boot disk — doing nothing"
         return 0
     }
@@ -113,7 +125,7 @@ main() {
 
     # Read (and later clear) the factory-reset marker on the ESP. The ESP is not mounted this early,
     # so mount it ourselves; if it will not mount we simply have no marker to act on.
-    esp_part=$(boot_disk_part 1) || esp_part=""
+    esp_part=$(boot_disk_part esp) || esp_part=""
     esp_mnt=$(mktemp -d)
     marker=""
     if [ -n "$esp_part" ] && [ -b "$esp_part" ] && mount "$esp_part" "$esp_mnt" 2>/dev/null; then
