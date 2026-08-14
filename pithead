@@ -7484,11 +7484,22 @@ preflight_resources() {
 setup() {
     if is_deployed; then
         warn "A previous deployment was detected."
-        read -r -p "Re-run setup (re-provisions Tor and may modify GRUB)? (y/N): " RERUN || true
-        if [[ ! "$RERUN" =~ ^[Yy] ]]; then
-            log "Setup skipped. Edit config.json and run '$0 apply' to propagate config changes,"
-            log "or '$0 up' to start the stack."
-            exit 0
+        # Same no-tty rule as resolve_dashboard_host: an interactive ask with no terminal is an
+        # EOF, and `read`'s `|| true` used to swallow that into an empty RERUN — read as decline,
+        # exit 0, deployment untouched. Every headless caller (firstboot's --cli re-run, and its
+        # own retry after a failed provisioning attempt) reached setup() BECAUSE it already
+        # decided to proceed; a silent no-op there reports success while doing nothing (#924).
+        # A real terminal keeps the prompt exactly as before.
+        if [ -t 0 ]; then
+            local RERUN
+            read -r -p "Re-run setup (re-provisions Tor and may modify GRUB)? (y/N): " RERUN || true
+            if [[ ! "$RERUN" =~ ^[Yy] ]]; then
+                log "Setup skipped. Edit config.json and run '$0 apply' to propagate config changes,"
+                log "or '$0 up' to start the stack."
+                exit 0
+            fi
+        else
+            log "No terminal attached — proceeding with the re-run automatically."
         fi
     fi
 
