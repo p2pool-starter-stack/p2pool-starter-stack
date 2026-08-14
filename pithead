@@ -3190,28 +3190,44 @@ stack_backup() {
 
     log "Creating backup archive..."
     # Read with sudo because the Tor data dir is owned by 100:101.
-    if [ -n "$pass" ]; then
-        # Stream tar straight into openssl so no plaintext archive ever exists on disk.
-        # AES-256-CBC with PBKDF2 at 600k iterations — bare `openssl enc` would fall back to a
-        # single round of EVP_BytesToKey. The passphrase travels over fd 3 (a pipe), never argv
-        # (visible in `ps`) and never a file. pipefail is in force, so either side failing
-        # fails the whole pipeline; remove the partial ciphertext rather than leave a corrupt
-        # archive that looks like a backup.
-        if ! (umask 077 && sudo tar -czf - -C "/" "${rel[@]}" |
-            openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
-                -pass fd:3 -out "$archive" 3< <(printf '%s' "$pass")); then
-            rm -f "$archive"
-            [ "$was_running" -eq 1 ] && stack_up
-            error "Backup failed — the partial archive was removed."
+    #
+    # One bounded retry (#970): even with the stack stopped, tar can lose a race against a
+    # container teardown finishing its last flush or a startup that slipped past the running
+    # snapshot above — "file changed as we read it" is exit 1 and pipefail fails the pipeline.
+    # A second pass a few seconds later reads a quiet tree; failing twice is a real fault and
+    # stays fatal. tar's own stderr is left on the terminal both times — the failing member's
+    # name is the diagnosis.
+    local _attempt _backup_ok=0
+    for _attempt in 1 2; do
+        if [ -n "$pass" ]; then
+            # Stream tar straight into openssl so no plaintext archive ever exists on disk.
+            # AES-256-CBC with PBKDF2 at 600k iterations — bare `openssl enc` would fall back
+            # to a single round of EVP_BytesToKey. The passphrase travels over fd 3 (a pipe),
+            # never argv (visible in `ps`) and never a file.
+            if (umask 077 && sudo tar -czf - -C "/" "${rel[@]}" |
+                openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt \
+                    -pass fd:3 -out "$archive" 3< <(printf '%s' "$pass")); then
+                _backup_ok=1
+                break
+            fi
+        else
+            if (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}"); then
+                _backup_ok=1
+                break
+            fi
         fi
-    else
         # sudo tar itself opens $archive, so a failed run can still leave a root-owned partial
-        # file behind — guard it the same way as the encrypted branch above (#551).
-        if ! (umask 077 && sudo tar -czf "$archive" -C "/" "${rel[@]}"); then
-            sudo rm -f "$archive"
-            [ "$was_running" -eq 1 ] && stack_up
-            error "Backup failed — the partial archive was removed."
-        fi
+        # file behind — remove it rather than leave a corrupt archive that looks like a backup
+        # (#551), on the retry exactly as on the way out.
+        sudo rm -f "$archive"
+        [ "$_attempt" -eq 1 ] && {
+            warn "Backup attempt 1 failed — retrying once on a quiet tree..."
+            sleep 5
+        }
+    done
+    if [ "$_backup_ok" -ne 1 ]; then
+        [ "$was_running" -eq 1 ] && stack_up
+        error "Backup failed — the partial archive was removed."
     fi
     sudo chown "$REAL_USER":"$REAL_USER" "$archive"
     chmod 600 "$archive"

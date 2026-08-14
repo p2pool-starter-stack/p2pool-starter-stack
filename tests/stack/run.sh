@@ -3967,6 +3967,47 @@ seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 
+echo "== unit: stack_backup — one bounded retry on a tar race (#970) =="
+# Even with the stack stopped, tar can lose a race against a teardown's last flush — exit 1
+# under pipefail failed the whole backup once on the KVM bench. The fixture sudo fails the
+# FIRST tar with tar's real race error, then passes through: one retry must land the archive.
+RB="$(cd "$SANDBOX" && pwd -P)/backup-retry"
+mkdir -p "$RB/build/tari" "$RB/data/tor" "$RB/data/dashboard" "$RB/bin"
+cp "$STACK" "$RB/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$RB/build/tari/"
+cat >"$RB/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat >"$RB/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "chown" ] && exit 0
+if [ "$1" = "tar" ] && [ ! -f "${RETRY_MARK:?}" ]; then
+    : >"$RETRY_MARK"
+    echo "tar: fixture-member: file changed as we read it" >&2
+    exit 1
+fi
+exec "$@"
+EOF
+chmod +x "$RB/bin/docker" "$RB/bin/sudo"
+cat >"$RB/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=RBTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$RB/config.json"
+out="$(cd "$RB" && PATH="$RB/bin:$PATH" RETRY_MARK="$RB/first-tar-failed" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y 2>&1)"
+rc=$?
+assert_rc "backup survives one tar race via the retry" "$rc" "0"
+assert_contains "the first failure is loud, not silent" "$out" "retrying once"
+assert_eq "the retry actually ran (fixture consumed)" "$([ -f "$RB/first-tar-failed" ] && echo yes)" "yes"
+rbarchive="$(ls "$RB"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+{ [ -n "$rbarchive" ] && [ -s "$rbarchive" ]; } && ok "retry produced a real archive" || bad "retry produced a real archive" "no .enc archive"
+
 echo "== unit: install.sh host gate (#77 phase 1) =="
 # The installer hard-fails on the platforms the stack cannot run on, before any download.
 IBIN="$SANDBOX/install-stub-bin"
