@@ -4390,6 +4390,32 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_contains "doctor: OK when Tor-only (#183)" "$(cd "$V" && PATH="$V/bin:$PATH" ./pithead doctor 2>&1)" "Tor-only"
 
+echo "== black-box: clearnet_initial_sync vs. tor_egress_firewall contradiction warning =="
+# A clearnet_initial_sync flag asks a daemon to sync off-Tor; the egress firewall (default on) DROPs
+# every non-Tor dial, so that combination is self-defeating (the sync just runs over Tor anyway,
+# slower than intended) rather than unsafe (nothing leaks — the firewall still holds). WARN, not
+# FAIL: apply must still succeed, but say so loudly. Covers the contradictory pair and all three
+# non-contradictory combinations so the warning fires only where it's actually true.
+CN_WARN_NEEDLE="the firewall drops the clearnet dials"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","clearnet_initial_sync":true}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "monero clearnet + firewall on: apply still succeeds (warn, not fail)" "$?" "0"
+assert_contains "monero clearnet + firewall on: warns" "$out" "$CN_WARN_NEEDLE"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","clearnet_initial_sync":true}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_rc "tari clearnet + firewall on: apply still succeeds (warn, not fail)" "$?" "0"
+assert_contains "tari clearnet + firewall on: warns" "$out" "$CN_WARN_NEEDLE"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p","clearnet_initial_sync":true}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "network":{"tor_egress_firewall":false}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_not_contains "clearnet sync + firewall OFF: no warning (not contradictory)" "$out" "$CN_WARN_NEEDLE"
+seed_env
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
+out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+assert_not_contains "no clearnet sync + firewall on: no warning (not contradictory)" "$out" "$CN_WARN_NEEDLE"
+
 # p2pool compose↔image coupling fail-safe (#273): clearnet is off, so apply renders P2POOL_FLAGS with
 # the #165 --socks5. doctor reads the RUNNING p2pool argv (/proc/1/cmdline, stubbed via P2POOL_PROC1)
 # and must FAIL loudly if --socks5 is absent (a stale pre-#165 image silently dropping the env flags),
