@@ -5,7 +5,7 @@
 # os-image sibling of tests/integration/run.sh; it needs a Linux host with KVM + libvirt + the
 # built image, so it runs on the bench, not in CI.
 #
-#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|install|provision|rig|media|fault|all]
+#   tests/os/run.sh --image PATH [--keep] [--phase boot|update|install|provision|rig|media|fault|reset|all]
 #
 # Phases:
 #   boot    flash the image to a scratch disk, boot it, assert EFI boot + firstboot wizard up
@@ -27,7 +27,10 @@
 #           boot shows its exact diff on the console, counts down, applies, and consumes itself —
 #           and pulling the stick mid-countdown cancels the change. Opt-in, like fault.
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
-#   all     boot, update, install, provision and rig (default) — media and fault are opt-in
+#   reset   factory-reset's ESP marker (the real `pithead factory-reset`) wipes /data and returns
+#           a FRESH machine to the wizard; a corrupt data-partition superblock drives the same
+#           wedged-/data recovery instead of bricking. Opt-in: destructive, not in `all`.
+#   all     boot, update, install, provision and rig (default) — media, fault and reset are opt-in
 #
 # A failed assertion is recorded and the run continues, so one bench boot collects the whole
 # battery rather than stopping at the first fault; the run exits non-zero if any assertion failed.
@@ -1242,7 +1245,7 @@ phase_provision() {
     }
     ok "one-time token read from the console ($token)"
     _wait_setup_page 120 || {
-        bad "wizard gate never served on :80"
+        bad "wizard gate never served"
         return
     }
 
@@ -2256,6 +2259,223 @@ phase_fault() {
     fi
 }
 
+# The last-resort path — never yet run against a real disk. Two legs, opt-in (destructive, and
+# the recovery leg re-partitions/re-mounts a disk out from under a running guest).
+#
+#   leg 1  a PROVISIONED machine runs `pithead factory-reset -y` — the real command, not a
+#          reimplementation of it — which arms the `pithead-reset` marker on the ESP
+#          ($PRESEED_DIR/pithead-reset, default /boot/efi) and reboots. pithead-data-reset picks
+#          the marker up before /data mounts, reformats it, and consumes the marker. Assert the
+#          machine comes back to the wizard, the provisioned config and old container images are
+#          gone, the seeded dirs are back, and — the reset-tier rule — host identity (SSH
+#          host-key fingerprint, machine-id) is FRESH, not carried over: a handed-over box must
+#          not keep the old owner's identity (os/overlay/pithead-data-reset).
+#   leg 2  the OTHER trigger: a data partition that will not mount even after fsck. Corrupt the
+#          ext4 magic on partition 4 (the fixed data slot) from the HOST, on the powered-off
+#          disk, then boot and assert the box self-heals into the wizard instead of bricking.
+phase_reset() {
+    info "phase: reset (factory-reset ESP marker + wedged-/data recovery — opt-in, destructive)"
+    local img token tries jar scode names deadline
+
+    info "leg 1 — factory-reset must wipe /data and return a FRESH machine to the wizard"
+    img=$(_build_image v1) || {
+        bad "image build failed (/tmp/os-fault-build.log)"
+        return
+    }
+    _vm_boot_disk "$img" && _wait_ssh 240 || {
+        bad "guest never answered SSH (ip: ${ip:-none})"
+        return
+    }
+    ok "image boots ($ip)"
+
+    token="" tries=0
+    while [ -z "$token" ] && [ "$tries" -lt 40 ]; do
+        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$token" ] || sleep 3
+        tries=$((tries + 1))
+    done
+    [ -n "$token" ] || {
+        bad "no one-time token ever appeared on the console"
+        return
+    }
+    _wait_setup_page 120 || {
+        bad "wizard gate never served"
+        return
+    }
+
+    jar=$(mktemp)
+    curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
+        grep -q "wizard_session" "$jar" || {
+        bad "token was not accepted"
+        rm -f "$jar"
+        return
+    }
+    scode=$(curl -sSk -b "$jar" --data "monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini" \
+        "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    [ "$scode" = "200" ] || {
+        bad "config submit did not return 200 (got ${scode:-none})"
+        rm -f "$jar"
+        return
+    }
+    tries=0
+    while [ "$tries" -lt 24 ]; do
+        curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"' && break
+        sleep 5
+        tries=$((tries + 1))
+    done
+    [ "$tries" -lt 24 ] || {
+        bad "no credentials handoff appeared on the page"
+        rm -f "$jar"
+        return
+    }
+    curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null
+    rm -f "$jar"
+    ok "config submitted and provisioning released"
+
+    if ! _ssh "for i in \$(seq 120); do [ -f /data/pithead/config.json ] && exit 0; sleep 2; done; exit 1"; then
+        bad "the submitted config never became /data/pithead/config.json"
+        return
+    fi
+    ok "provisioned: config installed by the host"
+
+    names="" deadline=$(($(date +%s) + 1500))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        case "$names" in
+        *dashboard*caddy* | *caddy*dashboard*) break ;;
+        esac
+        sleep 15
+    done
+    case "$names" in
+    *dashboard*caddy* | *caddy*dashboard*)
+        ok "stack containers are running ahead of the reset ($names)"
+        ;;
+    *)
+        bad "stack never came up before the reset — running: '${names:-none}'"
+        return
+        ;;
+    esac
+
+    # Baseline, captured on the machine ABOUT to be wiped.
+    local id_before fp_before images_before
+    id_before=$(_ssh cat /etc/machine-id)
+    fp_before=$(_ssh ssh-keygen -lf /data/ssh/ssh_host_ed25519_key 2>/dev/null | awk '{print $2}')
+    images_before=$(_ssh "podman images --format '{{.Repository}}'" 2>/dev/null | tr '\n' ' ')
+    if [ -n "$id_before" ] && [ -n "$fp_before" ] && printf '%s' "$images_before" | grep -q dashboard; then
+        ok "pre-reset baseline: machine-id $id_before, host-key $fp_before, images present ($images_before)"
+    else
+        bad "could not capture a full pre-reset baseline (id: ${id_before:-none}, fp: ${fp_before:-none}, images: ${images_before:-none})"
+        return
+    fi
+
+    # The real command an operator runs — not a reimplementation of it (factory_reset() in
+    # `pithead`). It arms the ESP marker and reboots; the ssh connection drops with the reboot.
+    _ssh "cd /data/pithead && ./pithead factory-reset -y" >/dev/null 2>&1 || true
+    sleep 10
+    if _wait_ssh 300; then
+        ok "guest returned after the factory-reset reboot"
+    else
+        bad "guest never returned after factory-reset — BRICKED"
+        return
+    fi
+
+    if _wait_setup_page 120; then
+        ok "machine comes back UNPROVISIONED — the wizard token gate serves again"
+    else
+        bad "no wizard gate after factory-reset — the machine did not return to first-boot"
+    fi
+    if _ssh "test -f /data/pithead/config.json"; then
+        bad "the provisioned config.json survived factory-reset"
+    else
+        ok "the provisioned config is gone"
+    fi
+    if _ssh "test -d /data/overlay/var && test -d /data/overlay/var-work && test -d /data/pithead"; then
+        ok "the /var overlay + /pithead dirs were reseeded on the fresh partition"
+    else
+        bad "reseeded dirs missing after factory-reset (/data/overlay/var, /data/overlay/var-work, /data/pithead)"
+    fi
+    local images_after
+    images_after=$(_ssh "podman images --format '{{.Repository}}'" 2>/dev/null | tr '\n' ' ')
+    if printf '%s' "$images_after" | grep -q dashboard; then
+        bad "the OLD container store survived factory-reset (still has: $images_after)"
+    else
+        ok "container store was recreated — no stack images survive the wipe (podman images: ${images_after:-none})"
+    fi
+
+    # The reset-tier rule (os/overlay/pithead-data-reset): /data/ssh and /data/pithead/machine-id
+    # are deliberately NOT reseeded, so both regenerate — a handed-over box keeps nothing.
+    local id_after fp_after
+    id_after=$(_ssh cat /etc/machine-id)
+    fp_after=$(_ssh ssh-keygen -lf /data/ssh/ssh_host_ed25519_key 2>/dev/null | awk '{print $2}')
+    if [ -n "$id_after" ] && [ "$id_after" != "$id_before" ]; then
+        ok "machine-id is FRESH after factory-reset ($id_before -> $id_after)"
+    else
+        bad "machine-id survived factory-reset (before: $id_before, after: ${id_after:-none}) — the old owner's identity carried over"
+    fi
+    if [ -n "$fp_after" ] && [ "$fp_after" != "$fp_before" ]; then
+        ok "SSH host-key fingerprint is FRESH after factory-reset ($fp_before -> $fp_after)"
+    else
+        bad "SSH host-key fingerprint survived factory-reset (before: $fp_before, after: ${fp_after:-none})"
+    fi
+
+    # ---- leg 2: a wedged /data must self-heal, not brick ----------------------------------
+    info "leg 2 — a corrupt data-partition superblock must drive the wedged-/data recovery, not a brick"
+    _ssh "systemctl poweroff" 2>/dev/null || true
+    tries=0
+    while [ "$tries" -lt 60 ]; do
+        [ "$(virsh domstate "$VM" 2>/dev/null)" = "shut off" ] && break
+        sleep 5
+        tries=$((tries + 1))
+    done
+    [ "$(virsh domstate "$VM" 2>/dev/null)" = "shut off" ] || {
+        bad "guest never powered off cleanly before corrupting the data partition"
+        return
+    }
+
+    # Corrupt the ext4 magic (2 bytes at offset 1080 — the 1024-byte superblock plus s_magic at
+    # 0x38) on partition 4, the fixed data slot pithead-data-reset itself derives by number. Done
+    # from the HOST against the powered-off disk, via a loop device with partition scanning:
+    # dd'ing a MOUNTED filesystem's superblock risks the live kernel writing the correct bytes
+    # straight back before the corruption is ever read at the next mount.
+    local loopdev
+    loopdev=$(losetup -f) || {
+        bad "no free loop device to corrupt the data partition"
+        return
+    }
+    if losetup -P "$loopdev" "$DISK"; then
+        have udevadm && udevadm settle 2>/dev/null
+        sleep 1
+        if [ -b "${loopdev}p4" ] &&
+            dd if=/dev/zero of="${loopdev}p4" bs=1 seek=1080 count=2 conv=notrunc >/dev/null 2>&1; then
+            ok "corrupted the ext4 magic on the data partition (${loopdev}p4)"
+        else
+            bad "could not corrupt ${loopdev}p4 (partition node missing or dd failed)"
+            losetup -d "$loopdev" 2>/dev/null || true
+            return
+        fi
+    else
+        bad "losetup -P failed to attach $DISK"
+        return
+    fi
+    losetup -d "$loopdev" 2>/dev/null || true
+
+    virsh start "$VM" >/dev/null 2>&1 || {
+        bad "guest would not start after the corruption"
+        return
+    }
+    if _wait_ssh 300; then
+        ok "guest survived a wedged /data — no brick"
+    else
+        bad "BRICKED — no boot after a corrupt data-partition superblock (disqualifying)"
+        return
+    fi
+    if _wait_setup_page 120; then
+        ok "wedged /data recovered into the wizard — the box is usable again"
+    else
+        bad "no wizard gate after the wedged-/data recovery — the box did not come back usable"
+    fi
+}
+
 require_host
 require_clean_bench
 case "$PHASE" in
@@ -2266,6 +2486,7 @@ provision) phase_provision ;;
 rig) phase_rig ;;
 media) phase_media ;;
 fault) phase_fault ;;
+reset) phase_reset ;;
 all)
     phase_boot
     phase_update
