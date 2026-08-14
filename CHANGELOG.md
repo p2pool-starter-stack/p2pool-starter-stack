@@ -9,6 +9,50 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.18.0] - 2026-08-13
+
+### Added
+
+- **The XvB calculator is a decision table with measured estimates (#900).** One row per tier:
+  the odds of a win per day at your hashrate, the donation cost, what XvB's published bonus
+  figure implies, and a study estimate that tempers the published figure by what winners
+  measurably receive on-chain — 33% of face value (95% CI 28–39%), from a 25-round delivery
+  study run against this stack's own wallet and the public winners feed. The yearly net shows
+  as a band, and a tier is coloured profitable or unprofitable only when the whole band agrees.
+  Once the dashboard has confirmed enough local wins, your own measured realization replaces
+  the study band. The expected-vs-actual card's XvB expectation is tempered the same way.
+- **The dashboard stands down XvB when it is disabled.** The hero raffle KPIs, the Overview
+  tiles, and the stats panel disappear instead of showing dashes; the decision table stays, so
+  a miner can still judge whether enabling is worth the donation. When XvB is on, the win
+  forecast follows the tier the donation actually targets, not only the tier already held.
+- **The XvB delivery study ships in the repo
+  ([docs/research/xvb-delivery-study](docs/research/xvb-delivery-study/PAPER.md)).** The full
+  paper — methods, per-round data, figures, analysis scripts, and checksummed source archives —
+  documents how the measured band was derived and how to reproduce it.
+
+### Fixed
+
+- **The donation cap holds during catch-up (#898).** After an under-tier hour, catch-up aimed
+  at the tier target even when the configured donation cap could never reach it, so the
+  algorithm donated at the cap ceiling indefinitely. Catch-up now aims at the achievable
+  ceiling — the lesser of the tier target and the cap times stable hashrate — so a cap set
+  below the tier target holds.
+- **The e2e upgrade test seeds from the live release bundle (#880),** not the canonical
+  checkout, so the pre-cut bench run exercises the same starting state an operator upgrades
+  from.
+
+### Changed
+
+- **The repository is reorganized (#907).** The research record lives under `docs/research/`,
+  root-level files are pruned or moved to their subject directories, and the dev docs got an
+  accuracy pass — release branch mechanics, withdrawing a bad release, the operator-run
+  pre-cut e2e gate, service and config-key counts.
+
+### Dependencies
+
+- Python (dashboard): diff-cover 10.5.0, hypothesis 6.165.2, ruff refresh. Docker: refreshed
+  the pinned `ubuntu` base digest in the monero, p2pool, and xmrig-proxy images.
+
 ## [1.17.0] - 2026-08-02
 
 ### Added
