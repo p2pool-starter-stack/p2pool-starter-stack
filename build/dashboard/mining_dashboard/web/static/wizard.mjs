@@ -571,17 +571,7 @@ export class WizardApp extends Component {
                             autocomplete="new-password" />
                     <//>
                 </div>`
-                : html`<div class="wizard-when">
-                    <${Field} label="Chain size">
-                        <select value=${String(v("prune") ?? true)} onChange=${on("prune")}>
-                            <option value="true">Pruned — about 120 GB (default, mines exactly the same)</option>
-                            <option value="false">Full — about 320 GB (only if you need the whole chain)</option>
-                        </select>
-                    <//>
-                    <${Note}>A local Tari node adds about 170 GB on top. Under roughly 350 GB of
-                    disk, pruned Monero plus a ${" "}<em>remote</em>${" "}Tari node is the
-                    combination that fits.<//>
-                </div>`
+                : null
             }
 
             <h3>Tari node</h3>
@@ -667,13 +657,7 @@ export class WizardApp extends Component {
                     to you on the next screen.<//>`
             }
 
-            <h3>Alerts <span class="text-muted">(optional — skip both if you are not sure)</span></h3>
-            <${Field} label="Healthchecks.io ping URL">
-                <input value=${v("healthchecks") || ""} onInput=${on("healthchecks")}
-                    autocomplete="off" spellcheck=${false} placeholder="https://hc-ping.com/your-uuid" />
-            <//>
-            <${Note}>Tells you when this machine goes ${" "}<em>silent</em>${" "}— a power cut
-            or a crash, which the machine itself cannot report.<//>
+            <h3>Alerts <span class="text-muted">(optional — skip if you are not sure)</span></h3>
             <${Field} label="Telegram bot token">
                 <input value=${v("telegramToken") || ""} onInput=${on("telegramToken")}
                     autocomplete="off" spellcheck=${false} placeholder="123456:ABC-DEF…" />
@@ -684,16 +668,36 @@ export class WizardApp extends Component {
             <//>
             ${tg.partial && html`<p class="c-bad">Telegram needs both fields, or leave both blank.</p>`}
 
-            <${Field} label="Time zone">
-                <input value=${v("timezone") || "auto"} onInput=${on("timezone")} list="wizard-tzs"
-                    autocomplete="off" />
-            <//>
-            <datalist id="wizard-tzs">${TIMEZONES.map((t) => html`<option value=${t} />`)}</datalist>
-            <${Note}><code>auto</code>${" "}uses this machine's own setting — for dashboard
-            timestamps and the daily summary.<//>
-
             <details>
                 <summary><strong>Advanced</strong> — the exact configuration, every key and default</summary>
+                <${Note}>Everything here already has a sane default — the machine runs fine
+                untouched. Change these only if you know you need to.<//>
+                ${
+                  !remoteMonero &&
+                  html`<${Field} label="Chain size">
+                    <select value=${String(v("prune") ?? true)} onChange=${on("prune")}>
+                        <option value="true">Pruned — about 120 GB (default, mines exactly the same)</option>
+                        <option value="false">Full — about 320 GB (only if you need the whole chain)</option>
+                    </select>
+                <//>
+                <${Note}>A local Tari node adds about 170 GB on top. Under roughly 350 GB of
+                disk, pruned Monero plus a ${" "}<em>remote</em>${" "}Tari node is the
+                combination that fits.<//>`
+                }
+                <${Field} label="Healthchecks.io ping URL">
+                    <input value=${v("healthchecks") || ""} onInput=${on("healthchecks")}
+                        autocomplete="off" spellcheck=${false} placeholder="https://hc-ping.com/your-uuid" />
+                <//>
+                <${Note}>Tells you when this machine goes ${" "}<em>silent</em>${" "}— a power cut
+                or a crash, which the machine itself cannot report.<//>
+                <${Field} label="Time zone">
+                    <input value=${v("timezone") || "auto"} onInput=${on("timezone")} list="wizard-tzs"
+                        autocomplete="off" />
+                <//>
+                <datalist id="wizard-tzs">${TIMEZONES.map((t) => html`<option value=${t} />`)}</datalist>
+                <${Note}><code>auto</code>${" "}uses this machine's own setting — for dashboard
+                timestamps and the daily summary.<//>
+
                 <${Note}>This is what the machine will run. Editing a field above updates it;
                 editing it here directly wins. Keys still at their documented default are not
                 written to disk, so this machine keeps receiving improved defaults from future

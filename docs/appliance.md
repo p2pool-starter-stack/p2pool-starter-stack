@@ -160,16 +160,19 @@ Then a handful of choices, all with sensible defaults:
 | Question | Default | When to change it |
 |---|---|---|
 | Tari payout address | — | Required, like the Monero one: this stack always merge-mines both coins from the same work. |
-| Monero chain | Pruned (~120 GB) | Only asked when this machine runs the node. Full is ~320 GB and mines identically. |
 | P2Pool sidechain | mini | `nano` for a single low-power rig, `main` only for very large hashrate. Changeable later. |
-| Healthchecks ping URL | — | Optional. Tells you when the machine goes *silent* — a power cut or crash, which it cannot report itself. |
 | Telegram bot | — | Optional. Alerts and status commands; needs both the token and the chat id. |
 | Monero node | run it here | Point at a node you already run. |
 | Tari node | run it here | Same, over a network you trust. |
 | Mine with this machine's CPU | off | On if this box should mine as well as coordinate. Nothing to install: the image carries its own [RigForge](https://github.com/p2pool-starter-stack/rigforge) miner, pointed at this machine's own pool. It starts by itself once the stack is up, comes back on every boot, and appears in the dashboard's Workers view. Mining tunes the whole box for hashrate (CPU governor, memory reservations) — what a dedicated appliance is for. |
 | First sync | private over Tor | Faster over the open internet if days of syncing is too slow; it uses Tor afterwards either way. |
-| Time zone | UTC | For dashboard timestamps. |
 | Dashboard login | generate one for me | Or choose your own password. "No login" is offered but leaves the dashboard — payout addresses, hashrate — open to anyone on your network; never combine it with the Tor onion. |
+
+That is the whole first-run form — fewer questions than the DIY install, on purpose: anything
+with a default that is right for almost every home rig lives one level down, in **Advanced**,
+not on the quick form. Today that means the Monero chain size (pruned, ~120 GB, vs. the full
+~320 GB — only asked at all when this machine runs the node), the Healthchecks ping URL, and
+the time zone (UTC unless set). They are still there to change, just not asked outright.
 
 The dashboard login is also the machine's **console login**: sit at the machine, log in as
 `root` with the dashboard password. It is set fresh at every boot and never stored on disk.
@@ -180,8 +183,8 @@ browser session would own the machine, wallets and all.
 
 **Already know exactly what you want?** Open **Advanced** at the bottom. It shows the complete
 configuration — every key, with its default filled in — and it *is* what the machine will run:
-answering a question above rewrites it, and editing it directly wins. Paste a whole
-`config.json` in there if you have one.
+answering a question above (or one of the Advanced fields) rewrites it, and editing it directly
+wins. Paste a whole `config.json` in there if you have one.
 
 ### Press "Validate, then install"
 
