@@ -84,9 +84,9 @@ RUN curl -fsSL -o /usr/local/bin/docker-compose \
 # The built-in miner (#796): a pinned RigForge tree plus everything it needs, baked at image
 # build because nothing can be installed later — apt cannot run on the read-only root, and even
 # a rw-remount install leaves its /etc state (alternatives, ld.so.cache) on the volatile overlay
-# where the first reboot breaks the compiler. RIGFORGE_REF pins a commit on rigforge's develop
-# (the first ref with appliance mode); move it to the next tagged rigforge release when one
-# ships. pithead-sync copies the tree to /data/rigforge every boot; `pithead local-miner` runs
+# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.14.0 release tag
+# (by commit, not tag name, so a moved tag cannot change the bake); bump it release by release.
+# pithead-sync copies the tree to /data/rigforge every boot; `pithead local-miner` runs
 # its setup with RIGFORGE_APPLIANCE=1 when local_miner.enabled.
 #
 # The toolchain is RigForge's Debian dependency list, with one naming fix: trixie ships the
@@ -96,7 +96,7 @@ RUN curl -fsSL -o /usr/local/bin/docker-compose \
 RUN apt-get install -y --no-install-recommends \
         git build-essential cmake libuv1-dev libssl-dev libhwloc-dev gettext-base python3 \
         linux-cpupower msr-tools
-ARG RIGFORGE_REF=32be3a433b261110dde371f0ed5dab88acafd6f4
+ARG RIGFORGE_REF=a8840b3c8108ee6def9d850221a440f2fd355cf6
 RUN curl -fsSL -o /tmp/rigforge.tar.gz \
         "https://github.com/p2pool-starter-stack/rigforge/archive/${RIGFORGE_REF}.tar.gz" \
     && mkdir -p /opt/rigforge \
