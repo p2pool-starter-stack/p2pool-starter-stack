@@ -319,8 +319,10 @@ Inspect](dashboard.md#worker-inspect) change history (#579): a still-`accepted` 
 status-poll deadline still reaches a terminal state without a second authenticated dial to the
 control port.
 
-[TODO: verify upstream — confirm the `rigforge.control` mirror ships in RigForge; until then this
-parses to nothing and the row stays `accepted`.]
+RigForge does not ship this mirror yet — its enriched feed carries `config_meta` provenance
+(revision, `changed_at`, source, `last_change_id`) but no `control` status object — so this parses to
+nothing today, and a rollback slower than the status-poll deadline stays `accepted` until
+the rig ships the mirror.
 
 #### RigForge new-release badge
 
