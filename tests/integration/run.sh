@@ -48,6 +48,7 @@ SAFETY_BACKUP=0
 SAFETY_ARCHIVE=""
 KEEP_STATE=0
 EXPECTED_WORKERS=2
+SKIP_MINING_ASSERTS=0
 REMOTE_MONERO_HOST=""
 PRUNED_DATA_DIR=""
 FULL_DATA_DIR=""
@@ -83,6 +84,9 @@ MATRIX:
                          headroom, secrets not world-readable, dashboard localhost-only).
   --scenario <name>      run only one scenario (see --list)
   --workers <n>          miners expected online while mining (default: 2)
+  --no-mining-asserts    SKIP the two mining assertions (workers online, stratum hashes) with a
+                         logged notice — for a box with no miner connected (e2e --no-miner, #905).
+                         Every other assertion stays binding.
   --remote-monero-host <h>  external node endpoint for the remote-mode scenario
                             (e.g. the box's own synced node on its LAN IP)
   --pruned-data-dir <d>  synced PRUNED monero data dir (enables the pruned case when the
@@ -197,6 +201,10 @@ parse_args() {
         --workers)
             EXPECTED_WORKERS="$2"
             shift 2
+            ;;
+        --no-mining-asserts)
+            SKIP_MINING_ASSERTS=1
+            shift
             ;;
         --remote-monero-host)
             REMOTE_MONERO_HOST="$2"
@@ -421,10 +429,11 @@ run_scenario() {
         return 0
     fi
 
-    # Wait for the stack to settle on real readiness signals before asserting.
+    # Wait for the stack to settle on real readiness signals before asserting. The miner/hash
+    # waits are pointless with --no-mining-asserts (nothing will ever connect) — skip the stall.
     wait_status_ok 240 || true
     wait_monero_synced 120 || true
-    wait_miner_running 180 || true
+    [ "$SKIP_MINING_ASSERTS" = "1" ] || wait_miner_running 180 || true
     # p2pool infers its sidechain from connected peers, so after a pool switch it reads "Unknown"
     # until peers on the new chain connect — wait for the dashboard to classify it (issue #54).
     local _pool
@@ -433,7 +442,7 @@ run_scenario() {
     wait_pool_ready 180 "$(pool_label "$_pool")" || true
     # End-to-end mining: p2pool's stratum hash counter resets on restart and climbs only once the
     # proxy's upstream reconnects and a share lands — wait for it before asserting hashes>0 (issue #54).
-    wait_hashes_flowing 300 || true
+    [ "$SKIP_MINING_ASSERTS" = "1" ] || wait_hashes_flowing 300 || true
     # When Tari is a required sync gate, give it the same treatment as Monero: after a restart it
     # must close its offline gap before the .sync.tari.state assertion, or we'd catch it mid-"loading".
     if [ "$(jq_get "$config" '.dashboard.tari_required')" = "true" ]; then
@@ -576,15 +585,21 @@ assert_running_state() {
     #    minute later, and which scenario loses that race moves run to run. The re-fetched
     #    assertion below stays the arbiter: a rig that never returns still fails after the
     #    timeout.
-    local workers conns hashes
-    wait_stratum_hashes 180 || true
-    st="$(api_state)" # re-fetch so this step and everything after read post-wait state
-    workers="$(jq_get "$st" '.proxy_workers')"
-    conns="$(jq_get "$st" '.stratum.conns')"
-    hashes="$(jq_get "$st" '.stratum.total_hashes')"
-    assert_num_ge "workers online (>= $EXPECTED_WORKERS)" "${workers:-0}" "$EXPECTED_WORKERS"
-    assert_num_gt "stratum total hashes > 0" "${hashes:-0}" 0
-    it_step "stratum conns=${conns:-?} (informational)"
+    if [ "$SKIP_MINING_ASSERTS" = "1" ]; then
+        # #905: no miner is connected on purpose (e2e --no-miner), so a live worker/hash count
+        # would fail a healthy stack. Skip these two loudly; every other assertion stays binding.
+        it_warn "SKIPPED mining assertions (workers online, stratum hashes): --no-mining-asserts"
+    else
+        local workers conns hashes
+        wait_stratum_hashes 180 || true
+        st="$(api_state)" # re-fetch so this step and everything after read post-wait state
+        workers="$(jq_get "$st" '.proxy_workers')"
+        conns="$(jq_get "$st" '.stratum.conns')"
+        hashes="$(jq_get "$st" '.stratum.total_hashes')"
+        assert_num_ge "workers online (>= $EXPECTED_WORKERS)" "${workers:-0}" "$EXPECTED_WORKERS"
+        assert_num_gt "stratum total hashes > 0" "${hashes:-0}" 0
+        it_step "stratum conns=${conns:-?} (informational)"
+    fi
 
     # 7. Tari sync-gate posture matches tari_required. The sync verdict tolerates post-restart
     #    target re-discovery ONLY once Tari has proved "done" earlier this run (#746).
@@ -1915,8 +1930,8 @@ run_subnet_scenario() {
     fi
     wait_status_ok 300 || true
     wait_monero_synced 120 || true
-    wait_miner_running 180 || true
-    wait_hashes_flowing 300 || true
+    [ "$SKIP_MINING_ASSERTS" = "1" ] || wait_miner_running 180 || true
+    [ "$SKIP_MINING_ASSERTS" = "1" ] || wait_hashes_flowing 300 || true
     # The down/up restarted Tari too, so — like the per-scenario deploy path — let it close its
     # post-restart offline gap before assert_running_state's sync check, or we catch it mid-"loading".
     if [ "$(jq_get "$config" '.dashboard.tari_required')" = "true" ]; then

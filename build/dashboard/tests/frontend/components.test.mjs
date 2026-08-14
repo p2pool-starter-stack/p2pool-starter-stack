@@ -424,8 +424,10 @@ test('EarningsCard Energy tab folds the current-tier XvB estimate into net, labe
     const html = renderApp({ state: s });
     assert.match(html, /scope="col"[^>]*>Net</);
     assert.match(html, /P2Pool \+ XvB \(est\.\), after power/);
-    // Tooltip drops the "Excludes XvB" clause and states it's an estimate.
-    assert.match(html, /XvB is an estimate/);
+    // Tooltip drops the "Excludes XvB" clause and states it's an estimate — tempered by
+    // measured delivery, never face value (#902).
+    assert.match(html, /XvB is an estimate, tempered by measured delivery/);
+    assert.match(html, /never XvB(?:'|&#39;)s face value/);
     assert.doesNotMatch(html, /Excludes XvB/);
     assert.doesNotMatch(html, /P2Pool XMR only, after power/);
 });
@@ -550,12 +552,14 @@ test('EarningsCard marks running windows the payout history does not fully cover
     assert.match(html, /no payouts on record yet/);
 });
 
-test('EarningsCard XvB tab shows the published current-tier reward as a day/month/year table', () => {
+test('EarningsCard XvB tab shows the tempered current-tier reward as a day/month/year table', () => {
     const s = clone();
     s.earnings.available = true;
-    s.earnings.xvb_day = 0.002; // fresh published estimate → the standardized table appears
+    s.earnings.xvb_day = 0.002; // fresh (server-tempered, #902) estimate → the standardized table
     let html = renderApp({ state: s });
-    assert.match(html, /Current Tier Expected Reward — published by XvB/);
+    // The heading says the figure is tempered by measured delivery, not XvB's face value (#902).
+    assert.match(html, /Current Tier Expected Reward — tempered by measured delivery/);
+    assert.match(html, /tempered by measured delivery: scaled to what this wallet/);
     assert.match(html, /0\.002000 XMR/);  // day
     assert.match(html, /0\.060000 XMR/);  // month, same shared precision
     assert.match(html, /0\.730000 XMR/);  // year

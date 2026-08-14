@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import mining_dashboard.service.metrics as service_metrics
 import mining_dashboard.web.views as views
 from mining_dashboard.config import config as egress_config
 from mining_dashboard.config.config import (
@@ -61,6 +62,7 @@ from mining_dashboard.web.views import (
     xvb_current_tier_reward_day,
     xvb_expected_wins_day,
     xvb_realization,
+    xvb_tempered_day,
 )
 
 # --- Metrics fixtures for the presentation builders -----------------------------------
@@ -2024,6 +2026,55 @@ class TestXvbRealization:
             self._payouts(4_800_000_000), self.WINS, 0.016, 1.0, now=self.NOW, p2pool_day=0.0064
         )
         assert out == (pytest.approx(0.2), 6)
+
+
+class TestXvbTemperedDay:
+    """The calculator/energy figure ships tempered — never XvB's raw published number (#902)."""
+
+    def test_measured_realization_beats_the_prior(self):
+        assert xvb_tempered_day(0.016, (0.19, 15)) == pytest.approx(0.016 * 0.19)
+
+    def test_unmeasured_falls_back_to_the_prior_midpoint(self):
+        lo, hi = views.XVB_REALIZATION_PRIOR
+        assert xvb_tempered_day(0.016, None) == pytest.approx(0.016 * (lo + hi) / 2)
+
+    def test_never_the_raw_published_figure(self):
+        # Whichever branch resolves, face value must not survive the tempering.
+        assert xvb_tempered_day(0.016, None) < 0.016
+        assert xvb_tempered_day(0.016, (0.99, 5)) < 0.016
+
+    def test_nothing_published_passes_through(self):
+        # None (no fresh estimate / XvB off) and 0 stay as-is — nothing fabricated either way.
+        assert xvb_tempered_day(None, None) is None
+        assert xvb_tempered_day(None, (0.19, 15)) is None
+        assert xvb_tempered_day(0.0, (0.19, 15)) == 0.0
+
+    def test_build_state_ships_tempered_while_the_summary_keeps_face_value(self, monkeypatch):
+        # The wiring the issue is about: est.xvbDay (earnings.xvb_day) leaves build_state
+        # tempered, while the expected-vs-actual summary still works from the face value (it
+        # applies the measured factor itself — feeding it the tempered figure would double-count).
+        monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", False)
+        monkeypatch.setattr(views.config, "TARI_PAYOUT_CONFIRM_ENABLED", False)
+        monkeypatch.setattr(service_metrics, "ENABLE_XVB", True)
+        monkeypatch.setattr(views, "xvb_current_tier_reward_day", lambda m, s: 0.016)
+        monkeypatch.setattr(views, "xvb_realization", lambda *a, **k: (0.25, 6))
+        st = build_state(_data(), _state_mgr(), "all")
+        assert st["earnings"]["xvb_day"] == pytest.approx(0.016 * 0.25)
+        # Measured tempering applied exactly ONCE on the summary side (0.016 × 30 × 0.25).
+        assert st["earnings_summary"]["xmr"]["expected_30d"] == pytest.approx(0.016 * 30 * 0.25)
+
+    def test_build_state_unmeasured_box_ships_the_prior_midpoint(self, monkeypatch):
+        # No measured wins: the calculator figure drops to the prior midpoint; the summary keeps
+        # the face value (its tooltip labels it an upper bound) — asymmetric by design.
+        monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", False)
+        monkeypatch.setattr(views.config, "TARI_PAYOUT_CONFIRM_ENABLED", False)
+        monkeypatch.setattr(service_metrics, "ENABLE_XVB", True)
+        monkeypatch.setattr(views, "xvb_current_tier_reward_day", lambda m, s: 0.016)
+        monkeypatch.setattr(views, "xvb_realization", lambda *a, **k: None)
+        st = build_state(_data(), _state_mgr(), "all")
+        lo, hi = views.XVB_REALIZATION_PRIOR
+        assert st["earnings"]["xvb_day"] == pytest.approx(0.016 * (lo + hi) / 2)
+        assert st["earnings_summary"]["xmr"]["expected_30d"] == pytest.approx(0.016 * 30)
 
 
 class TestEarningsVsActualTempering:

@@ -19,7 +19,7 @@ class TariClient:
     # to send reply ... ChainMetadata" and its own `status` command times out), gRPC calls
     # fail. Serve the last good sync reading for up to this long so the dashboard doesn't
     # flicker to 0/0 on every blip. Bounded so a genuinely down node isn't masked forever —
-    # the proper "node is down" indicator is tracked separately in the TODO.
+    # the "node is down" signal is NodeHealthMonitor's job (#31), not this cache's.
     _MAX_STALE_SECONDS = 300
 
     def __init__(self):

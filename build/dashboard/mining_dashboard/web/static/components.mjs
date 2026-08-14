@@ -592,14 +592,15 @@ function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
                          title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />
         </div>
         ${
-          // Current-tier expected reward (#712's published per-day figure) in the same
-          // standardized Day/Month/Year table every other tab shows. Only when the server sent a
-          // fresh estimate — never fabricated; a fixed published figure, NOT scaled by the
-          // what-if hashrate, and the heading says so.
+          // Current-tier expected reward (#712) in the same standardized Day/Month/Year table
+          // every other tab shows. Only when the server sent a fresh estimate — never fabricated.
+          // The server tempers the published figure by measured delivery (#902): this wallet's
+          // measured win payouts when enough wins exist, else the study band's midpoint — never
+          // face value. A fixed figure, NOT scaled by the what-if hashrate; the heading says so.
           est && est.xvbDay !== null
             ? html`
-        <h4 class="est-heading" title="XvB's published expected reward for the tier your fleet holds now — a raffle expectation across all qualifiers, not scaled by the what-if hashrate above.">
-            Current Tier Expected Reward — published by XvB</h4>
+        <h4 class="est-heading" title="XvB's published expected reward for the tier your fleet holds now, tempered by measured delivery: scaled to what this wallet's wins measurably paid when enough wins exist, else by the midpoint of the measured delivery band (28–39% of face value). XvB's raw figure shows only in the decision table's own column. A raffle expectation across all qualifiers, not scaled by the what-if hashrate above.">
+            Current Tier Expected Reward — tempered by measured delivery</h4>
         <${EstTable} unit="XMR" day=${est.xvbDay} month=${est.xvbMonth} year=${est.xvbYear}
                      price=${energy ? energy.xmr_price : 0} currency=${energy ? energy.currency : "USD"} />`
             : null
@@ -907,19 +908,20 @@ class EarningsCard extends Component {
 // then energy cost once an electricity price is set, then net profit once an XMR price is also set —
 // each layer appears only when its inputs exist, so the operator never sees a fabricated figure.
 // Setting a Tari price too (#520) folds the Tari merge-mining estimate into gross, and the current
-// XvB tier's published expected reward folds in when XvB sends a fresh one (#712); the heading and
-// the Net/day tooltip say exactly what's counted — including that XvB is an estimate — so the net
-// is never silently partial or over-confident. `est` is the earnings for the shared what-if
-// hashrate; the client does the kWh/cost/net math.
+// XvB tier's expected reward — tempered by measured delivery server-side (#902), never face
+// value — folds in when XvB sends a fresh one (#712); the heading and the Net/day tooltip say
+// exactly what's counted — including that XvB is a tempered estimate — so the net is never
+// silently partial or over-confident. `est` is the earnings for the shared what-if hashrate;
+// the client does the kWh/cost/net math.
 function EnergyPanel({ energy, est }) {
   const en = computeEnergy(energy, est);
   const cur = energy.currency;
   const haveCost = energy.cost_per_kwh > 0;
   const haveNet = haveCost && energy.xmr_price > 0;
-  // Honest label (#520, #712): say exactly what gross counts so the net figure is never silently
-  // partial. XvB is tagged "(est.)" — it's the current tier's published expected reward, and the
-  // raffle draw is probabilistic. When XvB isn't folded in, the strings are byte-identical to the
-  // pre-#712 label/tooltip.
+  // Honest label (#520, #712, #902): say exactly what gross counts so the net figure is never
+  // silently partial. XvB is tagged "(est.)" — the current tier's expected reward, tempered by
+  // measured delivery server-side, and the raffle draw is probabilistic. When XvB isn't folded
+  // in, the strings are byte-identical to the pre-#712 label/tooltip.
   const netLabel = en.includesXvb
     ? en.includesTari
       ? "P2Pool + Tari + XvB (est.), after power"
@@ -929,8 +931,8 @@ function EnergyPanel({ energy, est }) {
       : "P2Pool XMR only, after power";
   const netTitle = en.includesXvb
     ? en.includesTari
-      ? "P2Pool XMR + Tari (merge-mined) earnings at your set prices, plus the current XvB tier's published expected reward valued at your XMR price, minus power cost. XvB is an estimate — the raffle draw is random among qualifiers."
-      : "P2Pool XMR earnings at your XMR price plus the current XvB tier's published expected reward valued at your XMR price, minus power cost. Excludes Tari (set dashboard.energy.tari_price to include it). XvB is an estimate — the raffle draw is random among qualifiers."
+      ? "P2Pool XMR + Tari (merge-mined) earnings at your set prices, plus the current XvB tier's expected reward valued at your XMR price, minus power cost. XvB is an estimate, tempered by measured delivery (your wallet's measured win payouts when enough wins exist, else the measured delivery band's midpoint) — never XvB's face value — and the raffle draw is random among qualifiers."
+      : "P2Pool XMR earnings at your XMR price plus the current XvB tier's expected reward valued at your XMR price, minus power cost. Excludes Tari (set dashboard.energy.tari_price to include it). XvB is an estimate, tempered by measured delivery (your wallet's measured win payouts when enough wins exist, else the measured delivery band's midpoint) — never XvB's face value — and the raffle draw is random among qualifiers."
     : en.includesTari
       ? "P2Pool XMR + Tari (merge-mined) earnings at your set prices, minus power cost. Excludes XvB (raffle status, not a per-day income estimate)."
       : "P2Pool XMR earnings at your XMR price, minus power cost. Excludes Tari (set dashboard.energy.tari_price to include it) and XvB (raffle status, not a per-day income estimate).";

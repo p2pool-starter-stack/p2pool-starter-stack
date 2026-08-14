@@ -1489,7 +1489,8 @@ def xvb_current_tier_reward_day(metrics, state_mgr):
 
     Feeds the net-profit calculator (``est.xvbDay``): the whole net is already probabilistic, so
     blending the raffle's expected reward into the single figure is coherent — but it's an
-    *estimate* (the draw is random among qualifiers), so the UI labels it as one.
+    *estimate* (the draw is random among qualifiers), so the UI labels it as one. This is the
+    FACE value; ``build_state`` tempers it (``xvb_tempered_day``, #902) before the payload ships.
 
     Uses the **current** tier (``min(xvb_1h, xvb_24h)`` — the same lower-of-two rule as
     ``metrics.current_tier``), not the target: what the fleet is actually credited now. Returns
@@ -1629,6 +1630,19 @@ def xvb_realization(payouts, raffle_wins, xvb_day, expected_wins_day, now=None, 
     return (max(0.0, min(1.0, frac)), len(stamps))
 
 
+def xvb_tempered_day(xvb_day, realization):
+    """The per-day XvB figure the calculator and energy net fold in (#902) — never face value.
+
+    Same precedence as the decision table: this wallet's measured realization when enough wins
+    exist to measure it (``xvb_realization``), else the midpoint of the measured delivery prior
+    (``XVB_REALIZATION_PRIOR``). ``None``/0 passes through — nothing published means nothing to
+    temper, never a fabricated figure."""
+    if not xvb_day:
+        return xvb_day
+    frac = realization[0] if realization else sum(XVB_REALIZATION_PRIOR) / 2
+    return xvb_day * frac
+
+
 def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None):
     """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
 
@@ -1683,6 +1697,8 @@ def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None)
         "tari_reward": metrics.tari_reward,  # full XTM paid per Tari block (solo, lumpy)
         # Current-tier XvB expected reward, XMR/day, folded into the net-profit estimate (#712).
         # None unless XvB is on with a fresh published estimate for the tier the fleet holds now.
+        # build_state tempers this by measured delivery (xvb_tempered_day, #902) before the
+        # payload ships — clients never see the raw published figure.
         "xvb_day": xvb_day,
         "pool_difficulty": metrics.pool_difficulty,  # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
@@ -2057,6 +2073,21 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
             p2pool_day=earnings["coeff_day"] * metrics.p2pool_30d,
         )
 
+    # Expected vs actual (#808) reads the published FACE value — it tempers its own XvB leg by
+    # the measured factor and labels the untempered fallback face value in the tooltip — so it
+    # is built before the calculator's copy is tempered below.
+    earnings_summary = build_earnings_vs_actual(
+        metrics,
+        earnings,
+        raffle_wins,
+        expected_wins_day=xvb_wins_day,
+        realization=xvb_realized,
+    )
+    # The calculator/energy copy (est.xvbDay) ships TEMPERED (#902): measured realization when
+    # this wallet has one, else the delivery prior's midpoint — the raw published figure was the
+    # last untempered money surface (a donating box's fiat net read ~3x high on the XvB addend).
+    earnings["xvb_day"] = xvb_tempered_day(earnings["xvb_day"], xvb_realized)
+
     egress = egress_posture_from_config()  # per-component egress route + privacy roll-up (#170)
     topology = (
         topology_from_config()
@@ -2108,13 +2139,8 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         # (feature off → earnings shows only the estimate). Built above, before the payload.
         "earnings": earnings,
         # Expected vs actual, one row per stream (#808) — the Simple view's earnings figure.
-        "earnings_summary": build_earnings_vs_actual(
-            metrics,
-            earnings,
-            raffle_wins,
-            expected_wins_day=xvb_wins_day,
-            realization=xvb_realized,
-        ),
+        # Built above, from the face-value earnings dict, before the #902 tempering.
+        "earnings_summary": earnings_summary,
         "xvb_calc": build_xvb_calc(metrics, state_mgr, realization=xvb_realized),
         # On a backup stack, the XvB controller state last pulled from the primary (#249) — held as
         # standby, adopted only at failover. None on a single stack (nothing pulls). Inspectable so

@@ -165,8 +165,12 @@ Two runs of the matrix are required, and the automated one is the smaller of the
 
 After deploying the published release to the bench, run the non-destructive live sweep as the
 closing check: `tests/integration/run.sh --local --dir <stack-dir> --check`. On a bench with no
-miners connected, exactly two failures are expected — `workers online` and `stratum total
-hashes` — anything else is a regression.
+miners connected, add `--no-mining-asserts`
+([#905](https://github.com/p2pool-starter-stack/pithead/issues/905)): the two mining
+assertions skip with a logged notice, and the sweep must then pass with zero failures — any
+failure is a regression. Without the flag, `workers online` and `stratum total hashes` fail on
+every miner-less bench and have to be eyeballed as "expected", which is exactly the
+tolerated-known-failure habit the flag exists to end.
 
 ## Signed releases
 

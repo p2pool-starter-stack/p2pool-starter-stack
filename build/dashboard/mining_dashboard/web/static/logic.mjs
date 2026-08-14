@@ -279,7 +279,8 @@ export function computeEarnings(hashrateHs, earnings) {
     tariYear: tariDay === null ? null : tariDay * DAYS_PER_YEAR,
     tariTimeToBlockSec,
     tariRewardPerBlock: earnings.tari_available ? earnings.tari_reward : null,
-    // Current-tier XvB expected reward, XMR/day (#712). A fixed published figure, NOT scaled by the
+    // Current-tier XvB expected reward, XMR/day (#712) — the published figure tempered by
+    // measured delivery server-side (#902), never face value. A fixed figure, NOT scaled by the
     // what-if hashrate (unlike day/tariDay); null unless the server sent a fresh estimate. Month/
     // year are the same day/month/year spans every other estimate gets, so the XvB tab can show
     // the standardized table.
@@ -417,11 +418,12 @@ export function formatXtm(xtm) {
 //           + (current-tier XvB/day × xmr_price, when the server sent a fresh estimate).
 // `est` is the already-computed earnings for this what-if hashrate (computeEarnings; `est.tariDay`
 // is the same Tari/day estimate the Tari tab already shows — no separate estimate invented here).
-// XvB (#712): `est.xvbDay` is the current tier's published expected reward (XMR/day), folded into
-// the single net — the whole net is already probabilistic, so one number stays coherent, and the
-// UI labels the XvB slice as an estimate (the raffle draw is random among qualifiers). It's a
-// fixed published figure, so it does NOT scale with the what-if hashrate; null (server-gated on a
-// fresh, non-stale estimate for a held donor tier) means it's simply left out — never fabricated.
+// XvB (#712): `est.xvbDay` is the current tier's expected reward (XMR/day; the published figure
+// tempered by measured delivery server-side, #902 — never face value), folded into the single
+// net — the whole net is already probabilistic, so one number stays coherent, and the UI labels
+// the XvB slice as a tempered estimate (the raffle draw is random among qualifiers). It's a
+// fixed figure, so it does NOT scale with the what-if hashrate; null (server-gated on a fresh,
+// non-stale estimate for a held donor tier) means it's simply left out — never fabricated.
 // Any figure whose inputs are missing comes back null so the card shows "—" rather than a bogus
 // number: cost needs cost_per_kwh > 0; net additionally needs xmr_price > 0 and a valid XMR
 // estimate — Tari and XvB only ever ADD to that base (mirrors the existing xmr_price-gates-net
@@ -454,8 +456,9 @@ export function computeEnergy(energy, est) {
   const haveXmr = Number.isFinite(xmrPrice) && xmrPrice > 0 && est && Number.isFinite(est.day);
   const includesTari =
     haveXmr && Number.isFinite(tariPrice) && tariPrice > 0 && Number.isFinite(est.tariDay);
-  // XvB (#712): the current tier's published expected reward (XMR/day), valued at the XMR price —
-  // an estimate blended into the single net, gated on a real XMR price like every other addend.
+  // XvB (#712): the current tier's expected reward (XMR/day, delivery-tempered server-side,
+  // #902), valued at the XMR price — an estimate blended into the single net, gated on a real
+  // XMR price like every other addend.
   const includesXvb = haveXmr && Number.isFinite(est.xvbDay) && est.xvbDay > 0;
   const grossDay = haveXmr
     ? est.day * xmrPrice +
