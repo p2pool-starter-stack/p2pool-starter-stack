@@ -12,6 +12,16 @@
 # pithead-install): 1 = ESP, 2/3 = system slots, 4 = data. On first boot partition 4 may not
 # exist yet — systemd-repart creates it — and systemd waits on the device unit exactly as it
 # waited on the label, so ordering is unchanged.
+#
+# NOT consolidated onto lsblk -o PARTLABEL (#926), unlike pithead-data-reset and pithead-install,
+# which both resolve the same disk this way. A generator runs before any other unit — including
+# systemd-udevd — and per systemd.generator(7) "cannot rely on any external services"; lsblk's
+# PARTLABEL column is sourced from the udev database first, falling back to a direct blkid probe
+# only once that database is unavailable, and its own man page recommends running `udevadm
+# settle` first when it might not be — a settle this generator has no daemon left to run against.
+# The awk/sed derivation below touches only /proc and does its own arithmetic, so it owes nothing
+# to udev having run yet. Trading that self-containment for the shared shape would be the exact
+# kind of behavior-with-an-unprovable-early-boot-dependency this refactor exists to avoid.
 set -eu
 
 GENDIR="${1:-/run/systemd/generator}"

@@ -9846,6 +9846,54 @@ assert_eq "no marker + /data mounts clean -> skip (fail-safe: never touch a heal
 assert_eq "no marker + /data wedged after fsck -> reformat-wedged (recovery)" "$(decide "$DR/no-marker" fail)" "reformat-wedged"
 assert_eq "no marker + fsck repairs the mount -> skip (recoverable /data is never wiped)" "$(decide "$DR/no-marker" repair)" "skip"
 
+echo "== unit: pithead-data-reset boot_disk_part resolves by PARTLABEL on the boot disk (#926) =="
+# Stubbed findmnt + lsblk (the same PATH-stub shape pithead's own prefill_from_previous_install
+# test uses for lsblk). findmnt always answers the fake root partition; lsblk branches on its
+# first flag: -no PKNAME returns the parent disk name, -lnpo NAME,PARTLABEL lists that disk's
+# partitions with their labels — never a bare/unscoped label lookup.
+DRP="$SANDBOX/data-reset-partition"
+mkdir -p "$DRP/bin"
+printf '#!/usr/bin/env bash\necho "/dev/vda2"\n' >"$DRP/bin/findmnt"
+# The stub's labels are DERIVED from the real build inputs, not hand-typed: mkimage's sgdisk line
+# names the ESP, repart.d names the data partition. If either file ever changes its casing or
+# name, this test fails instead of green-lighting a lookup that no longer matches reality.
+DRP_ESP_LABEL=$(grep -oE '\-c 1:[a-zA-Z]+' "$ROOT/os/rauc/mkimage.sh" | cut -d: -f2)
+DRP_DATA_LABEL=$(grep -oE '^Label=.*' "$ROOT/os/rootfs/repart.d/40-data.conf" | cut -d= -f2)
+assert_eq "the ESP label mkimage bakes is the one data-reset looks up" "$DRP_ESP_LABEL" "esp"
+assert_eq "the data label repart declares is the one data-reset looks up" "$DRP_DATA_LABEL" "data"
+cat >"$DRP/bin/lsblk" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+-no) echo "vda" ;;
+-lnpo) printf '/dev/vda1 ${DRP_ESP_LABEL}\n/dev/vda4 ${DRP_DATA_LABEL}\n' ;;
+esac
+EOF
+chmod +x "$DRP/bin/findmnt" "$DRP/bin/lsblk"
+resolve() { # $1: partlabel
+    (
+        export PATH="$DRP/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$ROOT/os/overlay/pithead-data-reset"
+        boot_disk_part "$1"
+    )
+}
+assert_eq "boot_disk_part data -> the data partition on the boot disk" "$(resolve data)" "/dev/vda4"
+assert_eq "boot_disk_part esp -> the ESP on the boot disk" "$(resolve esp)" "/dev/vda1"
+assert_eq "boot_disk_part on a label the boot disk doesn't carry -> empty (first boot, pre-repart)" \
+    "$(resolve nosuchlabel)" ""
+
+# A container/unexpected root (mountinfo source isn't /dev/*) must fail closed, not guess.
+printf '#!/usr/bin/env bash\necho "overlay"\n' >"$DRP/bin/findmnt"
+out=$(
+    export PATH="$DRP/bin:$PATH"
+    # shellcheck disable=SC1090
+    source "$ROOT/os/overlay/pithead-data-reset"
+    boot_disk_part data
+)
+rc=$?
+assert_rc "boot_disk_part on a non-/dev root -> rc 1" "$rc" "1"
+assert_eq "boot_disk_part on a non-/dev root -> prints nothing" "$out" ""
+
 echo "== unit: pithead-machine-id — restore writes THROUGH /etc/machine-id, never unmounts it =="
 # The regression this pins: an earlier version unmounted /etc/machine-id before writing, which on
 # a read-only-root A/B slot exposed the lower image and the write failed — leaving an empty id and
