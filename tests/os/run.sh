@@ -1059,12 +1059,69 @@ phase_install() {
     fi
 
     # ---- restore-at-setup leg (#909, #786 sub-issue B) -----------------------------------
-    # A genuine encrypted backup pulled off THIS live, fully-provisioned machine seeds a
+    # A genuine encrypted backup pulled off a live, fully-provisioned machine seeds a
     # totally fresh disk through the wizard's upload path instead of the config form — the
     # disaster-recovery loop #908 (export) opens and this closes. Real archive, real upload
     # over curl -F, real decrypt+extract on the guest, and the identity (wallet, Tor onion)
     # must survive — proof the "restored config drives provisioning as if pre-seeded" promise
     # actually holds, which nothing below tier 4 can prove.
+    #
+    # The keep-reinstalled machine above sits at the WIZARD — a reinstall always returns
+    # there (keep preserves /data, not provisioned-ness), and `pithead backup` rightly
+    # refuses without a provisioned stack (.env, onion keys). Provision it first, through
+    # the same HTTP flow a human would drive.
+    local rtoken rjar rtries
+    rtoken=""
+    rtries=0
+    while [ -z "$rtoken" ] && [ "$rtries" -lt 40 ]; do
+        rtoken=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$rtoken" ] || sleep 3
+        rtries=$((rtries + 1))
+    done
+    if [ -z "$rtoken" ]; then
+        bad "restore leg: no wizard token on the console after the keep-reinstall"
+        rm -f "$target_disk"
+        return
+    fi
+    rjar=$(mktemp)
+    curl -fsSk -c "$rjar" -d "token=$rtoken" "https://$ip/auth" -o /dev/null 2>/dev/null
+    scode=$(curl -sSk -b "$rjar" --data "monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini" \
+        "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    if [ "$scode" != "200" ]; then
+        bad "restore leg: wizard submit did not return 200 (got ${scode:-none})"
+        rm -f "$rjar" "$target_disk"
+        return
+    fi
+    # A keep-machine keeps its old login, so the credentials card (and the hold it creates)
+    # may never appear — ack it if it does, move on if it does not.
+    rtries=0
+    while [ "$rtries" -lt 12 ]; do
+        if curl -sSk -b "$rjar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"'; then
+            curl -sSk -b "$rjar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null
+            break
+        fi
+        sleep 5
+        rtries=$((rtries + 1))
+    done
+    rm -f "$rjar"
+    local rdeadline rnames
+    rdeadline=$(($(date +%s) + 1500))
+    rnames=""
+    while [ "$(date +%s)" -lt "$rdeadline" ]; do
+        rnames=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        case "$rnames" in *dashboard*caddy* | *caddy*dashboard*) break ;; esac
+        sleep 15
+    done
+    case "$rnames" in
+    *dashboard*caddy* | *caddy*dashboard*)
+        ok "restore leg: keep-reinstalled machine provisioned — a live stack to back up ($rnames)"
+        ;;
+    *)
+        bad "restore leg: stack never came up after provisioning (running: '${rnames:-none}')"
+        rm -f "$target_disk"
+        return
+        ;;
+    esac
     local restore_archive="/tmp/pithead-os-restore-test.tar.gz.enc"
     local restore_pass="pithead-os-restore-test-passphrase" # fixture value, not real secret material
     rm -f "$restore_archive"
