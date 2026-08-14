@@ -1129,9 +1129,9 @@ phase_install() {
         ok "restore leg: took a real encrypted backup off the live machine"
     else
         bad "restore leg: could not take the source backup"
-        # The reason lives on the guest — print it, or this failure is undiagnosable after the
-        # VM is recycled (exactly what happened on its first live run).
-        printf '     guest backup log tail: %s\n' "$(_ssh "tail -c 600 /tmp/restore-backup.log 2>/dev/null" | tr '\n' ' ' | tail -c 500)"
+        # The reason lives on the guest — print ALL of it, or this failure is undiagnosable
+        # after the VM is recycled (a 500-char tail cut off the tar/openssl stderr once).
+        _ssh "cat /tmp/restore-backup.log 2>/dev/null" | tr -d '\r' | sed 's/^/     | /'
         rm -f "$target_disk"
         return
     fi
