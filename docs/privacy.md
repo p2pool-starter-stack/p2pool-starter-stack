@@ -250,7 +250,7 @@ be explicitly opted into.
 The trade-off above only actually happens if the clearnet dials can leave the host. The [fail-closed
 egress firewall](#enforced-fail-closed-not-just-configured-270) is on by default and DROPs any direct
 dial to the public internet from the mining bridge — including the clearnet peers, priority nodes, and
-DNS seeds a clearnet sync needs. With both left at their defaults, the sync simply falls back to
+DNS seeds a clearnet sync needs. With both left at their defaults, the sync falls back to
 whatever it can still reach over Tor: no faster, and no less private, than leaving
 `clearnet_initial_sync` off in the first place. Nothing leaks — the firewall is doing exactly its
 job — but the speed the flag promised never materializes, and nothing said so.
