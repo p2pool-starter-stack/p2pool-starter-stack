@@ -232,6 +232,12 @@ jobs:
         run: make lint-sh
       - name: Run pithead test suite
         run: bash tests/stack/run.sh
+      - name: Test-inventory drift check
+        # The inventory generator is grep-based; it exits non-zero when any suite it
+        # enumerates counts zero — i.e. a suite moved or changed shape and the inventory
+        # would silently under-count (#981). Output discarded: the generated file is
+        # git-ignored and read on demand via `make test-inventory`.
+        run: bash tests/inventory.sh > /dev/null
       - name: Run integration harness self-test
         # Pure-logic checks for the tests/integration/ harness (config rendering, matrix
         # coverage, redaction). The LIVE matrix (tests/integration/run.sh) needs a real test

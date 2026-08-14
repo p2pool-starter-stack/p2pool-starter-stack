@@ -172,7 +172,8 @@ make test-integration ARGS="--host user@box --dir pithead --lifecycle --fault-in
 
 What gates a merge vs. a release, the standards every test holds to, and the known gaps. For the
 full enumerated coverage, `make test-inventory` generates the list on demand (git-ignored — read it
-locally).
+locally). The generator is grep-based, so CI runs it on every PR and fails if any suite it
+enumerates counts zero — the drift a moved or reshaped suite would otherwise hide.
 
 ### What runs where
 
@@ -185,7 +186,7 @@ locally).
 | Compose interpolation + **security/hardening** invariants | 1 | every PR | ✅ required |
 | Fake-daemon **contract test** | 2 | every PR | ✅ required |
 | Integration harness **self-test** | 4 | every PR | ✅ required |
-| **Test-inventory drift** check | — | every PR | ✅ required |
+| **Test-inventory drift** check (the generator still enumerates every suite) | — | every PR | ✅ required |
 | Fake-daemon **docker mini-stack** | 3 | PRs touching the harness/dashboard | ✅ (own workflow) |
 | **Live config matrix** on real nodes | 4 | manual / pre-release | ✅ **release gate** ([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)) |
 
@@ -209,8 +210,8 @@ Every scenario, at every tier, holds to the same rules.
 - Secrets hygiene. Tokens, RPC creds, and onions are never printed; preservation is checked by
   hashing on the box; all artifacts pass a redactor.
 - Reproducible. The live run records a manifest (stack `VERSION`, git rev, image digests).
-- Test code is real code. The same lint (shellcheck), coverage gate, and inventory drift check
-  apply to the tests themselves.
+- Test code is real code. The same lint (shellcheck) and coverage gate apply to the tests
+  themselves, and the inventory generator fails CI if it stops enumerating a suite.
 
 ### Flake policy
 
