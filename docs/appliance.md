@@ -117,6 +117,37 @@ from the USB stick, one page asks for everything at once: which disk to install 
 answers the miner needs. You fill it in, save the login it shows you, and the machine does the
 rest — including erasing the disk only after everything else checked out.
 
+### What is this machine?
+
+Before the disk, the page asks what the machine is going to be. This is the first question
+because it decides everything else the page asks — and, for one of the three answers, whether
+the machine gets a dashboard at all.
+
+| Choice | What it produces |
+|---|---|
+| **Pithead** (default) | A coordinator: monerod, the Tari node, p2pool, xmrig-proxy and the dashboard, all in containers. Does not mine itself. |
+| **Pithead + RigForge** | The same coordinator, plus a built-in miner on this machine's own CPU, pointed at its own pool. Same as turning on "Mine with this machine's CPU" below. |
+| **RigForge** | A rig: just the miner, pointed at a Pithead you already have running. No coordinator, no containers, no chains, no dashboard. |
+
+Picking **RigForge** collapses the rest of the page to three questions — the pool address
+(`host:port`), a worker name, and an optional stratum password — because a rig holds no payout
+addresses, runs no node, and serves nothing to log into. If a Pithead already answers on the
+network at `pithead.local:3333`, its address is filled in for you; otherwise enter it by hand
+from that machine's own "Point miners at" line. Confirming shows a summary card with the worker
+name and where it mines — **not a login**, because a rig has none. It appears in that Pithead's
+dashboard, under Workers, once it connects; from then on its own console is the only place to
+look at it, the same way you would watch any other machine on the network.
+
+**Pithead + RigForge** asks every coordinator question below, unchanged, and adds the built-in
+miner on top. The two mining workloads on that one box do not compete for HugePages: the
+appliance reserves a fixed 6 GiB RandomX pool at boot, and the built-in miner is told to leave
+the coordinator's share alone (`hugepages_reserve_extra_mb` in its own config) rather than the
+two halves independently growing into each other's reservation.
+
+Switching back to plain **Pithead** after trying one of the others resets the local-miner switch
+to its documented default (off) and, on the installation medium, clears a disk choice of "run
+from the USB stick" — that option only exists for a rig.
+
 ### The disk
 
 Each disk is listed with its model, size and serial number. The USB stick you booted from is
@@ -149,6 +180,10 @@ page opens blank.
 Type the disk's name to confirm.
 
 ### The questions
+
+Everything below applies to the **Pithead** and **Pithead + RigForge** roles. A **RigForge**
+rig skips all of it — see [What is this machine?](#what-is-this-machine) above for its three
+questions.
 
 **Paste your payout addresses — do not type them.** A Monero address is 95 characters and a
 single wrong character pays a stranger. The page checks the address as you paste it and tells
