@@ -275,6 +275,14 @@ for edge in "monerod=tor" "tari=tor" "wallet-rpc=monerod" "tari-wallet=tari"; do
 done
 jq_assert "xmrig-proxy waits for p2pool service_started only, not health-gated (#565)" \
     '.services["xmrig-proxy"].depends_on["p2pool"].condition == "service_started"'
+# Peer-loss coupling (#972): a tor restart/recreate kills monerod's SOCKS peers and monerod does
+# NOT re-dial on its own (bench: 0 in / 0 out peers for ~6h, healthcheck green). restart: true
+# makes every compose operation that restarts/recreates tor restart monerod right after — and it
+# is deliberately the ONLY such coupling: p2pool re-peers on its own.
+jq_assert "monerod restarts whenever compose restarts/recreates tor (#972)" \
+    '.services["monerod"].depends_on["tor"].restart == true'
+jq_assert "the tor restart coupling stays monerod-only (#972)" \
+    '[.services[] | (.depends_on // {}) | to_entries[] | select(.value.restart == true)] | length == 1'
 jq_assert "p2pool has no depends_on — both monerod and tari can be profiled off (#103/#565)" \
     '(.services["p2pool"].depends_on // {}) == {}'
 # Count guard: a NEW depends_on edge (health-gated or not) added anywhere in the file must show up

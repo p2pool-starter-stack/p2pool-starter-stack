@@ -127,6 +127,14 @@ services:
     depends_on:
       tor:
         condition: service_healthy
+        # A tor restart/recreate kills every SOCKS connection, and monerod keeps its dead peer
+        # sockets: bench-observed at 0 in / 0 out peers for ~6h with the healthcheck passing
+        # throughout (#972). restart: true makes every compose operation that restarts or
+        # recreates tor (up/apply/upgrade recreation, './pithead restart tor') restart monerod
+        # right after tor is healthy again, so it re-dials through the fresh Tor (recovers in
+        # about a minute). Needs compose >= 2.17. The dashboard's tor auto-heal (#424) bypasses
+        # compose, so tor_heal.py couples the same restart itself.
+        restart: true
     healthcheck:
       # The RPC username/password are read from the container's env inside the script, NOT
       # interpolated into the test command — so they no longer leak via `docker inspect` (#90).

@@ -154,8 +154,8 @@ block and set it to `false` — any event you don't list stays on:
 
 | Event key | Default | Alert |
 |---|---|---|
-| `node_down` | `true` | Monero/Tari node went down |
-| `node_recovered` | `true` | …and came back |
+| `node_down` | `true` | Monero/Tari node went down; also the Monero node reachable but out of sync for 10+ minutes (peers lost after a Tor restart) |
+| `node_recovered` | `true` | …and came back / back in sync |
 | `worker_offline` | `true` | A rig went DOWN |
 | `worker_recovered` | `true` | …and came back |
 | `worker_joined` | `true` | A new rig joined the fleet |

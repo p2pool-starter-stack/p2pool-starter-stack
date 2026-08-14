@@ -68,6 +68,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Tari down + required → reject; Tari down + non-blocking → **ignore** | `tari_down ∧ TARI_REQUIRED?` | 1 ✅ · 3 ▶ |
 | Recovery hysteresis — readmit only after stable `NODE_RECOVERY_AFTER_SEC` | reachable again | 1 ✅ |
 | Transient blip / never-reachable → **no** false reject | debounce / `ever_up` | 1 ✅ |
+| Monero node reachable but **out of sync** — the post-tor-restart 0-peer strand (#972): raw `synchronized` passthrough, debounced stale flag, alert via the `node_down` toggle, monerod restarted alongside tor (compose `depends_on: restart` + the #424 auto-heal), `restart monerod` leg, doctor WARN | `synchronized: false` ≥ `NODE_STALE_AFTER_SEC` after being in sync once | 1 ✅ (client/data_service/alert/tor_heal pytest, `tests/stack` doctor + restart + compose invariants) · 2 ✅ (flag over the wire) · 4 (real strand + re-peer needs the bench) |
 | Double outage; readmit only when **both** healthy | both down → both up | 1 ✅ (added) · 3 ▶ |
 | #35 latch × #31 failover coexist after release | down post-release | 1 ✅ (added) · 3 ▶ |
 | Stop/start fails → retry next cycle (idempotent) | docker error | 1 ✅ |

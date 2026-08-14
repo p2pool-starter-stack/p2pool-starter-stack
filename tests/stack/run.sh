@@ -196,6 +196,7 @@ printf '%s\n' "${SS_OUT:-}"
 EOF
 cat >"$DRBIN/curl" <<'EOF'
 #!/usr/bin/env bash
+[ -n "${CURL_BODY:-}" ] && printf '%s' "$CURL_BODY"
 exit "${CURL_RC:-0}"
 EOF
 chmod +x "$DRBIN"/*
@@ -279,6 +280,27 @@ assert_contains "tor egress probe: WARN never fails doctor (rc 0)" "$out" "rc=0"
 out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_clearnet_egress 2>&1)"
 assert_contains "tor egress probe: tor down -> info skip" "$out" "isn't running"
 
+echo "== unit: doctor Monero sync check — peer-loss strand (#972) =="
+# A monerod stranded by a tor restart keeps a green healthcheck while get_info reports
+# synchronized:false — the check trusts the RAW flag (a stranded node can report a stale
+# target_height of 0, so height math lies) and WARNs, never FAILs (initial sync reads the same).
+out="$(RUNNING_CONTAINERS="monerod" CURL_BODY='{"status":"OK","synchronized":true,"target_height":0}' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1)"
+assert_contains "monerod sync: synchronized -> OK" "$out" "reports synchronized"
+out="$(RUNNING_CONTAINERS="monerod" CURL_BODY='{"status":"OK","synchronized":false,"target_height":0,"height":3000000}' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1)"
+assert_contains "monerod sync: stranded (raw flag false, stale target 0) -> WARN" "$out" "NOT synchronized"
+assert_contains "monerod sync: WARN names the fix" "$out" "restart monerod"
+out="$(
+    RUNNING_CONTAINERS="monerod" CURL_BODY='{"status":"OK","synchronized":false,"target_height":10}' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1
+    echo "rc=$?"
+)"
+assert_contains "monerod sync: WARN never fails doctor (rc 0)" "$out" "rc=0"
+# RPC not answering (container mid-start) -> info skip; no monerod container (remote mode /
+# stack down) -> silent skip, no verdict either way.
+out="$(RUNNING_CONTAINERS="monerod" CURL_RC=7 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1)"
+assert_contains "monerod sync: RPC silent -> info skip" "$out" "did not answer"
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1)"
+assert_eq "monerod sync: no container -> silent skip" "$out" ""
+
 echo "== unit: stack_restart — scoped tor restart (#424) =="
 # `restart` bare restarts the whole stack; `restart tor` restarts ONLY tor (fresh guard
 # selection when clearnet egress is stuck); anything else is rejected — other containers must
@@ -296,10 +318,15 @@ assert_contains "restart tor restarts only the tor container" "$(cat "$RSTLOG")"
 assert_contains "restart tor warns that circuits drop" "$out" "circuits drop"
 assert_contains "restart tor points at the doctor verify" "$out" "doctor"
 : >"$RSTLOG"
+# `restart monerod` (#972): the manual re-peer leg after a tor restart left the node out of sync.
+out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart monerod 2>&1)"
+assert_contains "restart monerod restarts only the monerod container" "$(cat "$RSTLOG")" "compose restart monerod"
+assert_contains "restart monerod says why (re-dial peers)" "$out" "re-dials"
+: >"$RSTLOG"
 out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart p2pool 2>&1)"
 rc=$?
-assert_rc "restart rejects any service but tor" "$rc" "1"
-assert_contains "restart rejection names the contract" "$out" "takes no argument, or 'tor'"
+assert_rc "restart rejects any service but tor/monerod" "$rc" "1"
+assert_contains "restart rejection names the contract" "$out" "takes no argument, 'tor'"
 assert_eq "rejected restart touches no container" "$(cat "$RSTLOG")" ""
 
 echo "== unit: is_ipv4 =="
