@@ -2,15 +2,18 @@
 # Build the pithead-os appliance rootfs (#77 phase 2): the OS as a container build, exported to a
 # tarball. os/rauc/mkimage.sh turns that tarball into a bootable image and os/rauc/mkbundle.sh
 # turns it into an update bundle. Run from the repo root on a box with docker.
-#   os/build-image.sh [--ssh [PUBKEY_FILE]]   -> os/build/pithead-root.tar
+#   os/build-image.sh [--ssh [PUBKEY_FILE]] [--fresh-index]   -> os/build/pithead-root.tar
 #
 #   --ssh [FILE]   debug/bench variant: bake FILE (default: the builder's ~/.ssh/id_ed25519.pub,
 #                  falling back to id_rsa.pub) as root's authorized key and enable sshd. Release
 #                  builds omit it and stay shell-less. Sets the same PITHEAD_TEST_SSH_PUBKEY the
 #                  env path always honored — the flag exists so the bench recipe is one word,
 #                  not a rediscovered env var.
+#   --fresh-index  bust ONLY the rootfs Dockerfile's apt-update layer (#929): a warm builder
+#                  cache reuses that layer's apt index for weeks, and when the mirror rotates a
+#                  package the stale index 404s on install. Later layers still cache normally.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -33,13 +36,32 @@ while [ $# -gt 0 ]; do
         export PITHEAD_TEST_SSH_PUBKEY
         echo "==> debug build: sshd enabled, key from $keyfile"
         ;;
+    --fresh-index)
+        FRESH_INDEX=1
+        ;;
     *)
-        echo "unknown argument: $1 (usage: os/build-image.sh [--ssh [PUBKEY_FILE]])" >&2
+        echo "unknown argument: $1 (usage: os/build-image.sh [--ssh [PUBKEY_FILE]] [--fresh-index])" >&2
         exit 1
         ;;
     esac
     shift
 done
+
+# apt_fetch_failure_hint (#929): given a build log tail, detect the stale-apt-index 404 signature
+# and print the remedy. Split out so it's testable without docker (tests/stack/run.sh covers it).
+apt_fetch_failure_hint() {
+    if grep -qE '404  Not Found|Unable to fetch some archives' <<<"$1"; then
+        echo "==> looks like a stale apt index (mirror rotated a package since the last build)." >&2
+        echo "==> rerun with: os/build-image.sh --fresh-index" >&2
+    fi
+}
+
+# Test seam: `PITHEAD_BUILD_IMAGE_TEST=1 source os/build-image.sh [args...]` parses args and
+# defines apt_fetch_failure_hint above, then returns here instead of touching docker — lets
+# tests/stack/run.sh exercise flag parsing and the remedy hint without a build.
+if [ "${PITHEAD_BUILD_IMAGE_TEST:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 # Bake the wizard's container image into the appliance: first boot must reach the setup page
 # without a registry (the operator may have no working network config yet, and the plan's
@@ -90,10 +112,20 @@ echo "==> building from commit ${BUILD_COMMIT}${BUILD_DIRTY}"
 ROOTFS_TAG="${PITHEAD_ROOTFS_TAG:-pithead-os-rootfs}"
 
 echo "==> rootfs: container build + export"
-docker build -f os/rootfs/Dockerfile -t "$ROOTFS_TAG" \
+# --fresh-index (#929) stamps a new value into the Dockerfile's APT_INDEX_STAMP ARG, which busts
+# only the apt-update layer it precedes — every other layer still caches normally.
+apt_index_stamp=0
+[ "${FRESH_INDEX:-0}" = "1" ] && apt_index_stamp="$(date +%s)"
+build_log="$(mktemp)"
+trap 'rm -f "$build_log"' EXIT
+if ! docker build -f os/rootfs/Dockerfile -t "$ROOTFS_TAG" \
     --build-arg PITHEAD_TEST_SSH_PUBKEY="${PITHEAD_TEST_SSH_PUBKEY:-}" \
     --build-arg PITHEAD_TEST_MARKER="${PITHEAD_TEST_MARKER:-}" \
-    --build-arg PITHEAD_UPDATER="${PITHEAD_UPDATER:-rauc}" .
+    --build-arg PITHEAD_UPDATER="${PITHEAD_UPDATER:-rauc}" \
+    --build-arg APT_INDEX_STAMP="$apt_index_stamp" . 2>&1 | tee "$build_log"; then
+    apt_fetch_failure_hint "$(cat "$build_log")"
+    exit 1
+fi
 cid=$(docker create "$ROOTFS_TAG")
 mkdir -p os/build
 docker export --output os/build/pithead-root.tar "$cid"
