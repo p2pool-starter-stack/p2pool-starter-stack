@@ -198,11 +198,15 @@ COPY os/overlay/pithead-data-reset /usr/local/sbin/pithead-data-reset
 # CPU governor: hold the cores at performance every boot (mining appliance tuning). Oneshot, and
 # a no-op on a box with no cpufreq — see the unit for the RigForge co-location note.
 COPY os/overlay/pithead-cpu-governor.service /etc/systemd/system/pithead-cpu-governor.service
-# Host identity (#894/#895): neither SSH host keys nor machine-id may ship CONCRETE — both were
-# baked by their packages' own postinst during this build (openssh-server, systemd), which made
-# them extractable from a published release and identical across every machine flashed from one.
-# Deleting/emptying them here is only half the fix; the other half is the boot-time mechanism
-# below that generates (once) and persists them on /data, the single persistence root.
+# Host identity (#894/#895): neither SSH host keys nor machine-id may ship CONCRETE — all were
+# baked by their packages' own postinst during this build (openssh-server, systemd, dbus), which
+# made them extractable from a published release and identical across every machine flashed from
+# one. dbus's copy counts fully: systemd's first-boot logic PREFERS /var/lib/dbus/machine-id
+# when it exists, so a baked copy there resurrects the shared identity even with /etc emptied —
+# the KVM reset leg caught exactly that (every "fresh" first boot minting the same id). The
+# standard symlink makes dbus follow /etc/machine-id instead. Deleting/emptying here is only
+# half the fix; the other half is the boot-time mechanism below that generates (once) and
+# persists them on /data, the single persistence root.
 COPY os/overlay/pithead-ssh-host-keys.conf /etc/systemd/system/ssh.service.d/pithead-host-keys.conf
 COPY os/overlay/pithead-ssh-host-keys /usr/local/sbin/pithead-ssh-host-keys
 COPY os/overlay/pithead-machine-id.service /etc/systemd/system/pithead-machine-id.service
@@ -210,7 +214,8 @@ COPY os/overlay/pithead-machine-id /usr/local/sbin/pithead-machine-id
 RUN mkdir -p /etc/ssh/sshd_config.d \
     && printf 'HostKey /data/ssh/ssh_host_ed25519_key\n' > /etc/ssh/sshd_config.d/pithead-host-keys.conf \
     && rm -f /etc/ssh/ssh_host_* \
-    && : > /etc/machine-id
+    && : > /etc/machine-id \
+    && ln -sf /etc/machine-id /var/lib/dbus/machine-id
 # An empty machine-id makes systemd treat EVERY boot as a first boot (the volatile /etc upper
 # resets it each power cycle), and on first boot PID 1 applies preset-all in enable-only mode.
 # Debian ships no preset files, and systemd's no-preset fallback is "enable" — which would

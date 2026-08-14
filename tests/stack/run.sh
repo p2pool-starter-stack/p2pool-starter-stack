@@ -3838,6 +3838,28 @@ assert_eq "the archive is consumed" "$([ -f "$RSPOOL/restore-archive" ] || echo 
 assert_eq "the passphrase is never retained" "$([ -f "$RSPOOL/restore-passphrase" ] || echo gone)" "gone"
 rm -f "$RSPOOL/applied" "$RS/config.json" # clean slate for the rejection cases below
 
+# 1b) Installer door (installer=1): the config surfaces for the credentials card, but the
+# machine itself is NOT restored — decrypted keys must never rest on the stick — and the
+# accepted archive + passphrase park in the carry dir for the ESP staging the install branch
+# performs (the target's first boot does the real restore).
+printf 'STICK-CADDY\n' >"$RS/Caddyfile"
+printf 'STICK-DB\n' >"$RS/data/dashboard/dashboard.db"
+cp "$rarchive" "$RSPOOL/restore-archive"
+printf 'hunter2' >"$RSPOOL/restore-passphrase" # test fixture, not a real secret
+RCARRY="$RS/carry"
+out=$(cd "$RS" && PATH="$RS/bin:$PATH" PITHEAD_RESTORE_CARRY_DIR="$RCARRY" run_sourced "$RS" firstboot_consume_restore "$RSPOOL" 1 && echo rc0)
+assert_contains "installer restore accepted" "$out" "rc0"
+assert_contains "installer restore surfaces the config for the card" "$(cat "$RS/config.json" 2>/dev/null)" "$WALLET"
+assert_eq "installer restore does NOT restore onto the stick (Caddyfile untouched)" "$(cat "$RS/Caddyfile")" "STICK-CADDY"
+assert_eq "installer restore does NOT restore onto the stick (db untouched)" "$(cat "$RS/data/dashboard/dashboard.db")" "STICK-DB"
+assert_eq "accepted archive parked for the ESP carry" "$([ -f "$RCARRY/archive" ] && echo yes)" "yes"
+assert_eq "passphrase parked beside it" "$(cat "$RCARRY/pass" 2>/dev/null)" "hunter2"
+assert_eq "installer restore consumes the spool archive" "$([ -f "$RSPOOL/restore-archive" ] || echo gone)" "gone"
+rm -rf "$RCARRY"
+rm -f "$RSPOOL/applied" "$RS/config.json"
+printf 'CADDY-ORIG\n' >"$RS/Caddyfile" # fixtures back to their case-1 state for the cases below
+printf 'DBDATA-ORIG\n' >"$RS/data/dashboard/dashboard.db"
+
 # 2) Bad passphrase: rejected before anything is touched.
 printf 'CORRUPTED\n' >"$RS/Caddyfile"
 cp "$rarchive" "$RSPOOL/restore-archive"
@@ -3944,6 +3966,47 @@ assert_contains "uninstall rejects unknown options" "$out" "Unknown option"
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+
+echo "== unit: stack_backup — one bounded retry on a tar race (#970) =="
+# Even with the stack stopped, tar can lose a race against a teardown's last flush — exit 1
+# under pipefail failed the whole backup once on the KVM bench. The fixture sudo fails the
+# FIRST tar with tar's real race error, then passes through: one retry must land the archive.
+RB="$(cd "$SANDBOX" && pwd -P)/backup-retry"
+mkdir -p "$RB/build/tari" "$RB/data/tor" "$RB/data/dashboard" "$RB/bin"
+cp "$STACK" "$RB/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$RB/build/tari/"
+cat >"$RB/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat >"$RB/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "chown" ] && exit 0
+if [ "$1" = "tar" ] && [ ! -f "${RETRY_MARK:?}" ]; then
+    : >"$RETRY_MARK"
+    echo "tar: fixture-member: file changed as we read it" >&2
+    exit 1
+fi
+exec "$@"
+EOF
+chmod +x "$RB/bin/docker" "$RB/bin/sudo"
+cat >"$RB/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=RBTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$RB/config.json"
+out="$(cd "$RB" && PATH="$RB/bin:$PATH" RETRY_MARK="$RB/first-tar-failed" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y 2>&1)"
+rc=$?
+assert_rc "backup survives one tar race via the retry" "$rc" "0"
+assert_contains "the first failure is loud, not silent" "$out" "retrying once"
+assert_eq "the retry actually ran (fixture consumed)" "$([ -f "$RB/first-tar-failed" ] && echo yes)" "yes"
+rbarchive="$(ls "$RB"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+{ [ -n "$rbarchive" ] && [ -s "$rbarchive" ]; } && ok "retry produced a real archive" || bad "retry produced a real archive" "no .enc archive"
 
 echo "== unit: install.sh host gate (#77 phase 1) =="
 # The installer hard-fails on the platforms the stack cannot run on, before any download.
@@ -9918,6 +9981,19 @@ printf 'abc0000000000000000000000000def0\n' >"$MID/etc-id"
     sh "$ROOT/os/overlay/pithead-machine-id"
 ) >/dev/null 2>&1
 assert_eq "adopt persists this boot's id to /data" "$(cat "$MID/data-id" 2>/dev/null)" "abc0000000000000000000000000def0"
+# 3) Nothing to adopt: /etc empty AND /data empty -> refuse loudly, persist nothing. A newline
+# persisted here would satisfy [ -s ] forever and every later boot would restore garbage.
+rm -f "$MID/data-id"
+: >"$MID/etc-id"
+if (
+    export PITHEAD_MACHINE_ID_FILE="$MID/data-id" PITHEAD_MACHINE_ID_ETC="$MID/etc-id"
+    sh "$ROOT/os/overlay/pithead-machine-id"
+) >/dev/null 2>&1; then
+    bad "empty-adopt: script must refuse when there is no id anywhere"
+else
+    ok "empty-adopt: refused (non-zero exit)"
+fi
+assert_eq "empty-adopt persists nothing" "$(cat "$MID/data-id" 2>/dev/null || echo absent)" "absent"
 
 echo "== unit: pithead-media-config — physical-presence media channel (#786 sub-issue D) =="
 # Source the boot leg (functions only — its main is guarded) and drive its pieces with stubbed

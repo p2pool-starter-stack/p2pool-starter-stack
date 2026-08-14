@@ -249,6 +249,11 @@ chk "no SSH host keys baked (extractable + shared across every machine otherwise
     '! ls "$ROOT"/etc/ssh/ssh_host_* >/dev/null 2>&1'
 chk "machine-id ships empty (systemd's own read-only-root first-boot semantics)" \
     '[ ! -s "$ROOT/etc/machine-id" ]'
+# systemd's first-boot logic PREFERS /var/lib/dbus/machine-id when it exists — dbus's postinst
+# bakes one at build, and a baked copy gives every machine flashed from this release the SAME
+# identity. The symlink makes dbus follow the per-machine /etc/machine-id instead.
+chk "dbus machine-id is a symlink (no per-release baked identity)" \
+    '[ -L "$ROOT/var/lib/dbus/machine-id" ]'
 chk "SSH host-key generator baked and executable" '[ -x "$ROOT/usr/local/sbin/pithead-ssh-host-keys" ]'
 chk "ssh.service host-key drop-in orders after /data" \
     'grep -q "RequiresMountsFor=/data" "$ROOT/etc/systemd/system/ssh.service.d/pithead-host-keys.conf"'
