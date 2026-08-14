@@ -110,6 +110,13 @@ working tree is on any other branch. The branch model itself is in
    notes, and attach release assets: a pinned `docker-compose.yml` / config bundle referencing
    `${STACK_VERSION}=vX.Y.Z`, its detached signature (`pithead.tar.gz.sig`), plus the ingredients
    manifest (exact component versions + promoted image digests).
+
+   **When the version ships the appliance channel too, pass `--draft`.** Published release
+   assets are immutable — v1.18.0 shipped an asset that could not be amended and the whole
+   version had to be withdrawn — and the appliance's `.img`/`.raucb` are built,
+   battery-tested and attached by hand *after* this stage (see
+   [appliance-release.md](appliance-release.md#cutting-a-release)). Publishing before they
+   are attached burns the tag. Draft first, attach both channels' artifacts, publish once.
 9. Post-publish smoke ([#459](https://github.com/p2pool-starter-stack/pithead/issues/459)): run
    `make release-smoke` once against the just-published tag. It downloads the published bundle +
    images and verifies them for real, and — on the previous-release bench box — drives the real #59

@@ -283,8 +283,12 @@ the morning.
 
 ## Cutting a release
 
-1. `develop` is green: `make lint && make test`, and `tests/os/run.sh --phase all` on the
-   bench.
+The branch mechanics are the DIY doc's ([releasing.md](releasing.md#branch-mechanics)):
+`develop` merges to `main` with a real merge and the cut runs from `main`. The steps here
+assume that has happened and both channels share one version and one GitHub Release.
+
+1. The release commit is green: `make lint && make test`, and `tests/os/run.sh --phase all`
+   on the bench.
 2. Bump `VERSION`. The tag is `v<VERSION>` and every artifact derives from it —
    `STACK_VERSION` is the single place the registry tag comes from.
 3. Build the image and bundle with the **release key**, never the throwaway `--dev` chain. Point
@@ -322,7 +326,11 @@ the morning.
    oneshot cgroup and systemd SIGKILLed the containers it had just spawned). Every check exists because its absence shipped, or nearly
    shipped, once.
 4. Run the manual battery (M1–M10) on real hardware. Record results.
-5. Publish image + bundle + checksums; the bundle's signature is what devices verify.
+5. Attach image + bundle + checksums to the version's GitHub Release **while it is still a
+   draft** (the DIY cut opens it with `release.sh --draft`), then publish once everything is
+   attached. Published release assets are immutable — v1.18.0 burned its tag this way — so
+   the release publishes exactly once, with both channels' artifacts aboard. The bundle's
+   signature is what devices verify.
 6. Back-merge `main` → `develop`, per the DIY release rule.
 
 ## Shipping a bad release
