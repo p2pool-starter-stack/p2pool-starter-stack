@@ -297,6 +297,14 @@ class TestEditableKeys:
         cfg = control_service.read_config()
         assert "p2pool.pool" in cfg["_editable_keys"]
         assert "xvb.donation_level" in cfg["_editable_keys"]
+        # 2026-08 audit reclassification: same risk class as their already-editable siblings.
+        assert "telegram.events.raffle_win" in cfg["_editable_keys"]
+        assert "monero.out_peers" in cfg["_editable_keys"]
+        assert "proxy.donate_level" in cfg["_editable_keys"]
+        # telegram.control.confirm_timeout stays OUT: telegram.control.* is the approval
+        # channel's own trust anchor (never-approve as a block), and the timeout is unbounded
+        # at validation — a compromised container could stretch the confirm window for days.
+        assert "telegram.control.confirm_timeout" not in cfg["_editable_keys"]
         assert cfg["_editable_keys"] == sorted(cfg["_editable_keys"])  # stable, deterministic order
 
     def test_dashboard_energy_is_the_special_case_addition(self, spool):
@@ -368,6 +376,8 @@ class TestConfirmKeys:
             "monero.clearnet_initial_sync",
             "tari.clearnet_initial_sync",
             "monero.prune",
+            "monero.payout_scan_height",
+            "tari.payout_scan_birthday",
         ):
             assert path in cfg["_confirm_keys"], path
         assert cfg["_confirm_keys"] == sorted(cfg["_confirm_keys"])  # stable, deterministic order

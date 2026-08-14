@@ -569,6 +569,11 @@ assert_contains "monero clearnet keeps tx on Tor" "$(run_sourced "$SANDBOX" desc
 assert_contains "monero clearnet disable is INFO" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC true false)" "INFO"
 assert_contains "tari clearnet enable is CONFIRM" "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "CONFIRM"
 assert_contains "tari clearnet enable warns exposure" "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "CLEARNET"
+# Wallet restore points (#719, 2026-08 audit reclassification): wallet-creation metadata, not a
+# security boundary — a wrong value only re-scans from a different height on the wallet's NEXT
+# creation, so both moved from host-only to confirm-gated (CONFIRM), not the plain editable set.
+assert_contains "monero payout scan height change is CONFIRM" "$(run_sourced "$SANDBOX" describe_change PAYOUT_SCAN_HEIGHT auto 3200000)" "CONFIRM"
+assert_contains "tari wallet birthday change is CONFIRM" "$(run_sourced "$SANDBOX" describe_change TARI_WALLET_BIRTHDAY auto 19500)" "CONFIRM"
 
 echo "== unit: p2pool_outbound_flags — Tor-by-default for outbound P2P (#165) =="
 # Default (clearnet absent/false) routes outbound sidechain dials through the bundled Tor SOCKS proxy.
@@ -6211,17 +6216,23 @@ roundtrip_key "DASHBOARD_TZ" '.dashboard.timezone="Europe/Paris"' '.dashboard.ti
 roundtrip_key "MONERO_MEM_LIMIT" '.monero.mem_limit="5g"' '.monero.mem_limit' "5g"
 roundtrip_key "TARI_MEM_LIMIT" '.tari.mem_limit="2g"' '.tari.mem_limit' "2g"
 roundtrip_key "MONERO_PREP_THREADS" '.monero.prep_blocks_threads=8' '.monero.prep_blocks_threads' "8"
+# 2026-08 audit reclassification: same risk class as the already-editable performance knobs above.
+roundtrip_key "MONERO_OUT_PEERS" '.monero.out_peers=64' '.monero.out_peers' "64"
+# 2026-08 audit reclassification: exact sibling of the already-editable XVB_DONATION_LEVEL.
+roundtrip_key "PROXY_DONATE_LEVEL" '.proxy.donate_level=5' '.proxy.donate_level' "5"
+# 2026-08 audit reclassification: a UX timeout on the confirm gate, not the gate itself.
 roundtrip_key "HASHRATE_DROP_THRESHOLD_PCT" '.dashboard.hashrate_drop_threshold=40' '.dashboard.hashrate_drop_threshold' "40"
 roundtrip_key "HASHRATE_DROP_MINUTES" '.dashboard.hashrate_drop_minutes=15' '.dashboard.hashrate_drop_minutes' "15"
 roundtrip_key "TELEGRAM_DAILY_SUMMARY_TIME" '.telegram.daily_summary_time="09:30"' '.telegram.daily_summary_time' "09:30"
 roundtrip_key "P2POOL_FLAGS/P2POOL_PORT" '.p2pool.pool="mini"' '.p2pool.pool' "mini"
-# The 24 allowlisted TELEGRAM_EVENT_* toggles. wallet_changed + clearnet_exposed are deliberately
-# NOT on the allowlist (tamper-evidence alarms; their refusal is asserted above), so they are
-# excluded here. Each flips true->false as a single-key diff.
+# The 25 allowlisted TELEGRAM_EVENT_* toggles (raffle_win added 2026-08: audit found it was the one
+# event toggle missing from its siblings, all otherwise editable). wallet_changed + clearnet_exposed
+# are deliberately NOT on the allowlist (tamper-evidence alarms; their refusal is asserted above),
+# so they are excluded here. Each flips true->false as a single-key diff.
 for ev in node_down node_recovered worker_offline worker_recovered worker_joined worker_left \
     sync_finished disk_space db_unhealthy db_reset xvb_no_share xvb_registration new_release \
     stack_online daily_summary hashrate_low hashrate_loss hugepages low_ram high_reject_rate \
-    block_found payout_found payout_confirmed container_unhealthy; do
+    block_found payout_found payout_confirmed container_unhealthy raffle_win; do
     roundtrip_key "TELEGRAM_EVENT ${ev}" ".telegram.events.${ev}=false" ".telegram.events.${ev}" "false"
 done
 

@@ -136,15 +136,21 @@ EDITABLE_ENV_KEY_PATHS = {
     "MONERO_MEM_LIMIT": ("monero.mem_limit",),
     "TARI_MEM_LIMIT": ("tari.mem_limit",),
     "MONERO_PREP_THREADS": ("monero.prep_blocks_threads",),
+    "MONERO_OUT_PEERS": ("monero.out_peers",),
+    "PROXY_DONATE_LEVEL": ("proxy.donate_level",),
     "HASHRATE_DROP_THRESHOLD_PCT": ("dashboard.hashrate_drop_threshold",),
     "HASHRATE_DROP_MINUTES": ("dashboard.hashrate_drop_minutes",),
     "TELEGRAM_DAILY_SUMMARY_TIME": ("telegram.daily_summary_time",),
     # TELEGRAM_EVENT_<NAME> -> telegram.events.<name> is a mechanical rename (pithead's tg_event()
     # helper and render_env do the same thing per event), so it's generated below rather than
-    # hand-typed 24 times. wallet_changed / clearnet_exposed are the two events NOT in this list —
+    # hand-typed 25 times. wallet_changed / clearnet_exposed are the two events NOT in this list —
     # deliberately excluded: they're the tamper-evidence alarms on the very channel a compromised
     # container would use to silence them, so the dashboard must never be able to turn them off.
     # They still render (greyed) in the Notifications > Telegram events nested subgroup (#612).
+    # NOTE (2026-08 audit): raffle_win was missing from this generated set for a while — the one
+    # event toggle out of step with its siblings. If you add a new event toggle, list it here AND
+    # in pithead's CONTROL_DASHBOARD_EDITABLE_KEYS — the drift guard below only catches a mismatch
+    # between the two, not an omission from both.
     **{
         f"TELEGRAM_EVENT_{name.upper()}": (f"telegram.events.{name}",)
         for name in (
@@ -172,6 +178,7 @@ EDITABLE_ENV_KEY_PATHS = {
             "payout_found",
             "payout_confirmed",
             "container_unhealthy",
+            "raffle_win",
         )
     },
 }
@@ -216,6 +223,11 @@ CONFIRM_ENV_KEY_PATHS = {
     "MONERO_CLEARNET_SYNC": ("monero.clearnet_initial_sync",),
     "TARI_CLEARNET_SYNC": ("tari.clearnet_initial_sync",),
     "MONERO_PRUNE": ("monero.prune",),
+    # 2026-08 audit reclassification: wallet-creation metadata, not a security boundary. A wrong
+    # value only re-scans from a different height on the wallet's NEXT creation — recoverable, not
+    # destructive — so these moved from host-only to confirm-gated rather than the editable set.
+    "PAYOUT_SCAN_HEIGHT": ("monero.payout_scan_height",),
+    "TARI_WALLET_BIRTHDAY": ("tari.payout_scan_birthday",),
 }
 
 

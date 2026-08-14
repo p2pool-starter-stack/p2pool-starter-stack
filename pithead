@@ -7740,6 +7740,10 @@ describe_change() {
         msg="On-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off)."
         ;;
     PAYOUT_SCAN_HEIGHT)
+        # #719 (2026-08 audit reclassification): confirm-gated — wallet-creation metadata, not a
+        # security boundary. A wrong value only re-scans from a different height on the wallet's
+        # NEXT creation; nothing is destroyed.
+        flag=CONFIRM
         msg="Payout wallet restore height: $old → $new — only affects a first-time wallet creation."
         ;;
     WALLET_RPC_USERNAME | MONERO_WALLET_RPC_URL)
@@ -7767,6 +7771,10 @@ describe_change() {
         msg="Tari on-chain payout confirmation → $([ "$new" == "true" ] && echo on || echo off)."
         ;;
     TARI_WALLET_BIRTHDAY)
+        # #719 (2026-08 audit reclassification): confirm-gated — wallet-creation metadata, not a
+        # security boundary. A wrong value only re-scans from a different height on the wallet's
+        # NEXT creation; nothing is destroyed.
+        flag=CONFIRM
         msg="Tari payout wallet birthday: $old → $new (days since the Unix epoch) — only affects a first-time wallet creation."
         ;;
     TARI_SPEND_PUBLIC_KEY | TARI_WALLET_GRPC_ADDRESS | TARI_WALLET_SECRET_FILE)
@@ -8134,18 +8142,27 @@ run_chain() {
 # command line, URL, or credential. Everything else — wallets, auth, onion exposure, the control
 # channel itself, Tor egress/clearnet toggles, binds and ports, node endpoints, the XvB pool URL
 # and donor id, tokens and passwords, the #381 payout-confirmation secrets (MONERO_VIEW_KEY,
-# WALLET_RPC_PASSWORD) plus PAYOUT_CONFIRM_ENABLED / PAYOUT_SCAN_HEIGHT, and their #462 Tari siblings
-# (TARI_VIEW_KEY, TARI_WALLET_PASSWORD, TARI_SPEND_PUBLIC_KEY) plus TARI_PAYOUT_CONFIRM_ENABLED /
-# TARI_WALLET_BIRTHDAY / TARI_WALLET_GRPC_ADDRESS / TARI_WALLET_SECRET_FILE — stays host-CLI-only.
+# WALLET_RPC_PASSWORD) plus PAYOUT_CONFIRM_ENABLED, and their #462 Tari siblings (TARI_VIEW_KEY,
+# TARI_WALLET_PASSWORD, TARI_SPEND_PUBLIC_KEY) plus TARI_PAYOUT_CONFIRM_ENABLED /
+# TARI_WALLET_GRPC_ADDRESS / TARI_WALLET_SECRET_FILE — stays host-CLI-only. PAYOUT_SCAN_HEIGHT and
+# TARI_WALLET_BIRTHDAY moved to the confirm-gated set below (2026-08 audit reclassification):
+# they're wallet-creation metadata, not a secret, and a wrong value only re-scans from a different
+# height on the wallet's NEXT creation — recoverable, not destructive.
 # Each view key reveals every incoming payout amount/time, so it is never dashboard-committable
 # (default-deny already refuses it; named here deliberately). The WALLET_CHANGED and
 # CLEARNET_EXPOSED alert toggles are excluded on purpose: they are the tamper-evidence alarms on
 # the Telegram channel (the future #338 approval channel), so the dashboard must not silence
 # them. Space-separated exact env-key names.
+#
+# NOTE (2026-08 audit): TELEGRAM_EVENT_RAFFLE_WIN was missing from this list for a while — the one
+# event toggle out of step with its 24 siblings, all otherwise editable. If you add a new event
+# toggle, list it here AND in control_service.EDITABLE_ENV_KEY_PATHS (build/dashboard) — the drift
+# guard only catches a mismatch between the two, not an omission from both.
 CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     XVB_ENABLED XVB_DONATION_LEVEL TARI_REQUIRED DASHBOARD_FAIL_CLOSED
     DASHBOARD_CHECK_UPDATES DASHBOARD_TZ
-    MONERO_MEM_LIMIT TARI_MEM_LIMIT MONERO_PREP_THREADS
+    MONERO_MEM_LIMIT TARI_MEM_LIMIT MONERO_PREP_THREADS MONERO_OUT_PEERS
+    PROXY_DONATE_LEVEL
     HASHRATE_DROP_THRESHOLD_PCT HASHRATE_DROP_MINUTES TELEGRAM_DAILY_SUMMARY_TIME
     TELEGRAM_EVENT_NODE_DOWN TELEGRAM_EVENT_NODE_RECOVERED
     TELEGRAM_EVENT_WORKER_OFFLINE TELEGRAM_EVENT_WORKER_RECOVERED
@@ -8157,7 +8174,8 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     TELEGRAM_EVENT_HASHRATE_LOW TELEGRAM_EVENT_HASHRATE_LOSS
     TELEGRAM_EVENT_HUGEPAGES TELEGRAM_EVENT_LOW_RAM
     TELEGRAM_EVENT_HIGH_REJECT_RATE TELEGRAM_EVENT_BLOCK_FOUND
-    TELEGRAM_EVENT_PAYOUT_FOUND TELEGRAM_EVENT_PAYOUT_CONFIRMED TELEGRAM_EVENT_CONTAINER_UNHEALTHY'
+    TELEGRAM_EVENT_PAYOUT_FOUND TELEGRAM_EVENT_PAYOUT_CONFIRMED TELEGRAM_EVENT_CONTAINER_UNHEALTHY
+    TELEGRAM_EVENT_RAFFLE_WIN'
 
 # The confirm-gated editable set (#719): operationally-disruptive env keys the dashboard MAY commit
 # behind a type-to-confirm — NOT the security perimeter (wallets, keys, credentials, onion,
@@ -8166,12 +8184,16 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
 # that can set a field can also fill the confirm box, so this set is strictly the "expensive but
 # recoverable, not a breach" class — a data-dir move (re-sync), a stratum-port repoint (rigs
 # reconnect), a clearnet-sync enable (host IP exposed during IBD, auto-reverts), a prune enable
-# (reclaims disk). describe_change flags each CONFIRM only in its in-scope DIRECTION — the flag
-# carries the direction (prune DISABLE, TOR data-dir move, etc. still emit DEST and stay refused);
-# this list is the static allowlist the gate's default-deny pass consults and the UI mirrors
-# (control_service.CONFIRM_ENV_KEY_PATHS, drift-guarded like CONTROL_DASHBOARD_EDITABLE_KEYS).
+# (reclaims disk), or a wallet restore-point (PAYOUT_SCAN_HEIGHT / TARI_WALLET_BIRTHDAY, 2026-08
+# audit reclassification: wallet-creation metadata, not a secret — a wrong value only re-scans
+# from a different height on the wallet's NEXT creation, nothing destroyed). describe_change flags
+# each CONFIRM only in its in-scope DIRECTION — the flag carries the direction (prune DISABLE, TOR
+# data-dir move, etc. still emit DEST and stay refused); this list is the static allowlist the
+# gate's default-deny pass consults and the UI mirrors (control_service.CONFIRM_ENV_KEY_PATHS,
+# drift-guarded like CONTROL_DASHBOARD_EDITABLE_KEYS).
 CONTROL_DASHBOARD_CONFIRM_KEYS='MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR
-    STRATUM_PORT MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC MONERO_PRUNE'
+    STRATUM_PORT MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC MONERO_PRUNE
+    PAYOUT_SCAN_HEIGHT TARI_WALLET_BIRTHDAY'
 
 control_approval_gate() { # <staged-file> [confirm-token]
     local staged="$1" confirm="${2:-}" porcelain

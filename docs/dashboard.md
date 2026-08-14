@@ -732,7 +732,8 @@ the config tab now behave identically.) The pieces:
   read-only, with a tooltip ("Host-only — edit `config.json` and run `./pithead apply`") instead of
   letting you edit it and finding out only at Save. A smaller set of operationally-disruptive
   fields — the four service data directories, the stratum port, the clearnet initial-sync toggles,
-  and enabling Monero pruning — render **editable but confirm-gated**
+  enabling Monero pruning, and the Monero/Tari wallet restore points — render **editable but
+  confirm-gated**
   ([#719](https://github.com/p2pool-starter-stack/pithead/issues/719)): editable, tooltipped
   "you'll type `APPLY` to confirm at Save". Both sets are derived from the same allowlists the gate
   enforces (see below) and surfaced on `GET /api/config` as `_editable_keys` and `_confirm_keys`,
@@ -773,7 +774,8 @@ direction, to anything else. A second, confirm-gated allowlist
 ([#719](https://github.com/p2pool-starter-stack/pithead/issues/719)) adds the
 operationally-disruptive-but-recoverable settings — a data-directory move (re-sync), a stratum-port
 change (rigs repoint), a clearnet initial-sync enable (host IP exposed during IBD, auto-reverts),
-enabling Monero pruning — which commit only behind the typed `APPLY`. Type-to-confirm here is
+enabling Monero pruning, changing the Monero/Tari wallet restore point (only affects the wallet's
+NEXT creation) — which commit only behind the typed `APPLY`. Type-to-confirm here is
 friction, not a security control: a compromised dashboard that can set a field can also fill the
 confirm box, so the boundary stays where a breach would happen. Form mode's grey-out and
 confirm-gating (above) are those SAME allowlists surfaced to the browser up front, not a separate
