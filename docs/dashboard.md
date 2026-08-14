@@ -668,10 +668,13 @@ resets your PPLNS shares — and with them XvB win collectability until a new sh
 
 **Raffle Wins log.** The *XvB Donation Stats* card (Advanced view) lists the rounds your wallet
 actually won — time, round type, and the hashrate XvB credited the win at — newest first, capped at
-the 20 most recent. The dashboard reads XvB's public winners log about every half hour over Tor,
-matches your wallet by the masked form the file uses, and stores each win permanently, so the list
-(and the chart's gold stars) survives restarts and covers wins far older than the ~4 days the file
-itself keeps. Each new win is also announced once in the dashboard's container log. The file
+the 20 most recent. The dashboard reads XvB's public winners log over Tor, matches your wallet by
+the masked form the file uses, and stores each win permanently, so the list (and the chart's gold
+stars) survives restarts and covers wins far older than the ~4 days the file itself keeps. The
+read runs about every half hour, tightening to every few minutes while your credited 1h average
+sits within 25% above its tier threshold or a recorded win is under 90 minutes old — the windows
+where a fresh win needs the donation controller's in-round hold engaged within minutes, not up to
+half an hour later. Each new win is also announced once in the dashboard's container log. The file
 carries only masked wallets and the fetch sends nothing about you.
 
 ### Pool Cadence & Luck

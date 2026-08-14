@@ -16,6 +16,8 @@ from mining_dashboard.client.xvb_client import (
 from mining_dashboard.config.config import XVB_REGISTER_INTERVAL_S
 from mining_dashboard.service.data_service import (
     _XVB_REGISTER_FAIL_ALERT,
+    _XVB_WINNERS_SYNC_FAST_SEC,
+    _XVB_WINNERS_SYNC_SEC,
     DataService,
     WorkerLifecycle,
     _aggregate_hashrate,
@@ -32,6 +34,7 @@ from mining_dashboard.service.data_service import (
     _read_host_config,
     _shares_to_record,
     _summary_deltas,
+    _xvb_winners_gate_sec,
 )
 
 
@@ -1736,6 +1739,10 @@ class TestXvbWinnersSync:
     def _svc(self):
         sm = MagicMock()
         sm.load_snapshot.return_value = None
+        # Adaptive-gate reads (#892): defaults that resolve to the 30-min baseline.
+        sm.get_xvb_stats.return_value = {}
+        sm.get_tiers.return_value = {}
+        sm.get_raffle_wins.return_value = []
         xvb = MagicMock()
         return DataService(sm, MagicMock(), xvb), sm, xvb
 
@@ -1806,6 +1813,63 @@ class TestXvbWinnersSync:
             svc.alert_service.raffle_win_alert.assert_awaited_once()
         finally:
             sm.close()
+
+
+class TestXvbWinnersGate:
+    """The adaptive winners-mirror gate (#892): the fast cadence only in the windows where a
+    late-detected win costs money — the credited 1h average riding just above its tier
+    threshold, or a recorded win still fresh — and the 30-min baseline everywhere else."""
+
+    _TIERS = {"donor": 1_000, "donor_whale": 100_000}
+    _NOW = 1_000_000.0
+
+    def _gate(self, avg_1h, avg_24h, last_win_ts=0.0):
+        return _xvb_winners_gate_sec(avg_1h, avg_24h, self._TIERS, last_win_ts, self._NOW)
+
+    def test_baseline_at_comfortable_margin_with_no_fresh_win(self):
+        # 250k credited over the 100k whale threshold: >25% above, no recorded win → 30 min.
+        assert self._gate(250_000, 250_000) == _XVB_WINNERS_SYNC_SEC
+
+    def test_fast_while_credited_rides_the_tier_threshold(self):
+        # The controller's steady state: the 1h average held at threshold + cushion (#769) —
+        # the exact band the #892 incident sagged out of.
+        assert self._gate(103_000, 105_000) == _XVB_WINNERS_SYNC_FAST_SEC
+
+    def test_margin_boundary_is_inclusive(self):
+        assert self._gate(125_000, 125_000) == _XVB_WINNERS_SYNC_FAST_SEC
+        assert self._gate(125_001, 125_001) == _XVB_WINNERS_SYNC_SEC
+
+    def test_tier_qualifies_on_the_lower_of_the_two_averages(self):
+        # 24h still ramping: the wallet qualifies at donor (1k), and 103k is far above THAT
+        # threshold — no whale round to protect yet → baseline.
+        assert self._gate(103_000, 50_000) == _XVB_WINNERS_SYNC_SEC
+
+    def test_baseline_below_the_lowest_tier(self):
+        # Cold ramp, no tier credited: nothing can be won, nothing to protect → 30 min.
+        assert self._gate(500, 400) == _XVB_WINNERS_SYNC_SEC
+
+    def test_fast_while_a_recorded_win_is_younger_than_90_min(self):
+        gate = self._gate(250_000, 250_000, last_win_ts=self._NOW - 89 * 60)
+        assert gate == _XVB_WINNERS_SYNC_FAST_SEC
+
+    def test_baseline_once_the_recorded_win_ages_out(self):
+        gate = self._gate(250_000, 250_000, last_win_ts=self._NOW - 91 * 60)
+        assert gate == _XVB_WINNERS_SYNC_SEC
+
+    async def test_sensitive_window_reopens_the_sync_gate_early(self):
+        # Wiring: in the sensitive band _sync_xvb_winners refetches after 150+ s, where the
+        # old fixed 30-min gate would have suppressed the second fetch.
+        sm = MagicMock()
+        sm.load_snapshot.return_value = None
+        sm.get_xvb_stats.return_value = {"avg_1h": 103_000, "avg_24h": 105_000}
+        sm.get_tiers.return_value = self._TIERS
+        sm.get_raffle_wins.return_value = []
+        svc = DataService(sm, MagicMock(), MagicMock())
+        svc.xvb_client.get_recent_wins.return_value = {"wins": [], "round_stats": {}}
+        await svc._sync_xvb_winners()
+        svc._last_xvb_winners_sync -= _XVB_WINNERS_SYNC_FAST_SEC + 1
+        await svc._sync_xvb_winners()
+        assert svc.xvb_client.get_recent_wins.call_count == 2
 
 
 class _RecordingGet:
