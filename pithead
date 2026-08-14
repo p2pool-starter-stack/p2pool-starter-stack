@@ -7303,7 +7303,15 @@ optimize_kernel() {
 
             if ! grep -q "hugepages=" /etc/default/grub; then
                 warn "Persistent HugePages requires editing /etc/default/grub and a reboot."
-                read -r -p "Modify GRUB for persistent HugePages now? (y/N): " GRUB_OK || true
+                if [ -t 0 ]; then
+                    read -r -p "Modify GRUB for persistent HugePages now? (y/N): " GRUB_OK || true
+                else
+                    # Headless: never touch GRUB unattended, but say so — the old EOF-swallow
+                    # skipped this silently and the operator never learned the reservation is
+                    # boot-only.
+                    GRUB_OK=""
+                    warn "No terminal attached — skipping the persistent-HugePages GRUB change. Run '$0 setup' from a terminal (or edit /etc/default/grub) to make it permanent."
+                fi
                 if [[ ! "$GRUB_OK" =~ ^[Yy] ]]; then
                     log "Skipped GRUB edit. HugePages set for this boot only (vm.nr_hugepages=$PITHEAD_HUGEPAGES)."
                     return 0
@@ -7484,12 +7492,14 @@ preflight_resources() {
 setup() {
     if is_deployed; then
         warn "A previous deployment was detected."
-        # Same no-tty rule as resolve_dashboard_host: an interactive ask with no terminal is an
-        # EOF, and `read`'s `|| true` used to swallow that into an empty RERUN — read as decline,
-        # exit 0, deployment untouched. Every headless caller (firstboot's --cli re-run, and its
-        # own retry after a failed provisioning attempt) reached setup() BECAUSE it already
-        # decided to proceed; a silent no-op there reports success while doing nothing (#924).
-        # A real terminal keeps the prompt exactly as before.
+        # An interactive ask with no terminal is an EOF, and `read`'s `|| true` used to swallow
+        # that into an empty answer — read as decline, exit 0: a headless caller believed setup
+        # succeeded while nothing ran (#924's silent false success). Headless now REFUSES loudly
+        # instead of proceeding: an unattended re-provision (Tor container recreate, full
+        # re-render, a possible GRUB edit) must never ride on the mere absence of a terminal —
+        # `pithead setup` has long been a safe probe on a deployed box for cron/automation, and
+        # the appliance's own headless paths never reach this branch (a failed provisioning
+        # attempt is not deployed). A real terminal keeps the prompt exactly as before.
         if [ -t 0 ]; then
             local RERUN
             read -r -p "Re-run setup (re-provisions Tor and may modify GRUB)? (y/N): " RERUN || true
@@ -7499,7 +7509,7 @@ setup() {
                 exit 0
             fi
         else
-            log "No terminal attached — proceeding with the re-run automatically."
+            error "Already provisioned, and re-running setup re-provisions Tor and may modify GRUB — run '$0 setup' from a terminal to confirm that. For configuration changes use '$0 apply'; to start the stack use '$0 up'."
         fi
     fi
 

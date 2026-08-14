@@ -8192,16 +8192,17 @@ assert_contains "'pithead setup' reports completion" "$su_out" "Deployment prepa
 assert_eq "'pithead setup' writes a completed .env" \
     "$(run_sourced "$SU" env_get_file "$SU/.env" DEPLOYMENT_COMPLETED)" "true"
 
-echo "== black-box: 'pithead setup' re-run with stdin on /dev/null proceeds instead of silently no-opping (#924) =="
-# Exactly how a systemd unit invokes it (no tty, stdin /dev/null): the old `read -r -p ... || true`
-# turned the immediate EOF into an empty RERUN, read as decline, exit 0 with nothing re-provisioned.
-# is_deployed is already true from the setup above, so this re-run hits the same guard the
-# firstboot retry path hits after a failed provisioning attempt.
+echo "== black-box: 'pithead setup' re-run with stdin on /dev/null refuses loudly (#924) =="
+# Exactly how a systemd unit or cron invokes it (no tty, stdin /dev/null): the old
+# `read -r -p ... || true` turned the immediate EOF into an empty RERUN, read as decline, exit 0
+# — a silent FALSE SUCCESS. The fix refuses loudly with a nonzero exit instead of proceeding: an
+# unattended re-provision must never ride on the absence of a terminal, and the appliance's own
+# headless paths never reach this guard (a failed provisioning attempt is not deployed).
 su2_out="$(cd "$SU" && DOCKER_LOG=/dev/null PATH="$SU/bin:$PATH" ./pithead setup --skip-deps --skip-optimize </dev/null 2>&1)"
 su2_rc=$?
-assert_rc "headless re-run exits 0" "$su2_rc" "0"
-assert_not_contains "headless re-run does not silently skip" "$su2_out" "Setup skipped"
-assert_contains "headless re-run actually re-provisions" "$su2_out" "Deployment preparation complete"
+assert_rc "headless re-run on a deployed box refuses (nonzero, no silent success)" "$su2_rc" "1"
+assert_contains "the refusal says how to proceed" "$su2_out" "run './pithead setup' from a terminal"
+assert_not_contains "the refusal never claims setup was skipped-as-success" "$su2_out" "Setup skipped"
 unset SU su_out su_rc su2_out su2_rc
 
 echo "== black-box: 'pithead setup' with stratum_tls in a hand-written config generates the keypair (#261) =="
