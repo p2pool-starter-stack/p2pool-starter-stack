@@ -83,9 +83,9 @@ function paletteColors() {
     purple,
     shares: v("--bad", "#da3633"),
     evtLoss: v("--warn", "#d29922"), // degradation event marker (#99)
-    evtOk: v("--ok", "#3fb950"), // recovery event marker
+    evtOk: v("--ok-fg", "#3fb950"), // recovery event marker — the text shade, readable on the plot
     raffleWin: v("--warn", "#d29922"), // XvB raffle-win star — the warn gold reads as gold here
-    payout: v("--ok", "#3fb950"), // confirmed-payout coin — green "money landed", distinct from the gold star
+    payout: v("--ok-fg", "#3fb950"), // confirmed-payout coin — green "money landed", distinct from the gold star
     donation: v("--purple", "#a371f7"), // XvB donation-% line — ties visually to the XvB area
     grid: v("--border", "#30363d"),
     ticks: v("--text-muted", "#8b949e"),
