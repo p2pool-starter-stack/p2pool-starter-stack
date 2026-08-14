@@ -141,10 +141,14 @@ EDITABLE_ENV_KEY_PATHS = {
     "TELEGRAM_DAILY_SUMMARY_TIME": ("telegram.daily_summary_time",),
     # TELEGRAM_EVENT_<NAME> -> telegram.events.<name> is a mechanical rename (pithead's tg_event()
     # helper and render_env do the same thing per event), so it's generated below rather than
-    # hand-typed 24 times. wallet_changed / clearnet_exposed are the two events NOT in this list —
+    # hand-typed 25 times. wallet_changed / clearnet_exposed are the two events NOT in this list —
     # deliberately excluded: they're the tamper-evidence alarms on the very channel a compromised
     # container would use to silence them, so the dashboard must never be able to turn them off.
     # They still render (greyed) in the Notifications > Telegram events nested subgroup (#612).
+    # NOTE (2026-08 audit): raffle_win was missing from this generated set for a while — the one
+    # event toggle out of step with its siblings. If you add a new event toggle, list it here AND
+    # in pithead's CONTROL_DASHBOARD_EDITABLE_KEYS — the drift guard below only catches a mismatch
+    # between the two, not an omission from both.
     **{
         f"TELEGRAM_EVENT_{name.upper()}": (f"telegram.events.{name}",)
         for name in (
@@ -172,6 +176,7 @@ EDITABLE_ENV_KEY_PATHS = {
             "payout_found",
             "payout_confirmed",
             "container_unhealthy",
+            "raffle_win",
         )
     },
 }
@@ -216,6 +221,12 @@ CONFIRM_ENV_KEY_PATHS = {
     "MONERO_CLEARNET_SYNC": ("monero.clearnet_initial_sync",),
     "TARI_CLEARNET_SYNC": ("tari.clearnet_initial_sync",),
     "MONERO_PRUNE": ("monero.prune",),
+    # 2026-08 security review: bounded (8-1024) and instantly reversible, but the biggest
+    # steady-state knob on the shared Tor daemon's CPU — confirm-gated, not free-commit. The same
+    # review kept proxy.donate_level and the two payout restore points host-only (donate traffic
+    # bypasses the Tor socks5 per docs/privacy.md; a future-dated restore point silently defeats
+    # payout-confirmation tamper evidence).
+    "MONERO_OUT_PEERS": ("monero.out_peers",),
 }
 
 

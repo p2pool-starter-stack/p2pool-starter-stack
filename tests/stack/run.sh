@@ -569,6 +569,11 @@ assert_contains "monero clearnet keeps tx on Tor" "$(run_sourced "$SANDBOX" desc
 assert_contains "monero clearnet disable is INFO" "$(run_sourced "$SANDBOX" describe_change MONERO_CLEARNET_SYNC true false)" "INFO"
 assert_contains "tari clearnet enable is CONFIRM" "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "CONFIRM"
 assert_contains "tari clearnet enable warns exposure" "$(run_sourced "$SANDBOX" describe_change TARI_CLEARNET_SYNC false true)" "CLEARNET"
+# 2026-08 security review: the outbound-peer count is confirm-gated (bounded 8-1024 but the
+# biggest steady-state knob on the shared Tor daemon's CPU). The same review kept the payout
+# restore points and proxy.donate_level host-only — a future-dated restore point silently defeats
+# payout-confirmation tamper evidence, and donate traffic bypasses the Tor socks5.
+assert_contains "monero outbound-peer change is CONFIRM" "$(run_sourced "$SANDBOX" describe_change MONERO_OUT_PEERS 12 64)" "CONFIRM"
 
 echo "== unit: p2pool_outbound_flags — Tor-by-default for outbound P2P (#165) =="
 # Default (clearnet absent/false) routes outbound sidechain dials through the bundled Tor SOCKS proxy.
@@ -6341,13 +6346,14 @@ roundtrip_key "HASHRATE_DROP_THRESHOLD_PCT" '.dashboard.hashrate_drop_threshold=
 roundtrip_key "HASHRATE_DROP_MINUTES" '.dashboard.hashrate_drop_minutes=15' '.dashboard.hashrate_drop_minutes' "15"
 roundtrip_key "TELEGRAM_DAILY_SUMMARY_TIME" '.telegram.daily_summary_time="09:30"' '.telegram.daily_summary_time' "09:30"
 roundtrip_key "P2POOL_FLAGS/P2POOL_PORT" '.p2pool.pool="mini"' '.p2pool.pool' "mini"
-# The 24 allowlisted TELEGRAM_EVENT_* toggles. wallet_changed + clearnet_exposed are deliberately
-# NOT on the allowlist (tamper-evidence alarms; their refusal is asserted above), so they are
-# excluded here. Each flips true->false as a single-key diff.
+# The 25 allowlisted TELEGRAM_EVENT_* toggles (raffle_win added 2026-08: audit found it was the one
+# event toggle missing from its siblings, all otherwise editable). wallet_changed + clearnet_exposed
+# are deliberately NOT on the allowlist (tamper-evidence alarms; their refusal is asserted above),
+# so they are excluded here. Each flips true->false as a single-key diff.
 for ev in node_down node_recovered worker_offline worker_recovered worker_joined worker_left \
     sync_finished disk_space db_unhealthy db_reset xvb_no_share xvb_registration new_release \
     stack_online daily_summary hashrate_low hashrate_loss hugepages low_ram high_reject_rate \
-    block_found payout_found payout_confirmed container_unhealthy; do
+    block_found payout_found payout_confirmed container_unhealthy raffle_win; do
     roundtrip_key "TELEGRAM_EVENT ${ev}" ".telegram.events.${ev}=false" ".telegram.events.${ev}" "false"
 done
 
