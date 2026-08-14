@@ -1,10 +1,13 @@
 # pithead-os build — known issues
 
-## Status: RAUC appliance, installs to disk, all batteries green (2026-07-25)
+## Status: RAUC appliance, installs to disk; the battery gates every cut
 
-`tests/os/run.sh` passes all five phases on the RAUC appliance — boot 4/4, update 15/15,
-provision 21/21, install 33/33 and fault 11/11 — with no brick in any run. The per-phase
-assertion list is in
+`tests/os/run.sh` has grown from the original five phases to eight — boot, update, install,
+provision, media, rig, fault and reset — and "green" means the full battery passing on the
+tip being cut, not a dated badge here: the 2026-08 waves each found real product bugs on a
+tip whose previous run had passed. The last fully-green run of the original five phases was
+2026-07-25 (boot 4/4, update 15/15, provision 21/21, install 33/33, fault 11/11, no brick in
+any run). The per-phase assertion list is in
 [the release doc's battery table](../docs/dev/appliance-release.md#the-automated-battery).
 The image ships the ESP and slot A only (636 MB);
 systemd-repart builds slot B and /data on the target's own disk, and `/data` measured
@@ -189,30 +192,31 @@ reason as the page's error text, the config as the retry prefill.
 
 ## Open
 
-- **Installing to a disk still needs a human.** Pre-seeding (`pithead-token.txt` /
+- **Installing to a disk still needs a human (#979).** Pre-seeding (`pithead-token.txt` /
   `pithead-config.json` on the ESP) covers configuration headlessly and the installer carries
   both onto the target, so a fleet can be flashed and provisioned from one file. Choosing
   which disk to erase is deliberately NOT automated — an unattended installer that picks a
   disk itself will eventually pick the wrong one. A pre-seeded target would need to name the
   disk by serial, not by `/dev/` path, and that is unbuilt.
-- **Everything host-CLI-only is impossible on the appliance (#786).** The control gate's
-  host-only class — wallets, view keys, auth, onion, workers.list, backup/restore — assumes
-  a host terminal that the appliance does not have. Right by design, unreachable by
-  accident: the wizard covers setup, but changing these later means reinstalling. #338's
-  out-of-band approval (or a physical-presence channel via the stick) is the lift;
-  dashboard backup export is the sharpest single loss.
-- **No user-facing OS update path exists yet.** RAUC and rollback are proven at the OS
-  layer, but nothing a user can reach applies an update: the dashboard action for
+- **Part of the host-CLI surface is still unreachable on the appliance (#786).** The GA
+  trio closed the sharpest losses: dashboard backup export (#908), restore at setup
+  (#909), and the media config channel (#910) — which also carries the settings the
+  dashboard never exposes, so "changing these later means reinstalling" no longer holds.
+  What remains rides the post-GA fast-follows: out-of-band approval at the commit gate
+  (#911), fleet descriptor editing (#912), and the CLI remainder on the dashboard (#913).
+- **No user-facing OS update path exists yet (#976).** RAUC and rollback are proven at the
+  OS layer, but nothing a user can reach applies an update: the dashboard action for
   install/commit/rollback of OS bundles is the pre-GA blocker, and the DIY one-click
   upgrade deliberately refuses on the appliance (a tarball upgrade would silently revert
-  at the next boot).
+  at the next boot). #976 holds the decision: build it before GA, or record that GA ships
+  without it — the roadmap's gate list (#394) currently omits it.
 - **The manual hardware battery has not been run.** Everything above is KVM. Secure Boot,
   real disks, headless discovery and a genuine power cut are exactly what a VM cannot
   show — M1-M10 in the release doc must pass on a physical box before an image ships.
-- **Only the wizard image is baked in.** The rest of the stack still pulls at provision
-  time, so the plan's "first boot works offline" property is partial: the setup page
-  works without a network, provisioning does not. Baking the full set roughly triples
+- **Only the wizard image is baked in (#978).** The rest of the stack still pulls at
+  provision time, so the plan's "first boot works offline" property is partial: the setup
+  page works without a network, provisioning does not. Baking the full set roughly triples
   the image and inflates every update bundle — sized deliberately, not forgotten.
-- **Hugepages are reserved unconditionally** (6 GiB), so the appliance needs ≥ 16 GiB
+- **Hugepages are reserved unconditionally (#977)** (6 GiB), so the appliance needs ≥ 16 GiB
   RAM to leave room for the stack. The harness sizes its VM accordingly; a real
   appliance should either check or scale the reservation.
