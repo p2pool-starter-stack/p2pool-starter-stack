@@ -117,6 +117,11 @@ working tree is on any other branch. The branch model itself is in
    battery-tested and attached by hand *after* this stage (see
    [appliance-release.md](appliance-release.md#cutting-a-release)). Publishing before they
    are attached burns the tag. Draft first, attach both channels' artifacts, publish once.
+
+   One nuance: the git tag itself is pushed at this stage, and the `v*` ruleset blocks
+   re-pointing it — the draft protects the assets and the publish moment, not the version
+   number. A hardware-battery failure after the DIY cut still spends the version, so do not
+   start this stage until the appliance tree is believed final.
 9. Post-publish smoke ([#459](https://github.com/p2pool-starter-stack/pithead/issues/459)): run
    `make release-smoke` once against the just-published tag. It downloads the published bundle +
    images and verifies them for real, and — on the previous-release bench box — drives the real #59
