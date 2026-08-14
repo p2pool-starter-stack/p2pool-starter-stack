@@ -183,7 +183,8 @@ The fingerprint is the whole trust model: XMRig does no CA validation for stratu
 pins it explicitly. On a rig, set:
 
 ```jsonc
-// the rig's pool entry (RigForge: same fields, prompted at setup)
+// the rig's pool entry (RigForge: same fields, added to its config.json by hand — setup
+// prompts only for the pool URL and stratum password, then `sudo ./rigforge.sh apply`)
 { "url": "YOUR_STACK_IP:3333", "tls": true, "tls-fingerprint": "<the printed fingerprint>" }
 ```
 
