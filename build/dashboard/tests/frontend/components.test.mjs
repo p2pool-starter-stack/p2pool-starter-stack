@@ -261,13 +261,17 @@ test('EarningsCard leads with solo time-to-block + per-block reward, day as avg 
     assert.match(up, /16\.1000 XTM/);       // the long-run daily average figure still shown
     assert.match(up, /483\.0000 XTM/);      // ... spanned to month
     assert.match(up, /5876\.5000 XTM/);     // ... and year, same shared precision
-    // Merge-mining inactive/syncing: the rows stay, the figures degrade to "—".
+    // Merge-mining inactive/syncing: the estimates degrade to "—", but a KNOWN per-block
+    // reward keeps showing — it is a fact about the chain (the Tari Merge-Mining card prints
+    // the same figure), not a function of this box's hashrate or channel state.
     const off = clone();
     off.earnings.available = true;
     off.earnings.tari_available = false;
+    off.earnings.tari_reward = 10_709;
     const down = renderApp({ state: off });
     assert.match(down, /Est\. Time to Tari Block/);
     assert.match(down, /—/);
+    assert.match(down, /10709\.0000 XTM/);
     assert.doesNotMatch(down, /NaN/);
 });
 
@@ -1064,6 +1068,26 @@ test('ExpectedVsActualCard compares combined Monero+XvB with a percent and parti
     // Without a fresh published estimate the label honestly drops the "+ XvB".
     s.earnings_summary.xmr.includes_xvb = false;
     assert.match(renderApp({ state: s }), /Monero \(30d\)/);
+});
+
+test('ExpectedVsActualCard drops the percent when the server withholds it, tooltip explains (#992)', () => {
+    // A near-zero expectation makes the server withhold pct (views.py caps at 999%) — the
+    // actual figure stands alone and the row tooltip owns the missing percent.
+    const s = clone();
+    s.earnings_summary.xmr = {
+        available: true, expected_30d: 1e-6, includes_xvb: false, enabled: true,
+        actual_30d: 0.28, partial: false, pct: null,
+        xvb_realization_pct: null, xvb_wins_measured: null,
+    };
+    const out = renderApp({ state: s });
+    assert.match(out, /0\.280000 XMR/);
+    assert.doesNotMatch(out, /0\.280000 XMR \(/); // no percent appended
+    assert.match(out, /No percentage shown: the expected figure is near zero/);
+    // A present percent keeps the old rendering and drops the explanation.
+    s.earnings_summary.xmr.pct = 82;
+    const withPct = renderApp({ state: s });
+    assert.match(withPct, /\(82%\)/);
+    assert.doesNotMatch(withPct, /No percentage shown/);
 });
 
 test('ExpectedVsActualCard shows the config key when confirmation is off, never a zero (#808)', () => {

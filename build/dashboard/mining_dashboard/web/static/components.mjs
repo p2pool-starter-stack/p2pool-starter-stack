@@ -630,6 +630,14 @@ function ExpectedVsActualCard({ summary }) {
   const partialMark = (row, text) => (row.partial ? text + " *" : text);
   const anyPartial = (xmr.enabled && xmr.partial) || (tari.enabled && tari.partial);
   const rows = [];
+  // The server withholds pct past 999%: a near-zero expectation (a box idle for most of the
+  // window) turns the ratio into a five-digit figure that reads as a bug. Once available and
+  // enabled both hold, a null pct means exactly that — the tooltip owns the explanation.
+  const pctNote =
+    xmr.available && xmr.enabled && xmr.pct === null
+      ? " No percentage shown: the expected figure is near zero for this window — the miner " +
+        "was idle or unrecorded for most of it, so a ratio against it would be noise."
+      : "";
   rows.push({
     label: xmr.includes_xvb ? "Monero + XvB (30d)" : "Monero (30d)",
     expected: xmr.available ? formatXmr(xmr.expected_30d) : "—",
@@ -637,23 +645,24 @@ function ExpectedVsActualCard({ summary }) {
       ? "set monero.view_key"
       : partialMark(xmr, formatXmr(xmr.actual_30d) + (xmr.pct !== null ? ` (${xmr.pct}%)` : "")),
     dim: !xmr.enabled,
-    title: xmr.includes_xvb
-      ? "Confirmed on-chain payouts over the trailing 30 days vs the P2Pool linear expectation " +
-        "at your 30-day average hashrate PLUS XvB's estimate for your tier — combined " +
-        "on both sides, because an XvB win pays out through ordinary payouts that cannot be " +
-        "told apart from P2Pool payouts. " +
-        (xmr.xvb_realization_pct !== null
-          ? `The XvB share is tempered to this wallet's measured win payouts — ` +
-            `${xmr.xvb_realization_pct}% of XvB's published face value over the last ` +
-            `${xmr.xvb_wins_measured} wins. `
-          : "The XvB share is XvB's published face-value estimate — an upper bound: it prices " +
-            "every bonus hash at full block reward and assumes every won round runs to " +
-            "completion. ") +
-        "Payouts swing with luck; a sustained gap is the signal worth checking, not one window."
-      : "Confirmed on-chain payouts over the trailing 30 days vs the linear expectation at " +
-        "your 30-day average P2Pool hashrate. Any XvB win payouts land in the actual too — " +
-        "they cannot be told apart from P2Pool payouts. Payouts swing with luck; a sustained " +
-        "gap is the signal worth checking, not one window.",
+    title:
+      (xmr.includes_xvb
+        ? "Confirmed on-chain payouts over the trailing 30 days vs the P2Pool linear expectation " +
+          "at your 30-day average hashrate PLUS XvB's estimate for your tier — combined " +
+          "on both sides, because an XvB win pays out through ordinary payouts that cannot be " +
+          "told apart from P2Pool payouts. " +
+          (xmr.xvb_realization_pct !== null
+            ? `The XvB share is tempered to this wallet's measured win payouts — ` +
+              `${xmr.xvb_realization_pct}% of XvB's published face value over the last ` +
+              `${xmr.xvb_wins_measured} wins. `
+            : "The XvB share is XvB's published face-value estimate — an upper bound: it prices " +
+              "every bonus hash at full block reward and assumes every won round runs to " +
+              "completion. ") +
+          "Payouts swing with luck; a sustained gap is the signal worth checking, not one window."
+        : "Confirmed on-chain payouts over the trailing 30 days vs the linear expectation at " +
+          "your 30-day average P2Pool hashrate. Any XvB win payouts land in the actual too — " +
+          "they cannot be told apart from P2Pool payouts. Payouts swing with luck; a sustained " +
+          "gap is the signal worth checking, not one window.") + pctNote,
   });
   rows.push({
     label: "Tari (30d)",

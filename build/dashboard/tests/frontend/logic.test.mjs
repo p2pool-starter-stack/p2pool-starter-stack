@@ -297,6 +297,20 @@ test('computeEarnings: Tari figures are null when merge-mining is unavailable (#
     assert.ok(est.day > 0);   // the XMR estimate is unaffected
 });
 
+test('computeEarnings: a known per-block reward survives a dead channel and a zero hashrate (#992)', () => {
+    // The reward is a chain fact the TariCard prints on the same page — only the estimates
+    // (time-to-block, per-day averages) depend on tari_available and the what-if hashrate.
+    const earnings = { available: true, coeff_day: 1e-7, pool_difficulty: 1,
+                       tari_available: false, tari_coeff_day: 0, tari_difficulty: 0,
+                       tari_reward: 10_709 };
+    const est = computeEarnings(50_000, earnings);
+    assert.equal(est.tariRewardPerBlock, 10_709);
+    assert.equal(est.tariTimeToBlockSec, null);  // the time estimate stays gated
+    assert.equal(est.tariDay, null);
+    // Hashrate-independent: the zero-hashrate early return keeps the known reward too.
+    assert.equal(computeEarnings(0, earnings).tariRewardPerBlock, 10_709);
+});
+
 test('computeEarnings: no time-to-share when share difficulty is unknown', () => {
     const est = computeEarnings(50_000, { available: true, coeff_day: 1e-7, pool_difficulty: 0 });
     assert.equal(est.timeToShareSec, null);

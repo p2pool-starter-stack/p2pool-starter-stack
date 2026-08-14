@@ -1660,6 +1660,14 @@ class TestPoolNetwork:
         pn = build_pool_network({"monero_sync": {"db_size": 0}}, _metrics())
         assert pn["monero"]["db_size"] == "—"
 
+    def test_last_block_is_a_relative_duration(self):
+        # One time register for "when did the pool last find a block" (#992): the cadence card
+        # already shows a duration, and a bare HH:MM:SS here (no date, no timezone) read as one
+        # too — so the value now IS a duration, "Never" before the pool's first block.
+        data = {"pool": {"pool": {"last_block_ts": time.time() - 90}}}
+        assert build_pool_network(data, _metrics())["pool"]["last_blk"] == "1m 30s ago"
+        assert build_pool_network({}, _metrics())["pool"]["last_blk"] == "Never"
+
 
 # --- Pool cadence & luck (#84) ---------------------------------------------------------
 
@@ -1755,12 +1763,34 @@ class TestEarningsVsActual:
         e = _summary_earnings(
             coeff_day=1e-8,
             xvb_day=-5.0,
-            confirmed={"enabled": True, "xmr_30d": 0.1, "partial": {}},
+            # In-range actual (~83% of expected): pct must survive the >999% withhold to prove
+            # the denominator stayed positive.
+            confirmed={"enabled": True, "xmr_30d": 0.002, "partial": {}},
         )
         s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), e, [], now=self.NOW)
         assert s["xmr"]["includes_xvb"] is False
         assert s["xmr"]["expected_30d"] == pytest.approx(1e-8 * 8000.0 * 30)
         assert s["xmr"]["pct"] is not None and s["xmr"]["pct"] > 0
+
+    def test_pct_withheld_when_the_expectation_is_dust(self):
+        # A box idle for most of the window that still confirmed normal payouts: the ratio
+        # against a near-zero expectation is a five-digit figure that reads as a bug (#992).
+        # Past 999% the pct is withheld — the client tooltip explains — never capped to a
+        # number that would still look like data.
+        e = _summary_earnings(
+            coeff_day=1e-8,
+            confirmed={"enabled": True, "xmr_30d": 0.28, "partial": {}},
+        )
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=1.0), e, [], now=self.NOW)
+        assert s["xmr"]["available"] is True and s["xmr"]["enabled"] is True
+        assert s["xmr"]["pct"] is None
+        # At the boundary the figure still shows: 999% is large but legible.
+        e = _summary_earnings(
+            coeff_day=1e-8,
+            confirmed={"enabled": True, "xmr_30d": 1e-8 * 8000.0 * 30 * 9.99, "partial": {}},
+        )
+        s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), e, [], now=self.NOW)
+        assert s["xmr"]["pct"] == 999
 
     def test_xmr_row_degrades_honestly(self):
         # Estimate unavailable (no network figures) -> not available, and no pct even with
