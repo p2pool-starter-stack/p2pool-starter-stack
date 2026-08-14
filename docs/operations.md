@@ -230,15 +230,18 @@ point 0.33, 95% CI 0.28–0.39). XvB can change its payout behaviour at any time
 feed is the raw material for re-running that measurement; without an archive, anything older
 than ~45 days is gone.
 
-Run it daily from cron on the deploy box:
+Run it daily from cron on the deploy box, and give it an archive directory **outside** the
+version directories:
 
 ```
-10 0 * * * $HOME/mining/current/scripts/xvb-winners-archive.sh
+10 0 * * * $HOME/mining/current/scripts/xvb-winners-archive.sh $HOME/mining/xvb-winners-archive
 ```
 
-Snapshots land in `xvb-winners-archive/` in the stack directory as `winners-YYYYMMDD.txt`
-(UTC date); pass a different directory as the only argument. Each snapshot is ~90 KB, so a
-daily archive grows about 3 MB a month.
+Snapshots land there as `winners-YYYYMMDD.txt` (UTC date). The directory argument matters:
+without it the script defaults to `xvb-winners-archive/` inside the stack directory, and the
+deploy layout above rotates old version directories away on upgrade — taking any archive
+inside them along. The explicit directory survives every upgrade. Each snapshot is ~90 KB,
+so a daily archive grows about 3 MB a month.
 
 ---
 
