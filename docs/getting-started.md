@@ -3,6 +3,10 @@
 Install and first-run setup, from a fresh Ubuntu host to a synced, mining stack. The `pithead`
 script drives every step.
 
+This is the DIY path: your host, your OS. To dedicate a machine and skip the host management
+entirely, write [the appliance image](appliance.md) to a USB stick instead — same stack, same
+dashboard, no Linux to set up.
+
 > **TL;DR**
 >
 > ```bash

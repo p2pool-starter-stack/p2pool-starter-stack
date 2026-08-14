@@ -1,6 +1,9 @@
 # Hardware Requirements
 
-Hardware sizing for the stack host. The stack runs on two kinds of machine with different needs:
+Hardware sizing for the stack host. The same sizing applies whether the host runs
+[the appliance image](appliance.md) or the DIY Compose stack — the appliance guide's
+"What you need" section restates the essentials for that path. The stack runs on two kinds
+of machine with different needs:
 
 1. The stack host: the one machine that runs `./pithead` and the Docker stack (Monero node, P2Pool,
    Tari, the XMRig proxy, the dashboard, Tor). It does not mine — it runs the nodes and coordinates;
