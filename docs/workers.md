@@ -320,7 +320,7 @@ status-poll deadline still reaches a terminal state without a second authenticat
 control port.
 
 RigForge does not ship this mirror yet — its enriched feed carries `config_meta` provenance
-(revision, source, `last_change_id`) but no `control` status object — so this parses to
+(revision, `changed_at`, source, `last_change_id`) but no `control` status object — so this parses to
 nothing today, and a rollback slower than the status-poll deadline stays `accepted` until
 the rig ships the mirror.
 
