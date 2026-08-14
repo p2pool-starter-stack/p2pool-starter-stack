@@ -1827,7 +1827,10 @@ phase_media() {
 
     # ---- apply leg: a real change, shown, counted down, applied, consumed --------------------
     local stick1="${DISK%.img}-media-apply.img"
-    local new_wallet="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
+    # A DIFFERENT valid primary address than HARNESS_WALLET (an earlier copy-paste made them
+    # identical, so the "changed wallet" leg changed nothing and the wallet assert could never
+    # match). The Monero project's donation address: public, checksum-valid, safe as a fixture.
+    local new_wallet="44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"
     _make_media_stick "$stick1" \
         "{\"monero\":{\"wallet_address\":\"$new_wallet\"},\"tari\":{\"wallet_address\":\"$HARNESS_TARI\"},\"p2pool\":{\"pool\":\"nano\",\"stratum_password\":\"auto\"}}"
     _attach_media_stick "$stick1"
