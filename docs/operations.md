@@ -83,6 +83,10 @@ it works from any checkout or bundle directory.
 
 `status` prints the usual compose table, then a per-service health check: a green ✓ for each
 running (and healthy) service, and a ⚠/✗ for anything unhealthy, restarting, stopped, or missing.
+Every container carries its own healthcheck — including the dashboard, Caddy, xmrig-proxy and the
+two Docker-socket proxies — so a ✓ means the service answers its probe, not merely that a process
+exists. A service whose check hasn't passed yet shows as starting, which is normal for a minute
+after a start or upgrade.
 It exits non-zero when something needs attention, so you can wire it into a cron/monitoring check.
 A stopped `p2pool`/`xmrig-proxy` is reported as intentional, not an error: the dashboard stops it
 either to fail workers over a node-down outage or while the miner is held until the required chains
