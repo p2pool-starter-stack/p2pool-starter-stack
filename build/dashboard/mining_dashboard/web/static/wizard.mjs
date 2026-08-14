@@ -304,14 +304,28 @@ export class WizardApp extends Component {
     tick();
   }
 
+  // A dropped connection reads identically to the lockout to the operator: the machine
+  // exits right after refusing the last attempt, so a network failure gets the same
+  // actionable message as the 429 it raced.
+  static LOCKOUT_MESSAGE =
+    "Too many attempts — the machine printed a fresh token on its console; enter that one.";
+
   auth = async (e) => {
     e.preventDefault();
-    const res = await fetch("/auth", {
-      method: "POST",
-      body: new URLSearchParams(new FormData(e.target)),
-    });
-    if (res.ok && (await this.loadState())) return;
-    this.setState({ error: "Wrong token." });
+    try {
+      const res = await fetch("/auth", {
+        method: "POST",
+        body: new URLSearchParams(new FormData(e.target)),
+      });
+      if (res.ok && (await this.loadState())) return;
+      if (res.status === 429) {
+        this.setState({ error: WizardApp.LOCKOUT_MESSAGE });
+        return;
+      }
+      this.setState({ error: "Wrong token." });
+    } catch {
+      this.setState({ error: WizardApp.LOCKOUT_MESSAGE });
+    }
   };
 
   // Field edit → config → JSON pane. The JSON is the single source of what gets submitted.

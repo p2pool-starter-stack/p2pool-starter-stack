@@ -194,9 +194,22 @@ async def auth(request: web.Request) -> web.Response:
         raise resp
     request.app["failures"] += 1
     if request.app["failures"] >= MAX_FAILURES:
-        # The host restarts the container with a fresh token; nothing to serve beyond this.
+        resp = web.json_response(
+            {
+                "error": "Too many attempts — this machine printed a fresh token on its "
+                "console; enter that one."
+            },
+            status=429,
+        )
+        # Flush the refusal to the browser BEFORE the host restarts the container for a
+        # re-mint. prepare/write_eof are idempotent, so aiohttp's own finish step (which
+        # runs them again once this handler returns) is a no-op — this just moves the bytes
+        # onto the wire ahead of the exit, instead of the process tearing down mid-request.
+        await resp.prepare(request)
+        await resp.write_eof()
         print("wizard: token failure limit reached — exiting for a re-mint", flush=True)
         request.app["exit"](EXIT_TOKEN_LOCKOUT)
+        return resp
     return web.json_response({"error": "wrong token"}, status=403)
 
 

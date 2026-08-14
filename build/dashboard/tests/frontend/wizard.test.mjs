@@ -571,3 +571,46 @@ test("before a disk is chosen, the page asks ONLY that", async () => {
   assert.match(after, /Type the disk name to confirm/);
   restore();
 });
+
+// --- the token gate: the lockout must read as actionable, not as a dead page -----------------
+
+test("auth: a 429 (lockout) shows the console-token message, not the generic wrong-token one", async () => {
+  const inst = new WizardApp({});
+  stubSetState(inst);
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 429,
+    json: async () => ({ error: "server-side lockout text" }),
+  });
+  await inst.auth({ preventDefault() {}, target: undefined });
+  globalThis.fetch = real;
+  assert.match(inst.state.error, /too many attempts/i);
+  assert.match(inst.state.error, /console/i);
+});
+
+test("auth: a genuinely dropped connection reads the same as the 429 it raced", async () => {
+  // The exact bug: the lockout's exit used to race the response, so the fetch this app makes
+  // rejects instead of resolving 429. Uncaught, that was a silent unhandled rejection — the
+  // operator just saw the page do nothing.
+  const inst = new WizardApp({});
+  stubSetState(inst);
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+  await inst.auth({ preventDefault() {}, target: undefined });
+  globalThis.fetch = real;
+  assert.match(inst.state.error, /too many attempts/i);
+  assert.match(inst.state.error, /console/i);
+});
+
+test("auth: an ordinary wrong token still gets the plain message, not the lockout one", async () => {
+  const inst = new WizardApp({});
+  stubSetState(inst);
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 403, json: async () => ({}) });
+  await inst.auth({ preventDefault() {}, target: undefined });
+  globalThis.fetch = real;
+  assert.equal(inst.state.error, "Wrong token.");
+});

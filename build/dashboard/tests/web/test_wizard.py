@@ -113,6 +113,47 @@ async def test_lockout_exits_3_after_max_failures(client):
     assert client.server.app["exits"] == [wizard.EXIT_TOKEN_LOCKOUT]
 
 
+async def test_lockout_response_is_429_with_console_hint(client):
+    # Every failure before the last is the plain 403; only the one that trips the limit gets
+    # the distinguishing status and the pointer to the console.
+    for _ in range(wizard.MAX_FAILURES - 1):
+        r = await _auth(client, "pit-WRONGX")
+        assert r.status == 403
+    r = await _auth(client, "pit-WRONGX")
+    assert r.status == 429
+    body = await r.json()
+    assert "too many attempts" in body["error"].lower()
+    assert "console" in body["error"].lower()
+
+
+async def test_lockout_writes_the_429_before_the_exit_hook_runs(spool, monkeypatch):
+    """Regression: the exit hook used to fire before the response was ever written, so the
+    process could tear down before a single byte reached the browser. Track the real order of
+    'bytes handed to the transport' vs 'exit hook called' rather than trusting that both merely
+    happened."""
+    order = []
+    real_write_eof = web.Response.write_eof
+
+    async def tracking_write_eof(self, *a, **kw):
+        order.append("written")
+        return await real_write_eof(self, *a, **kw)
+
+    monkeypatch.setattr(web.Response, "write_eof", tracking_write_eof)
+
+    app = wizard.make_app(exit_fn=lambda code: order.append("exit"))
+    c = TestClient(TestServer(app))
+    await c.start_server()
+    try:
+        for _ in range(wizard.MAX_FAILURES - 1):
+            await _auth(c, "pit-WRONGX")
+        r = await _auth(c, "pit-WRONGX")
+        assert r.status == 429
+    finally:
+        await c.close()
+    assert order[0] == "written"
+    assert order.count("exit") == 1
+
+
 def test_main_requires_token(monkeypatch):
     monkeypatch.delenv("WIZARD_TOKEN", raising=False)
     with pytest.raises(SystemExit) as e:
