@@ -80,3 +80,17 @@ that the boot path's files sit where the firmware and GRUB will look.
 sudo tests/os/verify-image.sh os/rauc/build/system.img          # release: test artifacts REFUSED
 sudo tests/os/verify-image.sh os/rauc/build/system.img --test   # harness build: SSH key expected
 ```
+
+## The real appliance
+
+`run.sh` and `verify-image.sh` above both work against a KVM guest or a built image — neither is
+hardware. [`tests/os/hw-battery.sh`](hw-battery.sh) is the sibling harness for the physical
+`pithead-os` appliance bench: it drives the real box over ssh, takes the bench reservation
+(`tests/os/bench-lock.sh`) itself, and runs what only real hardware can prove — see
+[`docs/dev/appliance-release.md`](../../docs/dev/appliance-release.md#manual-battery--required-before-every-appliance-release)
+for what it covers and [`docs/dev/release-server.md`](../../docs/dev/release-server.md#appliance-bench-reservation)
+for the reservation and the box contract.
+
+```bash
+tests/os/hw-battery.sh --host root@<appliance-address>
+```

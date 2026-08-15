@@ -10329,6 +10329,170 @@ assert_contains "404 signature triggers the --fresh-index remedy" "$(run_hint 'E
 assert_contains "'Unable to fetch' signature triggers the remedy" "$(run_hint 'E: Unable to fetch some archives, maybe run apt-get update')" "--fresh-index"
 assert_eq "an unrelated failure prints no hint" "$(run_hint 'E: some other build error')" ""
 
+echo "== unit: tests/os/bench-lock.sh — the appliance bench reservation (#1022) =="
+# Sourced-only, no test seam needed: sourcing it just defines functions (like tests/integration/
+# lib.sh — nothing runs until a function is called).
+# shellcheck disable=SC1091  # path is dynamic by design
+source "$ROOT/tests/os/bench-lock.sh"
+
+echo "== unit: _bench_holder_line / bench_lock_classify (pure) =="
+assert_eq "_bench_holder_line formats who/what/when" \
+    "$(_bench_holder_line "hw-battery.sh" "exclusive" "vijit@gouda" "4242" "2026-08-15T00:00:00Z")" \
+    "hw-battery.sh mode=exclusive who=vijit@gouda pid=4242 started=2026-08-15T00:00:00Z"
+assert_eq "bench_lock_classify: rc=0 is free regardless of holder text" "$(bench_lock_classify 0 "stale text")" "free"
+assert_eq "bench_lock_classify: nonzero rc reports the holder line" \
+    "$(bench_lock_classify 1 "hw-battery.sh mode=exclusive who=a pid=1")" \
+    "busy: hw-battery.sh mode=exclusive who=a pid=1"
+assert_eq "bench_lock_classify: nonzero rc with no holder text falls back" "$(bench_lock_classify 1 "")" "busy: unknown holder"
+
+echo "== behavioral: bench_lock — acquire/busy/shared/wait/cleanup/symlink =="
+# Mirrors tests/integration/selftest.sh's own rig_lock coverage (background holder blocked on a
+# fifo so the lock stays held until the test releases it; FD 9 dying with the process is the
+# property under test, not simulated).
+BL_RL="$(mktemp -d)"
+BENCH_LOCK_FILE="$BL_RL/lock"
+BENCH_LOCK_HOLDER="$BL_RL/holder"
+export BENCH_LOCK_FILE BENCH_LOCK_HOLDER
+mkfifo "$BL_RL/hold-x"
+(
+    bench_lock "hw-battery.sh selftest" && : >"$BL_RL/ready-x" && read -r _ <"$BL_RL/hold-x"
+) &
+bl_bg=$!
+bl_tries=0
+while [ ! -f "$BL_RL/ready-x" ] && [ "$bl_tries" -lt 50 ]; do
+    sleep 0.1
+    bl_tries=$((bl_tries + 1))
+done
+if [ -f "$BENCH_LOCK_HOLDER" ]; then ok "holder sidecar written on acquire"; else bad "holder sidecar written on acquire" "no $BENCH_LOCK_HOLDER"; fi
+assert_contains "holder sidecar names the caller's label" "$(cat "$BENCH_LOCK_HOLDER" 2>/dev/null)" "hw-battery.sh selftest"
+
+bl_out="$( (bench_lock "second run") 2>&1)"
+bl_rc=$?
+assert_rc "a second EXCLUSIVE attempt is busy (EX_TEMPFAIL)" "$bl_rc" "75"
+assert_contains "busy message points at BENCH_LOCK_WAIT=1" "$bl_out" "BENCH_LOCK_WAIT=1"
+
+(bench_lock "shared probe" shared) >/dev/null 2>&1
+bl_rc2=$?
+assert_rc "a SHARED probe is also excluded by an exclusive holder" "$bl_rc2" "75"
+
+assert_contains "bench_lock_status reports busy while held" "$(bench_lock_status)" "busy:"
+
+# BENCH_LOCK_WAIT=1 queues instead of failing fast.
+mkfifo "$BL_RL/hold-w"
+(
+    BENCH_LOCK_WAIT=1 bench_lock "queued" 2>"$BL_RL/waiter.err" && : >"$BL_RL/queued-ok"
+) &
+bl_wait_pid=$!
+sleep 1
+if [ ! -f "$BL_RL/queued-ok" ]; then ok "BENCH_LOCK_WAIT=1 blocks while the lock is held"; else bad "BENCH_LOCK_WAIT=1 blocks while the lock is held" "acquired before release"; fi
+echo x >"$BL_RL/hold-x" # release the exclusive holder
+wait "$bl_bg" 2>/dev/null
+wait "$bl_wait_pid" 2>/dev/null
+if [ -f "$BL_RL/queued-ok" ]; then ok "BENCH_LOCK_WAIT=1 acquired the instant the lock freed"; else bad "BENCH_LOCK_WAIT=1 acquired the instant the lock freed" "never acquired"; fi
+
+bl_tries=0
+while [ -f "$BENCH_LOCK_HOLDER" ] && [ "$bl_tries" -lt 50 ]; do
+    sleep 0.1
+    bl_tries=$((bl_tries + 1))
+done
+if [ ! -f "$BENCH_LOCK_HOLDER" ]; then ok "holder sidecar removed when the holding process exits (kill -9-safe by construction)"; else bad "holder sidecar removed on exit" "sidecar still present"; fi
+assert_eq "bench_lock_status reports free once released" "$(bench_lock_status)" "free"
+
+# Two SHARED holders coexist.
+mkfifo "$BL_RL/hold-s1" "$BL_RL/hold-s2"
+(
+    bench_lock "reader1" shared && : >"$BL_RL/ready-s1" && read -r _ <"$BL_RL/hold-s1"
+) &
+bl_s1=$!
+bl_tries=0
+while [ ! -f "$BL_RL/ready-s1" ] && [ "$bl_tries" -lt 50 ]; do
+    sleep 0.1
+    bl_tries=$((bl_tries + 1))
+done
+(
+    bench_lock "reader2" shared && : >"$BL_RL/ready-s2" && read -r _ <"$BL_RL/hold-s2"
+) &
+bl_s2=$!
+bl_tries=0
+while [ ! -f "$BL_RL/ready-s2" ] && [ "$bl_tries" -lt 50 ]; do
+    sleep 0.1
+    bl_tries=$((bl_tries + 1))
+done
+if [ -f "$BL_RL/ready-s2" ]; then ok "a second SHARED holder joins while the first still holds"; else bad "a second SHARED holder joins while the first still holds" "never joined"; fi
+echo x >"$BL_RL/hold-s1"
+echo x >"$BL_RL/hold-s2"
+wait "$bl_s1" "$bl_s2" 2>/dev/null
+
+# A planted symlink at either path is refused outright, never followed (a shared coordinator is
+# reachable by more than one user).
+BL_RL2="$(mktemp -d)"
+ln -s /etc/passwd "$BL_RL2/lock"
+bl_out3="$( (BENCH_LOCK_FILE="$BL_RL2/lock" BENCH_LOCK_HOLDER="$BL_RL2/holder" bench_lock "x") 2>&1)"
+bl_rc3=$?
+assert_rc "a symlinked lock path is refused" "$bl_rc3" "1"
+assert_contains "the refusal names the reason" "$bl_out3" "symlink"
+
+unset BENCH_LOCK_FILE BENCH_LOCK_HOLDER
+rm -rf "$BL_RL" "$BL_RL2"
+
+echo "== unit: tests/os/hw-battery.sh — classify_address, the #1021 globally-routable-address class =="
+# PITHEAD_HW_BATTERY_TEST makes the script return right after defining every function (nothing
+# reserved, no ssh, no main) — mirrors os/build-image.sh's own PITHEAD_BUILD_IMAGE_TEST seam above.
+hw_battery_test() {
+    (
+        export PITHEAD_HW_BATTERY_TEST=1
+        # shellcheck disable=SC1091  # path is dynamic by design
+        source "$ROOT/tests/os/hw-battery.sh"
+        "$@"
+    )
+}
+# The real box's own evidence from issue #1021 (found 2026-08-15): the LAN address, the two
+# docker-bridge addresses and the ULA are private; the ISP-assigned IPv6 is the leak.
+assert_eq "RFC1918 LAN address is private" "$(hw_battery_test classify_address 192.168.1.202)" "private"
+assert_eq "docker bridge 172.28.0.1 is private" "$(hw_battery_test classify_address 172.28.0.1)" "private"
+assert_eq "docker bridge 10.89.0.1 is private" "$(hw_battery_test classify_address 10.89.0.1)" "private"
+assert_eq "the ISP-assigned globally-routable IPv6 is global (the #1021 leak)" \
+    "$(hw_battery_test classify_address 2605:59c8:1234:5678::71b8)" "global"
+assert_eq "the ULA fd00::/8 address is private" "$(hw_battery_test classify_address fd1c:1234:5678::71b8)" "private"
+assert_eq "loopback IPv4 is private" "$(hw_battery_test classify_address 127.0.0.1)" "private"
+assert_eq "loopback IPv6 is private" "$(hw_battery_test classify_address ::1)" "private"
+assert_eq "link-local IPv4 is private" "$(hw_battery_test classify_address 169.254.1.1)" "private"
+assert_eq "link-local IPv6 is private" "$(hw_battery_test classify_address fe80::1)" "private"
+assert_eq "IPv6 hex is case-insensitive (ULA)" "$(hw_battery_test classify_address FD1C:1234::1)" "private"
+assert_eq "IPv6 hex is case-insensitive (link-local)" "$(hw_battery_test classify_address FE80::1)" "private"
+assert_eq "a public IPv4 is global" "$(hw_battery_test classify_address 8.8.8.8)" "global"
+assert_eq "the IPv6 documentation range is global (fails closed, not a special case)" \
+    "$(hw_battery_test classify_address 2001:db8::1)" "global"
+assert_eq "an mDNS name is 'other', not a private/global verdict" "$(hw_battery_test classify_address pithead.local)" "other"
+assert_eq "'localhost' is 'other'" "$(hw_battery_test classify_address localhost)" "other"
+assert_eq "the IPv4 wildcard is 'other', never global" "$(hw_battery_test classify_address 0.0.0.0)" "other"
+assert_eq "the ss '*' wildcard is 'other'" "$(hw_battery_test classify_address '*')" "other"
+assert_eq "the bracketed IPv6 wildcard is 'other'" "$(hw_battery_test classify_address '[::]')" "other"
+assert_eq "an out-of-range octet is 'other' (fails closed to a verdict, not a crash)" \
+    "$(hw_battery_test classify_address 300.1.1.1)" "other"
+assert_eq "a 3-part address is 'other'" "$(hw_battery_test classify_address 1.2.3)" "other"
+assert_eq "a 5-part address is 'other'" "$(hw_battery_test classify_address 1.2.3.4.5)" "other"
+assert_eq "a leading zero is 'other' (never reinterpreted as octal by -le)" "$(hw_battery_test classify_address 08.1.1.1)" "other"
+
+echo "== unit: extract_addresses_from_caddy_site_line (pure) =="
+caddy_site='https://pithead.local, https://192.168.1.202, https://2605:59c8:1234:5678::71b8, https://fd1c:1234:5678::71b8, https://localhost {'
+extracted="$(hw_battery_test extract_addresses_from_caddy_site_line "$caddy_site")"
+assert_contains "extracts the mDNS name" "$extracted" "pithead.local"
+assert_contains "extracts the LAN IPv4, scheme stripped" "$extracted" "192.168.1.202"
+assert_contains "extracts the global IPv6, scheme stripped" "$extracted" "2605:59c8:1234:5678::71b8"
+assert_contains "extracts the ULA IPv6, scheme stripped" "$extracted" "fd1c:1234:5678::71b8"
+assert_contains "extracts the LAST address too (no unterminated-final-line loss)" "$extracted" "localhost"
+assert_not_contains "the trailing brace is dropped, not glued to localhost" "$extracted" "{"
+assert_not_contains "no scheme prefix survives" "$extracted" "https://"
+assert_eq "a single address with no trailing comma still extracts" \
+    "$(hw_battery_test extract_addresses_from_caddy_site_line 'https://192.168.1.202 {')" "192.168.1.202"
+
+echo "== unit: _egress_verdict (pure; mirrors tests/integration/lib.sh's egress_verdict) =="
+assert_eq "the OK marker classifies ok" "$(hw_battery_test _egress_verdict '[verify-egress] OK  0 leaks over 3 polls')" "ok"
+assert_eq "a LEAK line classifies leak" "$(hw_battery_test _egress_verdict 'LEAK: clearnet connection from p2pool')" "leak"
+assert_eq "script-not-found classifies inconclusive, never leak" \
+    "$(hw_battery_test _egress_verdict 'bash: bench-verify-egress.sh: No such file or directory')" "inconclusive"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

@@ -211,7 +211,26 @@ fails the release regardless of the rest.
 
 The automated battery runs in KVM. KVM is not hardware, and the failures it cannot see
 are exactly the ones that strand a user: real firmware, real disks, real NICs. Run this
-on a physical box before publishing an image. Record the results in the release issue.
+on a physical box before publishing an image.
+
+Two of the ten items are fully automatable over ssh against the real box — M7 and M9, the same
+paths the dashboard's OS-update action drives — plus assertions a VM cannot make at all: no
+globally-routable address is served, identity (machine-id, SSH host key) survives an A/B update,
+the watchdog and CPU governor are actually armed, and the Tor egress posture holds on a real NIC.
+[`tests/os/hw-battery.sh`](../../tests/os/hw-battery.sh) runs that whole automated slice, takes the
+appliance bench reservation itself (exclusive — see
+[release-server.md § Appliance bench reservation](release-server.md#appliance-bench-reservation)),
+and for the four items that genuinely need hands — M1, M4, M8, M10 — prints exactly what to do and
+records the operator's timestamped attestation rather than skipping them or marking them passed on
+its own. It writes a dated result file ready to paste into the release issue:
+
+```bash
+tests/os/hw-battery.sh --host root@<appliance-address>
+```
+
+This is now the release gate for the physical channel: run it (interactively, so the four
+physical items get a real attestation) before every appliance release, the same way
+`tests/os/run.sh --phase all` gates the image itself.
 
 Hardware: one x86-64 machine with UEFI, ≥ 16 GiB RAM, an internal SSD/NVMe, wired
 ethernet, and a USB stick. A second disk makes M4 and M5 meaningful.
@@ -259,7 +278,10 @@ Expected: the stack provisions and the dashboard comes up.
 must warn before removing its own SSH). Expected: installs, reboots into the new version,
 and an uncommitted update reverts on the next reboot. The dashboard-driven OS update is
 tracked pre-GA work — until it exists, this is the honest mechanism, and it is the same
-one the KVM update phase exercises.
+one the KVM update phase exercises. Automated by `tests/os/hw-battery.sh`: it builds the
+bundle, calls `pithead os-update` itself, reboots twice to prove the health gate
+self-committed (no harness-driven `mark-good`), and also checks machine-id and the SSH
+host-key fingerprint survive the update.
 
 **M8 — pull the plug.** During the update's write phase, physically cut power. Repeat
 three times. Expected: the machine boots the old version every time. *A brick here blocks
@@ -268,6 +290,11 @@ the release.*
 **M9 — bad release rollback.** Ship a deliberately broken bundle (a failing health check).
 Expected: the machine reverts to the previous version without a human present. Then
 perform an operator-initiated rollback from a good version and confirm it returns.
+Automated by `tests/os/hw-battery.sh` for the auto-rollback half: it installs a bundle with
+one revenue container deliberately unable to start, so `pithead doctor`'s own commit gate
+refuses it, and proves the box falls back to the previous build unaided. The
+operator-initiated-rollback half (`rauc status mark-bad booted`) is exercised generically by
+the KVM update phase's own leg 3; `hw-battery.sh` does not repeat it against the real box.
 
 **M10 — power-loss during normal mining.** Cut power at the wall with the stack running
 and synced, then restore it and **do not touch the machine**. Expected: it powers on by
@@ -325,7 +352,9 @@ assume that has happened and both channels share one version and one GitHub Rele
    pithead-boot is enabled (and podman-restart is NOT — it started the stack into its own
    oneshot cgroup and systemd SIGKILLed the containers it had just spawned). Every check exists because its absence shipped, or nearly
    shipped, once.
-4. Run the manual battery (M1–M10) on real hardware. Record results.
+4. Run the battery (M1–M10) on real hardware: `tests/os/hw-battery.sh --host root@<address>`
+   automates M7/M9 plus the real-hardware-only assertions and walks the operator through
+   attesting M1/M4/M8/M10. Paste its dated result file into the release issue.
 5. Attach image + bundle + checksums to the version's GitHub Release **while it is still a
    draft** (the DIY cut opens it with `release.sh --draft`), then publish once everything is
    attached. Published release assets are immutable — v1.18.0 burned its tag this way — so

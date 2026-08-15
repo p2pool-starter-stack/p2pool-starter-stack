@@ -364,6 +364,52 @@ ssh <box> 'flock -n -x /var/lock/rig-e2e.lock true' || ssh <box> 'cat /run/rig-e
 ssh <box> 'cat /etc/bench-role'   # the box's static owner
 ```
 
+## Appliance bench reservation
+
+The physical `pithead-os` appliance is a third bench resource, and it breaks the rig model in one
+way that matters: `tests/os/hw-battery.sh` and the manual M1/M4/M8/M10 battery
+([appliance-release.md](appliance-release.md)) reflash and factory-reset the box as part of what
+they test. A lock or holder file stored *on* the appliance would be destroyed by the exact work it
+is meant to guard — reflashing it clears whatever the previous run wrote there. So the reservation
+lives on the bench coordinator instead (the same host `tests/os/hw-battery.sh` runs from), keyed
+by the appliance's identity, not on the box it protects.
+
+The mechanism (`tests/os/bench-lock.sh`) mirrors the rig lock's properties on purpose — a flock
+held on an inherited FD so the kernel releases it the moment the holding process dies (`kill -9`
+included, no stale-lock cleanup), a best-effort holder sidecar naming who/what/when, shared
+(read-only probing) vs exclusive (mutating/reflashing). It is a separate protocol, not a fork of
+`rig_lock`: the lock path, the holder line's shape, and where the lock lives all differ on
+purpose, because the resource it protects fails differently. `tests/os/hw-battery.sh` takes it
+exclusive before touching anything and holds it for the whole run.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BENCH_LOCK_ID` | `appliance` | Names which resource — a second physical appliance would pass a different id. |
+| `BENCH_LOCK_FILE` | `/var/lock/pithead-bench-${BENCH_LOCK_ID}.lock` | The flock path. |
+| `BENCH_LOCK_HOLDER` | `${BENCH_LOCK_FILE}.holder` | Display-only sidecar naming the holder; the flock is authoritative, a stale sidecar is harmless. |
+| `BENCH_LOCK_WAIT` | unset | Set to `1` to queue instead of exiting 75 (`EX_TEMPFAIL`) on a busy box. |
+
+All three paths are env-overridable, which is what lets `tests/stack/run.sh` exercise the whole
+mechanism — busy detection, shared coexistence, the wait queue, holder cleanup, symlink refusal —
+against a throwaway directory instead of the real `/var/lock`.
+
+Off-box actors check the same way the rig lock recipe does:
+
+```bash
+ssh <bench-coordinator> 'flock -n -x /var/lock/pithead-bench-appliance.lock true' || \
+    ssh <bench-coordinator> 'cat /var/lock/pithead-bench-appliance.lock.holder'
+```
+
+**The box contract.** The appliance bench is owned by Pithead, for `tests/os/hw-battery.sh` and
+the manual M1-M10 battery. Safe to destroy: the OS slots — every `os-update`, reflash, and
+factory-reset the battery runs is expected to replace them. **Not safe to destroy: `/data`.** It
+holds a synced Monero chain (~105 GB), the Tari data directory, both wallets, and the Tor onion
+identity — days to resync, not a config change. M7 and M9 only ever install update *bundles*
+(`pithead os-update`), which never touch `/data`; only a deliberate, attested `factory-reset`
+(outside the automated subset, see the M1/M4/M8/M10 attestations in appliance-release.md) reformats
+it. Before running the battery, check the box is reserved (`bench_lock_status`, sourced from
+`tests/os/bench-lock.sh`) — the same discipline as `cat /etc/bench-role` for a rig.
+
 ## Hardening checklist (the pitfalls)
 
 Treat the box as production-sensitive. It holds keys and it's the thing that signs off releases.

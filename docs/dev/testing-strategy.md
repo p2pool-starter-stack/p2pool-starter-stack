@@ -185,6 +185,7 @@ no VM needed, run on every image build.
 | Physical-presence config channel (#786 sub-issue D): identical-config short-circuit, diff building + secret masking, consumed-marker, the abort/apply state machine (media removed, keypress, countdown timeout, absence of input is not abort) | `tests/stack/run.sh` (sourced, stubbed lsblk/mount) | 1 ✅ |
 | Physical-presence config channel: exact diff on the console, countdown applies, the changed setting takes effect, the stick is consumed, pulling the stick mid-countdown cancels | battery `--phase media` (opt-in) | 4 (added — not yet run at the release gate) |
 | Power cuts mid-write and mid-commit; corrupt bundle — a brick is disqualifying | battery `--phase fault` (opt-in) | 4 ✅ |
+| Real-hardware-only: no globally-routable address served, identity survival across a real A/B update, watchdog + CPU governor actually armed, Tor egress on a real NIC — none of which a KVM guest can show | `tests/os/hw-battery.sh` (M7/M9 automated, M1/M4/M8/M10 operator-attested) | 4 ✅ (address/egress-output classifiers are pure — `tests/stack/run.sh` pins them at 1) |
 
 ## Running each tier
 
@@ -196,6 +197,8 @@ make test-integration ARGS="--host user@box --dir pithead --lifecycle --fault-in
 # tier 4, appliance channel (KVM bench):
 os/build-image.sh --ssh && os/rauc/mkimage.sh --dev
 sudo tests/os/run.sh --image os/rauc/build/system.img
+# tier 4, the physical appliance bench (real hardware, not KVM):
+tests/os/hw-battery.sh --host root@<appliance-address>
 ```
 
 ## Production-readiness posture
@@ -219,6 +222,7 @@ locally).
 | Fake-daemon **docker mini-stack** | 3 | PRs touching the harness/dashboard | ✅ (own workflow) |
 | **Live config matrix** on real nodes | 4 | manual / pre-release | ✅ **release gate** ([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)) |
 | **KVM appliance battery** (`tests/os/run.sh`) | 4 | manual / pre-release | ✅ **release gate for the image** ([appliance-release.md](appliance-release.md)) |
+| **Physical appliance battery** (`tests/os/hw-battery.sh`) | 4 | manual / pre-release | ✅ **release gate for the physical channel** ([appliance-release.md](appliance-release.md), reservation in [release-server.md](release-server.md#appliance-bench-reservation)) |
 
 The first three tiers run on every PR with no special infrastructure. Tier 4 is the blocking
 pre-release gate (see [Releasing](releasing.md)) because it needs the real synced nodes.
