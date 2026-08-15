@@ -1436,7 +1436,7 @@ phase_provision() {
     tries=0
     local code=000 served=0
     while [ "$tries" -lt 60 ]; do
-        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
         case "$code" in
         2?? | 3?? | 401 | 403)
             ok "dashboard is served through caddy (HTTP $code)"
@@ -1616,7 +1616,7 @@ phase_provision() {
     tries=0
     local answered=0
     while [ "$tries" -lt 36 ]; do
-        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
         case "$code" in
         2?? | 3?? | 401 | 403)
             ok "dashboard answers again after the reboot (HTTP $code) — through a REGENERATED Caddyfile"
@@ -1983,7 +1983,7 @@ phase_media() {
     # success within a shared 900 s window instead of judging a settling stack once.
     local http_deadline=$(($(date +%s) + 900)) code=000 authed=000
     while [ "$(date +%s)" -lt "$http_deadline" ]; do
-        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
         case "$code" in 000 | 5??) sleep 10 ;; *) break ;; esac
     done
     if [ "$code" = "401" ]; then
@@ -1992,7 +1992,7 @@ phase_media() {
         bad "the dashboard answered HTTP $code without credentials after the minimal-stick apply"
     fi
     while [ "$(date +%s)" -lt "$http_deadline" ]; do
-        authed=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 -u "$old_user:$old_pw" "https://$ip/" 2>/dev/null || echo 000)
+        authed=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 -u "$old_user:$old_pw" "https://$ip/" 2>/dev/null || true)
         case "$authed" in 000 | 5??) sleep 10 ;; *) break ;; esac
     done
     case "$authed" in
