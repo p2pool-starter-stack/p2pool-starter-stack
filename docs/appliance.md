@@ -12,7 +12,7 @@ manage the host.
 
 - An x86-64 machine with UEFI you can dedicate to mining. It will be **erased**.
 - 16 GB RAM or more, and an internal SSD or NVMe with room for the chains. The stack budgets
-  about 120 GB for pruned Monero and about 170 GB for a local Tari node (measured chains:
+  about 120 GB for pruned Monero and about 200 GB for a local Tari node (measured chains:
   roughly 100 GB and 150 GB in August 2026, and growing — the budget is the growth room), so
   **350 GB or more** runs both locally. On a smaller disk, run pruned Monero and point Tari
   at a node you already have — the setup page asks both questions.

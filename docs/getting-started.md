@@ -27,7 +27,7 @@ dashboard, no Linux to set up.
 | Operating system | Ubuntu Server 24.04 LTS is the supported platform. Other Linux distributions and macOS may work but aren't supported. |
 | CPU | A processor with AVX2 support for RandomX performance. |
 | RAM | 16 GB minimum with HugePages enabled (~6 GB is reserved for RandomX); 32 GB for a full node or long uptimes. |
-| Disk | A pruned Monero node needs ~100 GB and a full one ~270 GB, plus ~150 GB for the Tari node (its chain is the biggest single consumer). Plan for ~300 GB (pruned) or ~500 GB (full) of SSD minimum. Both chains grow ~100+ GB/year, so a 2–4 TB drive is the set-and-forget choice. |
+| Disk | A pruned Monero node needs ~100 GB and a full one ~270 GB, plus ~150 GB for the Tari node (its chain is the biggest single consumer). Plan for ~330 GB (pruned) or ~530 GB (full) of SSD minimum. Both chains grow ~100+ GB/year, so a 2–4 TB drive is the set-and-forget choice. |
 | Software | Docker Engine, Docker Compose V2, `jq`, and `openssl`. |
 
 > 📐 Sizing guidance for the stack host — minimum vs. recommended specs, plus ways to run leaner —
@@ -35,8 +35,8 @@ dashboard, no Linux to set up.
 > [RigForge](https://github.com/p2pool-starter-stack/rigforge).
 
 > 🔎 `setup` checks this for you. Before it starts anything, `./pithead setup` runs a best-effort
-> pre-flight on free disk and total RAM. If either is below the recommended minimums (~300 GB
-> pruned / ~500 GB full disk, 16 GB RAM), it prints a warning. It never blocks setup, so you can
+> pre-flight on free disk and total RAM. If either is below the recommended minimums (~330 GB
+> pruned / ~530 GB full disk, 16 GB RAM), it prints a warning. It never blocks setup, so you can
 > proceed on a smaller host at your own risk. See **[Hardware Requirements](hardware.md)**.
 
 You don't have to install the software dependencies yourself. `setup` checks for them and, on
