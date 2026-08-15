@@ -15,10 +15,11 @@ manage the host.
   6 GB of it for mining at every boot. With less RAM it still boots, but it prints a warning
   on the machine's screen and shrinks that reservation — mining runs slower and everything
   else runs squeezed, at every boot until the machine has 16 GB.
-- An internal SSD or NVMe with room for the chains. Pruned Monero
-  needs about 120 GB and a local Tari node about 170 GB, so **350 GB or more** runs both
-  locally. On a smaller disk, run pruned Monero and point Tari at a node you already have —
-  the setup page asks both questions.
+- An internal SSD or NVMe with room for the chains. The stack budgets
+  about 120 GB for pruned Monero and about 170 GB for a local Tari node (measured chains:
+  roughly 100 GB and 150 GB in August 2026, and growing — the budget is the growth room), so
+  **350 GB or more** runs both locally. On a smaller disk, run pruned Monero and point Tari
+  at a node you already have — the setup page asks both questions.
 - A wired ethernet connection. Wi-Fi is not supported.
 - A USB stick, **16 GB or larger** — the image writes 5 GB to the stick, whatever the size of the download.
 - A second computer with a browser, on the same network.
@@ -210,8 +211,8 @@ Then a handful of choices, all with sensible defaults:
 
 That is the whole first-run form — fewer questions than the DIY install, on purpose: anything
 with a default that is right for almost every home rig lives one level down, in **Advanced**,
-not on the quick form. Today that means the Monero chain size (pruned, ~120 GB, vs. the full
-~320 GB — only asked at all when this machine runs the node), the Healthchecks ping URL, and
+not on the quick form. Today that means the Monero chain size (a ~120 GB budget pruned vs.
+~320 GB full — only asked at all when this machine runs the node), the Healthchecks ping URL, and
 the time zone (detected from the machine unless set). They are still there to change, just not asked outright.
 
 The dashboard login is also the machine's **console login**: sit at the machine, log in as

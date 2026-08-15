@@ -102,12 +102,22 @@ HARNESS_WALLET="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F
 # handoff. Same throwaway address the stack suite uses.
 HARNESS_TARI="126J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5BJ"
 
+# Every remote call is bounded. Debian socket-activates sshd: the socket unit accepts the TCP
+# connection as soon as it listens and only THEN starts ssh@.service, so a guest that is still
+# booting satisfies ConnectTimeout and stalls in the handshake — which no ssh option bounds.
+# An unbounded call therefore outlives its caller's deadline instead of failing it: on 2026-08-15
+# one boot-phase probe held for five hours against a guest that answered ssh normally the whole
+# time, and the phase reported "SSH never came up" the instant that probe was killed. SSH_TIMEOUT
+# is the per-call ceiling; the default clears the longest legitimate remote command in this file
+# (the 1800 s local-miner wait) and exists only so no single call can hang a release gate forever.
+# ponytail: polling loops lower it to a few seconds — a stalled handshake must read as "not ready
+# yet" so the loop re-evaluates its own deadline, which is the whole point of having one.
 _ssh() {
-    ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
+    timeout "${SSH_TIMEOUT:-2400}" ssh -i "$KEY" -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
 }
 _wait_ssh() { # $1 seconds — the definition of "not bricked"
-    local deadline=$(($(date +%s) + $1))
+    local deadline=$(($(date +%s) + $1)) SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}"
     while [ "$(date +%s)" -lt "$deadline" ]; do
         _ssh true && return 0
         sleep 5
@@ -216,7 +226,9 @@ _rollback_cmd() {
 }
 
 require_host() {
-    for c in virsh virt-install qemu-img; do
+    # timeout bounds every remote call (see _ssh) — without it each one dies 127 and the whole
+    # run reads as a bricked guest, so it is a hard dependency, not a nicety.
+    for c in virsh virt-install qemu-img timeout; do
         have "$c" || {
             echo "missing $c — install libvirt/qemu (see tests/os/README.md)" >&2
             exit 2
@@ -1744,7 +1756,7 @@ phase_provision() {
     fi
     ok "config validated and installed by the host"
 
-    local deadline=$(($(date +%s) + 1500)) names=""
+    local deadline=$(($(date +%s) + 1500)) names="" SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}"
     while [ "$(date +%s)" -lt "$deadline" ]; do
         names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
         case "$names" in
@@ -2266,7 +2278,7 @@ phase_media() {
         bad "the ESP pre-seed never reached the running system — nothing to change from here"
         return
     fi
-    local deadline=$(($(date +%s) + 1500)) names=""
+    local deadline=$(($(date +%s) + 1500)) names="" SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}"
     while [ "$(date +%s)" -lt "$deadline" ]; do
         names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
         case "$names" in *dashboard*caddy* | *caddy*dashboard*) break ;; esac
@@ -2876,6 +2888,7 @@ phase_reset() {
     fi
     ok "provisioned: config installed by the host"
 
+    local SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" # scoped: later calls in this phase run long
     names="" deadline=$(($(date +%s) + 1500))
     while [ "$(date +%s)" -lt "$deadline" ]; do
         names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
