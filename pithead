@@ -9742,14 +9742,27 @@ control_os_gate() { # <cdir> <id> <actor> <action> — rc 0 = proceed (budget co
 }
 
 # The local-bundle refusals shared by os-verify and os-install (install re-runs them so a result
-# can never go stale between the two clicks). Echoes the refusal reason; empty = pass. The caller
-# deletes a refused bundle — only bundles that verify may sit staged.
+# can never go stale between the two clicks). Echoes the refusal reason; empty = pass. Returns 0
+# for a real verdict — the caller deletes a refused bundle, only bundles that verify may sit
+# staged — and 3 when rauc itself could not run, where the caller KEEPS the bundle: deleting a
+# multi-GB Tor download is a verdict too, and a tool that never ran has not earned one.
 os_verify_bundle_reason() { # <bundle> <target-tag>
-    local bundle="$1" tag="$2"
+    local bundle="$1" tag="$2" rc=0
     # Signature first: `rauc info` verifies the bundle signature against the system keyring
     # before it prints anything, so an unsigned or mis-signed file fails here, before any
-    # metadata is trusted.
-    if ! rauc info "$bundle" >/dev/null 2>&1; then
+    # metadata is trusted. A nonzero exit is only a signature verdict when rauc actually ran
+    # and judged the file — an exec failure or a crash (rc 126/127, or death by signal) gets
+    # one retry and then its own honest reason instead of masquerading as a bad signature.
+    rauc info "$bundle" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -ge 126 ]; then
+        rc=0
+        rauc info "$bundle" >/dev/null 2>&1 || rc=$?
+        if [ "$rc" -ge 126 ]; then
+            printf '%s' "rauc could not run to judge the downloaded bundle — the file was kept; retry, and check the host journal if this repeats."
+            return 3
+        fi
+    fi
+    if [ "$rc" -ne 0 ]; then
         printf '%s' "the downloaded file failed signature verification against this machine's release keys — it was deleted; check for updates and download again."
         return 0
     fi
@@ -9777,6 +9790,13 @@ os_verify_bundle_reason() { # <bundle> <target-tag>
     reason=$(os_update_version_guard "$bundle_version" 0)
     if [ -n "$reason" ]; then
         printf '%s' "$reason"
+        return 0
+    fi
+    # Equality passes the shared guard on purpose — the CLI keeps same-version installs for
+    # manual slot repair at the machine — but on the dashboard door an equal bundle is only a
+    # lever for looped reinstall-and-reboot downtime, so it refuses here.
+    if os_semver_ok "$bundle_version" && [ "$bundle_version" = "$(os_running_version)" ]; then
+        printf '%s' "already on v$bundle_version, nothing to update — the bundle was deleted."
         return 0
     fi
     # The bundle's own stamp must match the host-derived target — a mirror serving an OLDER
@@ -9871,6 +9891,14 @@ control_os_download() { # <claimed-file> <id> <actor> <control-dir>
         control_os_refuse "$cdir" "$id" "$actor" "os-download" rejected "requested version ${proposed:-none} is not the checked release ($tag) — reload the dashboard and retry."
         return 0
     fi
+    # An equal version is nothing to update — refused before a byte moves, or a compromised
+    # container could loop a same-version download (gigabytes over Tor) into install and reboot
+    # for forced downtime and flash wear. Same-version slot repair stays with `pithead
+    # os-update` at the machine, which allows equality on purpose.
+    if [ "$tag" = "v$(os_running_version)" ]; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-download" rejected "already on $tag, nothing to update."
+        return 0
+    fi
     mkdir -p "$osdir"
     final="$osdir/pithead-os-$tag.raucb"
     part="$final.partial"
@@ -9886,11 +9914,13 @@ control_os_download() { # <claimed-file> <id> <actor> <control-dir>
         os_state_write "$cdir" "$(jq -n --arg v "$tag" '{step:"downloaded",version:$v}')"
         return 0
     fi
-    # Disk headroom for the REMAINDER plus margin, refused up front — a download that fills /data
-    # would starve the chain databases mid-write, which is far worse than waiting.
+    # Disk headroom for the REMAINDER plus a 1 GiB margin, refused up front — a download that
+    # fills /data would starve the chain databases mid-write, which is far worse than waiting,
+    # and the LMDB chain stores degrade well before the disk actually fills. The margin has to
+    # absorb the .partial in flight plus results growth for the whole transfer.
     local avail_kb need
     avail_kb=$(df -Pk "$osdir" 2>/dev/null | awk 'NR==2{print $4}') || avail_kb=0
-    need=$(((size - have) / 1024 + 65536))
+    need=$(((size - have) / 1024 + 1048576))
     if [ -z "$avail_kb" ] || [ "$avail_kb" -lt "$need" ]; then
         control_os_refuse "$cdir" "$id" "$actor" "os-download" rejected "not enough free space on /data for the update bundle (need about $((need / 1024)) MiB free, have $((${avail_kb:-0} / 1024)) MiB) — free space and retry."
         return 0
@@ -9964,7 +9994,7 @@ control_os_verify() { # <claimed-file> <id> <actor> <control-dir>
     local file="$1" id="$2" actor="$3" cdir="$4"
     control_os_gate "$cdir" "$id" "$actor" "os-verify" || return 0
     control_audit "$cdir/audit/control.log" "$id" "$actor" "os-verify" "started"
-    local osdir tag bundle reason
+    local osdir tag bundle reason keep=0
     osdir=$(os_update_staging_dir)
     tag=$(jq -r '.tag // ""' "$(os_update_target_file)" 2>/dev/null) || tag=""
     bundle="$osdir/pithead-os-$tag.raucb"
@@ -9972,10 +10002,14 @@ control_os_verify() { # <claimed-file> <id> <actor> <control-dir>
         control_os_refuse "$cdir" "$id" "$actor" "os-verify" rejected "no fully downloaded update bundle is staged — download it first."
         return 0
     fi
-    reason=$(os_verify_bundle_reason "$bundle" "$tag")
+    reason=$(os_verify_bundle_reason "$bundle" "$tag") || keep=1
     if [ -n "$reason" ]; then
-        rm -f "$bundle"
-        os_state_write "$cdir" '{"step":"idle"}'
+        # rc 3 = rauc never ran, so no verdict was reached: the download stays staged for the
+        # retry instead of being deleted on a broken tool.
+        if [ "$keep" -eq 0 ]; then
+            rm -f "$bundle"
+            os_state_write "$cdir" '{"step":"idle"}'
+        fi
         control_os_refuse "$cdir" "$id" "$actor" "os-verify" rejected "$reason"
         return 0
     fi
@@ -9993,7 +10027,7 @@ control_os_install() { # <claimed-file> <id> <actor> <control-dir>
     local file="$1" id="$2" actor="$3" cdir="$4"
     control_os_gate "$cdir" "$id" "$actor" "os-install" || return 0
     control_audit "$cdir/audit/control.log" "$id" "$actor" "os-install" "started"
-    local osdir tag bundle reason
+    local osdir tag bundle reason keep=0
     osdir=$(os_update_staging_dir)
     tag=$(jq -r '.tag // ""' "$(os_update_target_file)" 2>/dev/null) || tag=""
     bundle="$osdir/pithead-os-$tag.raucb"
@@ -10003,10 +10037,13 @@ control_os_install() { # <claimed-file> <id> <actor> <control-dir>
     fi
     # Re-run the whole verify gate: a result can go stale between the verify click and this one,
     # and the install must never trust a judgment it did not just make itself.
-    reason=$(os_verify_bundle_reason "$bundle" "$tag")
+    reason=$(os_verify_bundle_reason "$bundle" "$tag") || keep=1
     if [ -n "$reason" ]; then
-        rm -f "$bundle"
-        os_state_write "$cdir" '{"step":"idle"}'
+        # Same keep rule as os-verify: only a real verdict deletes the staged download.
+        if [ "$keep" -eq 0 ]; then
+            rm -f "$bundle"
+            os_state_write "$cdir" '{"step":"idle"}'
+        fi
         control_os_refuse "$cdir" "$id" "$actor" "os-install" rejected "$reason"
         return 0
     fi
@@ -10029,7 +10066,15 @@ control_os_install() { # <claimed-file> <id> <actor> <control-dir>
     # Same wait shape as the download's: `if ! wait` would eat the subshell's exit code.
     wait "$pid" && rc=0 || rc=$?
     if [ "$rc" -ne 0 ]; then
-        control_os_refuse "$cdir" "$id" "$actor" "os-install" failed "the install did not complete — the running system is untouched and mining continues. $(tail -c 500 "$logf" 2>/dev/null | tr -d '[:cntrl:]')"
+        # The raw install log is a host detail (staging paths, slot devices) and stays host-side:
+        # the full tail goes to the journal, and the container-visible result carries only the
+        # final error line whitelist-extracted from the log — rauc's own last word, or nothing.
+        local detail
+        detail=$(grep -aE '^LastError: |^\[ERROR\] |[Ff]ailed' "$logf" 2>/dev/null |
+            grep -av 'pithead aborted unexpectedly' |
+            tail -1 | tr -d '[:cntrl:]' | head -c 300) || detail=""
+        warn "OS install failed (rc=$rc); log tail: $(tail -c 500 "$logf" 2>/dev/null | tr -d '[:cntrl:]')"
+        control_os_refuse "$cdir" "$id" "$actor" "os-install" failed "the install did not complete — the running system is untouched and mining continues.${detail:+ $detail} The full install log is in the host journal."
         rm -f "$logf"
         return 0
     fi
@@ -10054,6 +10099,18 @@ control_os_reboot() { # <claimed-file> <id> <actor> <control-dir>
     control_os_gate "$cdir" "$id" "$actor" "os-reboot" || return 0
     if [ ! -f "$(os_update_inflight_file)" ]; then
         control_os_refuse "$cdir" "$id" "$actor" "os-reboot" rejected "no installed update is waiting for a reboot — nothing to finish."
+        return 0
+    fi
+    # The install result authorizes the reboot for 24 hours, then goes stale. The gate proves
+    # "an installed update is waiting", never "the operator asked just now" — within the window
+    # a spool writer can still time the reboot, so the TTL bounds how long that lever stays
+    # armed rather than pretending it does not exist. An unreadable timestamp is not proof of
+    # freshness and refuses too; a fresh verify and install re-arms it.
+    local armed_ts
+    armed_ts=$(jq -r '.ts // 0' "$(os_update_inflight_file)" 2>/dev/null) || armed_ts=0
+    printf '%s' "$armed_ts" | grep -qE '^[0-9]+$' || armed_ts=0
+    if [ "$armed_ts" -le 0 ] || [ $(($(date +%s) - armed_ts)) -gt 86400 ]; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-reboot" rejected "the installed update has been waiting more than a day — run the update again; a fresh verify and install re-arms the reboot."
         return 0
     fi
     # The result must land BEFORE the reboot order or the page never learns the reboot is real.

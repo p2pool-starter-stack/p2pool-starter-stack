@@ -68,9 +68,13 @@ The stack's defaults:
   OS-update verbs hold the same line, one step per intent (check, download, verify, install, and
   a separate reboot): the host re-derives the release target, downloads the signed OS bundle to
   `/data` itself, and judges the local file (RAUC signature against the baked keyring, machine
-  `compatible`, the downgrade/`/data`-migration floor, build-variant posture) before any slot is
-  written — a refused bundle is deleted with no override, the reboot intent is refused unless a
-  verified install is actually waiting, and every verb refuses outright on a non-appliance host. Enabling the
+  `compatible`, the downgrade/`/data`-migration floor and a same-version reinstall — the
+  dashboard door only ever moves forward — build-variant posture) before any slot is
+  written — a refused bundle is deleted with no override, and every verb refuses outright on a
+  non-appliance host. The reboot intent is refused unless an install completed within the last
+  24 hours. That gate proves *an installed update is waiting*, not *the operator asked now*:
+  inside the window, a compromised container that can write the spool can time the reboot
+  itself — the TTL bounds that exposure rather than removing it. Enabling the
   channel without a dashboard password is a validation error, on a published onion it additionally
   requires Tor client authorization, and every mutation is audited host-side. Commits are default-denied against an explicit allowlist. Low-risk
   operational settings commit directly; a small set of operationally-disruptive ones — data-directory

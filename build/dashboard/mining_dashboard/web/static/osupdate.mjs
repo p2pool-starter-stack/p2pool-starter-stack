@@ -85,6 +85,11 @@ export async function runOsDownload(
   return out;
 }
 
+// The release-notes href arrives as host-relayed release data, not something this page authored.
+// Pin it client-side: only the public GitHub release page ever renders as a link.
+export const releaseNotesHref = (u) =>
+  typeof u === "string" && u.startsWith("https://github.com/") ? u : null;
+
 // One verdict line for the banner. Pure — the render just wraps it.
 export function verdictText(verdict) {
   if (!verdict || !verdict.outcome) return null;
@@ -324,16 +329,16 @@ export class OsUpdateControl extends Component {
     const stepPhase = this.stepPhase();
     const size = (check && check.size) || (passive && passive.raucb_size);
     const newer = check ? check.newer : !!(passive && passive.available);
+    const notes =
+      releaseNotesHref(check && check.notes) || releaseNotesHref(passive && passive.url);
     return html`<p>Running ${running || "this release"}.</p>
         ${
           newer && version
             ? html`<p>Update ${version} is available${size ? ` (${fmtMiB(size)} download)` : ""}.
                 ${
-                  check && check.notes
-                    ? html` <a href=${check.notes} target="_blank" rel="noopener noreferrer">Release notes ↗</a>`
-                    : passive && passive.url
-                      ? html` <a href=${passive.url} target="_blank" rel="noopener noreferrer">Release notes ↗</a>`
-                      : null
+                  notes
+                    ? html` <a href=${notes} target="_blank" rel="noopener noreferrer">Release notes ↗</a>`
+                    : null
                 }</p>`
             : html`<p class="text-muted">No newer release is known. Check to ask the release
                 server now.</p>`

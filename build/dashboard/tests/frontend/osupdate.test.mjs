@@ -13,6 +13,7 @@ import {
   OsUpdateControl,
   OsVerdictBanner,
   pollOsResult,
+  releaseNotesHref,
   runOsDownload,
   verdictText,
 } from "../../mining_dashboard/web/static/osupdate.mjs";
@@ -185,10 +186,37 @@ test("OsUpdateControl surfaces a host-remembered reboot-pending step on the butt
   assert.match(out, /reboot to finish/);
 });
 
+test("releaseNotesHref pins the link to the public GitHub release page", () => {
+  const gh = "https://github.com/p2pool-starter-stack/pithead/releases/tag/v1.19.0";
+  assert.equal(releaseNotesHref(gh), gh);
+  assert.equal(releaseNotesHref("https://evil.invalid/rel"), null);
+  assert.equal(releaseNotesHref("http://github.com/x"), null); // scheme matters, not just host
+  assert.equal(releaseNotesHref("javascript:alert(1)"), null);
+  assert.equal(releaseNotesHref(undefined), null);
+});
+
+test("a non-GitHub notes href renders no link — host-relayed data is data, not a URL", () => {
+  const c = inst({
+    os: { step: "idle" },
+    update: { available: true, latest: "v1.19.0", url: "https://evil.invalid/rel" },
+    version: { text: "v1.18.1" },
+    enabled: true,
+  });
+  c.state.phase = "idle";
+  const out = renderToString(c.render());
+  assert.match(out, /v1\.19\.0 is available/);
+  assert.doesNotMatch(out, /Release notes/);
+});
+
 test("the idle modal offers Download with size and notes when an update is available", () => {
   const c = inst({
     os: { step: "idle" },
-    update: { available: true, latest: "v1.19.0", url: "https://x/rel", raucb_size: 1048576 },
+    update: {
+      available: true,
+      latest: "v1.19.0",
+      url: "https://github.com/p2pool-starter-stack/pithead/releases/tag/v1.19.0",
+      raucb_size: 1048576,
+    },
     version: { text: "v1.18.1" },
     enabled: true,
   });

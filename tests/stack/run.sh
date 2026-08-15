@@ -9544,6 +9544,12 @@ assert_contains "rauc install ran under --allow-downgrade" "$(cat "$RAUC_LOG")" 
 ourun_v "1.10.0" "" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "a newer bundle installs" "$?" "0"
 assert_contains "rauc install ran for the newer bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
+# The CLI door keeps same-version installs — manual slot repair at the machine is its job.
+# The dashboard door refuses equality (covered in the control os-* block below).
+: >"$RAUC_LOG"
+ourun_v "1.17.0" "" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
+assert_rc "a same-version bundle installs at the CLI (slot repair)" "$?" "0"
+assert_contains "rauc install ran for the same-version bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 
 # #851: below the /data migration floor is refused OUTRIGHT — --allow-downgrade does not override it.
 printf '2.0.0\n' >"$OUSB/floor-2"
@@ -9666,12 +9672,14 @@ cat >"$OSC/bin/rauc" <<'EOF'
 echo "[rauc] $*" >>"${RAUC_LOG:?}"
 case "$1" in
 info)
+    [ "${RAUC_RUN_FAIL:-}" = "1" ] && exit 127 # rauc never ran (exec failure), no verdict
     [ "${RAUC_SIG_FAIL:-}" = "1" ] && exit 1
     [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT"
     exit 0
     ;;
 install)
     [ "${RAUC_INSTALL_FAIL:-}" = "1" ] && {
+        echo "slot device /dev/hostdisk3 staging $PWD" # host detail that must stay out of the result
         echo "installing failed"
         exit 1
     }
@@ -9786,6 +9794,28 @@ assert_eq "a non-checked download version is rejected" "$(jq -r '.status' "$OSRE
 assert_contains "the refusal names the checked release" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "v9.9.9"
 os_reset
 
+# Equality is still an honest CHECK — up to date reports normally; only fetch and install refuse.
+# pithead re-reads the VERSION file at startup (env cannot override it through the black-box
+# door), so the sandbox's running version is swapped to the target and back.
+printf '9.9.9' >"$OSC/VERSION"
+os_intent "$UOS" os-check
+osrun >/dev/null
+assert_eq "a same-version check still reports checked" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "checked"
+assert_eq "a same-version check reports not newer" "$(jq -r '.newer' "$OSRES/$UOS.json" 2>/dev/null)" "false"
+os_reset
+
+# The dashboard door refuses a same-version fetch outright, before a byte moves — a compromised
+# container must not loop gigabytes over Tor into reinstalls and forced reboots. (The CLI keeps
+# equality for manual slot repair, proven in the os-update unit block above.)
+dials_before=$(grep -c 'releases/download' "$OSC/curl.log" || true)
+os_intent "$UOS" os-download "v9.9.9"
+osrun >/dev/null
+assert_eq "a same-version download is rejected on the dashboard door" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal says already on it" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "already on v9.9.9"
+assert_eq "no bytes moved for the refused same-version fetch" "$(grep -c 'releases/download' "$OSC/curl.log" || true)" "$dials_before"
+printf '1.3.1' >"$OSC/VERSION"
+os_reset
+
 # No disk headroom: refused before a byte moves.
 os_intent "$UOS" os-download "v9.9.9"
 osrun DF_AVAIL_KB=1000 >/dev/null
@@ -9836,6 +9866,20 @@ os_reset
 
 os_restage() { cp "$OSC/fixture.raucb" "$OSDIR/pithead-os-v9.9.9.raucb"; }
 
+# rauc failing to RUN is not a signature verdict: one retry, a distinct honest reason, and the
+# download is KEPT for the retry — deleting a multi-GB Tor fetch is a verdict a broken tool
+# has not earned.
+os_restage
+: >"$OSC/rauc.log"
+os_intent "$UOS" os-verify
+osrun RAUC_RUN_FAIL=1 >/dev/null
+assert_eq "a rauc that cannot run rejects the verify" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the reason says rauc could not run, not signature" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "could not run"
+assert_not_contains "the reason does not claim a signature verdict" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "signature"
+assert_eq "the bundle is kept when rauc never judged it" "$([ -f "$OSDIR/pithead-os-v9.9.9.raucb" ] && echo present || echo absent)" "present"
+assert_eq "the failed rauc run was retried once" "$(grep -c 'info' "$OSC/rauc.log" || true)" "2"
+os_reset
+
 # Wrong compatible: built for another machine class, refused and deleted.
 os_restage
 os_intent "$UOS" os-verify
@@ -9872,6 +9916,19 @@ assert_eq "a tag-mismatched stamp is rejected" "$(jq -r '.status' "$OSRES/$UOS.j
 assert_contains "the refusal names the mismatch" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "9.9.8"
 os_reset
 
+# A same-version bundle refuses at verify too — download refuses it first, but verify holds the
+# line for a bundle already staged when the versions converged, and the bundle is deleted.
+# Same VERSION-file swap as the check/download equality tests above.
+os_restage
+printf '9.9.9' >"$OSC/VERSION"
+os_intent "$UOS" os-verify
+osrun >/dev/null
+assert_eq "a same-version bundle is rejected at verify" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the verify refusal says already on it" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "already on v9.9.9"
+assert_eq "the same-version bundle was deleted" "$([ -f "$OSDIR/pithead-os-v9.9.9.raucb" ] && echo present || echo absent)" "absent"
+printf '1.3.1' >"$OSC/VERSION"
+os_reset
+
 # The happy verify: signed, compatible, newer, stamped as published.
 os_restage
 os_intent "$UOS" os-verify
@@ -9890,10 +9947,15 @@ assert_eq "no reboot was ordered" "$(grep -c reboot "$OSC/sysctl.log" || true)" 
 os_reset
 
 # A failing install reports failed and the running system is untouched (no in-flight flag).
+# The result carries only the whitelist-extracted final error line — the raw log tail (staging
+# paths, slot devices) stays host-side, in the journal.
 os_intent "$UOS" os-install
-osrun RAUC_INSTALL_FAIL=1 >/dev/null
+out=$(osrun RAUC_INSTALL_FAIL=1)
 assert_eq "a failing install reports failed" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "failed"
 assert_contains "the failure says the system is untouched" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "untouched"
+assert_contains "the result carries rauc's final error line" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "installing failed"
+assert_not_contains "the raw log tail stays out of the result" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "hostdisk3"
+assert_contains "the full log tail lands host-side for the journal" "$out" "hostdisk3"
 assert_eq "no in-flight flag after a failed install" "$([ -f "$OSDIR/in-flight.json" ] && echo present || echo absent)" "absent"
 os_reset
 
@@ -9909,11 +9971,28 @@ assert_eq "the state file records reboot-pending" "$(jq -r '.step' "$OSSTATE" 2>
 assert_eq "the staged bundle was cleaned up" "$([ -f "$OSDIR/pithead-os-v9.9.9.raucb" ] && echo present || echo absent)" "absent"
 os_reset
 
-# Now the reboot goes through: result lands BEFORE the order, then systemctl reboot.
+# Now the reboot goes through — the install result is FRESH: result lands BEFORE the order,
+# then systemctl reboot.
 os_intent "$UOS" os-reboot
 osrun >/dev/null
-assert_eq "os-reboot with an installed update reports rebooting" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rebooting"
+assert_eq "os-reboot with a fresh install reports rebooting" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rebooting"
 assert_contains "systemctl reboot was ordered" "$(cat "$OSC/sysctl.log")" "reboot"
+os_reset
+
+# The install result authorizes a reboot for 24 hours, then goes stale: refused with the re-arm
+# path, and no reboot is ordered. An in-flight flag with no readable timestamp refuses too —
+# unreadable is not proof of freshness.
+jq -n '{from:"1.3.1",to:"9.9.9",ts:((now|floor) - 90000)}' >"$OSDIR/in-flight.json"
+os_intent "$UOS" os-reboot
+osrun >/dev/null
+assert_eq "a stale install no longer authorizes a reboot" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the stale refusal names the re-arm path" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "re-arms the reboot"
+assert_eq "no second reboot was ordered" "$(grep -c reboot "$OSC/sysctl.log" || true)" "1"
+os_reset
+jq -n '{from:"1.3.1",to:"9.9.9"}' >"$OSDIR/in-flight.json"
+os_intent "$UOS" os-reboot
+osrun >/dev/null
+assert_eq "an in-flight flag without a timestamp refuses the reboot" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
 os_reset
 
 # One os-* verb per drain: a second one in the same cycle rejects with a retry hint.
