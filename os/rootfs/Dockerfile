@@ -89,7 +89,7 @@ RUN curl -fsSL -o /usr/local/bin/docker-compose \
 # The built-in miner (#796): a pinned RigForge tree plus everything it needs, baked at image
 # build because nothing can be installed later — apt cannot run on the read-only root, and even
 # a rw-remount install leaves its /etc state (alternatives, ld.so.cache) on the volatile overlay
-# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.14.0 release tag
+# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.15.0 release tag
 # (by commit, not tag name, so a moved tag cannot change the bake); bump it release by release.
 # pithead-sync copies the tree to /data/rigforge every boot; `pithead local-miner` runs
 # its setup with RIGFORGE_APPLIANCE=1 when local_miner.enabled.
