@@ -198,7 +198,11 @@ BOTH RandomX datasets — p2pool's ~2.3 GiB dataset falling out of hugetlbfs lan
 1 GiB cgroup cap and OOM-loops, the load-bearing finding from the #78 spike), zero
 below 7 GiB where the stack cannot run regardless. Degrades are announced on every
 console, journaled, and repeated by `doctor` as a WARN — never a FAIL, so the A/B
-commit gate still commits a degraded-but-serving slot.
+commit gate still commits a degraded-but-serving slot. Running before the boot owners
+is not what makes the decision hold: pithead's own later writers grow the pool too, so
+the `/run` marker records the chosen page count and both of them honour it — setup's
+kernel optimization caps its grow at the recorded pages, and the local-miner render
+hands RigForge the recorded reservation, never the baked 6 GiB, as its headroom.
 
 ## Open
 

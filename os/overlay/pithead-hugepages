@@ -8,8 +8,12 @@
 # machine the unconditional 6 GiB silently starves everything else instead (#977) — no check,
 # no message, a box that just thrashes. This unit runs right after systemd-sysctl on every
 # boot, before either boot owner starts a container — the pool is still idle, so resizing it
-# never steals pages from a running miner (RigForge's own grow-only write happens later, inside
-# the boot path).
+# never steals pages from a running miner. Running first is not enough on its own: pithead's
+# own later writers grow the pool too (setup's optimize_kernel, and RigForge via the rendered
+# local-miner headroom), so the marker below records the chosen page count and BOTH of those
+# writers take that record as their authority — the cap on optimize_kernel's grow, the value
+# the local-miner render declares as headroom. Without the record they would re-inflate the
+# pool this unit just shrank, on the very same boot.
 #
 # The tiers, and why the low one is "reduced", not "skip":
 #   >= 15 GiB   full 3072 pages (6 GiB). The supported machine; nothing to say.
@@ -25,9 +29,11 @@
 #               and the stack cannot run in what remains either way. Releasing it keeps the
 #               machine itself responsive enough to tell the operator what is wrong.
 #
-# A degraded boot leaves its message in /run (volatile on purpose — RAM cannot change without
-# a reboot) and doctor's memory section reports it as a WARN, never a FAIL: the A/B commit
-# gate takes doctor's exit code, and a degraded-but-serving box must still commit its slot.
+# A degraded boot leaves a two-line marker in /run (volatile on purpose — RAM cannot change
+# without a reboot): the operator prose first, then "pages=N", the machine-readable record of
+# the decision. doctor's memory section repeats the prose as a WARN, never a FAIL: the A/B
+# commit gate takes doctor's exit code, and a degraded-but-serving box must still commit its
+# slot. pithead's hugepages_decision_pages reads the pages= line.
 set -uo pipefail
 
 # Env-overridable so the stack tests can run this against fixtures, matching pithead-sync and
@@ -88,7 +94,7 @@ main() {
     else
         msg="This machine has ${mem_gib:-?} GiB of RAM — far below the supported 16 GB. The 6 GiB mining reservation is released entirely so the machine stays responsive, and the mining stack will not run reliably on this hardware."
     fi
-    printf '%s\n' "$msg" >"$MARKER" 2>/dev/null || true
+    printf '%s\npages=%s\n' "$msg" "$want" >"$MARKER" 2>/dev/null || true
     _console "$msg"
     return 0
 }

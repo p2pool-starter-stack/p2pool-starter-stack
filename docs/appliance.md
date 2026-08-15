@@ -144,9 +144,10 @@ look at it, the same way you would watch any other machine on the network.
 
 **Pithead + RigForge** asks every coordinator question below, unchanged, and adds the built-in
 miner on top. The two mining workloads on that one box do not compete for HugePages: the
-appliance reserves a fixed 6 GiB RandomX pool at boot, and the built-in miner is told to leave
-the coordinator's share alone (`hugepages_reserve_extra_mb` in its own config) rather than the
-two halves independently growing into each other's reservation.
+appliance reserves a RandomX pool sized to its RAM at boot (6 GiB on the supported 16 GB
+machine), and the built-in miner is told to leave the coordinator's share alone
+(`hugepages_reserve_extra_mb` in its own config) rather than the two halves independently
+growing into each other's reservation.
 
 Switching back to plain **Pithead** after trying one of the others resets the local-miner switch
 to its documented default (off) and, on the installation medium, clears a disk choice of "run
