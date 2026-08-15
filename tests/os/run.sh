@@ -344,10 +344,12 @@ phase_boot() {
     # hugepages reserved, systemd-repart growing /data to ~24 GiB, the wizard image loading, the
     # host key generating — and 120 s clipped it (SSH came up just after, per the failed-run
     # forensics). An equally unprovisioned update-phase guest reaches SSH within 240 s.
-    # 420, not the update phase's 240: this is the run's very FIRST cold boot — 6 GiB of
+    # 900, not the update phase's 240: this is the run's very FIRST cold boot — 6 GiB of
     # hugepages, systemd-repart growing /data, the wizard image unpacking, host-key generation —
-    # and under full-battery host load 240 s clipped a boot that answered SSH moments later.
-    _wait_ssh 420 || {
+    # and it starts while the image build's export I/O is still settling. 420 s passed idle but
+    # clipped under full-battery load (proven both ways on the bench, 2026-08-15); the budget is
+    # sized for the loaded case because a deadline that only holds on an idle host is a flake.
+    _wait_ssh 900 || {
         bad "host SSH never came up after the wizard gate — cannot read hugepages/machine-id"
         return
     }
