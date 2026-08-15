@@ -951,6 +951,37 @@ CLI upgrade. The result names the restore point ([#637](https://github.com/p2poo
 on the versioned layout, the previous `pithead-vX.Y.Z` dir; in place, the pre-upgrade
 `config.json`/`.env` copies.
 
+## Updating the appliance OS
+
+On a [Pithead OS appliance](appliance.md) the tarball upgrade above is refused — the machine
+updates through signed OS images, and the header shows an **OS updates** control instead. It
+drives the appliance's A/B update from the browser, one explicit step at a time, through the same
+control channel as everything else on this page: the dashboard container only asks, and the host
+re-derives and re-verifies every step itself.
+
+1. **Check.** The host asks the release API (over Tor) for the latest release and its OS bundle.
+   The dashboard's passive new-release badge covers the same ground hourly; the button asks now.
+2. **Download.** The bundle (on the order of a gigabyte) lands on the data partition, over Tor,
+   resumable: a dropped connection or a closed page keeps the bytes already fetched, and Retry
+   continues from there instead of starting over. Mining is unaffected, and the host refuses to
+   start a download `/data` has no room for.
+3. **Verify.** Before anything touches a system slot, the host judges the downloaded file
+   locally: the RAUC signature against the machine's baked release keys, the machine-class
+   `compatible` stamp, and the version — an older release, or one below the
+   [`/data` migration floor](appliance.md#updates), is refused even with a valid signature. A
+   file that fails any check is deleted; there is no override in the dashboard.
+4. **Install.** The verified bundle is written to the idle system slot, with progress shown.
+   Mining keeps running; nothing about the running system changes yet.
+5. **Reboot.** Nothing reboots on its own. The reboot is its own confirmed action (type
+   `REBOOT`), and it is the only step that pauses mining — typically under five minutes. The
+   page waits and reconnects when the dashboard returns.
+
+After the reboot the machine health-checks itself before committing the new version — the same
+gate every appliance boot runs. A banner reports the outcome: updated to the new version, or
+rolled back to the previous one automatically because the new version failed its checks. Either
+way the machine ends on a working system; wallets, settings, and chain data live on the data
+partition and are never part of an update.
+
 ## Tips
 
 - **First visit certificate warning.** With `dashboard.secure: true` (the default), Caddy uses a
