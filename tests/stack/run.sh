@@ -10029,6 +10029,15 @@ EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"$MC/bin/umount"
 chmod +x "$MC/bin/lsblk" "$MC/bin/mount" "$MC/bin/umount"
 
+# A merged config that carries dashboard.auth.password sends media_validate_config's fresh bash
+# into parse_and_validate_config's caddy hash branch, which greps docker-compose.yml at CWD for
+# the pinned image and shells out to `docker run`. Give this section the #8 auth tests' hash-
+# answering docker stub plus a caddy-pinned one-line compose fixture, and run those legs from
+# $MC — the hash lands on the stub, never on a real (network-reaching) docker or the repo's
+# compose file.
+make_stubs "$MC/bin"
+printf 'image: caddy:0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000\n' >"$MC/docker-compose.yml"
+
 printf 'sda\tdisk\t0\t\nsda1\tpart\t0\text4\nsdb\tdisk\t1\t\nsdb1\tpart\t1\tvfat\n' >"$MC/lsblk-out"
 
 echo "== unit: _removable_fat_partitions =="
@@ -10166,6 +10175,7 @@ assert_eq "identical configs -> media_config_identical true" "$rc" "0"
 rc=$(
     export PITHEAD_MEDIA_BIN="$MC/pithead"
     source "$ROOT/os/overlay/pithead-media-config"
+    # shellcheck disable=SC2034  # read by media_config_identical inside the sourced file
     SECRET_PATHS_JSON=$(_secret_paths_json)
     media_config_identical "$MC/good.json" "$MC/changed.json"
     echo $?
@@ -10267,6 +10277,7 @@ mkdir -p "$STICK4"
 cp "$MC/changed.json" "$STICK4/pithead-config.json"
 : >"$MC/mount.log"
 (
+    cd "$MC" || exit 1 # changed.json carries dashboard.auth.password — the hash branch needs $MC's compose fixture + docker stub
     export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
     export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK4" MOUNT_LOG="$MC/mount.log"
     export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
@@ -10293,6 +10304,7 @@ cp "$MC/changed.json" "$STICK5/pithead-config.json"
 cp "$MC/good.json" "$RUN_CFG"
 : >"$MC/mount.log"
 (
+    cd "$MC" || exit 1 # changed.json carries dashboard.auth.password — see the stub note above
     export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
     export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK5" MOUNT_LOG="$MC/mount.log"
     export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
@@ -10316,6 +10328,7 @@ cp "$MC/changed.json" "$STICK6/pithead-config.json"
 cp "$MC/good.json" "$RUN_CFG"
 : >"$MC/mount.log"
 (
+    cd "$MC" || exit 1 # changed.json carries dashboard.auth.password — see the stub note above
     export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
     export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK6" MOUNT_LOG="$MC/mount.log"
     # Validation still works (real pithead), but the secret-path fetch reads a DIFFERENT, broken
@@ -10340,6 +10353,7 @@ cp "$MC/minimal-stick.json" "$STICK7/pithead-config.json"
 cp "$MC/running-full.json" "$RUN_CFG"
 : >"$MC/mount.log"
 (
+    cd "$MC" || exit 1 # the merged config carries the running dashboard.auth.password — see the stub note above
     export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
     export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK7" MOUNT_LOG="$MC/mount.log"
     export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
