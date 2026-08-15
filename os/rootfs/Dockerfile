@@ -101,7 +101,7 @@ RUN curl -fsSL -o /usr/local/bin/docker-compose \
 RUN apt-get install -y --no-install-recommends \
         git build-essential cmake libuv1-dev libssl-dev libhwloc-dev gettext-base python3 \
         linux-cpupower msr-tools
-ARG RIGFORGE_REF=a8840b3c8108ee6def9d850221a440f2fd355cf6
+ARG RIGFORGE_REF=b91505cbd55e12fdf2149193efef5ba387446795
 RUN curl -fsSL -o /tmp/rigforge.tar.gz \
         "https://github.com/p2pool-starter-stack/rigforge/archive/${RIGFORGE_REF}.tar.gz" \
     && mkdir -p /opt/rigforge \
