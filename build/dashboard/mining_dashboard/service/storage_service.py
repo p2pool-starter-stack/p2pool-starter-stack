@@ -51,6 +51,12 @@ RAFFLE_WINS_MAX_ROWS = 5000
 # Table names carrying a per-table write-health signal (see __init__ / _table_write_ok below).
 _TELEMETRY_TABLES = ("blocks", "xvb_history", "network_history", "disk_growth", "worker_history")
 
+# The full terminal vocabulary the rig's control mirror can report (#1009) — applied/rejected/
+# rolled_back/failed from a control-apply, plus noop (already on target)/throttled (retry-later)
+# from a control-upgrade (rigforge#320). Mirrors xmrig_client._CONTROL_TERMINAL and pithead's own
+# control_worker_apply/control_worker_upgrade poll cases (#1001) — one vocabulary, three places.
+_RECONCILE_TERMINAL = ("applied", "rejected", "rolled_back", "failed", "noop", "throttled")
+
 
 class StateManager:
     """
@@ -888,10 +894,12 @@ class StateManager:
         row ``accepted`` forever otherwise — nothing re-polls it. This is the reconciler: called
         from the dashboard's regular per-rig read poll (data_service.py), never a new dial. The
         ``WHERE status = 'accepted'`` is the whole safety property — a row already terminal
-        (``applied``/``rejected``/``rolled_back``) is never touched, even by a stale or duplicate
-        report for the same ``change_id``.
+        (applied/rejected/rolled_back/failed/noop/throttled) is never touched, even by a stale or
+        duplicate report for the same ``change_id``. ``status`` is recorded as-is: it becomes the
+        row's outcome verbatim, and the frontend's ``STATUS_META`` already renders every member of
+        this vocabulary (``workerview.mjs``).
         """
-        if status not in ("applied", "rejected", "rolled_back") or not change_id:
+        if status not in _RECONCILE_TERMINAL or not change_id:
             return
         try:
             with self._db_lock:

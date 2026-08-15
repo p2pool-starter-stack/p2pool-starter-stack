@@ -1368,6 +1368,17 @@ class TestWorkerConfigReconcile:
         assert row["status"] == "rolled_back"
         assert row["reason"] == "miner did not return to a live hashrate"
 
+    def test_accepted_row_becomes_terminal_for_the_1009_vocabulary(self, state_manager):
+        # #1009: failed/noop/throttled — the rigforge#320 members #579's original three-status
+        # allowlist dropped — must reconcile an accepted row exactly like applied/rejected/
+        # rolled_back always have.
+        for status in ("failed", "noop", "throttled"):
+            self._seed(state_manager, "accepted", change_id=f"cid-{status}")
+            state_manager.reconcile_worker_config_status(f"cid-{status}", status, "rig-supplied")
+            row = self._status_of(state_manager, change_id=f"cid-{status}")
+            assert row["status"] == status
+            assert row["reason"] == "rig-supplied"
+
     def test_applied_row_is_never_overwritten(self, state_manager):
         # A genuinely terminal row must survive even a (stale/duplicate) reconcile report.
         self._seed(state_manager, "applied")
@@ -1393,11 +1404,12 @@ class TestWorkerConfigReconcile:
 
     def test_non_terminal_status_is_a_noop(self, state_manager):
         # A defensive guard: reconcile() is only ever called with a terminal status by
-        # parse_worker_control_status, but a bad caller must not be able to write 'accepted' or
-        # 'running' back over itself.
+        # parse_worker_control_status, but a bad caller must not be able to write 'accepted',
+        # 'running', or 'started' (rigforge#320's in-flight upgrade marker) back over itself.
         self._seed(state_manager, "accepted")
         state_manager.reconcile_worker_config_status("cid-1", "running")
         state_manager.reconcile_worker_config_status("cid-1", "accepted")
+        state_manager.reconcile_worker_config_status("cid-1", "started")
         assert self._status_of(state_manager)["status"] == "accepted"
 
     def test_write_error_flags_db_unhealthy(self, state_manager):
