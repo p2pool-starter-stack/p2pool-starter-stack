@@ -11,6 +11,7 @@ the client share; ``server.py`` stays pure transport.
 """
 
 import bisect
+import json
 import logging
 import math
 import os
@@ -2022,6 +2023,20 @@ def visible_update(update, running=None):
     return update
 
 
+def read_os_update_state():
+    """The appliance OS-update state (step + post-reboot verdict), or ``None`` off an appliance.
+
+    Host-written under a fixed name in the read-only results/ mount — only a Pithead OS
+    appliance seeds it, so ``None`` doubles as "not an appliance: render no OS update control".
+    Fail-silent on a missing/garbled file: the control degrades to absent, never a 500."""
+    try:
+        with open(config.OS_UPDATE_STATE_PATH) as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASHRATE_WINDOW):
     """Assemble the full ``/api/state`` payload — the contract the client renders against.
 
@@ -2114,6 +2129,9 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         # routes 404 when off, so this is display gating only, not a security control. Read at
         # call time (module attribute, not from-import) so tests can flip the flag per-app.
         "control_enabled": config.DASHBOARD_CONTROL_ENABLED,
+        # Appliance OS-update state (step + verdict) | None off an appliance. Presence swaps the
+        # header's tarball Upgrade button for the OS update control.
+        "os_update": read_os_update_state(),
         # #559: use the snapshot's own timestamp, not now — a restored stale snapshot must
         # report its true age; falls back to now only when timestamp is missing/0.
         "last_update": format_time_abs(data.get("timestamp") or time.time()),

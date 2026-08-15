@@ -215,6 +215,43 @@ async def handle_control_upgrade(request):
     return web.json_response({"id": rid, "status": "pending"}, status=202)
 
 
+# The appliance OS-update steps, one closed set — anything else 400s before it reaches the
+# spool. The host runner re-validates each verb and refuses them all on a non-appliance host.
+OS_UPDATE_ACTIONS = frozenset({"check", "download", "verify", "install", "reboot"})
+
+
+async def handle_control_os_update(request):
+    """Ask the host runner to run one step of the appliance OS-update flow. The body's action
+    picks the step (check/download/verify/install/reboot); ``version`` is only what the operator
+    confirmed seeing — the host re-derives the real target over Tor and refuses a mismatch, and
+    every destructive judgment (signature, compatible, downgrade floor) is made host-side against
+    the local file. Returns 202 immediately: downloads and installs run long, and a reboot takes
+    the whole machine away — the client polls /api/control/result and rides it out."""
+    _require_control_header(request)
+    try:
+        body = await request.json()
+    except Exception:
+        raise web.HTTPBadRequest(text="Body must be JSON.") from None
+    action = body.get("action")
+    if action not in OS_UPDATE_ACTIONS:
+        raise web.HTTPBadRequest(
+            text="'action' must be one of: " + ", ".join(sorted(OS_UPDATE_ACTIONS))
+        )
+    version = body.get("version")
+    if version is not None and (
+        not isinstance(version, str) or not re.fullmatch(r"v\d+\.\d+\.\d+", version)
+    ):
+        raise web.HTTPBadRequest(text="'version' must look like vX.Y.Z.")
+    try:
+        rid = control_service.submit(
+            f"os-{action}", actor=request.headers.get("X-Auth-User", ""), version=version
+        )
+    except Exception:
+        logger.exception("Error submitting OS-update step")
+        return web.json_response({"error": "Failed to submit the OS-update request."}, status=500)
+    return web.json_response({"id": rid, "status": "pending"}, status=202)
+
+
 async def handle_control_backup(request):
     """Ask the host runner for an encrypted backup archive + a one-time emergency kit (#908).
 
@@ -533,6 +570,8 @@ def create_app(state_manager, latest_data_ref):
                 # archive the host produced for the id it names in its result.
                 web.post("/api/control/backup", handle_control_backup),
                 web.get("/api/control/backup-download", handle_backup_download),
+                # Appliance OS update: one route, a closed action set, every judgment host-side.
+                web.post("/api/control/os-update", handle_control_os_update),
             ]
         )
 

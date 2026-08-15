@@ -59,11 +59,22 @@ The stack's defaults:
   directory whose other legs (staged configs, results, the audit log) are host-owned and mounted
   read-only. A root systemd unit re-validates every intent with pithead's own config validation
   and dispatches a fixed, small set of actions (`apply --dry-run` for a preview, `apply -y` for a
-  config commit, a release upgrade, and — for the Telegram control commands (#338) — a stack
-  `restart` and a config re-`apply`); no string from the container is ever executed. The upgrade intent carries only the
+  config commit, a release upgrade, the appliance's staged OS-update steps, and — for the
+  Telegram control commands (#338) — a stack `restart` and a config re-`apply`); no string from
+  the container is ever executed. The upgrade intent carries only the
   version the operator confirmed: the runner re-derives the target itself from the GitHub release
   API (over the stack's Tor SOCKS), refuses any mismatch or non-release tag, and limits attempts
-  to one per 10 minutes — the container cannot choose an image, tag, or registry. Enabling the
+  to one per 10 minutes — the container cannot choose an image, tag, or registry. The appliance's
+  OS-update verbs hold the same line, one step per intent (check, download, verify, install, and
+  a separate reboot): the host re-derives the release target, downloads the signed OS bundle to
+  `/data` itself, and judges the local file (RAUC signature against the baked keyring, machine
+  `compatible`, the downgrade/`/data`-migration floor and a same-version reinstall — the
+  dashboard door only ever moves forward — build-variant posture) before any slot is
+  written — a refused bundle is deleted with no override, and every verb refuses outright on a
+  non-appliance host. The reboot intent is refused unless an install completed within the last
+  24 hours. That gate proves *an installed update is waiting*, not *the operator asked now*:
+  inside the window, a compromised container that can write the spool can time the reboot
+  itself — the TTL bounds that exposure rather than removing it. Enabling the
   channel without a dashboard password is a validation error, on a published onion it additionally
   requires Tor client authorization, and every mutation is audited host-side. Commits are default-denied against an explicit allowlist. Low-risk
   operational settings commit directly; a small set of operationally-disruptive ones — data-directory

@@ -303,6 +303,7 @@
     "reward": "0.0000 XMR",
     "ts": "Never"
   },
+  "os_update": null,
   "page_title": "Pithead Dashboard",
   "payouts": {
     "monero": [],

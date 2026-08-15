@@ -36,6 +36,7 @@ import {
   xvbDecisionRows,
 } from "./logic.mjs";
 import { MineCartTrain } from "./minecart.mjs";
+import { OsUpdateControl, OsVerdictBanner } from "./osupdate.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 import { SecurityPanel } from "./securityview.mjs";
 import { StackTopology } from "./topology.mjs";
@@ -227,7 +228,15 @@ function Header({ state }) {
                         <${Badges} badges=${state.badges} />
                         <${VersionBadge} version=${state.version} />
                         <${UpdateBadge} update=${state.update} />
-                        <${UpgradeControl} update=${state.update} enabled=${state.control_enabled} />
+                        ${
+                          // The appliance updates through signed OS images (state.os_update
+                          // present), so the tarball Upgrade button yields to the OS control —
+                          // the host would refuse its verb there anyway.
+                          state.os_update
+                            ? html`<${OsUpdateControl} os=${state.os_update} update=${state.update}
+                                  version=${state.version} enabled=${state.control_enabled} />`
+                            : html`<${UpgradeControl} update=${state.update} enabled=${state.control_enabled} />`
+                        }
                     </div>
                     <div class="brand-host font-mono text-muted">${state.host_ip}${state.host_addr ? html`<span class="brand-host-at">@</span>${state.host_addr}` : null}</div>
                 </div>
@@ -1323,6 +1332,7 @@ export function App({
   }
   return html`<${Fragment}>
         <${Header} state=${state} />
+        <${OsVerdictBanner} os=${state.os_update} />
         ${!connected ? html`<div class="disconnected-banner">Disconnected — showing data from ${state.last_update}. Retrying…</div>` : null}
         ${
           state.syncing

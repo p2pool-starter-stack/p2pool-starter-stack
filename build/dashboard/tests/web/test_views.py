@@ -2598,6 +2598,39 @@ class TestBuildState:
         assert build_state(_data(update=newer), _state_mgr(), "all")["update"] == newer
 
 
+class TestOsUpdateState:
+    """The appliance OS-update state read (host-written file behind the results/ mount)."""
+
+    def test_absent_file_reads_none(self, monkeypatch):
+        # No file = not an appliance: the state carries None and the control never renders.
+        monkeypatch.setattr(views.config, "OS_UPDATE_STATE_PATH", "/nonexistent/os-update.json")
+        assert views.read_os_update_state() is None
+        assert build_state(_data(), _state_mgr(), "all")["os_update"] is None
+
+    def test_state_file_passes_through(self, tmp_path, monkeypatch):
+        p = tmp_path / "os-update-state.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "step": "idle",
+                    "verdict": {"outcome": "updated", "from": "1.18.1", "to": "1.19.0"},
+                }
+            )
+        )
+        monkeypatch.setattr(views.config, "OS_UPDATE_STATE_PATH", str(p))
+        out = build_state(_data(), _state_mgr(), "all")["os_update"]
+        assert out["step"] == "idle"
+        assert out["verdict"]["outcome"] == "updated"
+
+    def test_garbled_file_degrades_to_none(self, tmp_path, monkeypatch):
+        p = tmp_path / "os-update-state.json"
+        p.write_text("{not json")
+        monkeypatch.setattr(views.config, "OS_UPDATE_STATE_PATH", str(p))
+        assert views.read_os_update_state() is None
+        p.write_text('["a","list"]')  # wrong shape is not a dict — also None
+        assert views.read_os_update_state() is None
+
+
 class TestVisibleUpdate:
     """#664: the pure self-consistency guard on the new-release badge."""
 
