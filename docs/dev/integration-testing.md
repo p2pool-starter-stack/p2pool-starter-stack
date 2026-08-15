@@ -204,6 +204,15 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
    dir, not `CANONICAL_DIR`. That keeps the restore from handing the `pithead` project locally-built
    `:dev` images. If the label can't be read (stack down), it falls back to `CANONICAL_DIR`; override
    with `CANONICAL_DIR=<dir>`. The synced chains are never touched (asserted post-restore).
+7. Proves the restored stack matches the on-disk config
+   ([#971](https://github.com/p2pool-starter-stack/pithead/issues/971)): the credential marker
+   baked into the running dashboard container (`docker inspect`) must equal the on-disk `.env`
+   line — compared as verdict words, values never printed — and monerod must answer a host-side
+   `get_info` authed with the on-disk creds. An e2e run once left the containers on
+   harness-rendered creds while the on-disk `.env` kept the real ones: internally consistent, so
+   the stack mined and looked healthy for a day while every host-side RPC probe 401ed. A failed
+   proof exits non-zero and names the recovery (`docker compose up -d` from the install dir
+   re-bakes everything from disk).
 
 `--mode`: `targeted` (default, lean) validates the dashboard and the sync logic against the
 already-synced node: `check` + `--lifecycle` (one controlled restart exercises the sync gate /

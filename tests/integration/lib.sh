@@ -264,6 +264,30 @@ config_key_paths() { jq -r "$CONFIG_KEY_PATHS_JQ" "$1" 2>/dev/null; }
 # shellcheck disable=SC2034  # consumed by e2e.sh + selftest.sh, which source this file
 E2E_SYNC_SUMMARY_JQ='"\(.sync.monero.state) \(.sync.monero.current)/\(.sync.monero.target) \(.sync.tari.state) \(.sync.tari.current)/\(.sync.tari.target)"'
 
+# Restore-proof marker compare (#971): does the value a live container was BAKED with (docker
+# inspect .Config.Env) agree with the on-disk .env? Compares whole KEY=VALUE lines and prints a
+# verdict word — never a value, so secrets stay out of logs. The incident this pins: an e2e run
+# recreated the live containers with harness-rendered creds while the on-disk .env kept the real
+# ones — internally consistent, healthy-looking, and every host-side RPC probe 401ed for a day.
+#   match         — both carry the same KEY=VALUE line
+#   mismatch      — both carry the var, values differ (the incident)
+#   no-disk-value — the on-disk .env doesn't set the var (nothing to prove against)
+#   not-baked     — the container env doesn't carry the var at all
+env_bake_verdict() { # <var> <disk-env-lines> <container-env-lines>
+    local disk baked
+    disk="$(printf '%s\n' "$2" | grep -m1 "^$1=")"
+    baked="$(printf '%s\n' "$3" | grep -m1 "^$1=")"
+    if [ -z "$disk" ]; then
+        printf 'no-disk-value'
+    elif [ -z "$baked" ]; then
+        printf 'not-baked'
+    elif [ "$baked" = "$disk" ]; then
+        printf 'match'
+    else
+        printf 'mismatch'
+    fi
+}
+
 # Authoritative "is Monero caught up?" — query monerod's own get_info on the box (creds stay
 # on the box) and trust its `synchronized` flag / target_height 0, exactly like the sync gate.
 # This is the readiness GATE (the source of truth, and it avoids waiting on a dashboard poll cycle).

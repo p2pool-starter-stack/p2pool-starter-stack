@@ -506,6 +506,31 @@ assert_eq "sync summary reads state + current/target for both chains" \
     "$(printf '%s' "$_ss" | jq -r "$E2E_SYNC_SUMMARY_JQ")" \
     "done 3487100/3487100 syncing 12000/12217"
 
+echo "== env_bake_verdict: restore-proof marker compare (#971) =="
+# The incident shape: an e2e restore left the live containers on harness-rendered creds while the
+# on-disk .env kept the real ones. The verdict compares whole KEY=VALUE lines and prints a word —
+# never a value — so e2e.sh can assert the bake without leaking secrets into its log.
+_disk='MONERO_NODE_USERNAME=pithead
+MONERO_NODE_PASSWORD=disk-secret'
+_baked='PATH=/usr/local/bin
+MONERO_NODE_PASSWORD=disk-secret
+TZ=Etc/UTC'
+assert_eq "same baked line -> match" "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" "$_baked")" "match"
+_baked_wrong='PATH=/usr/local/bin
+MONERO_NODE_PASSWORD=harness-secret'
+assert_eq "different value -> mismatch (the incident)" "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" "$_baked_wrong")" "mismatch"
+assert_eq "var missing on disk -> no-disk-value" "$(env_bake_verdict MONERO_NODE_PASSWORD 'OTHER=x' "$_baked")" "no-disk-value"
+assert_eq "var missing in container -> not-baked" "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" 'PATH=/usr/local/bin')" "not-baked"
+# Present-but-empty on both sides is still consistent — the line compare sees VAR= on each.
+assert_eq "empty on both sides -> match" "$(env_bake_verdict MONERO_NODE_PASSWORD 'MONERO_NODE_PASSWORD=' 'MONERO_NODE_PASSWORD=')" "match"
+# A longer var name must not satisfy the marker's anchored grep.
+assert_eq "longer var name is not the marker" "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" 'MONERO_NODE_PASSWORD_FILE=/x')" "not-baked"
+# And the verdicts never echo the secret itself.
+case "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" "$_baked_wrong")" in
+*disk-secret* | *harness-secret*) it_fail "verdict never carries a value" "secret leaked into the verdict" ;;
+*) it_pass "verdict never carries a value" ;;
+esac
+
 # --- Tally ------------------------------------------------------------------
 echo ""
 echo "selftest: $IT_PASS passed, $IT_FAIL failed"
