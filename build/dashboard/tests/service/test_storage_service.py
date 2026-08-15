@@ -1553,3 +1553,17 @@ class TestAuditEvents:
         with state_manager._db_lock:
             state_manager._conn.execute("DROP TABLE audit_events")
         assert state_manager.get_audit_events() == []
+
+
+def test_reconcile_terminal_matches_the_parser_verbatim():
+    """The reconciler's allowlist and the feed parser's must never drift apart.
+
+    They are deliberately declared separately (the parser lives with the client, the allowlist
+    with the store, and neither should import the other for a six-string tuple) — so this is the
+    thing that keeps the two honest: a status the parser hands over must be one the store will
+    act on, or a terminal outcome silently stops reconciling and history rows freeze at accepted,
+    which is the exact bug this pair was widened to fix.
+    """
+    from mining_dashboard.client.xmrig_client import _CONTROL_TERMINAL
+
+    assert storage_service._RECONCILE_TERMINAL == _CONTROL_TERMINAL
