@@ -541,6 +541,17 @@ services:
         ipv4_address: ${NETWORK_PREFIX:-172.28.0}.29
     depends_on:
       - p2pool
+    healthcheck:
+      # Control-API liveness (#904): a TCP connect to the HTTP API port, via a script that reads
+      # the port from env (#90 — nothing interpolated here). The API is the honest probe: a failed
+      # stratum bind kills the process outright (already visible as a restart), while the API can
+      # die quietly — and it is what the dashboard polls for worker stats. Surfaced in
+      # `pithead status` and the container-health alert (#337); gates nothing (no dependents).
+      test: ["CMD", "/usr/local/bin/xmrig-proxy-healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # --- Monitoring Dashboard ---
   dashboard:
@@ -782,6 +793,17 @@ services:
       - NTFY_URL=${NTFY_URL:-}
       - NTFY_TOKEN=${NTFY_TOKEN:-}
       - NOTIFY_TOR=${NOTIFY_TOR:-true}
+    healthcheck:
+      # HTTP liveness (#904): HEAD /api/state against the app's fixed loopback bind — a 200
+      # proves the server answers where Caddy proxies AND that state assembly works, the state a
+      # bare "Up" hid in the v1.8.1 incident (dashboard serving 502s behind an Up container,
+      # #622). start_period covers app start plus a SQLite auto-heal rebuild (#490) without
+      # counting failures, so a warmup blip never false-fails a one-click upgrade's status view.
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   # --- Docker Socket Proxy (read-only) ---
   # Read-only window onto the Docker API for the dashboard's container stats/logs.
@@ -820,6 +842,16 @@ services:
       - "127.0.0.1:12375:2375"
     networks:
       - proxy_net
+    healthcheck:
+      # End-to-end liveness (#904): GET /_ping THROUGH HAProxy to the Docker daemon, proving the
+      # proxy actually brokers the socket — not merely that a process exists. /_ping is in the
+      # image's default-allow set (PING=1), so the probe widens nothing; busybox wget ships in
+      # the alpine-based image.
+      test: ["CMD", "wget", "-q", "--spider", "-T", "5", "http://127.0.0.1:2375/_ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # --- Docker Control Proxy (start/stop only) ---
   # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy — node-down worker
@@ -863,6 +895,14 @@ services:
       - "127.0.0.1:12376:2375"
     networks:
       - proxy_net
+    healthcheck:
+      # Same end-to-end /_ping probe as docker-proxy (#904): the PING=1 default allows it
+      # independently of the POST-only ruleset here, so the start/stop scope stays untouched.
+      test: ["CMD", "wget", "-q", "--spider", "-T", "5", "http://127.0.0.1:2375/_ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # --- Caddy Reverse Proxy ---
   # Bridges the local 127.0.0.1 application binding to the LAN
@@ -897,6 +937,18 @@ services:
       # JSON access log (#349): Caddy rolls it natively (4 MiB × 3 files, see generate_caddyfile);
       # the dashboard mounts the same dir read-only to show recent accesses and failed logins.
       - ${CADDY_LOG_DIR:-./data/caddy-logs}:/var/log/caddy
+    healthcheck:
+      # Config-loaded liveness (#904): probe Caddy's admin API on its default localhost:2019 bind
+      # (the host loopback under network_mode: host; the generated Caddyfile never disables it).
+      # /config/ answers 200 only from a running Caddy with its config loaded — more than
+      # process-up, but deliberately not a vhost probe: the LAN vhost's scheme, port and auth all
+      # vary with config, and busybox wget can't speak the internal-CA TLS. wget ships in the
+      # alpine-based image (curl does not).
+      test: ["CMD", "wget", "-q", "--spider", "-T", "5", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 # --- Volumes ---
 volumes:
