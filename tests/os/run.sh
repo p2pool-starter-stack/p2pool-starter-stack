@@ -103,12 +103,14 @@ HARNESS_TARI="126J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivz
 # An unbounded call therefore outlives its caller's deadline instead of failing it: on 2026-08-15
 # one boot-phase probe held for five hours against a guest that answered ssh normally the whole
 # time, and the phase reported "SSH never came up" the instant that probe was killed. SSH_TIMEOUT
-# is the per-call ceiling; the default clears the longest legitimate remote command in this file
-# (the 1800 s local-miner wait) and exists only so no single call can hang a release gate forever.
+# is the per-call ceiling. The default is deliberately far larger than any legitimate call (the
+# longest here is the 1800 s local-miner wait; a slot copy on slow storage is the other long one):
+# this exists ONLY to stop an infinite hang, so it must never be the thing that ends real work —
+# if a call is legitimately slower than this, raise it rather than let the ceiling arbitrate.
 # ponytail: polling loops lower it to a few seconds — a stalled handshake must read as "not ready
 # yet" so the loop re-evaluates its own deadline, which is the whole point of having one.
 _ssh() {
-    timeout "${SSH_TIMEOUT:-2400}" ssh -i "$KEY" -o StrictHostKeyChecking=no \
+    timeout "${SSH_TIMEOUT:-5400}" ssh -i "$KEY" -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
 }
 _wait_ssh() { # $1 seconds — the definition of "not bricked"
