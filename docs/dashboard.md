@@ -274,7 +274,7 @@ trailing **30-day** window:
 
 | Row | Expected | Actual |
 |---|---|---|
-| **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** the XvB share for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). Once enough of your wins have confirmed payouts to measure, the XvB share is XvB's published figure **scaled to what your wins actually paid** — the tooltip names the measured percentage and sample. Until then the published face value stands, and the tooltip says it is an upper bound. | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
+| **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** the XvB share for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). Once enough of your wins have confirmed payouts to measure, the XvB share is XvB's published figure **scaled to what your wins actually paid** — the tooltip names the measured percentage and sample. Until then the published face value stands, and the tooltip says it is an upper bound. | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. The percent is withheld past 999% — a box idle for most of the window that still confirmed normal payouts would otherwise show a five-digit ratio against a near-zero expectation; the row's tooltip says so. |
 | **Tari (30d)** | Expected **blocks** (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
 | **XvB wins (30d)** | Forecast wins for your tier, from XvB's own winners file: how often your tier's rounds are drawn ÷ how many qualifiers they have (summed with the lower donor rounds you also qualify for). While no tier is held yet — a fleet still ramping, or an operator weighing whether donating is worth it — the forecast uses your **target** tier instead. `—` while the file hasn't been read or has gone stale. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
 
@@ -460,7 +460,9 @@ It is scoped to P2Pool — **not** an XvB calculator:
   honest headline is the expected **time to a Tari block** (`difficulty ÷ hashrate`) and the full
   **per-block reward** — the per-day XTM figure is only a long-run average, not steady income. The
   estimate assumes the merge-mine channel stays connected; while merge-mining is inactive or Tari is
-  still syncing, the XTM rows show `—` and the XMR figures are unaffected. XvB-donated hashrate does
+  still syncing, the XTM estimates show `—` and the XMR figures are unaffected — only the per-block
+  reward keeps showing once known, because it is a fact about the Tari chain, not about your
+  hashrate. XvB-donated hashrate does
   not merge-mine, so the same P2Pool-only default keeps the XTM estimate honest too.
 
 | Field | Meaning |
@@ -468,7 +470,7 @@ It is scoped to P2Pool — **not** an XvB calculator:
 | **Your P2Pool Hashrate** | The hashrate the estimate is based on. Defaults to your **P2Pool 1h average** (the same figure the header shows, excluding any XvB-donated portion); type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed P2Pool hashpower. |
 | **XMR Day / Month / Year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty`, the standard variance-free mining expectation. P2Pool's zero-fee PPLNS payout makes this the right long-run expectation. |
 | **Est. Time to Tari Block** | Expected time for your hashrate to solo-find one Tari block: `network difficulty ÷ hashrate`. This is the honest headline for solo merge-mining — the reward lands here, all at once. `—` while merge-mining is inactive or Tari is still syncing. |
-| **XTM per Block** | The full Tari block reward paid when you find a block — you get all of it at once, not spread over time. |
+| **XTM per Block** | The full Tari block reward paid when you find a block — you get all of it at once, not spread over time. Shown whenever the reward is known (the Tari Merge-Mining card shows the same figure): it depends on the Tari chain, not on your hashrate or the merge-mine channel. |
 | **Long-run Average (XTM)** | The Tari tab's Day / Month / Year table: the per-block reward spread across the expected time-to-block — a **long-run average**, not steady income, and headed as such. `—` while merge-mining is inactive or Tari is still syncing. |
 | **Time / Share** | How long, on average, that hashrate takes to find one P2Pool (sidechain) share. |
 | **XMR Block Reward** | The current Monero block reward, for context. |

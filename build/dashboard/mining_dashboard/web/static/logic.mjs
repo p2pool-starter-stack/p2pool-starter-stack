@@ -240,6 +240,11 @@ export function fmtHashrate(hs) {
 // expected seconds to find one P2Pool share (share difficulty / hashrate). Returns nulls when the
 // estimate can't be computed (rate unavailable, or a non-positive hashrate) so the card shows "—".
 export function computeEarnings(hashrateHs, earnings) {
+  // The per-block Tari reward is a fact about the chain, not about this box: it shows whenever
+  // p2pool has reported it, independent of the what-if hashrate and of the merge-mine channel —
+  // the Tari Merge-Mining card on the same page prints the same figure. Only the time-to-block
+  // estimate (and the per-day averages) need a live channel and a hashrate.
+  const tariReward = earnings && earnings.tari_reward > 0 ? earnings.tari_reward : null;
   if (!earnings || !earnings.available || !(hashrateHs > 0)) {
     return {
       day: null,
@@ -250,7 +255,7 @@ export function computeEarnings(hashrateHs, earnings) {
       tariMonth: null,
       tariYear: null,
       tariTimeToBlockSec: null,
-      tariRewardPerBlock: null,
+      tariRewardPerBlock: tariReward,
       xvbDay: null,
       xvbMonth: null,
       xvbYear: null,
@@ -278,7 +283,7 @@ export function computeEarnings(hashrateHs, earnings) {
     tariMonth: tariDay === null ? null : tariDay * DAYS_PER_MONTH,
     tariYear: tariDay === null ? null : tariDay * DAYS_PER_YEAR,
     tariTimeToBlockSec,
-    tariRewardPerBlock: earnings.tari_available ? earnings.tari_reward : null,
+    tariRewardPerBlock: tariReward,
     // Current-tier XvB expected reward, XMR/day (#712) — the published figure tempered by
     // measured delivery server-side (#902), never face value. A fixed figure, NOT scaled by the
     // what-if hashrate (unlike day/tariDay); null unless the server sent a fresh estimate. Month/

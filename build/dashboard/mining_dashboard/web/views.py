@@ -707,6 +707,10 @@ def build_pool_network(data, metrics):
     p2p = data.get("pool", {}).get("p2p", {})
     network = data.get("network", {})
     s_addr = stratum.get("wallet", "Unknown")
+    # Relative, matching the cadence card's "Since Pool's Last Block": a bare HH:MM:SS with no
+    # date or timezone cue two cards away from a real duration reads as a duration.
+    last_block_ts = local_pool.get("last_block_ts", 0)
+    last_blk = f"{format_duration(time.time() - last_block_ts)} ago" if last_block_ts else "Never"
 
     return {
         "stratum": {
@@ -733,7 +737,7 @@ def build_pool_network(data, metrics):
             "pplns_win": f"{metrics.pplns_window} ({format_duration(metrics.pplns_window * metrics.block_time)})",
             "pplns_wgt": local_pool.get("pplns_weight", 0),
             "blocks": local_pool.get("blocks_found", 0),
-            "last_blk": format_time_abs(local_pool.get("last_block_ts", 0)),
+            "last_blk": last_blk,
             "peers": f"{p2p.get('out_peers', 0)} / {p2p.get('in_peers', 0)}",
             "uptime": format_duration(p2p.get("uptime", 0)),
         },
@@ -1761,7 +1765,12 @@ def build_earnings_vs_actual(
         "pct": None,
     }
     if xmr["available"] and xmr["enabled"]:
-        xmr["pct"] = round((xmr["actual_30d"] or 0.0) / xmr["expected_30d"] * 100)
+        pct = round((xmr["actual_30d"] or 0.0) / xmr["expected_30d"] * 100)
+        # Withheld past 999%: a near-zero expectation (a box idle for most of the window that
+        # still confirmed normal payouts) turns the ratio into a five-digit figure that reads
+        # as a bug, not a comparison. pct is None only here once available+enabled hold, so
+        # the client's tooltip can own the explanation without an extra flag.
+        xmr["pct"] = pct if pct <= 999 else None
     # Expected Tari blocks over the window: hashrate × seconds ÷ difficulty (hashes-per-block).
     # Gated on tari_mining like the calculator, so a dead merge-mine channel shows "—", not 0.
     expected_blocks = (
