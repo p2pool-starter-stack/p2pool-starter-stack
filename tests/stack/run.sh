@@ -10068,6 +10068,47 @@ rc=$(
 )
 assert_eq "media_find_config returns 1 when no candidate carries the file" "$rc" "1"
 
+echo "== unit: media_merge_config (settings the stick does not name keep their running values) =="
+cat >"$MC/running-full.json" <<EOF
+{"monero":{"wallet_address":"$VALID_PRIMARY","node_username":"admin","node_password":"a-generated-password-1"},"tari":{"wallet_address":"$VALID_TARI"},"p2pool":{"pool":"mini","stratum_password":"auto"},"dashboard":{"auth":{"password":"the-firstboot-password"},"control":{"enabled":true}},"tor":{"auto_heal":true}}
+EOF
+printf '{"p2pool":{"pool":"nano"}}' >"$MC/minimal-stick.json"
+merged=$(
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_merge_config "$MC/running-full.json" "$MC/minimal-stick.json"
+)
+assert_eq "the named setting changes" "$(jq -r '.p2pool.pool' "$merged")" "nano"
+assert_eq "the unnamed dashboard password is preserved, not dropped" \
+    "$(jq -r '.dashboard.auth.password' "$merged")" "the-firstboot-password"
+assert_eq "the unnamed appliance defaults are preserved (control.enabled)" \
+    "$(jq -r '.dashboard.control.enabled' "$merged")" "true"
+assert_eq "the unnamed appliance defaults are preserved (tor.auto_heal)" \
+    "$(jq -r '.tor.auto_heal' "$merged")" "true"
+assert_eq "unnamed node credentials carry forward — validation has nothing left to regenerate" \
+    "$(jq -r '.monero.node_password' "$merged")" "a-generated-password-1"
+rm -f "$merged"
+
+printf '{"tor":{"auto_heal":null}}' >"$MC/null-stick.json"
+merged=$(
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_merge_config "$MC/running-full.json" "$MC/null-stick.json"
+)
+assert_eq "naming a setting null clears it — the documented unset spelling" \
+    "$(jq -r '.tor.auto_heal == null' "$merged")" "true"
+rm -f "$merged"
+
+printf 'not json at all' >"$MC/broken-stick.json"
+merged=$(
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_merge_config "$MC/running-full.json" "$MC/broken-stick.json"
+)
+if cmp -s "$MC/broken-stick.json" "$merged"; then
+    ok "an unmergeable stick file passes through as-is, so validation reports ITS error"
+else
+    bad "an unmergeable stick file passes through as-is" "merge altered or dropped it"
+fi
+rm -f "$merged"
+
 echo "== unit: media_validate_config (reuses the pre-seed validation engine) =="
 cat >"$MC/good.json" <<EOF
 {"monero":{"wallet_address":"$VALID_PRIMARY","node_username":"admin","node_password":"a-generated-password-1"},"tari":{"wallet_address":"$VALID_TARI"},"p2pool":{"pool":"mini","stratum_password":"auto"}}
@@ -10233,10 +10274,12 @@ cp "$MC/changed.json" "$STICK4/pithead-config.json"
     media_confirm_gate() { echo apply; }
     main
 ) >"$MC/apply.out" 2>&1
-if cmp -s "$MC/changed.json" "$RUN_CFG"; then
+# jq-level equality, not cmp: the merge stage reformats, and changed.json names every key
+# good.json has, so the merged result must equal changed.json setting-for-setting.
+if [ "$(jq -S . "$MC/changed.json")" = "$(jq -S . "$RUN_CFG")" ]; then
     ok "a confirmed change is written to the running config.json — the changed setting took effect"
 else
-    bad "a confirmed change is written to the running config.json" "$(diff "$MC/changed.json" "$RUN_CFG" 2>&1 | head -3)"
+    bad "a confirmed change is written to the running config.json" "$(diff <(jq -S . "$MC/changed.json") <(jq -S . "$RUN_CFG") 2>&1 | head -3)"
 fi
 mounted_at=$(tail -1 "$MC/mount.log")
 [ -n "$mounted_at" ] && [ ! -f "$mounted_at/pithead-config.json" ] &&
@@ -10287,6 +10330,33 @@ cp "$MC/good.json" "$RUN_CFG"
 assert_eq "no secret list -> the running config is never rewritten" "$(cmp -s "$MC/good.json" "$RUN_CFG" && echo same)" "same"
 assert_not_contains "no secret list -> no diff is ever displayed" "$(cat "$MC/nosecrets.out")" "DIFF-WAS-SHOWN"
 assert_contains "no secret list -> the stage refuses out loud" "$(cat "$MC/nosecrets.out")" "cannot read the secret-path list"
+
+# The issue-965 shape end to end: a stick naming ONLY the pool tier must change the pool tier
+# and NOTHING else — the generated dashboard login, the appliance defaults and the node
+# credentials all survive, and none of them appear in the console diff as a change.
+STICK7="$MC/stick-minimal"
+mkdir -p "$STICK7"
+cp "$MC/minimal-stick.json" "$STICK7/pithead-config.json"
+cp "$MC/running-full.json" "$RUN_CFG"
+: >"$MC/mount.log"
+(
+    export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
+    export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK7" MOUNT_LOG="$MC/mount.log"
+    export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_confirm_gate() { echo apply; }
+    main
+) >"$MC/minimal.out" 2>&1
+assert_eq "minimal stick: the named setting applies (p2pool.pool)" "$(jq -r '.p2pool.pool' "$RUN_CFG")" "nano"
+assert_eq "minimal stick: the dashboard password it never named is kept, not dropped or regenerated" \
+    "$(jq -r '.dashboard.auth.password' "$RUN_CFG")" "the-firstboot-password"
+assert_eq "minimal stick: dashboard.control.enabled survives" "$(jq -r '.dashboard.control.enabled' "$RUN_CFG")" "true"
+assert_eq "minimal stick: tor.auto_heal survives" "$(jq -r '.tor.auto_heal' "$RUN_CFG")" "true"
+assert_eq "minimal stick: node credentials do not churn" "$(jq -r '.monero.node_password' "$RUN_CFG")" "a-generated-password-1"
+assert_contains "minimal stick: the diff names the one real change" "$(cat "$MC/minimal.out")" "p2pool.pool: mini -> nano"
+assert_not_contains "minimal stick: nothing unnamed shows up as changed" "$(cat "$MC/minimal.out")" "dashboard.auth.password"
+assert_contains "minimal stick: the console states the keep-what-you-do-not-name rule" \
+    "$(cat "$MC/minimal.out")" "Settings the file does not name keep their current values."
 
 echo "== unit: os/build-image.sh — --fresh-index flag parsing + the 404 remedy hint (#929) =="
 # PITHEAD_BUILD_IMAGE_TEST makes the script return right after arg parsing (before docker), so
