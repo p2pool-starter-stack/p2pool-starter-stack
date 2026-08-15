@@ -598,6 +598,35 @@ class TestSchemaMigration:
         finally:
             sm.close()
 
+    def test_worker_config_type_column_added_on_upgrade(self, tmp_path):
+        # Intent (#1014): a pre-`type` worker_config table (the #185 original schema) gains the
+        # column in place, and an existing row — necessarily a config apply, since rig upgrades
+        # were never recorded before this — reads back type='apply', not NULL/blank.
+        db = str(tmp_path / "pre_1014.db")
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE worker_config (id INTEGER PRIMARY KEY AUTOINCREMENT, worker TEXT, "
+            "change_id TEXT, ts REAL, status TEXT, changes TEXT, reason TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO worker_config (worker, change_id, ts, status, changes, reason) "
+            "VALUES ('rig1', 'cid1', 100.0, 'applied', '{}', NULL)"
+        )
+        conn.commit()
+        conn.close()
+
+        sm = StateManager(db_path=db)
+        try:
+            cols = {
+                info[1] for info in sm._conn.execute("PRAGMA table_info(worker_config)").fetchall()
+            }
+            assert "type" in cols
+            history = sm.get_worker_config_history("rig1")
+            assert len(history) == 1
+            assert history[0]["type"] == "apply"
+        finally:
+            sm.close()
+
 
 class TestRetention:
     """Long-running behavior: history/workers must not grow unbounded. Tests are white-box
@@ -1264,6 +1293,26 @@ class TestWorkerHashrateByConfig:
         assert rows[0]["change_id"] == "cid1"
         assert rows[0]["sample_count"] == 1
 
+    def test_applied_upgrade_is_also_a_boundary(self, state_manager):
+        # #1014: hashrate_by_config must split on an applied rig upgrade the same way it splits on
+        # an applied config change — otherwise a version change misattributes the build's effect.
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
+        state_manager.add_worker_config_version(
+            "rig1", "cid2", "applied", {"version": "v1.12.0"}, None, ts=200, change_type="upgrade"
+        )
+        state_manager.add_worker_history(
+            [{"ts": 150, "name": "rig1", "h15": 1000.0, "accepted": 0, "rejected": 0}]
+        )
+        state_manager.add_worker_history(
+            [{"ts": 250, "name": "rig1", "h15": 5000.0, "accepted": 0, "rejected": 0}]
+        )
+        rows = state_manager.get_worker_hashrate_by_config("rig1")
+        assert [r["change_id"] for r in rows] == ["cid2", "cid1"]
+        assert (
+            rows[0]["avg_h15"] == 5000.0
+        )  # post-upgrade sample bucketed into the upgrade's window
+        assert rows[1]["avg_h15"] == 1000.0  # pre-upgrade sample stays with the config version
+
     def test_other_workers_hashrate_is_excluded(self, state_manager):
         state_manager.add_worker_config_version("rig1", "cid1", "applied", {"a": 1}, None, ts=100)
         state_manager.add_worker_history(
@@ -1450,6 +1499,34 @@ class TestWorkerConfigChangeKnown:
         with state_manager._db_lock:
             state_manager._conn.execute("DROP TABLE worker_config")
         assert state_manager.worker_config_change_known("cid-1") is True
+
+
+class TestWorkerConfigType:
+    """worker_config.type (#1014) distinguishes a config apply from a one-click rig upgrade so
+    the change history can show it and hashrate_by_config can attribute a build change correctly."""
+
+    def test_default_type_is_apply(self, state_manager):
+        # An ordinary worker-apply call never passes change_type — must default to 'apply', not
+        # blank/None, so get_last_applied_worker_config's type check keeps working unmodified.
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"DONATION": 2}, None)
+        assert state_manager.get_worker_config_history("rig1")[0]["type"] == "apply"
+
+    def test_upgrade_type_round_trips(self, state_manager):
+        state_manager.add_worker_config_version(
+            "rig1", "cid1", "applied", {"version": "v1.12.0"}, None, change_type="upgrade"
+        )
+        row = state_manager.get_worker_config_history("rig1")[0]
+        assert row["type"] == "upgrade"
+        assert row["changes"] == {"version": "v1.12.0"}
+
+    def test_last_applied_config_excludes_upgrade_rows(self, state_manager):
+        # An applied upgrade's changes = {"version": ...} must never leak into the editor prefill
+        # (it isn't a writable config key at all) — only 'apply'-type applied rows merge.
+        state_manager.add_worker_config_version("rig1", "cid1", "applied", {"DONATION": 2}, None)
+        state_manager.add_worker_config_version(
+            "rig1", "cid2", "applied", {"version": "v1.12.0"}, None, change_type="upgrade"
+        )
+        assert state_manager.get_last_applied_worker_config("rig1") == {"DONATION": 2}
 
 
 class TestAuditEvents:

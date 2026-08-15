@@ -340,9 +340,19 @@ crosses 5%.
 ### Worker Inspect
 
 With the control channel on (`dashboard.control.enabled`), a worker's name in the Workers Alive table
-is a link. Click it to open **Worker Inspect** — a dialog with that rig's live telemetry, an editor
-for the writable slice of its config, and the change history. Close it with the ✕ button, a click
-outside it, or Escape.
+is a link. Click it to open **Worker Inspect** — a dialog with that rig's live telemetry, a hashrate
+chart, an editor for the writable slice of its config, and the change history. Close it with the ✕
+button, a click outside it, or Escape.
+
+A **hashrate** chart sits above the editor: the rig's own `worker_history` samples (~5-minute
+cadence) as a line, with **24 Hr / 1 Wk / All** range buttons — no "1 Mo" button, since at the
+30-day retention it would show the same thing "All" already does. There's no averaging-window
+toggle here (unlike the [main chart](#hashrate-chart)) — the per-rig table stores only one window.
+Every config apply and rig upgrade in the change history below also marks the chart, so a step in
+the line has a visible cause; hover a marker for what changed. A rejected or rolled-back attempt
+still gets a marker, muted rather than dropped, since it tried but nothing on the rig actually
+changed. A rig with no samples yet (just added, or never online) shows an empty-chart message
+instead of a blank axis.
 
 The editor covers the keys RigForge lets the control path change: `pools`, `DONATION`, `autotune`,
 `watchdog`, `watchdog_interval_min`, and `max_temp_c`. Nothing else (identity, filesystem paths, API
@@ -371,7 +381,10 @@ latest release — the per-worker twin of the stack's one-click upgrade. The rig
 miner (about ten minutes when the XMRig pin changed) and rolls itself back if the miner doesn't
 come back live. The panel shows the outcome (applied / already up to date / rolled back / failed);
 a repeat click inside the rig's own six-hour upgrade window reads as "throttled — retry later",
-not an error. See
+not an error. Like a config apply, the outcome appends to the change history — with the version it
+moved to — so it isn't lost once the dialog closes, and both the hashrate chart above and the
+hashrate-by-config table below attribute what the hashrate does next to the upgrade, not to
+whatever config version happened to be active when it ran. See
 [Connecting Miners › One-click rig upgrade](workers.md#one-click-rig-upgrade) for what the rig
 must enable and how the target is derived.
 
@@ -397,14 +410,16 @@ config *values*, the editor prefills from the last config the dashboard applied 
 the rig — so a change made directly on the rig (via `rigforge.sh`) won't show here until the next
 dashboard apply.
 
-Below the change history sits a **Hashrate by config version** table: each *applied* change, with the
-rig's measured hashrate (the same per-rig `worker_history` samples, taken roughly every 5 minutes)
-averaged over the window that version was active — from the moment it was applied to the moment the
-next one was, or now for the current version. A version with no samples yet (just applied) shows a
-dash rather than zero. This is a correlation over existing data, not a new measurement — no rig-side
-change was needed to add it — so use it to compare versions empirically ("config #3 did 5.1 kH/s,
-config #4 did 4.8 kH/s") rather than as a precise A/B test; a version's window can include restarts,
-sync gaps, or other noise the average doesn't separate out.
+Below the change history sits a **Hashrate by config version** table: each *applied* change — a
+config apply or a rig upgrade — with the rig's measured hashrate (the same per-rig `worker_history`
+samples, taken roughly every 5 minutes) averaged over the window that change was active — from the
+moment it was applied to the moment the next one was, or now for the current one. A rig upgrade
+starts its own window the same way a config change does, so a version comparison here reflects a
+build change, not whatever config value happened to be active when the build changed. A row with no
+samples yet (just applied) shows a dash rather than zero. This is a correlation over existing data,
+not a new measurement — no rig-side change was needed to add it — so use it to compare changes
+empirically ("v1.11 did 5.1 kH/s, v1.12 did 4.8 kH/s") rather than as a precise A/B test; a window
+can include restarts, sync gaps, or other noise the average doesn't separate out.
 
 ### Simple vs. Advanced view
 
