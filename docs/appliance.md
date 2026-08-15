@@ -417,11 +417,14 @@ you have a monitor and a working password. It is the recovery path when the dash
 is lost.
 
 Prepare the stick with a normal FAT32 partition and a `pithead-config.json` at its root — copy
-`config.json` from a machine you already set up, or write one by hand (see
-[configuration](configuration.md)). At boot:
+`config.json` from a machine you already set up, or write just the settings you want to change
+(see [configuration](configuration.md)). Settings the file does not name keep their current
+values: `{"p2pool": {"pool": "nano"}}` changes the pool tier and nothing else — the dashboard
+login, the generated node credentials, and every other setting stay as they are. To clear a
+setting instead of keeping it, name it with a value of `null`. At boot:
 
-- If the staged file matches the running configuration exactly, the console says so and the
-  boot carries on without stopping.
+- If the staged file changes nothing — every setting it names already holds that value — the
+  console says so and the boot carries on without stopping.
 - If it differs, the console prints every changed setting: the old value, the new value, and
   for a password, token or RPC credential, that it changed — never what it changed to. Wallet
   addresses print in full; confirming the payout address is the point of the display.
