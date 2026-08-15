@@ -118,17 +118,19 @@ render_scenario_config() {
 # the final override string and returns 0; on a missing prerequisite sets SKIP_REASON and
 # returns 1 — no silent drops, and never a prune flip on the canonical synced DB (which would
 # invalidate it). Reads the globals BASELINE_PRUNE / PRUNED_DATA_DIR / FULL_DATA_DIR /
-# REMOTE_MONERO_HOST (all optional). Pure given those globals, so the self-test exercises it.
+# REMOTE_MONERO_HOST / REMOTE_TARI_HOST / IT_MONERO_VIEW_KEY / IT_TARI_VIEW_KEY /
+# IT_TARI_SPEND_PUBLIC_KEY (all optional). Pure given those globals, so the self-test exercises it.
 RESOLVED=""
 SKIP_REASON=""
 # shellcheck disable=SC2034  # RESOLVED/SKIP_REASON are output globals consumed by run.sh & selftest.sh
 resolve_overrides() {
-    local overrides="$1" prune mode subnet out="$1"
+    local overrides="$1" prune mode tari_mode subnet out="$1"
     RESOLVED=""
     SKIP_REASON=""
 
     prune="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.prune=//p')"
     mode="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.mode=//p')"
+    tari_mode="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^tari\.mode=//p')"
     subnet="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^network\.subnet=//p')"
 
     # A network.subnet move can't be hot-applied — Compose won't recreate the bridge's IPAM subnet
@@ -166,31 +168,69 @@ resolve_overrides() {
         out="$out monero.remote.host=$REMOTE_MONERO_HOST"
     fi
 
+    # tari.mode remote (#103/#942) needs its own external endpoint — same shape as monero's above,
+    # a separate global since the two chains can point at different remote hosts.
+    if [ "$tari_mode" = "remote" ]; then
+        [ -n "${REMOTE_TARI_HOST:-}" ] || {
+            SKIP_REASON="needs --remote-tari-host"
+            return 1
+        }
+        out="$out tari.remote.host=$REMOTE_TARI_HOST"
+    fi
+
+    # Payout confirmation (#381/#462, #942): monero.view_key / tari.view_key are real wallet-scanning
+    # secrets for the box's OWN wallet — never hardcoded in the matrix. The scenario instead carries
+    # the marker "payout_confirm=env" (not a real config path, always stripped below); an
+    # operator-supplied IT_MONERO_VIEW_KEY gates the whole row, the same shape as remote mode needing
+    # an endpoint. Tari's pair (IT_TARI_VIEW_KEY + IT_TARI_SPEND_PUBLIC_KEY) is an optional extra
+    # folded in only when BOTH are set; it never gates the row on its own.
+    if printf '%s' "$overrides" | tr ' ' '\n' | grep -qx 'payout_confirm=env'; then
+        out="$(printf '%s' "$out" | tr ' ' '\n' | grep -vx 'payout_confirm=env' | tr '\n' ' ')"
+        out="${out% }" # strip the trailing space left by removing the marker token
+        out="${out# }" # ...and a leading one, when the marker was the only/first token
+        [ -n "${IT_MONERO_VIEW_KEY:-}" ] || {
+            SKIP_REASON="needs IT_MONERO_VIEW_KEY (env; a real Monero view key for the box's monero.wallet_address)"
+            return 1
+        }
+        out="${out:+$out }monero.view_key=$IT_MONERO_VIEW_KEY"
+        if [ -n "${IT_TARI_VIEW_KEY:-}" ] && [ -n "${IT_TARI_SPEND_PUBLIC_KEY:-}" ]; then
+            out="$out tari.view_key=$IT_TARI_VIEW_KEY tari.spend_public_key=$IT_TARI_SPEND_PUBLIC_KEY"
+        fi
+    fi
+
     RESOLVED="$out"
     return 0
 }
 
 # --- Expectation derivation (pure) ------------------------------------------
-# Given a rendered config.json, list the services we expect to be running. The bundled
-# monerod only runs in local mode (the local_node compose profile); in remote mode it must
-# be ABSENT. Everything else is always expected. Mirrors stack_status()'s profile gating.
-EXPECTED_ALWAYS="caddy dashboard docker-control docker-proxy p2pool tari tor xmrig-proxy"
+# Given a rendered config.json, list the services we expect to be running. The bundled monerod
+# only runs in local mode (the local_node compose profile) and the bundled tari only runs in
+# local mode (local_tari, #103) — each independently, since the two chains toggle mode on their
+# own axis; in remote mode the matching bundled node must be ABSENT. wallet-rpc/tari-wallet
+# (#381/#462) only run when their view key is set (payout_confirm/tari_payout_confirm). Everything
+# else is always expected. Mirrors stack_status()'s profile gating.
+EXPECTED_ALWAYS="caddy dashboard docker-control docker-proxy p2pool tor xmrig-proxy"
 
 expected_services() {
-    local config_json="$1" mode
-    mode="$(printf '%s' "$config_json" | jq -r '.monero.mode // "local"')"
-    if [ "$mode" = "local" ]; then
-        printf '%s\n' "monerod $EXPECTED_ALWAYS" | tr ' ' '\n' | sort
-    else
-        printf '%s\n' "$EXPECTED_ALWAYS" | tr ' ' '\n' | sort
-    fi
+    local config_json="$1" mmode tmode out
+    mmode="$(printf '%s' "$config_json" | jq -r '.monero.mode // "local"')"
+    tmode="$(printf '%s' "$config_json" | jq -r '.tari.mode // "local"')"
+    out="$EXPECTED_ALWAYS"
+    [ "$mmode" = "local" ] && out="monerod $out"
+    [ "$tmode" = "local" ] && out="tari $out"
+    [ -n "$(printf '%s' "$config_json" | jq -r '.monero.view_key // empty')" ] && out="wallet-rpc $out"
+    [ -n "$(printf '%s' "$config_json" | jq -r '.tari.view_key // empty')" ] && out="tari-wallet $out"
+    printf '%s\n' "$out" | tr ' ' '\n' | sort
 }
 
-# Services that must NOT exist for this config (remote mode -> no local monerod).
+# Services that must NOT exist for this config (remote mode -> no bundled node for that chain).
 absent_services() {
-    local config_json="$1" mode
-    mode="$(printf '%s' "$config_json" | jq -r '.monero.mode // "local"')"
-    [ "$mode" = "remote" ] && printf 'monerod\n'
+    local config_json="$1" mmode tmode
+    mmode="$(printf '%s' "$config_json" | jq -r '.monero.mode // "local"')"
+    tmode="$(printf '%s' "$config_json" | jq -r '.tari.mode // "local"')"
+    [ "$mmode" = "remote" ] && printf 'monerod\n'
+    [ "$tmode" = "remote" ] && printf 'tari\n'
+    return 0
 }
 
 # Human-readable pool label as the dashboard reports it, from the config pool key.
