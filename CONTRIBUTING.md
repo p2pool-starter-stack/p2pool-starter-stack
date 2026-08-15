@@ -50,7 +50,11 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
      (`lychee`) runs on a weekly schedule, not per-PR.
    - **test-dashboard** — the dashboard `pytest` suite (must stay ≥ the **80% total coverage gate**).
      CI also runs **`make test-patch-coverage`** (`diff-cover`): new/changed lines must be **≥ 90%**
-     covered vs `origin/develop`, the ratchet that stops coverage rotting at the margin.
+     covered vs `origin/develop`, the ratchet that stops coverage rotting at the margin. The gate
+     says so explicitly when a diff has nothing it measures (shell/docs-only PRs pass loudly), and
+     fails if a changed dashboard Python file is missing from `coverage.xml` entirely — the
+     silent no-op it used to be. Run it right after `make test-dashboard`, so `coverage.xml`
+     is fresh.
    - **test-frontend** — the frontend logic tests (`node --test`); uses the same Node that the
      lint surfaces already require.
    - **test-stack** — the `pithead` shell test suite.
