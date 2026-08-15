@@ -1976,7 +1976,12 @@ phase_media() {
     # The end-to-end proof the issue asks for: after the minimal-stick apply, the served
     # dashboard still DEMANDS a login, and the pre-apply credentials still open it. Poll until
     # caddy answers — the pool change restarts the stack, so the front door lags the reboot.
-    local http_deadline=$(($(date +%s) + 600)) code=000 authed=000
+    # One readiness deadline covers BOTH probes: a post-apply boot re-loads every baked image
+    # before compose up, and under bench load that runs past 10 minutes with caddy up (401)
+    # while the dashboard behind it still answers 502. The bench proved every intermediate
+    # (000/000, 401/502, late-2xx) is the same slow settle — so poll each probe to its OWN
+    # success within a shared 900 s window instead of judging a settling stack once.
+    local http_deadline=$(($(date +%s) + 900)) code=000 authed=000
     while [ "$(date +%s)" -lt "$http_deadline" ]; do
         code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
         case "$code" in 000 | 5??) sleep 10 ;; *) break ;; esac
@@ -1986,7 +1991,10 @@ phase_media() {
     else
         bad "the dashboard answered HTTP $code without credentials after the minimal-stick apply"
     fi
-    authed=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 -u "$old_user:$old_pw" "https://$ip/" 2>/dev/null || echo 000)
+    while [ "$(date +%s)" -lt "$http_deadline" ]; do
+        authed=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 -u "$old_user:$old_pw" "https://$ip/" 2>/dev/null || echo 000)
+        case "$authed" in 000 | 5??) sleep 10 ;; *) break ;; esac
+    done
     case "$authed" in
     2?? | 3??) ok "the pre-apply dashboard login still works (HTTP $authed)" ;;
     *) bad "the pre-apply dashboard login no longer works (HTTP $authed)" ;;
