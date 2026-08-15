@@ -1149,7 +1149,7 @@ doctor() {
         doctor_prune=$(env_get MONERO_PRUNE)
         [ -n "$doctor_prune" ] || doctor_prune=1
         # A remote node (#103) keeps its chain elsewhere, so its dir must not count toward THIS
-        # host's disk budget — otherwise doctor demands ~120 GiB (Monero) / ~170 GiB (Tari) for a
+        # host's disk budget — otherwise doctor demands ~120 GiB (Monero) / ~200 GiB (Tari) for a
         # container that never runs, on exactly the small-disk hosts remote mode exists for. Read
         # the mode from the profile tokens like the container checks above; a pre-#103 .env has no
         # local_tari token yet, so require a rendered TARI_GRPC_ADDRESS (also new in #103) before
@@ -7482,8 +7482,8 @@ prompt_start_stack() {
 
 # Per-component free-disk requirement in GiB — the single source of truth for the stack's disk
 # budget, shared by setup's preflight_resources and doctor's Disk check. Monero (the blockchain) is
-# pruning-aware: ~120 GiB pruned, ~320 GiB full. Tari's chain is the other heavyweight — ~170 GiB and
-# growing fast. Summed, this is ~300 GiB pruned / ~500 GiB full, the documented minimum
+# pruning-aware: ~120 GiB pruned, ~320 GiB full. Tari's chain is the other heavyweight — ~200 GiB and
+# growing fast. Summed, this is ~330 GiB pruned / ~530 GiB full, the documented minimum
 # (docs/hardware.md). These carry generous growth headroom over usage measured on live nodes
 # (August 2026: Monero pruned ~100 GiB / full ~267 GiB, Tari ~149 GiB) because both chains grow
 # ~100+ GiB/year combined — for a set-and-forget host the docs recommend a 2–4 TB drive.
@@ -7491,7 +7491,7 @@ prompt_start_stack() {
 disk_component_gib() {
     case "$1" in
     monero) if [ "${2:-1}" -eq 1 ] 2>/dev/null; then echo 120; else echo 320; fi ;;
-    tari) echo 170 ;;
+    tari) echo 200 ;;
     p2pool) echo 5 ;;
     dashboard) echo 2 ;;
     tor) echo 1 ;;
@@ -7602,7 +7602,7 @@ preflight_resources() {
     # once per volume that can't hold the combined requirement of the components sharing it (so dirs
     # on the same disk produce a single line, not one per dir). check_disk_grouped is WARN-only here.
     # A remote node (#103) keeps its chain elsewhere: blank its dir so the ~120 GiB (Monero) /
-    # ~170 GiB (Tari) budget isn't demanded of THIS host — small disks are exactly why an operator
+    # ~200 GiB (Tari) budget isn't demanded of THIS host — small disks are exactly why an operator
     # goes remote. check_disk_grouped skips empty dirs.
     local pre_mono_dir="${MONERO_DIR:-}" pre_tari_dir="${TARI_DIR:-}"
     [ "$MONERO_MODE" == "remote" ] && pre_mono_dir=""

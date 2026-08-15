@@ -26,8 +26,8 @@ Size the host for nodes, storage, and uptime; size the workers for CPU mining pe
 |---|---|---|
 | **CPU** | 4 cores, 64-bit x86 (AVX2 advised) | 6–8+ cores with **AVX2** |
 | **RAM** | **16 GB** | **32 GB** |
-| **Disk — pruned node** | ~300 GB SSD | 1 TB+ SSD |
-| **Disk — full node** | ~500 GB SSD | 2 TB+ SSD |
+| **Disk — pruned node** | ~330 GB SSD | 1 TB+ SSD |
+| **Disk — full node** | ~530 GB SSD | 2 TB+ SSD |
 | **Network** | Always-on broadband | Unmetered broadband |
 | **OS** | Ubuntu Server **24.04 LTS** | Ubuntu Server 24.04 LTS |
 
@@ -58,11 +58,11 @@ reclaim space in place — run `monero-blockchain-prune` to write a new pruned D
 at full size.)
 
 Both chains keep growing, ~100+ GB/year combined (Tari, a young chain, grows fastest; Monero adds
-tens of GB/year). That's why the table lists a ~300 GB (pruned) / ~500 GB (full) minimum but
+tens of GB/year). That's why the table lists a ~330 GB (pruned) / ~530 GB (full) minimum but
 recommends more: for a set-and-forget host, put it on a 2–4 TB SSD. Disk figures are measured on live
 deployments (August 2026: a full node at 267 GB Monero + 149 GB Tari; a pruned node measured
 ~102 GB Monero). `./pithead setup` budgets above these measurements on purpose — 120 GB pruned /
-320 GB full for Monero, 170 GB for Tari — so a host sized to the minimums has growth room from day
+320 GB full for Monero, 200 GB for Tari — so a host sized to the minimums has growth room from day
 one. The
 per-service **RAM** figures are provisioning minimums — steady-state resident memory is much lower
 (`monerod` and P2Pool a few hundred MB each, since their large data lives in the shared HugePages and
@@ -113,7 +113,7 @@ node databases do heavy random I/O that punishes spinning disks. What to provisi
 | Monero chain | ~100 GB | ~270 GB |
 | Tari chain | ~150 GB | ~150 GB |
 | P2Pool + dashboard + Docker images | a few GB | a few GB |
-| **Plan for** | **~300 GB+ SSD** | **~500 GB+ SSD** |
+| **Plan for** | **~330 GB+ SSD** | **~530 GB+ SSD** |
 
 Both chains keep growing, ~100+ GB/year combined (Tari, a young chain, grows fastest), so leave
 headroom: the *recommended* 1 TB+ (pruned) / 2 TB+ (full) sizes exist for that, and a 2–4 TB SSD is
@@ -122,7 +122,7 @@ or not you prune Monero, so pruning only saves disk on the Monero side. Pruning 
 fully validating Monero node at a fraction of the size.
 
 > `setup` pre-flights these. Before a sync, `./pithead setup` checks free disk and total RAM against
-> the minimums on this page (~300 GB pruned / ~500 GB full disk, 16 GB RAM) and warns if the host
+> the minimums on this page (~330 GB pruned / ~530 GB full disk, 16 GB RAM) and warns if the host
 > falls short; it never blocks. `./pithead doctor` re-runs the same disk and RAM checks on demand.
 
 You can put any service's data on a dedicated disk by pointing its `*.data_dir` at an absolute path,

@@ -138,7 +138,7 @@ trick works for reusing a synced Tari node. See
 
 ### What hardware do I need?
 
-Plan for 16 GB+ RAM, a CPU with AVX2 for RandomX, and an SSD (~300 GB pruned / ~500 GB full
+Plan for 16 GB+ RAM, a CPU with AVX2 for RandomX, and an SSD (~330 GB pruned / ~530 GB full
 minimum; Tari's chain alone is ~150 GB, and both chains grow ~100+ GB/year, so a 2–4 TB drive is
 the set-and-forget choice). Full minimum-vs-recommended sizing for the stack host is in
 [Hardware Requirements](hardware.md). (Miner hardware is sized separately in
