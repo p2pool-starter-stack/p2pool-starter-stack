@@ -108,12 +108,14 @@ HARNESS_TARI="126J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivz
 # An unbounded call therefore outlives its caller's deadline instead of failing it: on 2026-08-15
 # one boot-phase probe held for five hours against a guest that answered ssh normally the whole
 # time, and the phase reported "SSH never came up" the instant that probe was killed. SSH_TIMEOUT
-# is the per-call ceiling; the default clears the longest legitimate remote command in this file
-# (the 1800 s local-miner wait) and exists only so no single call can hang a release gate forever.
+# is the per-call ceiling. The default is deliberately far larger than any legitimate call (the
+# longest here is the 1800 s local-miner wait; a slot copy on slow storage is the other long one):
+# this exists ONLY to stop an infinite hang, so it must never be the thing that ends real work —
+# if a call is legitimately slower than this, raise it rather than let the ceiling arbitrate.
 # ponytail: polling loops lower it to a few seconds — a stalled handshake must read as "not ready
 # yet" so the loop re-evaluates its own deadline, which is the whole point of having one.
 _ssh() {
-    timeout "${SSH_TIMEOUT:-2400}" ssh -i "$KEY" -o StrictHostKeyChecking=no \
+    timeout "${SSH_TIMEOUT:-5400}" ssh -i "$KEY" -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
 }
 _wait_ssh() { # $1 seconds — the definition of "not bricked"
@@ -1781,7 +1783,11 @@ phase_provision() {
     tries=0
     local code=000 served=0
     while [ "$tries" -lt 60 ]; do
-        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        # `|| true`, never `|| echo 000`: on a connection failure curl ALREADY prints 000 (-w
+        # always fires) and exits non-zero, so the echo appended a SECOND 000 — the retry case
+        # below then matched neither, broke on the first iteration, and reported the impossible
+        # "HTTP 000000". The loop existed to wait out exactly that state and never once waited.
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
         case "$code" in
         2?? | 3?? | 401 | 403)
             ok "dashboard is served through caddy (HTTP $code)"
@@ -1975,7 +1981,7 @@ phase_provision() {
     tries=0
     local answered=0
     while [ "$tries" -lt 36 ]; do
-        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
         case "$code" in
         2?? | 3?? | 401 | 403)
             ok "dashboard answers again after the reboot (HTTP $code) — through a REGENERATED Caddyfile"
@@ -2364,7 +2370,7 @@ phase_media() {
     # success within a shared 900 s window instead of judging a settling stack once.
     local http_deadline=$(($(date +%s) + 900)) code=000 authed=000
     while [ "$(date +%s)" -lt "$http_deadline" ]; do
-        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
         case "$code" in 000 | 5??) sleep 10 ;; *) break ;; esac
     done
     if [ "$code" = "401" ]; then
@@ -2373,7 +2379,7 @@ phase_media() {
         bad "the dashboard answered HTTP $code without credentials after the minimal-stick apply"
     fi
     while [ "$(date +%s)" -lt "$http_deadline" ]; do
-        authed=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 -u "$old_user:$old_pw" "https://$ip/" 2>/dev/null || echo 000)
+        authed=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 -u "$old_user:$old_pw" "https://$ip/" 2>/dev/null || true)
         case "$authed" in 000 | 5??) sleep 10 ;; *) break ;; esac
     done
     case "$authed" in
