@@ -111,6 +111,13 @@ echo "== unit: lint-operator-strings self-test (#755) =="
 bash "$ROOT/scripts/lint-operator-strings.sh" --self-test >/dev/null 2>&1
 assert_rc "operator-strings guard self-test passes" "$?" "0"
 
+echo "== unit: patch-coverage overlap self-test (#1000) =="
+# diff-cover exits 0 on "No lines with coverage information" — a vacuous pass. The wrapper's
+# overlap check is what turns that into a loud not-applicable pass or a real failure; its
+# --self-test drives fixtures through both branches plus the file-present quiet pass.
+bash "$ROOT/scripts/patch-coverage.sh" --self-test >/dev/null 2>&1
+assert_rc "patch-coverage wrapper self-test passes" "$?" "0"
+
 echo "== unit: is_public_ip classifier (#113) =="
 # Globally-routable -> rc 0 (public). Includes boundaries just OUTSIDE each excluded range.
 for ip in 8.8.8.8 1.1.1.1 172.15.0.1 172.32.0.1 100.128.0.1 169.1.1.1 2606:4700:4700::1111 2001:db8::1; do
