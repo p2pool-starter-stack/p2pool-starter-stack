@@ -1822,10 +1822,16 @@ def build_xvb_calc(metrics, state_mgr, realization=None):
     cumulative forecast) and ``players_avg`` (which also makes a single-qualifier artifact like
     Mega's self-evident). ``realized_reward_year`` scales the published figure by this wallet's
     measured win realization (``realization``, from ``xvb_realization``) — None when unmeasured,
-    so the client falls back to the study band; face value shows only in its own column. Returns ``{"enabled": False}`` alone when
-    XvB is off — there is no tier to calculate."""
-    if not metrics.xvb_enabled:
-        return {"enabled": False}
+    so the client falls back to the study band; face value shows only in its own column.
+
+    Published with XvB DISABLED too (#938): the table is the enable/don't-enable decision aid, so
+    hiding it behind the flag defeated its purpose. Everything here is computable from local
+    config plus the cached public feeds; disabling XvB stops the fetches (the egress rule, #726),
+    so on a box that never enabled XvB the odds and reward columns are honestly empty and on a
+    just-disabled box they age out through the same staleness rule as always. The live-credit
+    context goes quiet on its own: ``build_state`` computes ``realization`` only while enabled,
+    and ``Metrics`` reports current/target tier as "Disabled" — the client keys every
+    live-donation surface (and the current/target cards here) off ``enabled``."""
     tiers = state_mgr.get_tiers()
     round_state = state_mgr.get_xvb_round_stats()
     round_types = (
@@ -1851,7 +1857,7 @@ def build_xvb_calc(metrics, state_mgr, realization=None):
     estimates_stale = xvb_stats_are_stale(est_state)
     estimates_available = bool(estimates) and not estimates_stale
     return {
-        "enabled": True,
+        "enabled": metrics.xvb_enabled,
         # Ascending tier table for the client's what-if; names via get_tier_info so they read
         # exactly like the tier strings everywhere else (threshold already embedded in the name).
         # expected_reward_year is XvB's own figure for the tier, or None when unavailable/stale.

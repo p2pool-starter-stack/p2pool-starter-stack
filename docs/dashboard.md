@@ -433,8 +433,9 @@ The card is split into tabs — **Monero**, **Tari**, **XvB**, and **Energy** �
 Monero holds the XMR estimate, time-to-share, and block reward; Tari holds the solo time-to-block,
 per-block reward, and long-run average; XvB holds the tier/cost block, the current tier's expected
 reward (tempered by measured delivery — see the decision table below), and the per-tier payout
-comparison. The XvB tab appears only when XvB is enabled,
-and the Energy tab only when the fleet reports power (see [Energy & profit](#energy--profit)).
+comparison. The XvB tab stays with XvB disabled — its decision table is the "should I enable
+it?" aid — and the Energy tab appears only when the fleet reports power (see
+[Energy & profit](#energy--profit)).
 
 Every tab presents its rate estimate in the same **Day / Month / Year** table: the coin figure,
 plus a `≈` fiat column once that coin's price is known (see *Prices* under
@@ -630,9 +631,13 @@ Set the keys in `config.json` and run `./pithead apply`. Key reference: the `mon
 ### XvB Tier (raffle)
 
 A block inside the earnings card, driven by the same what-if hashrate input, that answers "which
-XMRvsBeast tier could this hashrate hold, and what would it cost?". Hidden entirely while XvB is
-disabled (`xvb.enabled: false`). The raffle winner is drawn at random among everyone above the
-threshold, so donating more than the threshold buys zero extra win chance — but the odds
+XMRvsBeast tier could this hashrate hold, and what would it cost?". It renders with XvB disabled
+too (`xvb.enabled: false`) — the decision table below is exactly the enable/don't-enable aid, so
+it must be readable *before* you enable anything. While disabled, the two live-credit rows
+(Current Tier, Target Tier) disappear, and — because disabling XvB stops every fetch from
+xmrvsbeast.com — the odds and reward columns run from the last cached read: on a box that never
+enabled XvB they show tier costs only. The raffle winner is drawn at random among everyone above
+the threshold, so donating more than the threshold buys zero extra win chance — but the odds
 themselves are knowable: XvB's winners file publishes the qualifier count for every round, and
 the comparison below shows them.
 
@@ -640,8 +645,8 @@ the comparison below shows them.
 |---|---|
 | **Sustainable Tier** | The highest XvB donor tier the entered hashrate sustains while leaving P2Pool its share of the split — the same auto rule the donation controller uses (`hashrate × max donation fraction ≥ tier threshold`, default fraction 0.85). `None` when even the lowest tier is out of reach. |
 | **Hashrate Cost** | What holding that tier costs: about its threshold in **continuous** donation, because XvB qualifies a tier on both the 1h and 24h credited averages. This hashrate earns no P2Pool shares while donated. |
-| **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). |
-| **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. |
+| **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). Only while XvB is enabled. |
+| **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. Only while XvB is enabled. |
 
 Below the tier figures sits the **per-tier decision table** — every donor tier on one row, so
 the whole choice is visible at once:

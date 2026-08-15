@@ -339,12 +339,15 @@ test('computeXvbTier: between tiers picks the lower one', () => {
     assert.equal(computeXvbTier(60_000, XVB_CALC).threshold, 10_000);
 });
 
-test('computeXvbTier: null when disabled, calc missing, empty tiers, or bad hashrate', () => {
-    assert.equal(computeXvbTier(15_000, { ...XVB_CALC, enabled: false }), null);
+test('computeXvbTier: null when calc missing, empty tiers, or bad hashrate', () => {
     assert.equal(computeXvbTier(15_000, null), null);
     assert.equal(computeXvbTier(15_000, { ...XVB_CALC, tiers: [] }), null);
     assert.equal(computeXvbTier(0, XVB_CALC), null);
     assert.equal(computeXvbTier(null, XVB_CALC), null);
+});
+
+test('computeXvbTier: still computes with XvB disabled — the what-if is the decision aid (#938)', () => {
+    assert.equal(computeXvbTier(15_000, { ...XVB_CALC, enabled: false }).threshold, 10_000);
 });
 
 // --- xvbDecisionRows (#872) — the per-tier decision table's pure math -------------------
@@ -400,7 +403,15 @@ test('xvbDecisionRows: no coeff (network stats down) -> no cost, no net, never a
     assert.equal(whale.cost, null);
     assert.equal(whale.net, null);
     assert.equal(whale.mode, 'none');
-    assert.equal(xvbDecisionRows({ enabled: false }, 1e-7, 200_000).length, 0);
+    assert.equal(xvbDecisionRows(null, 1e-7, 200_000).length, 0);
+});
+
+test('xvbDecisionRows: XvB disabled still prices the table (#938)', () => {
+    // The rows are the enable/don't-enable comparison, so the flag doesn't empty them —
+    // a disabled payload with tiers prices identically to an enabled one.
+    const rows = xvbDecisionRows({ ..._CALC, enabled: false }, 1e-7, 200_000);
+    assert.equal(rows.length, 2);
+    assert.ok(Math.abs(rows[1].cost - 3.65) < 1e-9);
 });
 test('formatXmr: precision scales with magnitude; "—" for null/invalid', () => {
     assert.equal(formatXmr(2.5), '2.5000 XMR');        // >= 1 -> 4 dp

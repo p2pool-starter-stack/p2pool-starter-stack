@@ -2286,9 +2286,27 @@ class TestXvbCalc:
         }
         return sm
 
-    def test_disabled_returns_enabled_false_only(self):
-        # XvB off → nothing to calculate; the whole payload is the single flag.
-        assert build_xvb_calc(_metrics(xvb_enabled=False), self._sm()) == {"enabled": False}
+    def test_disabled_still_publishes_the_decision_table(self):
+        # #938: XvB off no longer collapses the payload to the bare flag — the table is the
+        # enable/don't-enable decision aid, so the tiers, draw odds, and prior band publish
+        # either way (from local config + the cached feeds; the flag stops the fetches, so a
+        # never-enabled box degrades through the same staleness rules as always). enabled=False
+        # still rides along: the client's live-donation surfaces key off it.
+        out = build_xvb_calc(
+            _metrics(xvb_enabled=False, current_tier="Disabled", target_tier="Disabled"),
+            self._sm(),
+        )
+        assert out["enabled"] is False
+        assert [t["threshold"] for t in out["tiers"]] == [1_000, 10_000, 100_000, 1_000_000]
+        whale = next(t for t in out["tiers"] if t["threshold"] == 100_000)
+        assert whale["win_odds_day"] == pytest.approx((56 / 7.0) / 8.0)
+        lo, hi = views.XVB_REALIZATION_PRIOR
+        assert whale["assumed_reward_year_range"] == pytest.approx([6.17 * lo, 6.17 * hi])
+        assert out["max_fraction"] == views.XVB_MAX_DONATION_FRACTION
+        # Live-credit context passes through what Metrics reports on a disabled box; realization
+        # is never computed while off (build_state's gate), so the measured fields stay None.
+        assert out["current_tier"] == "Disabled"
+        assert out["realization_pct"] is None
 
     def test_tier_table_sorted_ascending_and_zero_thresholds_dropped(self):
         out = build_xvb_calc(_metrics(), self._sm())
