@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { withAlpha, padYAxis, eventColors, donationSeries } from '../../mining_dashboard/web/static/chart.mjs';
+import { withAlpha, padYAxis, eventColors, donationSeries, workerMarkerStyle } from '../../mining_dashboard/web/static/chart.mjs';
 
 test('withAlpha: appends an 8-bit alpha to a #rrggbb hex', () => {
     assert.equal(withAlpha('#58a6ff', '26'), '#58a6ff26');
@@ -83,4 +83,29 @@ test('donationSeries: maps xvb_history donation_fraction (0..1) to a 0..100 perc
 test('donationSeries: tolerates a missing history (XvB off / no samples yet)', () => {
     assert.deepEqual(donationSeries(undefined), []);
     assert.deepEqual(donationSeries([]), []);
+});
+
+test('workerMarkerStyle: upgrade markers are triangles, config-apply markers are diamonds (#1015)', () => {
+    const c = { accent: '#58a6ff', ticks: '#8b949e' };
+    const markers = [
+        { kind: 'apply', quiet: false },
+        { kind: 'upgrade', quiet: false },
+    ];
+    const style = workerMarkerStyle(markers, c);
+    assert.deepEqual(style.pointStyle, ['rectRot', 'triangle']);
+});
+
+test('workerMarkerStyle: a quiet outcome (nothing changed) renders muted, not accent', () => {
+    const c = { accent: '#58a6ff', ticks: '#8b949e' };
+    const markers = [
+        { kind: 'apply', quiet: false },
+        { kind: 'apply', quiet: true },
+    ];
+    const style = workerMarkerStyle(markers, c);
+    assert.deepEqual(style.color, [c.accent, c.ticks]);
+});
+
+test('workerMarkerStyle: tolerates a missing marker list', () => {
+    const c = { accent: '#58a6ff', ticks: '#8b949e' };
+    assert.deepEqual(workerMarkerStyle(undefined, c), { pointStyle: [], color: [] });
 });

@@ -13,10 +13,12 @@
 // one apply() below. A "Load from file" button inside JSON mode reads a local file into the
 // textarea (FileReader, no upload) for pushing the same profile to several rigs.
 
+import { WorkerChartCard } from "./chart.mjs";
 import { SECRET_HINT } from "./configlogic.mjs";
 import { loadPref, savePref } from "./logic.mjs";
 import { Component, createRef, html } from "./preact.mjs";
 import {
+  buildChartMarkers,
   buildFields,
   buildTableChanges,
   jsonSyntaxError,
@@ -78,14 +80,22 @@ function StatusLine({ result }) {
 }
 
 // One history row: the change keys, the outcome, and when. `changes` IS the diff (we record only
-// the deltas we authored), so listing its keys is the per-change diff.
+// the deltas we authored), so listing its keys is the per-change diff — except a rig-upgrade row
+// (#1014), whose `changes` carries `{version}` rather than a writable-key diff, shown as its own
+// target version instead of the literal key name "version".
 function HistoryRow({ row }) {
   const meta = STATUS_META[row.status] || { cls: "text-muted", label: row.status };
   const keys = Object.keys(row.changes || {});
+  const changed =
+    row.type === "upgrade"
+      ? `upgrade → ${row.changes?.version || "?"}`
+      : keys.length
+        ? keys.join(", ")
+        : "—";
   return html`
     <tr>
         <td class="text-xs text-muted">${row.applied_at || ""}</td>
-        <td class="font-mono text-xs">${keys.length ? keys.join(", ") : "—"}</td>
+        <td class="font-mono text-xs">${changed}</td>
         <td><span class=${"text-small " + meta.cls}>${meta.label}</span></td>
         <td class="text-xs text-muted">${row.reason || ""}</td>
     </tr>`;
@@ -155,6 +165,11 @@ export class WorkerInspect extends Component {
       upgArmed: false,
       upgBusy: false,
       upgResult: null,
+      // Per-worker hashrate chart (#1013): its own range preference (persisted, like the editor
+      // mode above) and its own loading flag — a range switch refetches ONLY the chart data
+      // (loadChart), never the full load(), so it can't wipe an in-progress config edit.
+      chartRange: loadPref("dashboardWorkerChartRange", ["24h", "1w", "all"], "24h"),
+      chartLoading: false,
     };
     this.dialogRef = createRef();
   }
@@ -172,7 +187,9 @@ export class WorkerInspect extends Component {
   async load() {
     this.setState({ phase: "loading", error: null });
     try {
-      const res = await fetch(`/api/worker?name=${encodeURIComponent(this.props.name)}`);
+      const res = await fetch(
+        `/api/worker?name=${encodeURIComponent(this.props.name)}&range=${this.state.chartRange}`,
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const detail = await res.json();
       // Prefill the editor with the last-applied writable config, or an empty object to start from.
@@ -181,6 +198,32 @@ export class WorkerInspect extends Component {
     } catch (e) {
       this.setState({ phase: "error", error: String(e) });
     }
+  }
+
+  // Hashrate chart range change (#1013): re-fetch /api/worker at the new range and replace ONLY
+  // detail.hashrate_history — unlike load(), this must never reset tableEdits/editText/phase, or
+  // clicking a range button mid-edit would silently drop the operator's in-progress changes.
+  async loadChart(range) {
+    this.setState({ chartLoading: true });
+    try {
+      const res = await fetch(
+        `/api/worker?name=${encodeURIComponent(this.props.name)}&range=${range}`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const detail = await res.json();
+      this.setState((s) => ({
+        chartLoading: false,
+        detail: { ...s.detail, hashrate_history: detail.hashrate_history },
+      }));
+    } catch {
+      this.setState({ chartLoading: false });
+    }
+  }
+
+  setChartRange(range) {
+    savePref("dashboardWorkerChartRange", range);
+    this.setState({ chartRange: range });
+    return this.loadChart(range);
   }
 
   onJsonInput(text) {
@@ -277,8 +320,19 @@ export class WorkerInspect extends Component {
   }
 
   renderBody(detail) {
-    const { mode, tableEdits, editText, jsonError, busy, result, upgArmed, upgBusy, upgResult } =
-      this.state;
+    const {
+      mode,
+      tableEdits,
+      editText,
+      jsonError,
+      busy,
+      result,
+      upgArmed,
+      upgBusy,
+      upgResult,
+      chartRange,
+      chartLoading,
+    } = this.state;
     const canEdit = detail.control_enabled && detail.editable;
     return html`
         <div class="worker-inspect-body">
@@ -318,6 +372,15 @@ export class WorkerInspect extends Component {
             }
             <${StatusLine} result=${upgResult} />
             ${detail.rigforge ? html`<${StatsTable} stats=${detail.rigforge.stats} />` : null}
+
+            <h4 class="mt-2">Hashrate${chartLoading ? html` <span class="text-muted text-small">refreshing…</span>` : null}</h4>
+            <${WorkerChartCard}
+                chart=${{
+                  hashrate: detail.hashrate_history?.hashrate || [],
+                  markers: buildChartMarkers(detail.hashrate_history?.markers),
+                }}
+                range=${chartRange}
+                onRange=${(r) => this.setChartRange(r)} />
 
             <h4 class="mt-2">Edit config</h4>
             ${

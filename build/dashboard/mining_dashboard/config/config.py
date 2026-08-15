@@ -355,6 +355,11 @@ DASHBOARD_ENERGY = load_energy_config()
 # How long a preview/commit POST waits for the host-side runner's result before returning 202 and
 # leaving the client to poll /api/control/result. The systemd path unit fires within seconds.
 CONTROL_WAIT_S = float(os.environ.get("CONTROL_WAIT_S", 30))
+# A worker-upgrade POST never waits inline (a rig rebuild can run minutes) — it returns 202 at
+# once and a background task records the terminal outcome once the host runner writes it. This
+# bounds that background wait; matches the client's own polling budget (workerview.mjs
+# UPGRADE_POLL_MAX = 150 * 2s = 300s), well past the host's own ~90s dial+poll cap.
+CONTROL_WORKER_UPGRADE_WAIT_S = float(os.environ.get("CONTROL_WORKER_UPGRADE_WAIT_S", 300))
 GITHUB_RELEASES_API = os.environ.get(
     "GITHUB_RELEASES_API",
     "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest",

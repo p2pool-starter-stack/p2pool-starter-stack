@@ -26,6 +26,7 @@ const DETAIL = {
   writable_keys: ["DONATION", "max_temp_c", "token"],
   last_applied: { DONATION: 5, max_temp_c: 70, token: SENTINEL },
   history: [],
+  hashrate_history: { hashrate: [], markers: [] },
 };
 
 // WorkerInspect is never mounted here (no DOM/jsdom — this repo's frontend tests deliberately run
@@ -177,6 +178,44 @@ test("the fill button is a no-op when the file picker is dismissed with no file"
   assert.equal(inst.state.editText, before);
 });
 
+// --- Change history (#1014) -------------------------------------------------------------------
+
+test("a config-apply history row lists its changed keys", () => {
+  const detail = {
+    ...DETAIL,
+    history: [
+      {
+        applied_at: "2026-07-16 12:00",
+        status: "applied",
+        type: "apply",
+        changes: { DONATION: 3 },
+        reason: null,
+      },
+    ],
+  };
+  const out = renderToString(readyInstance(detail).render());
+  assert.match(out, /DONATION/);
+  assert.doesNotMatch(out, /upgrade →/);
+});
+
+test("a rig-upgrade history row shows the version it moved to, not the literal key 'version'", () => {
+  const detail = {
+    ...DETAIL,
+    history: [
+      {
+        applied_at: "2026-07-16 12:00",
+        status: "applied",
+        type: "upgrade",
+        changes: { version: "v1.12.0" },
+        reason: null,
+      },
+    ],
+  };
+  const out = renderToString(readyInstance(detail).render());
+  assert.match(out, /upgrade → v1\.12\.0/);
+  assert.doesNotMatch(out, />version</); // never the raw changed-key name for an upgrade row
+});
+
 // --- Hashrate by config (#492) ----------------------------------------------------------------
 
 test("renders one row per config version with its aggregated hashrate", () => {
@@ -232,6 +271,88 @@ test("a version with no samples yet shows a dash, not a crash", () => {
 test("no applied config versions yet falls back to an explanatory message", () => {
   const out = renderToString(readyInstance({ ...DETAIL, hashrate_by_config: [] }).render());
   assert.match(out, /No applied config changes to correlate hashrate against yet/);
+});
+
+// --- Hashrate chart (#1013/#1015) -------------------------------------------------------------
+
+test("a rig with no hashrate history yet renders an honest empty state, not a broken chart", () => {
+  const out = renderToString(readyInstance(DETAIL).render());
+  assert.match(out, /No hashrate history for this rig yet/);
+  // The range control still renders (the operator can still try a wider range).
+  assert.match(out, /24 Hr/);
+  assert.match(out, />All</);
+});
+
+test("a rig with samples renders the range control and the chart canvas, not the empty state", () => {
+  const detail = {
+    ...DETAIL,
+    hashrate_history: { hashrate: [{ x: 1000, y: 500 }], markers: [] },
+  };
+  const out = renderToString(readyInstance(detail).render());
+  assert.doesNotMatch(out, /No hashrate history for this rig yet/);
+  assert.match(out, /<canvas/);
+  assert.match(out, /24 Hr/);
+  assert.match(out, /1 Wk/);
+});
+
+test("only the current chart range button is marked active", () => {
+  const detail = { ...DETAIL, hashrate_history: { hashrate: [{ x: 1, y: 1 }], markers: [] } };
+  const inst = readyInstance(detail);
+  inst.state.chartRange = "1w";
+  const out = renderToString(inst.render());
+  assert.match(out, /class="btn-range active"[^>]*>1 Wk/);
+});
+
+test("clicking a range button refetches only the chart data, leaving an in-progress edit alone", async () => {
+  const detail = { ...DETAIL, hashrate_history: { hashrate: [{ x: 1, y: 1 }], markers: [] } };
+  const inst = readyInstance(detail);
+  inst.state.tableEdits = { DONATION: "9" }; // an in-progress, unsaved edit
+  let requested = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requested = url;
+    return {
+      ok: true,
+      json: async () => ({ hashrate_history: { hashrate: [{ x: 2, y: 2 }], markers: [] } }),
+    };
+  };
+  try {
+    await inst.setChartRange("1w");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.match(requested, /\/api\/worker\?name=rig1&range=1w/);
+  assert.equal(inst.state.chartRange, "1w");
+  assert.equal(inst.state.chartLoading, false);
+  assert.deepEqual(inst.state.detail.hashrate_history.hashrate, [{ x: 2, y: 2 }]);
+  // Nothing else in detail, and no unrelated state, was touched by the chart-only refresh.
+  assert.deepEqual(inst.state.tableEdits, { DONATION: "9" });
+  assert.equal(inst.state.phase, "ready");
+});
+
+test("load() requests the current chart range from /api/worker", async () => {
+  const inst = new WorkerInspect({ name: "rig1", onClose: () => {} });
+  stubSetState(inst);
+  let requested = null;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requested = url;
+    return { ok: true, json: async () => DETAIL };
+  };
+  try {
+    await inst.load();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.match(requested, /range=24h/); // the default chart-range preference
+  assert.equal(inst.state.phase, "ready");
+});
+
+test("a detail payload missing hashrate_history entirely still renders (defensive, no crash)", () => {
+  const withoutChart = { ...DETAIL };
+  delete withoutChart.hashrate_history;
+  const out = renderToString(readyInstance(withoutChart).render());
+  assert.match(out, /No hashrate history for this rig yet/);
 });
 
 // --- One-click rig upgrade (#597) -------------------------------------------------------------

@@ -3259,3 +3259,85 @@ class TestBuildWorkerDetail:
         )
         sm.close()
         assert d["hashrate_by_config"] == []
+
+
+class TestBuildWorkerHashrateHistory:
+    """The per-worker hashrate-over-time chart (#1013) + its change-marker overlay (#1015)."""
+
+    def _detail(self, monkeypatch, workers=None, descriptors=None, range_arg="all", window=None):
+        from mining_dashboard.service.storage_service import StateManager
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(views.config, "DASHBOARD_WORKERS", descriptors or [])
+        sm = StateManager(db_path=":memory:")
+        data = {"workers": workers or [{"name": "rig1", "status": "online", "h60": 0}]}
+        return sm, data, range_arg, window
+
+    def test_no_history_yet_is_an_honest_empty_series(self, monkeypatch):
+        # A brand new rig: no worker_history samples, no change history. The chart must render an
+        # empty state client-side, not a broken axis — this is the data half of that contract.
+        sm, data, range_arg, window = self._detail(monkeypatch)
+        try:
+            d = build_worker_detail("rig1", data, sm, range_arg, window)
+        finally:
+            sm.close()
+        assert d["hashrate_history"] == {"hashrate": [], "markers": []}
+
+    def test_hashrate_series_and_markers_present(self, monkeypatch):
+        sm, data, range_arg, window = self._detail(monkeypatch)
+        try:
+            sm.add_worker_history(
+                [{"ts": 1000.0, "name": "rig1", "h15": 1234.0, "accepted": 0, "rejected": 0}]
+            )
+            sm.add_worker_config_version("rig1", "cid1", "applied", {"DONATION": 2}, None, ts=900.0)
+            d = build_worker_detail("rig1", data, sm, range_arg, window)
+        finally:
+            sm.close()
+        hist = d["hashrate_history"]
+        assert hist["hashrate"] == [{"x": 1000000, "y": 1234.0}]
+        assert len(hist["markers"]) == 1
+        m = hist["markers"][0]
+        assert m["x"] == 900000
+        assert m["status"] == "applied"
+        assert m["type"] == "apply"
+        assert m["changes"] == {"DONATION": 2}
+
+    def test_upgrade_row_marked_with_its_own_type(self, monkeypatch):
+        sm, data, range_arg, window = self._detail(monkeypatch)
+        try:
+            sm.add_worker_config_version(
+                "rig1",
+                "cid1",
+                "applied",
+                {"version": "v1.12.0"},
+                None,
+                ts=900.0,
+                change_type="upgrade",
+            )
+            d = build_worker_detail("rig1", data, sm, range_arg, window)
+        finally:
+            sm.close()
+        m = d["hashrate_history"]["markers"][0]
+        assert m["type"] == "upgrade"
+        assert m["changes"] == {"version": "v1.12.0"}
+
+    def test_range_filters_both_hashrate_and_markers(self, monkeypatch):
+        # Same range/window bound the chart line and its markers together, so a marker never
+        # renders outside the window its own hashrate slice covers.
+        now = time.time()
+        sm, data, _, _ = self._detail(monkeypatch)
+        try:
+            sm.add_worker_history(
+                [{"ts": now - 7200, "name": "rig1", "h15": 1.0, "accepted": 0, "rejected": 0}]
+            )
+            sm.add_worker_history(
+                [{"ts": now - 60, "name": "rig1", "h15": 2.0, "accepted": 0, "rejected": 0}]
+            )
+            sm.add_worker_config_version("rig1", "c-old", "applied", {"a": 1}, None, ts=now - 7200)
+            sm.add_worker_config_version("rig1", "c-new", "applied", {"a": 2}, None, ts=now - 60)
+            d = build_worker_detail("rig1", data, sm, "1h", None)  # 2h-old sample/marker excluded
+        finally:
+            sm.close()
+        hist = d["hashrate_history"]
+        assert len(hist["hashrate"]) == 1 and hist["hashrate"][0]["y"] == 2.0
+        assert len(hist["markers"]) == 1 and hist["markers"][0]["status"] == "applied"
