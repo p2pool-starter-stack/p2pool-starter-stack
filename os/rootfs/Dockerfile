@@ -116,10 +116,14 @@ RUN curl -fsSL -o /tmp/rigforge.tar.gz \
 # where RigForge's "already built" check accepts it (binary + commit marker + sha record, the
 # exact format rigforge.sh writes). The donate-level source patch is skipped on purpose: the
 # default (1%) equals XMRig's own default, and the runtime config carries the value regardless.
+# The sed anchors match rigforge.sh's exact NAME="${NAME:-value}" quoting; a cosmetic upstream
+# reformat extracts nothing, so the guard names the cause instead of failing mute mid-chain.
 RUN set -e \
     && XMRIG_VERSION=$(sed -n 's/^XMRIG_VERSION="${XMRIG_VERSION:-\(.*\)}"$/\1/p' /opt/rigforge/rigforge.sh) \
     && XMRIG_COMMIT=$(sed -n 's/^XMRIG_COMMIT="${XMRIG_COMMIT:-\(.*\)}"$/\1/p' /opt/rigforge/rigforge.sh) \
-    && test -n "$XMRIG_VERSION" && test -n "$XMRIG_COMMIT" \
+    && { test -n "$XMRIG_VERSION" && test -n "$XMRIG_COMMIT" || { \
+            echo "could not extract the XMRig pin from rigforge.sh — its XMRIG_VERSION/XMRIG_COMMIT quoting no longer matches the sed anchors above; update them to the new format" >&2; \
+            exit 1; }; } \
     && git clone --quiet --branch "$XMRIG_VERSION" --depth 1 https://github.com/xmrig/xmrig.git /tmp/xmrig \
     && test "$(git -C /tmp/xmrig rev-parse HEAD)" = "$XMRIG_COMMIT" \
     && cmake -S /tmp/xmrig -B /tmp/xmrig/build -DWITH_HWLOC=ON >/dev/null \
