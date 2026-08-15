@@ -6800,6 +6800,43 @@ assert_eq "worker-apply accept path records the rig's changed_keys" \
     "$(jq -rc '.changed_keys' "$WA3/results/$u9.json" 2>/dev/null)" '["pools"]'
 assert_contains "worker-apply accept is audited as applied" \
     "$(cat "$WA3/audit/control.log")" '"action":"worker-apply","status":"applied"'
+# The rig can also end an apply terminal "failed" — it could not restore its own rollback backup
+# (present since the v1.11.2 fleet floor). The poll must land it as failed-with-reason, never burn
+# the 20s deadline into a vague "accepted".
+WA4="$SANDBOX/ctrl185-failed"
+mkdir -p "$WA4/staged" "$WA4/results" "$WA4/audit" "$WA4/bin"
+cp "$WA3/config.json" "$WA4/config.json"
+cat >"$WA4/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out="" url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) url="$1"; shift ;;
+    esac
+done
+case "$url" in
+*/apply)
+    printf '{"change_id":"chg-2"}' >"$out"
+    printf '202' ;;
+*/status)
+    printf '{"change_id":"chg-2","status":"failed","reason":"rollback backup unreadable: /var/lib/rigforge/backup"}' >"$out"
+    printf '200' ;;
+*) printf '000' ;;
+esac
+exit 0
+EOF
+chmod +x "$WA4/bin/curl"
+u10="fafafafa-fafa-4afa-8afa-fafafafafafa"
+printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","changes":{"pools":["pool.example:3333"]}}\n' "$u10" >"$WA4/req.json"
+PATH="$WA4/bin:$PATH" CONTROL_WA_BUDGET=1 PITHEAD_CONFIG_FILE="$WA4/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$WA4/req.json" "$WA4" >/dev/null 2>&1
+assert_eq "a failed apply reaches terminal 'failed', not the poll-deadline 'accepted'" \
+    "$(jq -r '.status' "$WA4/results/$u10.json" 2>/dev/null)" "failed"
+assert_contains "the failed apply carries the rig's reason" \
+    "$(jq -r '.reason' "$WA4/results/$u10.json" 2>/dev/null)" "rollback backup unreadable"
+assert_contains "the failed apply is audited as failed" \
+    "$(cat "$WA4/audit/control.log")" '"action":"worker-apply","status":"failed"'
 
 # ---------------------------------------------------------------------------
 echo "== control channel: worker upgrade fails closed (#597) =="
@@ -6920,7 +6957,22 @@ assert_eq "rolled_back result carries the rig's reason" \
     "$(jq -r '.reason' "$WU_LAST_DIR/results/$w8.json" 2>/dev/null)" "miner did not return live"
 w9="34343434-3434-4234-9234-343434343434"
 wu_accept_case "$w9" '{"change_id":"chg-9","status":"failed","reason":"throttled: retry after the window"}' \
-    "rig-side throttle refusal is mapped to retry-later, not a fault" "throttled"
+    "legacy rig (pre-v1.12.0) throttle refusal (failed+text) still maps to retry-later" "throttled"
+# First-class terminals since rigforge#320 (v1.12.0): noop (already on the target) and throttled
+# land their real status on the first poll — neither burns the poll cap into a vague "accepted".
+w17="bcbcbcbc-bcbc-42bc-92bc-bcbcbcbcbcbc"
+wu_accept_case "$w17" '{"change_id":"chg-9","status":"noop","reason":"already on v9.9.9 — nothing to upgrade"}' \
+    "a rig already on the target lands first-class 'noop', not the poll-cap fallback" "noop"
+assert_contains "the noop result carries the rig's already-on-target reason" \
+    "$(jq -r '.reason' "$WU_LAST_DIR/results/$w17.json" 2>/dev/null)" "already on v9.9.9"
+w18="cdcdcdcd-cdcd-42cd-92cd-cdcdcdcdcdcd"
+wu_accept_case "$w18" '{"change_id":"chg-9","status":"throttled","reason":"throttled — too soon since the last upgrade attempt"}' \
+    "a first-class 'throttled' terminal lands as retry-later on the first poll" "throttled"
+# A genuine failure that merely MENTIONS the throttle must stay a fault (rigforge#321's
+# fail-closed refusal): only the legacy leading-"throttled" free text remaps to retry-later.
+w19="dededede-dede-42de-92de-dededededede"
+wu_accept_case "$w19" '{"change_id":"chg-9","status":"failed","reason":"throttle state unavailable under /var/lib/rigforge — refused (fail-closed)"}' \
+    "a broken-rig failure mentioning the throttle stays 'failed', never calmed" "failed"
 # An unreachable rig fails cleanly (nothing changed, rig keeps its version).
 unreach_dir="$SANDBOX/ctrl597-unreach"
 mkdir -p "$unreach_dir/staged" "$unreach_dir/results" "$unreach_dir/audit" "$unreach_dir/bin"

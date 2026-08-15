@@ -358,7 +358,8 @@ same `{worker, changes}` request:
 
 Either way, click **Apply to rig**; RigForge validates the change, applies it, and — if the miner
 doesn't come back to a live hashrate — rolls it back on its own. The panel shows the outcome
-(applied / rejected / rolled back) and appends it to the history.
+(applied / rejected / rolled back — or failed with the rig's reason, when its own rollback
+path broke) and appends it to the history.
 
 To make a rig editable, give it `host`, `token`, and (unless it's the default `8082`) `control_port`
 in its [`workers.list[]`](configuration.md#configuration-reference) descriptor. Without a host, or
@@ -368,8 +369,9 @@ When the rig's [new-release badge](#workers-alive) shows and the rig is editable
 rig…** button appears beside it: arm it, confirm, and the rig upgrades its own RigForge to the
 latest release — the per-worker twin of the stack's one-click upgrade. The rig may rebuild its
 miner (about ten minutes when the XMRig pin changed) and rolls itself back if the miner doesn't
-come back live. The panel shows the outcome (applied / rolled back / failed); a repeat click inside
-the rig's own six-hour upgrade window reads as "throttled — retry later", not an error. See
+come back live. The panel shows the outcome (applied / already up to date / rolled back / failed);
+a repeat click inside the rig's own six-hour upgrade window reads as "throttled — retry later",
+not an error. See
 [Connecting Miners › One-click rig upgrade](workers.md#one-click-rig-upgrade) for what the rig
 must enable and how the target is derived.
 
