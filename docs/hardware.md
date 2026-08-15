@@ -99,6 +99,12 @@ On a 16 GB machine this fits but is tight, which is why Tari is capped. Use 32 G
 > Running with only 8 GB? It boots only if you disable HugePages (`./pithead setup --skip-optimize`),
 > which frees the 6 GB reservation, but leaves little headroom and hurts RandomX verification
 > performance. Prefer 16 GB+.
+>
+> The [appliance](appliance.md) makes this call itself: 16 GB is its supported floor, and on a
+> machine below it the boot shrinks the reservation to 5 GB — the smallest pool that still holds
+> both RandomX datasets — announces it on the console, and `doctor` reports it as a warning until
+> the machine has 16 GB. Far below the floor (under ~7 GB) the reservation is released entirely
+> and the stack will not run reliably.
 
 ### Disk
 

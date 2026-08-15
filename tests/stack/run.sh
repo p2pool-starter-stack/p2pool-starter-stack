@@ -9995,6 +9995,105 @@ else
 fi
 assert_eq "empty-adopt persists nothing" "$(cat "$MID/data-id" 2>/dev/null || echo absent)" "absent"
 
+echo "== unit: pithead-hugepages — the RandomX reservation fits the machine's RAM (#977) =="
+# The appliance bakes a 6 GiB hugepages reservation sized for the supported 16 GB machine; the
+# boot-time sizing shrinks it LOUDLY on smaller RAM. The tier function is pure over a
+# meminfo-shaped file, so every branch is provable here; the only thing left for the battery is
+# that on the 16 GiB harness VM the sizing is a no-op (full pool intact, no marker).
+HG="$SANDBOX/hugepages"
+mkdir -p "$HG"
+printf 'MemTotal:       16250000 kB\nMemFree:        16000000 kB\n' >"$HG/meminfo-16g"
+printf 'MemTotal:       8050000 kB\n' >"$HG/meminfo-8g"
+printf 'MemTotal:       4000000 kB\n' >"$HG/meminfo-4g"
+printf 'MemTotal:       15728640 kB\n' >"$HG/meminfo-at-floor"
+printf 'MemTotal:       15728639 kB\n' >"$HG/meminfo-under-floor"
+printf 'MemTotal:       banana kB\n' >"$HG/meminfo-garbage"
+printf 'MemFree:        123 kB\n' >"$HG/meminfo-no-total"
+
+hg_want() {
+    (
+        # shellcheck disable=SC1091
+        source "$ROOT/os/overlay/pithead-hugepages"
+        hugepages_want "$1"
+    )
+}
+assert_eq "16 GiB machine keeps the full 3072-page pool" "$(hg_want "$HG/meminfo-16g")" "3072"
+assert_eq "exactly the 15 GiB floor keeps the full pool (a real 16 GB box clears it)" "$(hg_want "$HG/meminfo-at-floor")" "3072"
+assert_eq "just under the floor reduces to 2560 pages (both RandomX datasets still fit)" "$(hg_want "$HG/meminfo-under-floor")" "2560"
+assert_eq "8 GiB machine reduces to 2560 pages" "$(hg_want "$HG/meminfo-8g")" "2560"
+assert_eq "4 GiB machine releases the reservation (0 pages)" "$(hg_want "$HG/meminfo-4g")" "0"
+assert_eq "garbage MemTotal keeps the full baked pool (degrade only on evidence)" "$(hg_want "$HG/meminfo-garbage")" "3072"
+assert_eq "missing MemTotal keeps the full baked pool" "$(hg_want "$HG/meminfo-no-total")" "3072"
+
+# ONE definition, three copies: the overlay script's full value must match the CLI's
+# PITHEAD_HUGEPAGES and the rootfs's baked sysctl line — drift here re-opens the silent floor.
+cli_pages=$(run_sourced "$SANDBOX" eval 'echo "$PITHEAD_HUGEPAGES"')
+overlay_pages=$(
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    echo "$FULL_PAGES"
+)
+assert_eq "overlay full pool matches the CLI's PITHEAD_HUGEPAGES" "$overlay_pages" "$cli_pages"
+if grep -q "vm.nr_hugepages=$cli_pages" "$ROOT/os/rootfs/Dockerfile"; then
+    ok "rootfs bakes the same sysctl value the CLI and overlay declare ($cli_pages)"
+else
+    bad "rootfs bakes the same sysctl value the CLI and overlay declare ($cli_pages)" \
+        "no vm.nr_hugepages=$cli_pages line in os/rootfs/Dockerfile"
+fi
+
+# main, degraded tier: shrinks the pool file, leaves the plain-words marker doctor reads.
+printf '3072\n' >"$HG/nr_hugepages"
+out=$(
+    export PITHEAD_MEMINFO="$HG/meminfo-8g" PITHEAD_NR_HUGEPAGES_FILE="$HG/nr_hugepages" \
+        PITHEAD_HUGEPAGES_MARKER="$HG/marker"
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    main
+)
+assert_eq "low-RAM boot shrinks the pool to the reduced target" "$(cat "$HG/nr_hugepages")" "2560"
+assert_contains "low-RAM boot announces the degrade on the console/journal" "$out" "below the supported 16 GB"
+assert_contains "degraded marker names the supported floor in plain words" "$(cat "$HG/marker" 2>/dev/null)" "16 GB"
+assert_not_contains "degrade message carries no issue numbers (operator text)" "$out" "#9"
+
+# main, too-small tier: releases the pool entirely and says the stack will not run.
+printf '3072\n' >"$HG/nr_hugepages"
+out=$(
+    export PITHEAD_MEMINFO="$HG/meminfo-4g" PITHEAD_NR_HUGEPAGES_FILE="$HG/nr_hugepages" \
+        PITHEAD_HUGEPAGES_MARKER="$HG/marker"
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    main
+)
+assert_eq "far-below-floor boot releases the reservation" "$(cat "$HG/nr_hugepages")" "0"
+assert_contains "far-below-floor boot says the stack will not run reliably" "$out" "will not run reliably"
+
+# main, supported tier: a strict no-op — pool untouched, no marker, nothing said.
+printf '3072\n' >"$HG/nr_hugepages"
+rm -f "$HG/marker"
+out=$(
+    export PITHEAD_MEMINFO="$HG/meminfo-16g" PITHEAD_NR_HUGEPAGES_FILE="$HG/nr_hugepages" \
+        PITHEAD_HUGEPAGES_MARKER="$HG/marker"
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    main
+)
+assert_eq "supported machine leaves the baked pool alone" "$(cat "$HG/nr_hugepages")" "3072"
+assert_eq "supported machine writes no degraded marker" "$(cat "$HG/marker" 2>/dev/null || echo absent)" "absent"
+assert_eq "supported machine says nothing" "$out" ""
+
+# doctor reads the marker as a WARN — never FAIL, so the A/B commit gate (which takes doctor's
+# exit code) still commits a degraded-but-serving box.
+printf 'This machine has 7.7 GiB of RAM - below the supported 16 GB. Reduced reservation.\n' >"$HG/marker"
+out=$(PITHEAD_HUGEPAGES_MARKER="$HG/marker" run_sourced "$SANDBOX" check_hugepages_degraded 2>&1)
+assert_contains "doctor surfaces the degraded-hugepages message as a WARN" "$out" "WARN"
+assert_contains "doctor repeats the boot-time message verbatim" "$out" "below the supported 16 GB"
+assert_not_contains "doctor never FAILs on the degrade (commit gate must still pass)" "$out" "FAIL"
+rc=$(
+    PITHEAD_HUGEPAGES_MARKER="$HG/absent-marker" run_sourced "$SANDBOX" check_hugepages_degraded >/dev/null 2>&1
+    echo $?
+)
+assert_rc "no marker, no verdict (rc 0, silent off the appliance)" "$rc" "0"
+
 echo "== unit: pithead-media-config — physical-presence media channel (#786 sub-issue D) =="
 # Source the boot leg (functions only — its main is guarded) and drive its pieces with stubbed
 # lsblk/mount/umount and a real (sandboxed) copy of pithead for validation — the same two-layer

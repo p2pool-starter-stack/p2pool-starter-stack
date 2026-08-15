@@ -1,0 +1,97 @@
+#!/bin/bash
+# Boot-time hugepages sizing: fit the baked RandomX reservation to the RAM actually present.
+#
+# The rootfs bakes vm.nr_hugepages=3072 (6 GiB of 2 MiB pages) into /etc/sysctl.d/ — sized for
+# the supported 16 GB machine, and load-bearing for the container caps (#78 spike): a RandomX
+# dataset must land in hugetlbfs, where the cgroup does not count it, or p2pool's ~2.3 GiB
+# dataset falls into its 1 GiB cap and the OOM-killer ends it at every start. On a smaller
+# machine the unconditional 6 GiB silently starves everything else instead (#977) — no check,
+# no message, a box that just thrashes. This unit runs right after systemd-sysctl on every
+# boot, before either boot owner starts a container — the pool is still idle, so resizing it
+# never steals pages from a running miner (RigForge's own grow-only write happens later, inside
+# the boot path).
+#
+# The tiers, and why the low one is "reduced", not "skip":
+#   >= 15 GiB   full 3072 pages (6 GiB). The supported machine; nothing to say.
+#   >= 7 GiB    2560 pages (5 GiB): both RandomX datasets — p2pool's AND monerod's, each
+#               dataset + cache = 1168 pages — with slack for their working pages. It cannot
+#               be smaller: with room for only one dataset, whichever process allocates second
+#               falls back to normal pages, and when that is p2pool its 1 GiB cap kills it —
+#               a crash-loop the commit gate then refuses, i.e. an unbootable slot. The rest
+#               of the stack runs squeezed (Tari's auto ceiling already re-reads
+#               HugePages_Total at render time, so the caps adapt), and the console, journal
+#               and doctor all say so.
+#   below       0 pages: no reservation at all leaves more RAM than any reduced pool could,
+#               and the stack cannot run in what remains either way. Releasing it keeps the
+#               machine itself responsive enough to tell the operator what is wrong.
+#
+# A degraded boot leaves its message in /run (volatile on purpose — RAM cannot change without
+# a reboot) and doctor's memory section reports it as a WARN, never a FAIL: the A/B commit
+# gate takes doctor's exit code, and a degraded-but-serving box must still commit its slot.
+set -uo pipefail
+
+# Env-overridable so the stack tests can run this against fixtures, matching pithead-sync and
+# pithead-media-config's convention.
+MEMINFO="${PITHEAD_MEMINFO:-/proc/meminfo}"
+NR_HUGEPAGES_FILE="${PITHEAD_NR_HUGEPAGES_FILE:-/proc/sys/vm/nr_hugepages}"
+MARKER="${PITHEAD_HUGEPAGES_MARKER:-/run/pithead-hugepages-degraded}"
+
+# Same value as the CLI's PITHEAD_HUGEPAGES and the baked sysctl.d line; the stack suite pins
+# all three together so they cannot drift.
+FULL_PAGES=3072
+REDUCED_PAGES=2560
+
+# Target page count for this machine — a pure function of a meminfo-shaped file, so the tiers
+# are unit-testable. Unreadable meminfo keeps the full baked reservation: degrading is the
+# exception path, and a Linux box that cannot produce MemTotal has bigger problems.
+hugepages_want() {
+    local kb
+    kb=$(awk '/^MemTotal:/{print $2}' "$1" 2>/dev/null)
+    case "$kb" in '' | *[!0-9]*) kb="" ;; esac
+    if [ -z "$kb" ] || [ "$kb" -ge 15728640 ]; then # 15 GiB — every real 16 GB machine clears it
+        echo "$FULL_PAGES"
+    elif [ "$kb" -ge 7340032 ]; then # 7 GiB — every real 8 GB machine clears it
+        echo "$REDUCED_PAGES"
+    else
+        echo 0
+    fi
+}
+
+# Put words in front of a human on every physical console, same broadcast as
+# pithead-media-config: /dev/console is only whichever console= came LAST on the kernel
+# cmdline, so a message sent there alone is invisible on the other one. Every line also
+# reaches the journal through stdout.
+_console() { # lines...
+    local line dev
+    for line in "$@"; do
+        [ -n "$line" ] && echo "pithead-hugepages: $line"
+    done
+    for dev in /dev/tty1 /dev/ttyS0; do
+        [ -w "$dev" ] || continue
+        printf '%s\n' "$@" >"$dev" 2>/dev/null || true
+    done
+}
+
+main() {
+    local want mem_gib
+    want=$(hugepages_want "$MEMINFO")
+    # The supported machine: the baked sysctl already reserved the full pool. Say nothing.
+    [ "$want" -ge "$FULL_PAGES" ] && return 0
+
+    mem_gib=$(awk '/^MemTotal:/{printf "%.1f", $2 / 1048576}' "$MEMINFO" 2>/dev/null)
+    echo "$want" >"$NR_HUGEPAGES_FILE" 2>/dev/null ||
+        _console "could not resize the hugepage pool (writing $NR_HUGEPAGES_FILE failed)"
+
+    local msg
+    if [ "$want" -gt 0 ]; then
+        msg="This machine has ${mem_gib:-?} GiB of RAM — below the supported 16 GB. The mining reservation is reduced from 6 GiB to 5 GiB of large pages so mining can still run, and everything else runs squeezed: expect lower performance and less headroom. Use a 16 GB machine for supported operation."
+    else
+        msg="This machine has ${mem_gib:-?} GiB of RAM — far below the supported 16 GB. The 6 GiB mining reservation is released entirely so the machine stays responsive, and the mining stack will not run reliably on this hardware."
+    fi
+    printf '%s\n' "$msg" >"$MARKER" 2>/dev/null || true
+    _console "$msg"
+    return 0
+}
+
+# Sourceable for the test suite (functions only); runs main only when executed directly.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then main "$@"; fi

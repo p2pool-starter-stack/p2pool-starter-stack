@@ -349,7 +349,9 @@ phase_boot() {
 
     # Hugepages are load-bearing (the RandomX dataset must land in hugetlbfs, not the cgroup —
     # the Dockerfile's own words): the baked sysctl reserves 3072 2M pages, and a boot that
-    # silently lost them starves the miner while everything else looks healthy.
+    # silently lost them starves the miner while everything else looks healthy. Since #977 this
+    # also pins the boot-time sizing unit's no-op branch: on this 16 GiB guest it must leave
+    # the full pool alone (the degrade tiers are tier-1, stack suite).
     local hp
     hp=$(_ssh "awk '/^HugePages_Total/{print \$2}' /proc/meminfo" 2>/dev/null) || hp=""
     if [ -n "$hp" ] && [ "$hp" -ge 3072 ]; then
@@ -1648,6 +1650,28 @@ phase_provision() {
         ok "pithead-boot ran the baked-image loader (digest record rewritten)"
     else
         bad "the digest record never came back — pithead-boot did not run the loader"
+    fi
+    # Hugepages sizing on supported RAM (#977): the sizing unit runs every boot before the
+    # stack, and on this 16 GiB guest it must be a NO-OP — the full 3072-page (6 GiB) pool
+    # intact and no degraded marker. A short pool here means the sizing shrank supported
+    # hardware; a marker means it cried wolf. The degrade tiers themselves are tier-1 (stack
+    # suite, meminfo fixtures) — a second low-RAM VM would re-prove arithmetic.
+    local hp_prov
+    hp_prov=$(_ssh "awk '/^HugePages_Total/{print \$2}' /proc/meminfo" 2>/dev/null) || hp_prov=""
+    if [ -n "$hp_prov" ] && [ "$hp_prov" -ge 3072 ]; then
+        ok "full hugepage pool intact on a provisioned boot ($hp_prov pages — sizing left supported RAM alone)"
+    else
+        bad "hugepage pool short on a provisioned boot (HugePages_Total: ${hp_prov:-unreadable}, want >= 3072) — the sizing unit degraded a supported machine"
+    fi
+    if _ssh "systemctl is-active --quiet pithead-hugepages.service"; then
+        ok "hugepages sizing unit ran this boot"
+    else
+        bad "hugepages sizing unit did not run — a low-RAM machine would get the silent 6 GiB carve-out"
+    fi
+    if _ssh "test ! -f /run/pithead-hugepages-degraded"; then
+        ok "no degraded-hugepages marker on a supported machine"
+    else
+        bad "degraded-hugepages marker present on the 16 GiB guest: $(_ssh 'cat /run/pithead-hugepages-degraded' 2>/dev/null | tr '\n' ' ' | cut -c1-160)"
     fi
     # The booted slot must commit ITSELF once healthy (#793) — no harness mark-good here. On a
     # real appliance nothing ever ran mark-good, so RAUC called both slots bad and every boot

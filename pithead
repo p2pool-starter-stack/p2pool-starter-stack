@@ -924,6 +924,18 @@ docker_boot_enabled() {
     systemctl is-enabled docker.service >/dev/null 2>&1 || systemctl is-enabled docker.socket >/dev/null 2>&1
 }
 
+# Appliance low-RAM degrade: the boot-time sizing (os/overlay/pithead-hugepages) leaves its
+# plain-words message in /run when it shrank or released the RandomX reservation, and doctor
+# repeats it here. WARN, not FAIL, on purpose — the appliance's A/B commit gate takes doctor's
+# exit code, and a degraded-but-serving box must still commit its slot. The file never exists
+# off the appliance, so this is a no-op everywhere else. A separate function so the marker
+# read is unit-testable; the marker path override matches the overlay script's.
+check_hugepages_degraded() {
+    local marker="${PITHEAD_HUGEPAGES_MARKER:-/run/pithead-hugepages-degraded}"
+    [ -f "$marker" ] || return 0
+    dr_warn "$(tr '\n\t' '  ' <"$marker")"
+}
+
 # True (rc 0) when the host CPU advertises AVX2 — RandomX wants it, but it's performance-only,
 # not fatal. Linux reads /proc/cpuinfo; macOS reads sysctl's machdep CPU features.
 cpu_has_avx2() {
@@ -1069,6 +1081,7 @@ doctor() {
         else
             dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run './pithead setup' (kernel optimization) to reserve them."
         fi
+        check_hugepages_degraded
 
         # Runtime counterpart to setup's capacity pre-flight: preflight_resources checks MemTotal
         # (does the host have enough RAM at all), this checks MemAvailable (is enough free right

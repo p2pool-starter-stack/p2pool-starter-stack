@@ -11,7 +11,11 @@ manage the host.
 ## What you need
 
 - An x86-64 machine with UEFI you can dedicate to mining. It will be **erased**.
-- 16 GB RAM or more, and an internal SSD or NVMe with room for the chains. Pruned Monero
+- 16 GB RAM or more — that is the supported floor, not a suggestion: the appliance reserves
+  6 GB of it for mining at every boot. With less RAM it still boots, but it prints a warning
+  on the machine's screen and shrinks that reservation — mining runs slower and everything
+  else runs squeezed, at every boot until the machine has 16 GB.
+- An internal SSD or NVMe with room for the chains. Pruned Monero
   needs about 120 GB and a local Tari node about 170 GB, so **350 GB or more** runs both
   locally. On a smaller disk, run pruned Monero and point Tari at a node you already have —
   the setup page asks both questions.

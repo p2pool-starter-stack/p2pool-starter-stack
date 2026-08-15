@@ -190,6 +190,16 @@ does: `pithead` writes the last `[ERROR]` line to `error.txt` and the failed con
 `last-attempt.json` before reopening, and `wizard.py`/`wizard.mjs` surface both — the
 reason as the page's error text, the config as the retry prefill.
 
+**Fixed — the hugepages reservation now fits the machine's RAM (#977).** The baked 6 GiB
+sysctl imposed a silent ≥ 16 GiB floor the harness's 16 GiB VM could never notice.
+`pithead-hugepages.service` now sizes the pool every boot before either boot owner:
+full 3072 pages on a supported machine, 2560 below 15 GiB (the smallest pool holding
+BOTH RandomX datasets — p2pool's ~2.3 GiB dataset falling out of hugetlbfs lands in its
+1 GiB cgroup cap and OOM-loops, the load-bearing finding from the #78 spike), zero
+below 7 GiB where the stack cannot run regardless. Degrades are announced on every
+console, journaled, and repeated by `doctor` as a WARN — never a FAIL, so the A/B
+commit gate still commits a degraded-but-serving slot.
+
 ## Open
 
 - **Installing to a disk still needs a human (#979).** Pre-seeding (`pithead-token.txt` /
@@ -217,6 +227,3 @@ reason as the page's error text, the config as the retry prefill.
   provision time, so the plan's "first boot works offline" property is partial: the setup
   page works without a network, provisioning does not. Baking the full set roughly triples
   the image and inflates every update bundle — sized deliberately, not forgotten.
-- **Hugepages are reserved unconditionally (#977)** (6 GiB), so the appliance needs ≥ 16 GiB
-  RAM to leave room for the stack. The harness sizes its VM accordingly; a real
-  appliance should either check or scale the reservation.

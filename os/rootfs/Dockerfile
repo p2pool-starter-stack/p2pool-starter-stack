@@ -189,6 +189,12 @@ COPY os/overlay/pithead-boot /usr/local/sbin/pithead-boot
 # Physical-presence configuration channel (#786 sub-issue D): pithead-boot's one stage before
 # render. No unit of its own — it runs inline, inside the boot unit above.
 COPY os/overlay/pithead-media-config /usr/local/sbin/pithead-media-config
+# Hugepages sizing (#977): the sysctl.d reservation above is sized for the supported 16 GB
+# machine; this unit corrects it every boot on smaller RAM — loudly — before either boot owner
+# starts a container. Its own unit, not a pithead-boot stage, because the reservation lands on
+# EVERY boot including the unprovisioned first one, where pithead-boot never runs.
+COPY os/overlay/pithead-hugepages.service /etc/systemd/system/pithead-hugepages.service
+COPY os/overlay/pithead-hugepages /usr/local/sbin/pithead-hugepages
 # The two-tier reset's deep tier and the wedged-/data recovery path: reformats /data before it
 # mounts, either on a `pithead factory-reset` request (ESP marker) or when the partition is
 # genuinely unmountable. Ordered before data.mount by its unit — the wipe cannot run once /data is
@@ -227,7 +233,7 @@ RUN mkdir -p /etc/ssh/sshd_config.d \
 RUN mkdir -p /etc/systemd/system-preset \
     && printf 'disable *\n' > /etc/systemd/system-preset/00-pithead.preset \
     && systemctl mask systemd-firstboot.service
-RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-media-config /usr/local/sbin/pithead-data-reset /usr/local/sbin/pithead-ssh-host-keys /usr/local/sbin/pithead-machine-id /usr/lib/systemd/system-generators/pithead-mount-generator
+RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-media-config /usr/local/sbin/pithead-hugepages /usr/local/sbin/pithead-data-reset /usr/local/sbin/pithead-ssh-host-keys /usr/local/sbin/pithead-machine-id /usr/lib/systemd/system-generators/pithead-mount-generator
 # The updater is chosen per image. RAUC is a Debian package, so it is installed here when
 # selected; leaving PITHEAD_UPDATER empty builds the same rootfs with no updater at all.
 ARG PITHEAD_UPDATER=""
@@ -262,7 +268,7 @@ RUN sed -i 's/^#\?use-ipv6=.*/use-ipv6=no/' /etc/avahi/avahi-daemon.conf
 RUN systemctl enable podman.socket pithead-boot.service pithead-cpu-governor.service avahi-daemon \
         systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
-        pithead-data-reset.service pithead-machine-id.service \
+        pithead-data-reset.service pithead-machine-id.service pithead-hugepages.service \
     && systemctl disable ssh
 # systemd-repart.service is static — it is pulled in by sysinit.target, and `systemctl enable` on a
 # static unit is an error that would fail the build. Assert it is present instead.

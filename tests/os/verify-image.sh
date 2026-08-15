@@ -125,6 +125,11 @@ chk "data-reset ordered before /data mounts (a mounted partition cannot be refor
 # Hugepages: the sysctl the Dockerfile calls load-bearing for the memory caps.
 chk "hugepage reservation baked (RandomX dataset must land in hugetlbfs)" \
     'grep -q "vm.nr_hugepages=3072" "$ROOT/etc/sysctl.d/99-pithead-hugepages.conf"'
+# The low-RAM sizing that corrects that sysctl at boot: without it a small machine gets the
+# silent 6 GiB carve-out back.
+chk "hugepages sizing unit enabled (low-RAM boots degrade loudly, not silently)" \
+    'test -L "$ROOT/etc/systemd/system/multi-user.target.wants/pithead-hugepages.service"'
+chk "hugepages sizing script present and executable" 'test -x "$ROOT/usr/local/sbin/pithead-hugepages"'
 
 echo "==> docker-export artefacts (all six members)"
 chk "no /.dockerenv" '[ ! -e "$ROOT/.dockerenv" ]'
