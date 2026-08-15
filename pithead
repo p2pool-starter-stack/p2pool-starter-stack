@@ -7485,8 +7485,8 @@ prompt_start_stack() {
 # pruning-aware: ~120 GiB pruned, ~320 GiB full. Tari's chain is the other heavyweight — ~170 GiB and
 # growing fast. Summed, this is ~300 GiB pruned / ~500 GiB full, the documented minimum
 # (docs/hardware.md). These carry generous growth headroom over usage measured on live nodes
-# (Monero pruned ~100 GiB / full ~265 GiB, Tari ~135 GiB) because both chains grow ~100+ GiB/year
-# combined — for a set-and-forget host the docs recommend a 2–4 TB drive.
+# (August 2026: Monero pruned ~100 GiB / full ~267 GiB, Tari ~149 GiB) because both chains grow
+# ~100+ GiB/year combined — for a set-and-forget host the docs recommend a 2–4 TB drive.
 # Args: <component> [<prune>] where prune (1 = on, 0 = off) only matters for "monero". Prints GiB.
 disk_component_gib() {
     case "$1" in
