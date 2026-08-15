@@ -444,6 +444,13 @@ DASHBOARD_FAIL_CLOSED = os.environ.get("DASHBOARD_FAIL_CLOSED", "false").strip()
 NODE_DOWN_AFTER_SEC = int(os.environ.get("NODE_DOWN_AFTER_SEC", 90))
 NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
 
+# Peer-loss staleness (#972): a reachable monerod reporting `synchronized: false` must persist
+# this long before the out-of-sync alert fires. 10 minutes rides out normal tip-lag blips AND
+# the coupled monerod restart after a tor recreate (compose depends_on restart / tor_heal), so
+# only a node that genuinely failed to re-peer alarms. Env-only (tests/mini-stack), not a
+# config.json knob — nobody should have to tune a detector.
+NODE_STALE_AFTER_SEC = int(os.environ.get("NODE_STALE_AFTER_SEC", 600))
+
 # --- Healthchecks.io dead-man's switch (Issue #79) ---
 # Optional external liveness monitor. Set a ping URL and the dashboard loop pings it every cycle;
 # if the whole host dies (power loss, kernel panic, NIC death) the dashboard dies with it, the pings

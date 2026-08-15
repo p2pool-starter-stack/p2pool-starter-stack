@@ -53,6 +53,7 @@ from mining_dashboard.config.config import (
     LOW_RAM_GB,
     MONERO_CLEARNET_SYNC,
     MONERO_WALLET_ADDRESS,
+    NODE_STALE_AFTER_SEC,
     PAYOUT_CONFIRM_ENABLED,
     REJECT_WORKERS_CONTAINER,
     SYNC_GATE_CONTAINERS,
@@ -638,6 +639,11 @@ class DataService:
         self.docker_control = DockerControl()
         self.monero_health = NodeHealthMonitor()
         self.tari_health = NodeHealthMonitor()
+        # Peer-loss staleness (#972): the same debounce machine, fed monerod's own
+        # `synchronized` flag instead of reachability. "Ever synchronized" plays the ever-up
+        # guard, so a node mid-initial-sync (synchronized false for days) never alarms; only a
+        # node that WAS in sync and stayed out for NODE_STALE_AFTER_SEC trips `down` (= stale).
+        self.monero_sync_stale = NodeHealthMonitor(down_after=NODE_STALE_AFTER_SEC)
 
         # Healthchecks.io dead-man's switch (Issue #79). Disabled by default — when off this is
         # a no-op. When on, each cycle pings a unique URL; the alert fires externally on the
@@ -1503,6 +1509,17 @@ class DataService:
                     monero_sync["down"] = monero_down
                     tari_sync["down"] = tari_down
 
+                    # 3b. Peer-loss staleness (#972): monerod can survive a tor restart with
+                    # every SOCKS peer dead — reachable, healthcheck green, height creeping,
+                    # but `synchronized: false` for hours. The RPC path is the only one that
+                    # carries the flag; absence (log-scrape fallback, remote node) is no
+                    # verdict, so the monitor isn't fed and its streaks stay put.
+                    monero_reports_synced = monero_sync.get("synchronized")
+                    if monero_reports_synced is not None:
+                        self.monero_sync_stale.update(monero_reports_synced)
+                    monero_stale = self.monero_sync_stale.down
+                    monero_sync["stale"] = monero_stale
+
                     # 4. Sync gate (Issue #35): hold p2pool + xmrig-proxy until the required
                     # chain(s) first sync, then release. monerod must be synced; Tari must be
                     # synced too unless it's non-blocking. #31's runtime failover only applies
@@ -1558,6 +1575,9 @@ class DataService:
                     )
                     await self.alert_service.process(
                         monero_down=monero_down,
+                        # Debounced "reachable but out of sync" (#972) — the 0-peer strand
+                        # after a tor restart that node-down can't see.
+                        monero_stale=monero_stale,
                         tari_down=tari_down,
                         tari_required=TARI_REQUIRED,
                         miner_released=self.miner_released,

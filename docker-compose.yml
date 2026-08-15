@@ -127,6 +127,14 @@ services:
     depends_on:
       tor:
         condition: service_healthy
+        # A tor restart/recreate kills every SOCKS connection, and monerod keeps its dead peer
+        # sockets: bench-observed at 0 in / 0 out peers for ~6h with the healthcheck passing
+        # throughout (#972). restart: true makes every compose operation that restarts or
+        # recreates tor (up/apply/upgrade recreation, './pithead restart tor') restart monerod
+        # right after tor is healthy again, so it re-dials through the fresh Tor (recovers in
+        # about a minute). Needs compose >= 2.17. The dashboard's tor auto-heal (#424) bypasses
+        # compose, so tor_heal.py couples the same restart itself.
+        restart: true
     healthcheck:
       # The RPC username/password are read from the container's env inside the script, NOT
       # interpolated into the test command — so they no longer leak via `docker inspect` (#90).
@@ -814,8 +822,9 @@ services:
       - proxy_net
 
   # --- Docker Control Proxy (start/stop only) ---
-  # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy: node-down worker
-  # failover (Issue #31) and holding the miner until the nodes finish syncing (Issue #35).
+  # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy — node-down worker
+  # failover (Issue #31), holding the miner until the nodes finish syncing (Issue #35) — plus
+  # tor (#424) and monerod after a tor heal (#972).
   # With POST=1 but every section (CONTAINERS, EXEC, IMAGES, …) left off, the v0.4.2 ruleset
   # allows exactly `POST /containers/<id>/{start,stop}` and denies everything else
   # (create/kill/exec/reads). Kept separate from the read-only proxy above so opening POST
@@ -848,7 +857,8 @@ services:
     # can't scope start/stop to specific containers, so keeping this proxy off `mining_net` and only
     # on the host loopback is what stops a compromised mining container from start/stopping the whole
     # stack. The dashboard reaches it at 127.0.0.1:12376; it only ever names p2pool/xmrig-proxy —
-    # plus tor for the opt-in guard self-heal restart (#424).
+    # plus tor for the opt-in guard self-heal restart (#424), and monerod right after a successful
+    # tor heal (#972: a tor cycle strands monerod's peers, so the heal re-dials the local node too).
     ports:
       - "127.0.0.1:12376:2375"
     networks:

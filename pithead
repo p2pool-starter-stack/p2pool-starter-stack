@@ -258,7 +258,7 @@ stack_down() {
     log "Stack stopped."
 }
 
-stack_restart() { # [tor]
+stack_restart() { # [tor|monerod]
     case "${1:-}" in
     "")
         log "Restarting stack..."
@@ -268,14 +268,28 @@ stack_restart() { # [tor]
     tor)
         # Manual leg of the #424 guard self-heal: restart ONLY tor so it picks fresh guards
         # when clearnet exits are stuck (the doctor Tor clearnet-egress check WARNs on this).
-        # Only tor is accepted here — other containers must go through apply/upgrade, whose
-        # recreate applies current args (a bare restart would reuse stale ones, #273); tor
-        # takes no args from .env, so a plain restart is safe and is exactly the fix.
-        log "Restarting the tor container to pick fresh guards — ALL Tor circuits drop and rebuild (mining onions included; p2pool/monerod re-peer on their own)..."
+        # Tor takes no args from .env, so a plain restart is safe (other containers go
+        # through apply/upgrade, whose recreate applies current args, #273). Compose then
+        # restarts monerod right after tor is healthy again (depends_on restart: true, #972):
+        # monerod does NOT re-peer on its own after a tor restart kills its SOCKS
+        # connections — it can sit at 0 in / 0 out peers for hours; p2pool re-peers fine.
+        log "Restarting the tor container to pick fresh guards — ALL Tor circuits drop and rebuild (mining onions included; p2pool re-peers on its own, and a local monerod is restarted alongside so it re-dials)..."
         docker compose restart tor
         log "tor restarted. Verify egress recovered: './pithead doctor' (Tor clearnet-egress check)."
         ;;
-    *) error "restart takes no argument, or 'tor' (fresh Tor guards when clearnet egress is stuck). Got: '$1'." ;;
+    monerod)
+        # Peer-loss recovery (#972): a tor restart/recreate outside compose (docker itself, or
+        # the #424 auto-heal when its coupled monerod restart could not be issued) leaves
+        # monerod holding dead SOCKS sockets — reachable, healthcheck green, but
+        # `synchronized: false` with 0 peers for hours. A plain restart re-dials through the
+        # running tor and recovers in about a minute. Safe under the #273 recreate-only rule
+        # for the same reason as tor: re-peering wants the container's args EXACTLY as they
+        # are — config changes still go through apply.
+        log "Restarting the monerod container so it re-dials its peers through Tor..."
+        docker compose restart monerod
+        log "monerod restarted. It should report synchronized again within a few minutes — verify: './pithead doctor' (Monero sync check)."
+        ;;
+    *) error "restart takes no argument, 'tor' (fresh Tor guards when clearnet egress is stuck), or 'monerod' (re-dial peers after a Tor restart left the node out of sync). Got: '$1'." ;;
     esac
 }
 
@@ -1061,6 +1075,7 @@ doctor() {
             dr_warn "No containers reported by 'docker compose ps' — the stack may be stopped (run './pithead up') or run from a different directory."
         fi
         check_dashboard_answers
+        check_monerod_synchronized
     fi
 
     # --- Summary ---
@@ -1512,9 +1527,11 @@ Setup & configuration:
 Lifecycle:
   up                        Start the stack.
   down                      Stop the stack.
-  restart [tor]             Restart the stack — or only the tor container, which picks
-                            fresh guards when Tor clearnet egress is stuck (drops
-                            and rebuilds all Tor circuits).
+  restart [tor|monerod]     Restart the stack — or one container: 'tor' picks fresh
+                            guards when Tor clearnet egress is stuck (drops and rebuilds
+                            all Tor circuits; a local monerod restarts alongside);
+                            'monerod' re-dials peers when the node reports not
+                            synchronized after a Tor restart.
   upgrade                   Re-render generated config and rebuild/restart the stack after
                             an update — a 'git pull' on source installs, or an extracted
                             release bundle (the dashboard's one-click upgrade runs this).
@@ -2000,6 +2017,42 @@ check_tor_clearnet_egress() {
         dr_ok "Tor clearnet egress works — Healthchecks, Telegram, and XvB can reach their services."
     else
         dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this, #424). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself."
+    fi
+    return 0
+}
+
+# doctor (#972): a monerod that survived a tor restart with every SOCKS peer dead looks healthy —
+# container up, healthcheck green (it only probes the RPC), height even creeping on occasional
+# lucky dials — while `get_info` reports `synchronized: false` and mining sits on a stale tip.
+# Probe from the host with the .env digest creds (the monerod image carries no curl) and trust
+# the RAW `synchronized` flag, like the dashboard's out-of-sync alert: a stranded node can report
+# a stale target_height of 0, so any height math reads it as caught up — the flag is the node's
+# own verdict. WARN not FAIL: a node mid-initial-sync legitimately reports the same thing for
+# days. Silently skips when no monerod container runs (remote mode, stack down).
+check_monerod_synchronized() {
+    container_is_running monerod || return 0
+    if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        dr_info "Monero sync check skipped — needs curl and jq."
+        return 0
+    fi
+    local user pass url body
+    user=$(env_get MONERO_NODE_USERNAME 2>/dev/null)
+    pass=$(env_get MONERO_NODE_PASSWORD 2>/dev/null)
+    url=$(env_get MONERO_RPC_URL 2>/dev/null)
+    [ -n "$url" ] || url="http://127.0.0.1:18081"
+    if [ -n "$user" ]; then
+        body=$(curl -fsS --max-time 8 --digest -u "$user:$pass" "$url/get_info" 2>/dev/null)
+    else
+        body=$(curl -fsS --max-time 8 "$url/get_info" 2>/dev/null)
+    fi
+    if [ -z "$body" ]; then
+        dr_info "Monero sync check skipped — monerod's RPC did not answer (the container table above shows whether it is still starting)."
+        return 0
+    fi
+    if printf '%s' "$body" | jq -e '(.status == "OK") and (.synchronized == true)' >/dev/null 2>&1; then
+        dr_ok "monerod reports synchronized with the Monero network."
+    else
+        dr_warn "monerod is running but reports NOT synchronized — normal during initial sync; if it stays like this on a previously-synced node (peers lost after a Tor restart), './pithead restart monerod' re-dials and recovers in about a minute."
     fi
     return 0
 }
