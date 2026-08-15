@@ -2105,6 +2105,34 @@ class TestReconcileWorkerConfig:
         finally:
             sm.close()
 
+    def test_terminal_report_reconciles_accepted_row_for_the_1009_vocabulary(self):
+        # #1009: failed/noop/throttled (rigforge#320) must reach the SAME reconcile path as
+        # applied/rejected/rolled_back — the mirror now ships live (rigforge v1.15.0, #346), and
+        # the pre-#1009 three-status allowlist dropped exactly these on the floor as "accepted"
+        # forever.
+        svc, sm = self._svc_with_real_storage()
+        try:
+            for status in ("failed", "noop", "throttled"):
+                cid = f"cid-{status}"
+                self._seed(sm, "accepted", change_id=cid)
+                worker_results = [
+                    {
+                        "rigforge": {
+                            "control": {
+                                "change_id": cid,
+                                "status": status,
+                                "reason": "rig-supplied",
+                            }
+                        }
+                    }
+                ]
+                asyncio.run(svc._reconcile_worker_config(self._workers("rig1"), worker_results))
+                row = self._status_of(sm, change_id=cid)
+                assert row["status"] == status
+                assert row["reason"] == "rig-supplied"
+        finally:
+            sm.close()
+
     def test_terminal_row_is_never_overwritten(self):
         svc, sm = self._svc_with_real_storage()
         try:
