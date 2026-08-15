@@ -1448,7 +1448,11 @@ phase_provision() {
     tries=0
     local code=000 served=0
     while [ "$tries" -lt 60 ]; do
-        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        # `|| true`, never `|| echo 000`: on a connection failure curl ALREADY prints 000 (-w
+        # always fires) and exits non-zero, so the echo appended a SECOND 000 — the retry case
+        # below then matched neither, broke on the first iteration, and reported the impossible
+        # "HTTP 000000". The loop existed to wait out exactly that state and never once waited.
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
         case "$code" in
         2?? | 3?? | 401 | 403)
             ok "dashboard is served through caddy (HTTP $code)"
@@ -1628,7 +1632,7 @@ phase_provision() {
     tries=0
     local answered=0
     while [ "$tries" -lt 36 ]; do
-        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
         case "$code" in
         2?? | 3?? | 401 | 403)
             ok "dashboard answers again after the reboot (HTTP $code) — through a REGENERATED Caddyfile"
