@@ -924,6 +924,19 @@ docker_boot_enabled() {
     systemctl is-enabled docker.service >/dev/null 2>&1 || systemctl is-enabled docker.socket >/dev/null 2>&1
 }
 
+# Appliance low-RAM degrade: the boot-time sizing (os/overlay/pithead-hugepages) leaves its
+# marker in /run when it shrank or released the RandomX reservation — the plain-words message
+# first, then the machine-readable "pages=N" record hugepages_decision_pages reads — and doctor
+# repeats the words here, not the record. WARN, not FAIL, on purpose — the appliance's A/B
+# commit gate takes doctor's exit code, and a degraded-but-serving box must still commit its
+# slot. The file never exists off the appliance, so this is a no-op everywhere else. A separate
+# function so the marker read is unit-testable; the marker path override matches the overlay's.
+check_hugepages_degraded() {
+    local marker="${PITHEAD_HUGEPAGES_MARKER:-/run/pithead-hugepages-degraded}"
+    [ -f "$marker" ] || return 0
+    dr_warn "$(head -n 1 "$marker" | tr '\t' ' ')"
+}
+
 # True (rc 0) when the host CPU advertises AVX2 — RandomX wants it, but it's performance-only,
 # not fatal. Linux reads /proc/cpuinfo; macOS reads sysctl's machdep CPU features.
 cpu_has_avx2() {
@@ -1069,6 +1082,7 @@ doctor() {
         else
             dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run './pithead setup' (kernel optimization) to reserve them."
         fi
+        check_hugepages_degraded
 
         # Runtime counterpart to setup's capacity pre-flight: preflight_resources checks MemTotal
         # (does the host have enough RAM at all), this checks MemAvailable (is enough free right
@@ -2532,13 +2546,19 @@ announce_stratum_auth() {
 rigforge_dir() { printf '%s' "${PITHEAD_RIGFORGE_DIR:-/data/rigforge}"; }
 
 # RigForge's config.json is a DERIVED file on the appliance — a pure function of pithead's
-# config.json + .env, rebuilt on every render like the Caddyfile. It carries the three values
-# the miner needs: the stack's own stratum over loopback, the stratum password when one is set,
-# and the stack's HugePages budget as hugepages_reserve_extra_mb — the hand-off that makes
-# RigForge the pool's single writer. Its grow-only sysctl sizes the whole pool (miner need +
-# this headroom); pithead's own write never shrinks it back (optimize_kernel). Declaring the
-# budget beats maxing the two reservations: both sides hold pages at the same time, so only the
-# sum survives one side growing into its own reservation.
+# config.json + .env + the boot-time sizing decision, rebuilt on every render like the
+# Caddyfile. It carries the three values the miner needs: the stack's own stratum over
+# loopback, the stratum password when one is set, and the stack's ACTUAL reservation as
+# hugepages_reserve_extra_mb — the hand-off that makes RigForge the pool's single writer. Its
+# grow-only sysctl sizes the whole pool (miner need + this headroom); pithead's own write
+# never grows past the same decision (optimize_kernel). Declaring the budget beats maxing the
+# two reservations: both sides hold pages at the same time, so only the sum survives one side
+# growing into its own reservation. The headroom follows hugepages_decision_pages, NOT the
+# baked constant (#977): on a degraded box a constant 6144 had RigForge's sysctl re-inflate
+# the shrunk pool every boot — and not the live HugePages_Total either, because a mid-run
+# `apply` re-renders after RigForge has already grown the pool, and handing the grown pool
+# back as headroom would ratchet it up on every apply. Healthy hardware has no marker, so the
+# declared value is the same 6144 MB it has always been.
 render_local_miner_config() {
     is_appliance || return 0
     # Not on a rig, ever. This function's "switched off" branch DELETES the miner's config, and
@@ -2560,7 +2580,7 @@ render_local_miner_config() {
     local port secret
     port=$(stratum_port_effective)
     secret=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
-    jq -n --arg url "127.0.0.1:$port" --arg pass "$secret" --argjson reserve "$((PITHEAD_HUGEPAGES * 2))" \
+    jq -n --arg url "127.0.0.1:$port" --arg pass "$secret" --argjson reserve "$(($(hugepages_decision_pages) * 2))" \
         '{pools: [({url: $url} + (if $pass != "" then {pass: $pass} else {} end))], hugepages_reserve_extra_mb: $reserve}' \
         >"$dir/config.json"
     log "Local miner config rendered to $dir/config.json (pool 127.0.0.1:$port)."
@@ -7394,6 +7414,26 @@ EOF
 # so the reservation and the declaration cannot drift apart.
 readonly PITHEAD_HUGEPAGES=3072
 
+# The budget this MACHINE actually gets (#977). On the appliance, the boot-time sizing
+# (os/overlay/pithead-hugepages) may have chosen a smaller pool for the fitted RAM and recorded
+# the chosen page count as the marker's "pages=N" line — that record is the single authority
+# every later writer honours: optimize_kernel caps its grow at it, and render_local_miner_config
+# declares it (never the baked constant) as RigForge's headroom. Without the record both writers
+# re-inflated the pool the sizing had just shrunk, while the marker and doctor kept saying
+# "reduced". No marker — every DIY host, every healthy appliance — means the full budget.
+hugepages_decision_pages() {
+    local pages
+    # || true: no marker means sed fails under pipefail, and that is the normal case everywhere
+    # but a degraded appliance — it must read as "full budget", never abort under set -e.
+    pages=$(sed -n 's/^pages=\([0-9][0-9]*\)$/\1/p' \
+        "${PITHEAD_HUGEPAGES_MARKER:-/run/pithead-hugepages-degraded}" 2>/dev/null | head -n 1) || true
+    if [ -n "$pages" ] && [ "$pages" -lt "$PITHEAD_HUGEPAGES" ]; then
+        echo "$pages"
+    else
+        echo "$PITHEAD_HUGEPAGES"
+    fi
+}
+
 # Kernel boot params pithead appends to GRUB_CMDLINE_LINUX_DEFAULT for RandomX: reserve 6 GiB of
 # 2 MiB HugePages and disable Transparent HugePages. NOTE the THP param is SINGULAR
 # (transparent_hugepage) — the plural form is an unrecognized param the kernel silently ignores,
@@ -7449,13 +7489,18 @@ optimize_kernel() {
         # and whoever writes an absolute value last steals the other side's pages — the kernel
         # shrinks the pool to the in-use floor and leaves zero headroom for a restart on either
         # side. RigForge's own write is grow-only for the same reason, so write ordering between
-        # the two products stays safe regardless of who runs first.
-        local current_hugepages
+        # the two products stays safe regardless of who runs first. The grow TARGET is the
+        # sizing decision, not the raw constant (#977): on a degraded appliance the wizard-accept
+        # path runs setup as root, and growing to the full budget here re-inflated the pool the
+        # boot-time sizing had just shrunk. No marker (DIY, healthy appliance) — full budget,
+        # exactly the old behavior.
+        local current_hugepages hp_target
+        hp_target=$(hugepages_decision_pages)
         current_hugepages=$(cat "${PITHEAD_NR_HUGEPAGES_FILE:-/proc/sys/vm/nr_hugepages}" 2>/dev/null || echo 0)
-        if [ "${current_hugepages:-0}" -ge "$PITHEAD_HUGEPAGES" ] 2>/dev/null; then
-            log "HugePages pool already holds $current_hugepages pages (>= $PITHEAD_HUGEPAGES) — leaving it as is."
+        if [ "${current_hugepages:-0}" -ge "$hp_target" ] 2>/dev/null; then
+            log "HugePages pool already holds $current_hugepages pages (>= $hp_target) — leaving it as is."
         else
-            sudo sysctl -w vm.nr_hugepages="$PITHEAD_HUGEPAGES"
+            sudo sysctl -w vm.nr_hugepages="$hp_target"
         fi
 
         if [ -f "/etc/default/grub" ]; then

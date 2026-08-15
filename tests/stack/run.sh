@@ -9076,13 +9076,24 @@ export PITHEAD_RIGFORGE_DIR="$LMR/rigforge"
 PITHEAD_APPLIANCE=0 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
 [ -f "$LMR/rigforge/config.json" ] && bad "DIY host -> nothing written" "file exists" ||
     ok "DIY host -> nothing written"
-PITHEAD_APPLIANCE=1 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/no-marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
 assert_eq "pool url is the stack's own stratum over loopback" \
     "$(jq -r '.pools[0].url' "$LMR/rigforge/config.json")" "127.0.0.1:3333"
 assert_eq "no stratum password -> no pass key at all" \
     "$(jq -r '.pools[0] | has("pass")' "$LMR/rigforge/config.json")" "false"
-assert_eq "the stack's HugePages budget is declared as headroom (3072 pages -> 6144 MB)" \
+assert_eq "no degrade marker -> the full budget is declared as headroom (3072 pages -> 6144 MB)" \
     "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "6144"
+# Degraded box (#977): the boot-time sizing recorded a smaller reservation in the marker, and
+# the render declares THAT — a constant 6144 here had RigForge's grow-only sysctl size the pool
+# to miner-need + 6 GiB on the low-RAM machine, every boot.
+printf 'reduced-reservation words\npages=2560\n' >"$LMR/marker"
+PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+assert_eq "degrade marker -> headroom follows the recorded reservation (2560 pages -> 5120 MB)" \
+    "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "5120"
+printf 'released-reservation words\npages=0\n' >"$LMR/marker"
+PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+assert_eq "released reservation -> zero headroom (RigForge sizes for the miner alone)" \
+    "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "0"
 printf 'STRATUM_PORT=13333\nPROXY_STRATUM_PASSWORD=s3cret\n' >"$LMR/.env"
 PITHEAD_APPLIANCE=1 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
 assert_eq "custom stratum port lands in the pool url" \
@@ -9341,7 +9352,7 @@ printf '#!/usr/bin/env bash\necho "sudo:$*" >>"${OKLOG:?}"\n' >"$OKSB/bin/sudo"
 printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec /usr/bin/uname "$@"\n' >"$OKSB/bin/uname"
 chmod +x "$OKSB/bin/sudo" "$OKSB/bin/uname"
 export OKLOG="$OKSB/calls"
-okrun() { # <pages currently in the pool>
+okrun() { # <pages currently in the pool> [degrade-marker file]
     printf '%s\n' "$1" >"$OKSB/nr"
     (
         cd "$OKSB" || exit
@@ -9351,7 +9362,8 @@ okrun() { # <pages currently in the pool>
         set +e
         log() { :; }
         warn() { :; }
-        PITHEAD_NR_HUGEPAGES_FILE="$OKSB/nr" optimize_kernel </dev/null
+        PITHEAD_NR_HUGEPAGES_FILE="$OKSB/nr" PITHEAD_HUGEPAGES_MARKER="${2:-$OKSB/no-marker}" \
+            optimize_kernel </dev/null
     )
 }
 : >"$OKLOG"
@@ -9363,6 +9375,22 @@ assert_not_contains "a larger pool (the miner's merged budget) is never shrunk" 
 : >"$OKLOG"
 okrun 3072 >/dev/null 2>&1
 assert_not_contains "an exact pool is left alone" "$(cat "$OKLOG")" "vm.nr_hugepages"
+# The degrade cap (#977): the boot-time sizing's marker records the chosen page count, and that
+# record caps the grow. Without it the wizard-accept path (setup runs as root on the appliance)
+# re-inflated the pool the sizing had just shrunk, while the marker and doctor kept saying
+# "reduced". A pool at the recorded size is left alone; one below it grows only to the record.
+printf 'reduced-reservation words for the operator\npages=2560\n' >"$OKSB/marker"
+: >"$OKLOG"
+okrun 2560 "$OKSB/marker" >/dev/null 2>&1
+assert_not_contains "a marker-sized pool is never re-inflated to the full budget" "$(cat "$OKLOG")" "vm.nr_hugepages"
+: >"$OKLOG"
+okrun 100 "$OKSB/marker" >/dev/null 2>&1
+assert_contains "a pool below the record grows to the record" "$(cat "$OKLOG")" "sudo:sysctl -w vm.nr_hugepages=2560"
+assert_not_contains "the grow never passes the marker's cap" "$(cat "$OKLOG")" "3072"
+printf 'released-reservation words\npages=0\n' >"$OKSB/marker"
+: >"$OKLOG"
+okrun 0 "$OKSB/marker" >/dev/null 2>&1
+assert_not_contains "a released (0-page) decision writes nothing at all" "$(cat "$OKLOG")" "vm.nr_hugepages"
 unset OKLOG
 unset -f okrun
 rm -rf "$OKSB"
@@ -10384,6 +10412,119 @@ else
     ok "empty-adopt: refused (non-zero exit)"
 fi
 assert_eq "empty-adopt persists nothing" "$(cat "$MID/data-id" 2>/dev/null || echo absent)" "absent"
+
+echo "== unit: pithead-hugepages — the RandomX reservation fits the machine's RAM (#977) =="
+# The appliance bakes a 6 GiB hugepages reservation sized for the supported 16 GB machine; the
+# boot-time sizing shrinks it LOUDLY on smaller RAM. The tier function is pure over a
+# meminfo-shaped file, so every branch is provable here; the only thing left for the battery is
+# that on the 16 GiB harness VM the sizing is a no-op (full pool intact, no marker).
+HG="$SANDBOX/hugepages"
+mkdir -p "$HG"
+printf 'MemTotal:       16250000 kB\nMemFree:        16000000 kB\n' >"$HG/meminfo-16g"
+printf 'MemTotal:       8050000 kB\n' >"$HG/meminfo-8g"
+printf 'MemTotal:       4000000 kB\n' >"$HG/meminfo-4g"
+printf 'MemTotal:       15728640 kB\n' >"$HG/meminfo-at-floor"
+printf 'MemTotal:       15728639 kB\n' >"$HG/meminfo-under-floor"
+printf 'MemTotal:       banana kB\n' >"$HG/meminfo-garbage"
+printf 'MemFree:        123 kB\n' >"$HG/meminfo-no-total"
+
+hg_want() {
+    (
+        # shellcheck disable=SC1091
+        source "$ROOT/os/overlay/pithead-hugepages"
+        hugepages_want "$1"
+    )
+}
+assert_eq "16 GiB machine keeps the full 3072-page pool" "$(hg_want "$HG/meminfo-16g")" "3072"
+assert_eq "exactly the 15 GiB floor keeps the full pool (a real 16 GB box clears it)" "$(hg_want "$HG/meminfo-at-floor")" "3072"
+assert_eq "just under the floor reduces to 2560 pages (both RandomX datasets still fit)" "$(hg_want "$HG/meminfo-under-floor")" "2560"
+assert_eq "8 GiB machine reduces to 2560 pages" "$(hg_want "$HG/meminfo-8g")" "2560"
+assert_eq "4 GiB machine releases the reservation (0 pages)" "$(hg_want "$HG/meminfo-4g")" "0"
+assert_eq "garbage MemTotal keeps the full baked pool (degrade only on evidence)" "$(hg_want "$HG/meminfo-garbage")" "3072"
+assert_eq "missing MemTotal keeps the full baked pool" "$(hg_want "$HG/meminfo-no-total")" "3072"
+
+# ONE definition, three copies: the overlay script's full value must match the CLI's
+# PITHEAD_HUGEPAGES and the rootfs's baked sysctl line — drift here re-opens the silent floor.
+cli_pages=$(run_sourced "$SANDBOX" eval 'echo "$PITHEAD_HUGEPAGES"')
+overlay_pages=$(
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    echo "$FULL_PAGES"
+)
+assert_eq "overlay full pool matches the CLI's PITHEAD_HUGEPAGES" "$overlay_pages" "$cli_pages"
+if grep -q "vm.nr_hugepages=$cli_pages" "$ROOT/os/rootfs/Dockerfile"; then
+    ok "rootfs bakes the same sysctl value the CLI and overlay declare ($cli_pages)"
+else
+    bad "rootfs bakes the same sysctl value the CLI and overlay declare ($cli_pages)" \
+        "no vm.nr_hugepages=$cli_pages line in os/rootfs/Dockerfile"
+fi
+
+# main, degraded tier: shrinks the pool file, leaves the plain-words marker doctor reads.
+printf '3072\n' >"$HG/nr_hugepages"
+out=$(
+    export PITHEAD_MEMINFO="$HG/meminfo-8g" PITHEAD_NR_HUGEPAGES_FILE="$HG/nr_hugepages" \
+        PITHEAD_HUGEPAGES_MARKER="$HG/marker"
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    main
+)
+assert_eq "low-RAM boot shrinks the pool to the reduced target" "$(cat "$HG/nr_hugepages")" "2560"
+assert_contains "low-RAM boot announces the degrade on the console/journal" "$out" "below the supported 16 GB"
+assert_contains "degraded marker names the supported floor in plain words" "$(cat "$HG/marker" 2>/dev/null)" "16 GB"
+assert_eq "marker records the chosen page count — the authority later writers honour" \
+    "$(sed -n 's/^pages=//p' "$HG/marker" 2>/dev/null)" "2560"
+assert_not_contains "degrade message carries no issue numbers (operator text)" "$out" "#9"
+
+# main, too-small tier: releases the pool entirely and says the stack will not run.
+printf '3072\n' >"$HG/nr_hugepages"
+out=$(
+    export PITHEAD_MEMINFO="$HG/meminfo-4g" PITHEAD_NR_HUGEPAGES_FILE="$HG/nr_hugepages" \
+        PITHEAD_HUGEPAGES_MARKER="$HG/marker"
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    main
+)
+assert_eq "far-below-floor boot releases the reservation" "$(cat "$HG/nr_hugepages")" "0"
+assert_contains "far-below-floor boot says the stack will not run reliably" "$out" "will not run reliably"
+assert_eq "released marker records zero pages" "$(sed -n 's/^pages=//p' "$HG/marker" 2>/dev/null)" "0"
+
+# main, supported tier: a strict no-op — pool untouched, no marker, nothing said.
+printf '3072\n' >"$HG/nr_hugepages"
+rm -f "$HG/marker"
+out=$(
+    export PITHEAD_MEMINFO="$HG/meminfo-16g" PITHEAD_NR_HUGEPAGES_FILE="$HG/nr_hugepages" \
+        PITHEAD_HUGEPAGES_MARKER="$HG/marker"
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    main
+)
+assert_eq "supported machine leaves the baked pool alone" "$(cat "$HG/nr_hugepages")" "3072"
+assert_eq "supported machine writes no degraded marker" "$(cat "$HG/marker" 2>/dev/null || echo absent)" "absent"
+assert_eq "supported machine says nothing" "$out" ""
+
+# doctor reads the marker as a WARN — never FAIL, so the A/B commit gate (which takes doctor's
+# exit code) still commits a degraded-but-serving box. The words on line one are for the human;
+# the pages= record under them is for the writers, and doctor must not leak it.
+printf 'This machine has 7.7 GiB of RAM - below the supported 16 GB. Reduced reservation.\npages=2560\n' >"$HG/marker"
+out=$(PITHEAD_HUGEPAGES_MARKER="$HG/marker" run_sourced "$SANDBOX" check_hugepages_degraded 2>&1)
+assert_contains "doctor surfaces the degraded-hugepages message as a WARN" "$out" "WARN"
+assert_contains "doctor repeats the boot-time message verbatim" "$out" "below the supported 16 GB"
+assert_not_contains "doctor never FAILs on the degrade (commit gate must still pass)" "$out" "FAIL"
+assert_not_contains "doctor repeats the words, not the machine record" "$out" "pages=2560"
+rc=$(
+    PITHEAD_HUGEPAGES_MARKER="$HG/absent-marker" run_sourced "$SANDBOX" check_hugepages_degraded >/dev/null 2>&1
+    echo $?
+)
+assert_rc "no marker, no verdict (rc 0, silent off the appliance)" "$rc" "0"
+
+# The decision reader (hugepages_decision_pages) can only ever LOWER the budget: a corrupt
+# record at or above the full pool reads as the full pool, and no marker means the full budget
+# — so DIY hosts and healthy appliances keep the exact pre-#977 behavior.
+printf 'words\npages=9999\n' >"$HG/marker"
+assert_eq "a record above the budget is capped at the budget" \
+    "$(PITHEAD_HUGEPAGES_MARKER="$HG/marker" run_sourced "$SANDBOX" hugepages_decision_pages)" "3072"
+assert_eq "no marker reads as the full budget" \
+    "$(PITHEAD_HUGEPAGES_MARKER="$HG/absent-marker" run_sourced "$SANDBOX" hugepages_decision_pages)" "3072"
 
 echo "== unit: pithead-media-config — physical-presence media channel (#786 sub-issue D) =="
 # Source the boot leg (functions only — its main is guarded) and drive its pieces with stubbed

@@ -11,7 +11,11 @@ manage the host.
 ## What you need
 
 - An x86-64 machine with UEFI you can dedicate to mining. It will be **erased**.
-- 16 GB RAM or more, and an internal SSD or NVMe with room for the chains. Pruned Monero
+- 16 GB RAM or more — that is the supported floor, not a suggestion: the appliance reserves
+  6 GB of it for mining at every boot. With less RAM it still boots, but it prints a warning
+  on the machine's screen and shrinks that reservation — mining runs slower and everything
+  else runs squeezed, at every boot until the machine has 16 GB.
+- An internal SSD or NVMe with room for the chains. Pruned Monero
   needs about 120 GB and a local Tari node about 170 GB, so **350 GB or more** runs both
   locally. On a smaller disk, run pruned Monero and point Tari at a node you already have —
   the setup page asks both questions.
@@ -140,9 +144,10 @@ look at it, the same way you would watch any other machine on the network.
 
 **Pithead + RigForge** asks every coordinator question below, unchanged, and adds the built-in
 miner on top. The two mining workloads on that one box do not compete for HugePages: the
-appliance reserves a fixed 6 GiB RandomX pool at boot, and the built-in miner is told to leave
-the coordinator's share alone (`hugepages_reserve_extra_mb` in its own config) rather than the
-two halves independently growing into each other's reservation.
+appliance reserves a RandomX pool sized to its RAM at boot (6 GiB on the supported 16 GB
+machine), and the built-in miner is told to leave the coordinator's share alone
+(`hugepages_reserve_extra_mb` in its own config) rather than the two halves independently
+growing into each other's reservation.
 
 Switching back to plain **Pithead** after trying one of the others resets the local-miner switch
 to its documented default (off) and, on the installation medium, clears a disk choice of "run
