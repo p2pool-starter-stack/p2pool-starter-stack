@@ -747,7 +747,7 @@ phase_update_dashboard() { # <good-bundle-path>
     esac
     local tries=0 code=000
     while [ "$tries" -lt 60 ]; do
-        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || echo 000)
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
         case "$code" in 2?? | 3?? | 401 | 403) break ;; esac
         sleep 5
         tries=$((tries + 1))
