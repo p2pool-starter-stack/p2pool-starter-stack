@@ -107,6 +107,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `share_stats` series populated on a mining box (#116) | polls land | 1 ✅ (shape) · 4 ▶ (`--check`) |
 | Confirmed running earnings (#787): yesterday as a **calendar** day vs the trailing 24h/7d/30d spans, the DST-length day boundary, partial marking when a window outruns the recorded payout history, and one roll-up feeding both the dashboard card and `/earnings` | stored payouts | 1 ✅ (`test_earnings.py`, `test_telegram_commands.py`, `components.test.mjs`) |
 | Expected-vs-actual earnings summary (#808/#817): one shared 30d window, the combined Monero+XvB row (estimate folded on the expected side because win payouts are inseparable on the actual side), per-stream gates and honest degradation, Tari block counts, XvB win windowing, and the card's render branches in both views | metrics + stored payouts | 1 ✅ (`test_views.py` `TestEarningsVsActual`, `test_metrics.py`, `components.test.mjs`) |
+| Client entry point (#903): the 30s poll with its pre-tick abort so a hung Tor circuit can't latch the in-flight guard (#382), disconnected-banner state and recovery with the last snapshot kept, preference seeding from URL/localStorage through the normalizers, zoom/range/avg query building, and the handler wiring the App receives | injected fetch/storage/timer fakes | 1 ✅ (`dashboard.test.mjs`) |
 | Dashboard reads correct live state on a real stack | real daemons | 4 ▶ |
 
 ### G. CLI lifecycle (`pithead`)
