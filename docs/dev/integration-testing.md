@@ -131,12 +131,14 @@ Useful flags (full list in `run.sh --help`):
 | `--workers <n>` | Miners expected online while mining (default `2`). |
 | `--no-mining-asserts` | Skip the two mining assertions — workers online ≥ `--workers` and stratum total hashes > 0 — with a logged notice, for a box that has no miner connected. Every other assertion stays binding. `e2e.sh --no-miner` passes this automatically ([#905](https://github.com/p2pool-starter-stack/pithead/issues/905)). |
 | `--remote-monero-host <h>` | External node endpoint for the `remote` scenario. |
+| `--remote-tari-host <h>` | External Tari node endpoint for the `tari.mode=remote` scenario ([#103](https://github.com/p2pool-starter-stack/pithead/issues/103)) — an already-synced Tari node, same shape as `--remote-monero-host`. |
 | `--pruned-data-dir` / `--full-data-dir` | Synced alt DB to enable the opposite prune mode. |
 | `--lifecycle` | Also run the lifecycle phase (restart, apply secret-preservation). |
 | `--fault-injection` | Also break monerod (stop / SIGSTOP / remove) and assert `status`' down/unhealthy/missing verdicts and the failover→recovery cycle, plus a dashboard DB-write fault (data dir made read-only → `/api/state` reports `db_healthy:false` → write access restored, [#202](https://github.com/p2pool-starter-stack/pithead/issues/202)). Destructive-then-restored; local mode only; slow. |
 | `--auth-fail-closed` | Also empty `PROXY_AUTH_TOKEN` in `.env` and assert `pithead up` refuses to start (the live counterpart to the tier-1 compose-config check, [#153](https://github.com/p2pool-starter-stack/pithead/issues/153)/[#203](https://github.com/p2pool-starter-stack/pithead/issues/203)), then restore the exact token and recover. Destructive-then-restored; ssh or local mode. |
-| `--rigforge-control` | Also drive the RigForge WRITE paths against a real rig with `dashboard.control` on and the rig pinned in `workers.list[]` (#506; a baseline that still carries the deprecated `dashboard.workers[]` fallback is left as-is, so that shape stays exercised too): the enriched read survives a populated masked-token descriptor ([#514](https://github.com/p2pool-starter-stack/pithead/issues/514)), the rig is editable and a reversible Worker Inspect edit lands on it ([#508](https://github.com/p2pool-starter-stack/pithead/issues/508)/[#513](https://github.com/p2pool-starter-stack/pithead/issues/513)), a rig-side edit reflects back in the feed + masked prefill ([#516](https://github.com/p2pool-starter-stack/pithead/issues/516)), and an auto-rollback is recorded end-to-end ([#517](https://github.com/p2pool-starter-stack/pithead/issues/517)). Destructive-then-restored; local mode only; each leg self-skips without its prerequisites (see below). |
+| `--rigforge-control` | Also drive the RigForge WRITE paths against a real rig with `dashboard.control` on and the rig pinned in `workers.list[]` (#506; a baseline that still carries the deprecated `dashboard.workers[]` fallback is left as-is, so that shape stays exercised too): the enriched read survives a populated masked-token descriptor ([#514](https://github.com/p2pool-starter-stack/pithead/issues/514)), the rig is editable and a reversible Worker Inspect edit lands on it on two of the six writable keys — `max_temp_c` ([#508](https://github.com/p2pool-starter-stack/pithead/issues/508)/[#513](https://github.com/p2pool-starter-stack/pithead/issues/513)) and `pools` (needs `IT_RIG_POOLS_PROBE`) — a rig-side edit reflects back in the feed + masked prefill ([#516](https://github.com/p2pool-starter-stack/pithead/issues/516)), and an auto-rollback is recorded end-to-end ([#517](https://github.com/p2pool-starter-stack/pithead/issues/517)). Destructive-then-restored; local mode only; each leg self-skips without its prerequisites (see below). |
 | `--rig-host <h>` / `--rig-control-port <p>` | The borrowed rig's LAN host and writable control API port (default `8082`), used to inject a `workers.list[]` descriptor when the box's baseline lacks one ([#185](https://github.com/p2pool-starter-stack/pithead/issues/185)/#506). Pair with `IT_RIG_TOKEN` (env; never a flag). |
+| `--rigforge-upgrade` | With `--rigforge-control`, also POST the rig's own already-installed version through `/api/control/worker-upgrade` and assert it converges on `noop` — non-destructive, never rebuilds the rig. Proves the dashboard → host-runner → rig `/upgrade` route end to end, including the noop/throttled/failed poll vocabulary `control_worker_upgrade` learned when it started matching the rig's own terminal states. |
 | `--subnet` | Also bring the stack down then up on a non-default `network.subnet` (`10.84.0.0/24`) and assert the moved prefix reached `.env`, the docker bridge, Tor's render-at-start IP, monerod's proxy IP, the dashboard SSRF CIDR, and the [#344](https://github.com/p2pool-starter-stack/pithead/issues/344) onion vhost, then run the standard battery ([#201](https://github.com/p2pool-starter-stack/pithead/issues/201)/[#180](https://github.com/p2pool-starter-stack/pithead/issues/180)). Destructive-then-restored; local mode only. |
 | `--safety-backup` | Take a `pithead backup` before the destructive scenarios and auto-roll-back (down → restore → up) if anything fails; the archive is removed on success. Recommended for the destructive matrix on a precious box; also exercises backup/restore end-to-end. |
 | `--keep` | Don't restore the original config (leave the box on the last scenario). |
@@ -242,11 +244,16 @@ and `--list` prints it).
 | `dashboard.secure` | `true` (Caddy TLS) / `false` | Caddy config / scheme |
 | `dashboard.tari_required` | `true` (blocking) / `false` | sync-gate behavior ([#35](https://github.com/p2pool-starter-stack/pithead/issues/35)/[#51](https://github.com/p2pool-starter-stack/pithead/issues/51)) |
 | `network.subnet` | default `172.28.0.0/24` / a moved `/24` | the docker bridge prefix every static IP, Tor's rendered torrc, monerod's proxy IP, and the SSRF CIDR key off ([#180](https://github.com/p2pool-starter-stack/pithead/issues/180)/[#201](https://github.com/p2pool-starter-stack/pithead/issues/201)) — runs via `--subnet` (a move needs a full down/up, not a hot apply) |
+| `tari.mode` | `local` / `remote` | profile gating, onion gating, the sync gate against a remote target — the [#103](https://github.com/p2pool-starter-stack/pithead/issues/103) GO verdict's operating mode, needs `--remote-tari-host` |
+| `p2pool.stratum_tls` | `false` / `true` | a live TLS handshake on the published stratum port, and that the served certificate matches the fingerprint rigs are told to pin ([#261](https://github.com/p2pool-starter-stack/pithead/issues/261)) |
+| `network.tor_egress_firewall` | `true` (default) / `false` | the opt-out actually opens a direct clearnet dial from a `mining_net` container, not just that no rule got installed ([#270](https://github.com/p2pool-starter-stack/pithead/issues/270)) |
+| `monero.view_key` / `tari.view_key` | unset (default) / a real key | payout-confirmation wallet-rpc / tari-wallet wiring ([#381](https://github.com/p2pool-starter-stack/pithead/issues/381)/[#462](https://github.com/p2pool-starter-stack/pithead/issues/462)) — needs `IT_MONERO_VIEW_KEY` (env; the box's own real Monero view key), optionally paired with `IT_TARI_VIEW_KEY` + `IT_TARI_SPEND_PUBLIC_KEY` |
 
 ### What each scenario asserts
 
 - Expected containers up, unexpected absent. Every service for that config is running and
-  healthy; in `remote` mode there is no `monerod`.
+  healthy; in `remote` mode there is no `monerod` (and, independently, no `tari` when
+  `tari.mode=remote`); `wallet-rpc`/`tari-wallet` appear only when their view key is set.
 - `pithead status` exit code: `0` for a healthy config.
 - Dashboard reads live state. `/api/state` is reachable; Monero is synced (`done`); pruned/full
   display matches `monero.prune` ([#32](https://github.com/p2pool-starter-stack/pithead/issues/32)); the sidechain `pool.type` matches `p2pool.pool`.
@@ -254,6 +261,21 @@ and `--list` prints it).
   and total hashes are accumulating ([#28](https://github.com/p2pool-starter-stack/pithead/issues/28)).
 - Posture propagated. `MONERO_RPC_BIND`, `DASHBOARD_SECURE`, `XVB_ENABLED`, and `TARI_REQUIRED`
   in `.env` match the config; the Caddyfile uses the right scheme.
+- Node onions follow the node. The Monero and Tari hidden services are each published only when
+  their own mode is `local` ([#103](https://github.com/p2pool-starter-stack/pithead/issues/103)).
+- Stratum TLS is live (`p2pool.stratum_tls=true` row only). A TLS handshake against the published
+  stratum port succeeds, and the served certificate's fingerprint matches the one
+  `announce_stratum_tls` tells rigs to pin ([#261](https://github.com/p2pool-starter-stack/pithead/issues/261)).
+- Firewall opt-out actually opens the path (`network.tor_egress_firewall=false` row only). No
+  `pithead-tor-egress`-tagged rule is installed, and a direct clearnet dial from a `mining_net`
+  container succeeds — the mirror of the fail-closed default `assert_egress_posture` proves
+  elsewhere ([#270](https://github.com/p2pool-starter-stack/pithead/issues/270)).
+- Payout confirmation is live (the view-key row only). `PAYOUT_CONFIRM_ENABLED`/
+  `TARI_PAYOUT_CONFIRM_ENABLED` in `.env` match the config, and the dashboard's own
+  `earnings.confirmed.enabled`/`earnings.tari_confirmed.enabled` flags read `true`
+  ([#381](https://github.com/p2pool-starter-stack/pithead/issues/381)/[#462](https://github.com/p2pool-starter-stack/pithead/issues/462)). A real
+  confirmed payout needs days of chain time no e2e run has, so that total staying `0` is expected
+  and not asserted otherwise — only that the feature is genuinely ON, not just configured.
 - Idempotency. A second `apply -y` with no change is a clean no-op.
 - Secrets preserved. The proxy token and onion addresses are unchanged across every apply.
 
@@ -279,7 +301,7 @@ can prove — the tier-2 fake covers the `:8081` read only. It enables `dashboar
 borrowed rig in `workers.list[]` (#506; its token seen inside the container only as the
 `{"__secret__": true}` sentinel, [#440](https://github.com/p2pool-starter-stack/pithead/issues/440)
 — a baseline that still carries the deprecated `dashboard.workers[]` fallback is left as-is rather
-than force-migrated, so that shape stays exercised too), and drives four legs, each self-skipping
+than force-migrated, so that shape stays exercised too), and drives five legs, each self-skipping
 loudly without its prerequisite:
 
 - Read with a populated masked descriptor ([#514](https://github.com/p2pool-starter-stack/pithead/issues/514)):
@@ -289,6 +311,15 @@ loudly without its prerequisite:
   Worker Inspect reports the rig `editable`, and a `max_temp_c` nudge applied via
   `/api/control/worker-apply` lands on the rig's `/status` and is recorded in the per-worker
   history, then reverted.
+- A second writable key, `pools` (the repoint-your-hashrate key): unlike `max_temp_c`, the
+  enriched feed carries no writable-config *values* at all, so there is no live telemetry to read
+  the current value back from before mutating it — the real Worker Inspect editor has the exact
+  same limitation and prefills from the dashboard's own last-applied record instead
+  (`GET /api/worker`'s `.last_applied.pools`). This leg does the same: it reads that record as the
+  restore target, applies an operator-supplied probe value (`IT_RIG_POOLS_PROBE` — pithead treats
+  `pools` as opaque passthrough, so a guessed value risks a real `rejected` instead of proving the
+  round trip), asserts it landed, then reverts. Self-skips if the dashboard has never applied a
+  `pools` value to this rig before (nothing to safely restore).
 - Rig-side edit reflects ([#516](https://github.com/p2pool-starter-stack/pithead/issues/516)):
   a change made straight on the rig's control API shows up in the dashboard's enriched feed, and a
   `config.json` hand-edit shows up in the masked prefill (with the token still masked).
@@ -297,8 +328,33 @@ loudly without its prerequisite:
 
 Prerequisites: a real RigForge rig connected (self-skips otherwise); `--rig-host` + `IT_RIG_TOKEN`
 to inject a descriptor when the baseline lacks one, and to dial the rig directly for the #516 feed
+leg; `IT_RIG_POOLS_PROBE` (a JSON `pools` value safe to apply to the borrowed rig) for the pools
 leg; `IT_RIG_ROLLBACK_CHANGES` (a writable-key `changes` object the rig's fault-injection reverts)
 for the #517 leg.
+
+### RigForge upgrade (`--rigforge-upgrade`)
+
+With `--rigforge-control`, also POSTs the rig's own already-installed version back through
+`/api/control/worker-upgrade` and asserts the terminal status is `noop` — non-destructive, no
+rebuild, no rig restart. Proves the dashboard → host-runner → rig `/upgrade` route end to end,
+including the `control_worker_upgrade` poll loop's full terminal vocabulary
+(`applied`/`noop`/`throttled`/`rolled_back`/`failed`) matching the rig's own terminal states.
+
+Two honest paths reach the `noop` terminal, and which one fires on a given run depends on the
+dashboard's own poll cache, not on the harness:
+
+- The cache already agrees the rig is on the requested version (the common steady-state case):
+  `handle_worker_upgrade`'s client-side shortcut answers `noop` synchronously, without ever
+  dialing the rig or spending its 6h anti-beacon window.
+- The cache is momentarily stale: the request proceeds through the host runner's
+  `control_worker_upgrade`, dials the rig's `/upgrade` for real, and polls its `/status` for the
+  rig's own first-class `noop` terminal (rigforge#320).
+
+Either way the host independently re-derives "latest" from the RigForge release API and refuses
+any mismatch before dialing (the rig never decides its own target), so proposing "what's already
+installed" can only ever terminate `noop` or — on host-side version drift — a safe `rejected`,
+never a real upgrade. Needs `--rigforge-control`'s already-enabled control channel and pinned rig;
+its own extra prerequisite is a clean `vX.Y.Z` version in the rig's live feed.
 
 ### Moved subnet (`--subnet`)
 
