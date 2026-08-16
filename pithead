@@ -6954,23 +6954,45 @@ generate_caddyfile() {
     # mDNS name resolves to every address it has — including the one being excluded, which would
     # re-open exactly what this closes. Loopback is always added: the host-networked dashboard and
     # Caddy's own admin healthcheck both arrive that way.
-    _bind_line() {
-        local h out=""
-        [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" == "true" ] && return 0
-        is_appliance && [ -z "${DASHBOARD_HOST:-}" ] || return 0
-        for h in $site_hosts; do
-            case "$h" in
+    # Built from the BOX's own addresses, never from $site_hosts. The two are different questions:
+    # site_hosts is which Host values Caddy vhost-matches, this is which sockets it opens. Deriving
+    # the bind from site_hosts tied it to the auto-expansion, so an operator who pinned
+    # dashboard.host — a documented, supported choice — got a single-host site list and NO bind at
+    # all, which is the wildcard listener and the whole exposure, back again for exactly the
+    # operators who configured the box most deliberately.
+    local bind_addrs="" _bh
+    if is_appliance && [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ]; then
+        for _bh in $(hostname -I 2>/dev/null); do
+            is_public_ip "$_bh" && continue
+            case "$_bh" in
             *:*) ;;                # IPv6 literal
-            *[!0-9.]*) continue ;; # a name, not an address
+            *[!0-9.]*) continue ;; # not an address literal
             esac
-            out="${out:+$out }$h"
+            bind_addrs="${bind_addrs:+$bind_addrs }$_bh"
         done
-        [ -n "$out" ] || return 0
-        # NO trailing newline: this is consumed as $(_bind_line) on its own heredoc line, and
-        # command substitution strips trailing newlines anyway — emitting one here produced
-        # `bind ... ::1    basic_auth {` on a single line, which Caddy will not parse. Same
-        # convention as $auth above.
-        printf '    bind %s 127.0.0.1 ::1' "$out"
+        # Loopback unconditionally, appended OUTSIDE the loop so it survives a box that reports no
+        # usable non-public address at render time: the host-networked dashboard and Caddy's own
+        # admin healthcheck both arrive this way, and a bind that dropped them would be worse than
+        # no bind at all.
+        bind_addrs="${bind_addrs:+$bind_addrs }127.0.0.1 ::1"
+    fi
+    # NO trailing newline: consumed as $(_bind_line) on its own heredoc line, and command
+    # substitution strips trailing newlines anyway — emitting one here produced
+    # `bind ... ::1    basic_auth {` on a single line, which Caddy will not parse. Same convention
+    # as $auth above. Empty when binding is off, which collapses to a blank line, like $auth.
+    _bind_line() {
+        [ -n "$bind_addrs" ] || return 0
+        printf '    bind %s' "$bind_addrs"
+    }
+    # The onion vhost binds ONLY when the LAN vhost does. A site block with no bind asks Caddy for
+    # a wildcard listener, so the two must agree: mixing them puts a wildcard `:80` and a specific
+    # `NETWORK_PREFIX.1:80` in the same file, both claim the same port, and Caddy fails to start —
+    # which takes the dashboard AND the onion down together. That combination is reachable today
+    # (dashboard.secure:false with the onion enabled is documented and explicitly exempted from the
+    # insecure-transport warning), so this is tied deliberately rather than left to chance.
+    _onion_bind_line() {
+        [ -n "$bind_addrs" ] || return 0
+        printf '    bind %s' "${NETWORK_PREFIX}.1"
     }
 
     : >"Caddyfile"
@@ -7039,7 +7061,7 @@ EOF
         cat <<EOF >>"Caddyfile"
 
 http://${NETWORK_PREFIX}.1 {
-    bind ${NETWORK_PREFIX}.1
+$(_onion_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {

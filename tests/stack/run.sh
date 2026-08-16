@@ -1609,8 +1609,86 @@ case "$caddy_optin" in
 *"    bind "*) bad "the opt-in leaves the listener open" "a bind line was still emitted" ;;
 *) ok "the opt-in leaves the listener open" ;;
 esac
+# An operator who PINS dashboard.host is the most deliberately-configured box there is, and the
+# first cut of this fix left exactly those boxes wide open: the bind was derived from the
+# auto-expanded site list, so pinning the host produced a single-host site list and NO bind — the
+# wildcard listener, and the whole exposure, back again. The bind is built from the BOX's
+# addresses now, never from the site list, because they answer different questions: which Host
+# values Caddy matches, versus which sockets it opens.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_pinned="$(
+    # shellcheck disable=SC1090
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    is_appliance() { return 0; }
+    appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
+    appliance_mint_cert() { return 1; }
+    hostname() { printf '192.168.1.202 2605:59c8:cd7:ba08::1 fd1c:1d5:225c:8::1\n'; }
+    DASHBOARD_SECURE=true HOST_IP=192.168.1.202 DASHBOARD_HOST=192.168.1.202 \
+        DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "a pinned dashboard.host still gets a bind" "$caddy_pinned" "    bind "
+case "$(printf '%s' "$caddy_pinned" | grep '^    bind ')" in
+*2605:*) bad "a pinned host does not reopen the global v6" "global address is bound" ;;
+*) ok "a pinned host does not reopen the global v6" ;;
+esac
+
+# Loopback is appended outside the address loop, so a box reporting no usable non-public address
+# still binds something reachable rather than silently falling back to a wildcard.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_noaddr="$(
+    # shellcheck disable=SC1090
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    is_appliance() { return 0; }
+    appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
+    appliance_mint_cert() { return 1; }
+    hostname() { printf '2605:59c8:cd7:ba08::1\n'; } # ONLY a public address
+    DASHBOARD_SECURE=true HOST_IP=pithead.local DASHBOARD_AUTH_HASH_B64="" \
+        generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "a box with only a public address still binds loopback" "$caddy_noaddr" "    bind 127.0.0.1 ::1"
+
+# The onion vhost must bind exactly when the LAN vhost does. A site block with no bind asks for a
+# WILDCARD listener, so mixing the two puts a wildcard :80 and a specific NETWORK_PREFIX.1:80 in
+# one file, both claiming the port — Caddy fails to start and takes the dashboard and the onion
+# down together. dashboard.secure:false with the onion enabled is documented and exempted from the
+# insecure-transport warning, so this combination is reachable today.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_onion="$(
+    # shellcheck disable=SC1090
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    is_appliance() { return 0; }
+    hostname() { printf '192.168.1.202 2605:59c8:cd7:ba08::1\n'; }
+    DASHBOARD_SECURE=false HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 \
+        DASHBOARD_ONION_ENABLED=true DASHBOARD_AUTH_USER=admin \
+        DASHBOARD_AUTH_HASH_B64="$(printf 'x' | openssl base64 -A)" \
+        generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_eq "insecure+onion: both vhosts bind, never one wildcard and one specific" \
+    "$(printf '%s' "$caddy_onion" | grep -c '^    bind ')" "2"
+# And with binding off, NEITHER may bind — the mirror of the case above.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_onion_off="$(
+    # shellcheck disable=SC1090
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    is_appliance() { return 1; } # DIY: no binding at all
+    hostname() { printf '192.168.1.202\n'; }
+    DASHBOARD_SECURE=false HOST_IP=box.lan NETWORK_PREFIX=172.28.0 \
+        DASHBOARD_ONION_ENABLED=true DASHBOARD_AUTH_USER=admin \
+        DASHBOARD_AUTH_HASH_B64="$(printf 'x' | openssl base64 -A)" \
+        generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_eq "DIY insecure+onion: neither vhost binds — no wildcard/specific clash" \
+    "$(printf '%s' "$caddy_onion_off" | grep -c '^    bind ')" "0"
 unset -f _caddy_appliance
-unset caddy_default caddy_optin bindline
+unset caddy_default caddy_optin bindline caddy_pinned caddy_noaddr caddy_onion caddy_onion_off
 
 echo "== unit: generate_caddyfile custom port (#740) =="
 # A custom HOST_PORT moves the LAN vhost off the scheme default so a co-hosted reverse proxy keeps
