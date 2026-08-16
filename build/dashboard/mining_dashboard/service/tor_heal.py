@@ -33,6 +33,13 @@ Tor network is overloaded", so fresh guards may be just as bad):
 
 The restart goes through the same start/stop-only docker-control proxy as the #31 failover.
 The manual leg is ``./pithead restart tor``. Real stuck-guard recovery is tier 4 (the live bench).
+
+A successful tor restart is followed by a monerod restart when the node is local (#972): the tor
+restart kills every SOCKS connection, and monerod keeps its dead peer sockets — bench-observed at
+0 in / 0 out peers for ~6 hours while every healthcheck stayed green. Compose couples the same
+restart for its own operations (``depends_on: tor: restart: true``); this healer bypasses compose,
+so it couples it here. Best-effort: a failed monerod cycle is logged and never refunds the tor
+attempt (the tor restart DID happen) — the out-of-sync alert is the backstop.
 """
 
 import asyncio
@@ -41,7 +48,12 @@ import time
 
 import requests
 
-from mining_dashboard.config.config import TOR_AUTO_HEAL, TOR_SOCKS_PROXY
+from mining_dashboard.config.config import (
+    LOCAL_MONERO_HOST,
+    MONERO_NODE_HOST,
+    TOR_AUTO_HEAL,
+    TOR_SOCKS_PROXY,
+)
 from mining_dashboard.helper.http import bounded_get
 
 logger = logging.getLogger("TorHeal")
@@ -74,9 +86,23 @@ class TorEgressHealer:
     """
 
     CONTAINER = "tor"
+    MONEROD = "monerod"
 
-    def __init__(self, docker_control, enabled=None, probe=None, notify=None, clock=time.monotonic):
+    def __init__(
+        self,
+        docker_control,
+        enabled=None,
+        probe=None,
+        notify=None,
+        clock=time.monotonic,
+        restart_monerod=None,
+    ):
         self.enabled = TOR_AUTO_HEAL if enabled is None else enabled
+        # Cycle monerod after a successful tor restart (#972) — only when the node is local
+        # (a remote monerod has no container here and keeps its own tor).
+        if restart_monerod is None:
+            restart_monerod = MONERO_NODE_HOST == LOCAL_MONERO_HOST
+        self._restart_monerod = restart_monerod
         self._docker = docker_control
         self._probe = probe or self._probe_egress
         self._notify = notify  # optional async callable(text) — the Telegram one-off
@@ -197,6 +223,26 @@ class TorEgressHealer:
                         "tor restart could not be issued via docker-control (unreachable) — "
                         "the attempt was refunded and will be retried on the next probe (#424)."
                     )
+                elif self._restart_monerod:
+                    # The tor restart just killed every SOCKS connection; monerod holds its
+                    # dead peer sockets and can sit at 0 in / 0 out peers for hours while
+                    # looking healthy (#972). Cycle it so it re-dials through the fresh tor.
+                    # monerod's stop_grace_period is 1m, so the stop timeout matches it and the
+                    # HTTP timeout outlasts the stop (#234's lesson).
+                    logger.warning(
+                        "Restarting monerod alongside tor so it re-dials its peers through "
+                        "the fresh Tor (#972)."
+                    )
+                    m_stopped = await self._docker.stop(
+                        self.MONEROD, stop_timeout=60, request_timeout=90
+                    )
+                    m_started = await self._docker.start(self.MONEROD, request_timeout=60)
+                    if not (m_stopped and m_started):
+                        logger.warning(
+                            "monerod restart alongside tor could not be issued — if the node "
+                            "stays out of sync, restart it manually: './pithead restart "
+                            "monerod' (#972)."
+                        )
             elif action == "exhausted":
                 if not self._warned_exhausted:
                     self._warned_exhausted = True

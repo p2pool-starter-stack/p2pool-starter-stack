@@ -61,6 +61,10 @@ class AlertService:
       flag per node (#31). Tari is only alerted when it's treated as required; a non-blocking
       Tari going down isn't operator-critical (we keep mining Monero), matching the
       worker-rejection rule.
+    - **node out of sync / back in sync** — the debounced peer-loss strand (#972): monerod
+      reachable and healthy-looking but reporting ``synchronized: false`` past the stale
+      threshold (a tor restart kills its SOCKS peers and it doesn't re-dial). Rides the
+      ``node_down``/``node_recovered`` toggles — same conversation, different failure mode.
     - **sync finished** — the sync gate's ``miner_released`` latch flipping open once (#35).
     - **worker offline / back online / joined / left** — a debounced :class:`WorkerPresenceMonitor`
       over the live worker rows (offline keys off the same DOWN status the dashboard shows; joined /
@@ -184,6 +188,7 @@ class AlertService:
         self.host_label = "" if host_label in (None, "", "Unknown Host") else host_label
         # None = "not yet observed": the first cycle seeds the baseline without emitting.
         self._prev_monero_down = None
+        self._prev_monero_stale = None
         self._prev_tari_down = None
         self._prev_released = None
         self._prev_disk_level = None
@@ -232,6 +237,7 @@ class AlertService:
         self,
         *,
         monero_down,
+        monero_stale=False,
         tari_down,
         tari_required,
         miner_released,
@@ -273,6 +279,7 @@ class AlertService:
 
         # --- Node down / recovered (consume NodeHealthMonitor edges) ---
         alerts += self._node_edges("Monero", monero_down, "_prev_monero_down")
+        alerts += self._stale_edges(monero_stale)
         if tari_required:
             alerts += self._node_edges("Tari", tari_down, "_prev_tari_down")
         else:
@@ -377,6 +384,35 @@ class AlertService:
             (
                 self.EVT_NODE_RECOVERED,
                 self._fmt(f"\U0001f7e2 ⛓️ {label} node recovered — workers readmitted."),
+            )
+        ]
+
+    def _stale_edges(self, stale):
+        """Monero node reachable but OUT of sync (#972): the debounced ``synchronized: false``
+        strand a tor restart leaves behind. Distinct from node-down — the node answers its RPC
+        and every container reads healthy while mining sits on a stale tip. Rides the
+        node_down/node_recovered toggles: same conversation, different failure mode."""
+        prev = self._prev_monero_stale
+        self._prev_monero_stale = stale
+        if prev is None or stale == prev:
+            return []
+        if stale:
+            self._record_incident(self.EVT_NODE_DOWN)
+            return [
+                (
+                    self.EVT_NODE_DOWN,
+                    self._fmt(
+                        "\U0001f534 ⛓️ Monero node is OUT OF SYNC — reachable but reporting "
+                        "not-synchronized (peers usually die like this after a Tor restart). "
+                        "Mining sits on a stale tip until it re-peers: run "
+                        "'./pithead restart monerod'."
+                    ),
+                )
+            ]
+        return [
+            (
+                self.EVT_NODE_RECOVERED,
+                self._fmt("\U0001f7e2 ⛓️ Monero node is back in sync with the network."),
             )
         ]
 

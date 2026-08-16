@@ -27,6 +27,16 @@ const RANGES = [
   ["all", "All"],
 ];
 
+// Reduced range set for the per-worker hashrate chart (#1013), sized to what worker_history can
+// honestly support: it samples ~5 min (vs the main history's 30s), so a "1 Hr" button would show
+// ~12 points — dropped rather than shipped dishonest. Retention is 30 days — exactly what "1 Mo"
+// would mean — so "All" stands alone instead of offering an identical neighbour.
+const WORKER_RANGES = [
+  ["24h", "24 Hr"],
+  ["1w", "1 Wk"],
+  ["all", "All"],
+];
+
 // Hashrate-averaging windows for the chart toggle (#168): [param key, button label]. The keys match
 // the server's `avg` param; labels are spelled out so the "1m" window (1 MINUTE) isn't mistaken for
 // the "1 Mo" RANGE above. Persisted in dashboard.js ui.avg (localStorage), default 10m. 12h/24h read
@@ -504,6 +514,168 @@ export class ChartCard extends Component {
                 })}
             </div>
             <div class="chart-wrap"><canvas ref=${this.canvasRef}></canvas></div>
+        </div>`;
+  }
+}
+
+// Per-worker hashrate chart (#1013): the same card/range-control/palette idioms as ChartCard
+// above, sized down to what a single rig's data actually supports — one hashrate line, no
+// avg-window toggle (worker_history stores only h15), no zoom (not asked for; ChartCard's zoom
+// exists for #47's wide fleet range, not a per-rig glance). The "Changes" scatter overlay (#1015)
+// is a fourth instance of the hidden-0-1-axis marker pattern Events/Raffle/Payouts already use
+// above — not a new mechanism, just fed config-apply/rig-upgrade points instead.
+//
+// `props.chart` is pre-shaped by the caller (workerlogic.mjs's buildChartMarkers), the same way
+// ChartCard's own d.events/d.raffle/d.payouts arrive pre-shaped: `{hashrate: [{x,y}], markers:
+// [{x, y, label, kind, quiet}]}`. `quiet` marks an outcome where nothing actually changed
+// (rejected/rolled_back/failed/throttled/noop/accepted) — still shown, just muted, rather than
+// dropped (#1015).
+
+// Per-point style for the "Changes" marker dataset (#1015): a triangle for a rig upgrade, a
+// diamond (matching the Events marker above) for a config apply; muted (c.ticks) for an outcome
+// that didn't actually change anything (quiet), the chart's accent colour otherwise. Kept pure and
+// exported, mirroring eventColors above, so the branch is unit-tested without a canvas.
+export function workerMarkerStyle(markers, c) {
+  return {
+    pointStyle: (markers || []).map((m) => (m.kind === "upgrade" ? "triangle" : "rectRot")),
+    color: (markers || []).map((m) => (m.quiet ? c.ticks : c.accent)),
+  };
+}
+
+export class WorkerChartCard extends Component {
+  constructor(props) {
+    super(props);
+    this.canvasRef = createRef();
+  }
+
+  componentDidMount() {
+    this.create();
+  }
+  componentDidUpdate() {
+    this.sync();
+  }
+  componentWillUnmount() {
+    if (this.chart) {
+      this.chart.destroy();
+      this.chart = null;
+    }
+  }
+
+  create() {
+    const canvas = this.canvasRef.current;
+    const d = this.props.chart;
+    if (!canvas || typeof Chart === "undefined" || !d.hashrate.length) return;
+    const c = paletteColors();
+    const mk = workerMarkerStyle(d.markers, c);
+    this.chart = new Chart(canvas, {
+      type: "line",
+      data: {
+        datasets: [
+          {
+            label: "Hashrate",
+            data: d.hashrate,
+            borderColor: c.accent,
+            borderWidth: AREA_BORDER_WIDTH,
+            tension: 0.3,
+            fill: true,
+            backgroundColor: areaFill(c.accent),
+            pointRadius: 0,
+            pointHitRadius: 20,
+          },
+          // Config-apply / rig-upgrade markers, on their own hidden 0-1 axis so they ride near
+          // the top and never affect the hashrate y-range — same technique as Events above.
+          {
+            label: "Changes",
+            data: d.markers,
+            yAxisID: "markers",
+            pointStyle: mk.pointStyle,
+            pointRadius: 7,
+            pointHoverRadius: 10,
+            pointHitRadius: 100,
+            showLine: false,
+            pointBackgroundColor: mk.color,
+            pointBorderColor: mk.color,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "nearest", axis: "x", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title(items) {
+                return items.length ? fmtTimestamp(items[0].parsed.x) : "";
+              },
+              label(context) {
+                if (context.dataset.label === "Changes") return context.raw.label;
+                return context.parsed.y !== null ? fmtHashrate(context.parsed.y) : "";
+              },
+            },
+          },
+        },
+        scales: {
+          x: { type: "linear", display: false },
+          y: { grid: { color: c.grid }, ticks: { color: c.ticks }, afterDataLimits: padYAxis },
+          markers: { type: "linear", display: false, min: 0, max: 1 },
+        },
+      },
+    });
+  }
+
+  sync() {
+    const d = this.props.chart;
+    if (!d.hashrate.length) {
+      // Range switched to a slice with no samples (e.g. a rig that's only been up an hour, on
+      // "1 Wk") — drop the instance so render()'s empty state takes over instead of an empty axis.
+      if (this.chart) {
+        this.chart.destroy();
+        this.chart = null;
+      }
+      return;
+    }
+    if (!this.chart) {
+      this.create();
+      return;
+    }
+    const c = paletteColors(); // re-read so a theme switch recolours in place
+    const mk = workerMarkerStyle(d.markers, c);
+    const ds = this.chart.data.datasets;
+    ds[0].data = d.hashrate;
+    ds[0].borderColor = c.accent;
+    ds[0].backgroundColor = areaFill(c.accent);
+    ds[1].data = d.markers;
+    ds[1].pointStyle = mk.pointStyle;
+    ds[1].pointBackgroundColor = mk.color;
+    ds[1].pointBorderColor = mk.color;
+    this.chart.options.scales.y.grid.color = c.grid;
+    this.chart.options.scales.y.ticks.color = c.ticks;
+    this.chart.update();
+    this.chart.resize();
+  }
+
+  render(props) {
+    const empty = !props.chart.hashrate.length;
+    return html`
+        <div class="card">
+            <div class="chart-controls" role="group" aria-label="Hashrate chart range">
+                <span class="chart-control-label text-small mr-1">Range:</span>
+                ${WORKER_RANGES.map(
+                  ([r, label]) => html`<button type="button"
+                    class=${"btn-range" + (props.range === r ? " active" : "")}
+                    aria-pressed=${props.range === r}
+                    title=${"Chart range: " + label}
+                    onClick=${() => props.onRange(r)}>${label}</button>`,
+                )}
+            </div>
+            ${
+              empty
+                ? html`<p class="text-muted text-small">No hashrate history for this rig yet.</p>`
+                : html`<div class="chart-wrap"><canvas ref=${this.canvasRef}></canvas></div>`
+            }
         </div>`;
   }
 }

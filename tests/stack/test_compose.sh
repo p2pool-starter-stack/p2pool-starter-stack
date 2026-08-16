@@ -275,6 +275,14 @@ for edge in "monerod=tor" "tari=tor" "wallet-rpc=monerod" "tari-wallet=tari"; do
 done
 jq_assert "xmrig-proxy waits for p2pool service_started only, not health-gated (#565)" \
     '.services["xmrig-proxy"].depends_on["p2pool"].condition == "service_started"'
+# Peer-loss coupling (#972): a tor restart/recreate kills monerod's SOCKS peers and monerod does
+# NOT re-dial on its own (bench: 0 in / 0 out peers for ~6h, healthcheck green). restart: true
+# makes every compose operation that restarts/recreates tor restart monerod right after — and it
+# is deliberately the ONLY such coupling: p2pool re-peers on its own.
+jq_assert "monerod restarts whenever compose restarts/recreates tor (#972)" \
+    '.services["monerod"].depends_on["tor"].restart == true'
+jq_assert "the tor restart coupling stays monerod-only (#972)" \
+    '[.services[] | (.depends_on // {}) | to_entries[] | select(.value.restart == true)] | length == 1'
 jq_assert "p2pool has no depends_on — both monerod and tari can be profiled off (#103/#565)" \
     '(.services["p2pool"].depends_on // {}) == {}'
 # Count guard: a NEW depends_on edge (health-gated or not) added anywhere in the file must show up
@@ -288,6 +296,25 @@ jq_assert "exactly 5 depends_on edges total (#565)" \
 # runs fine (#777). Asserted here because tari-wallet only renders under tari_payout_confirm.
 jq_assert "tari-wallet healthcheck pattern survives ps CMD truncation (#777)" \
     '(.services["tari-wallet"].healthcheck.test | tostring) | contains("[m]inotari_consol") and (contains("[m]inotari_console_wallet") | not)'
+# Compose healthchecks close the #904 gap. `pithead status` and the dashboard's container-health
+# alert (#337) read these states, and a service without a check reports Up even when dead inside —
+# so with every profile active (this render), no service may lack one, and each of the five late
+# arrivals probes real readiness with tooling its own image ships.
+jq_assert "every service carries a healthcheck (#904)" \
+    '[.services[] | select(.healthcheck == null)] | length == 0'
+jq_assert "xmrig-proxy healthcheck probes the control API via script (#904)" \
+    '.services["xmrig-proxy"].healthcheck.test == ["CMD", "/usr/local/bin/xmrig-proxy-healthcheck.sh"]'
+jq_assert "dashboard healthcheck probes /api/state via script (#904)" \
+    '.services.dashboard.healthcheck.test == ["CMD", "/app/healthcheck.sh"]'
+jq_assert "caddy healthcheck probes the admin endpoint with wget (#904)" \
+    '(.services.caddy.healthcheck.test | tostring) | contains("wget") and contains("2019/config/")'
+jq_assert "both socket proxies healthcheck /_ping through HAProxy (#904)" \
+    '[.services["docker-proxy"], .services["docker-control"]] | all((.healthcheck.test | tostring) | contains("wget") and contains("2375/_ping"))'
+# The standing #90 bar, applied to the new probes: no secret rides in a rendered healthcheck
+# command. The env file above sets PROXY_AUTH_TOKEN=token, so any interpolation of the API token
+# into a probe would surface as the literal "token" here.
+jq_assert "no healthcheck command carries the proxy auth token (#90/#904)" \
+    '[.services[] | (.healthcheck.test | tostring)] | all(contains("token") | not)'
 # Profile-map drift guard (#822, same pattern as the depends_on count guard above): compose never
 # removes a profile-deactivated service's container (#795), so remove_deactivated_profile_containers
 # in the pithead script is the only thing that does — and it hardcodes the service↔profile map.

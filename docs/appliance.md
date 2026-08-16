@@ -15,10 +15,15 @@ manage the host.
   6 GB of it for mining at every boot. With less RAM it still boots, but it prints a warning
   on the machine's screen and shrinks that reservation — mining runs slower and everything
   else runs squeezed, at every boot until the machine has 16 GB.
-- An internal SSD or NVMe with room for the chains. Pruned Monero
-  needs about 120 GB and a local Tari node about 170 GB, so **350 GB or more** runs both
-  locally. On a smaller disk, run pruned Monero and point Tari at a node you already have —
-  the setup page asks both questions.
+- An internal SSD or NVMe with room for the chains. The stack budgets
+  about 120 GB for pruned Monero and about 200 GB for a local Tari node (measured chains:
+  roughly 100 GB and 150 GB in August 2026, and growing — the budget is the growth room), so
+  **400 GB or more** runs both locally: the appliance keeps a 256 MB boot partition and two 4 GB
+  system copies before your data starts, so a 350 GB disk leaves the chains short of their budget.
+  On a smaller disk, run pruned Monero and point Tari at a node you already have — the setup page
+  asks both questions, and that drops the requirement to about 140 GB. See
+  [Hardware › Running a node elsewhere](hardware.md#running-a-node-elsewhere) for the totals in
+  every combination.
 - A wired ethernet connection. Wi-Fi is not supported.
 - A USB stick, **16 GB or larger** — the image writes 5 GB to the stick, whatever the size of the download.
 - A second computer with a browser, on the same network.
@@ -129,7 +134,7 @@ the machine gets a dashboard at all.
 
 | Choice | What it produces |
 |---|---|
-| **Pithead** (default) | A coordinator: monerod, the Tari node, p2pool, xmrig-proxy and the dashboard, all in containers. Does not mine itself. |
+| **Pithead** (default) | A coordinator: p2pool, xmrig-proxy, Tor and the dashboard, plus the Monero and Tari nodes for whichever of the two you keep on this machine (the setup page asks). Does not mine itself unless you turn on the built-in miner. |
 | **Pithead + RigForge** | The same coordinator, plus a built-in miner on this machine's own CPU, pointed at its own pool. Same as turning on "Mine with this machine's CPU" below. |
 | **RigForge** | A rig: just the miner, pointed at a Pithead you already have running. No coordinator, no containers, no chains, no dashboard. |
 
@@ -202,16 +207,16 @@ Then a handful of choices, all with sensible defaults:
 | Tari payout address | — | Required, like the Monero one: this stack always merge-mines both coins from the same work. |
 | P2Pool sidechain | mini | `nano` for a single low-power rig, `main` only for very large hashrate. Changeable later. |
 | Telegram bot | — | Optional. Alerts and status commands; needs both the token and the chat id. |
-| Monero node | run it here | Point at a node you already run. |
-| Tari node | run it here | Same, over a network you trust. |
-| Mine with this machine's CPU | off | On if this box should mine as well as coordinate. Nothing to install: the image carries its own [RigForge](https://github.com/p2pool-starter-stack/rigforge) miner, pointed at this machine's own pool. It starts by itself once the stack is up, comes back on every boot, and appears in the dashboard's Workers view. Mining tunes the whole box for hashrate (CPU governor, memory reservations) — what a dedicated appliance is for. |
+| Monero node | run it here | Point at a node you already run. It has to be on your own network — a private address (10.x, 172.16–31.x, 192.168.x) or one reached over a VPN — because the machine only lets the mining containers dial private ranges; everything else goes through Tor. |
+| Tari node | run it here | Same, over a network you trust, and the same private-address requirement. Pointing Tari elsewhere is the single biggest saving on a small disk: it takes about 200 GB out of the budget. |
+| Mine with this machine's CPU | off | On if this box should mine as well as coordinate. Nothing to install: the image carries its own [RigForge](https://github.com/p2pool-starter-stack/rigforge) miner, pointed at this machine's own pool. It starts by itself once the stack is up, comes back on every boot, and appears in the dashboard's Workers view. The box is tuned for hashrate either way — the CPU governor and the HugePages reservation are set on every boot whether or not this switch is on. |
 | First sync | private over Tor | Faster over the open internet if days of syncing is too slow; it uses Tor afterwards either way. |
 | Dashboard login | generate one for me | Or choose your own password. "No login" is offered but leaves the dashboard — payout addresses, hashrate — open to anyone on your network; never combine it with the Tor onion. |
 
 That is the whole first-run form — fewer questions than the DIY install, on purpose: anything
 with a default that is right for almost every home rig lives one level down, in **Advanced**,
-not on the quick form. Today that means the Monero chain size (pruned, ~120 GB, vs. the full
-~320 GB — only asked at all when this machine runs the node), the Healthchecks ping URL, and
+not on the quick form. Today that means the Monero chain size (a ~120 GB budget pruned vs.
+~320 GB full — only asked at all when this machine runs the node), the Healthchecks ping URL, and
 the time zone (detected from the machine unless set). They are still there to change, just not asked outright.
 
 The dashboard login is also the machine's **console login**: sit at the machine, log in as
@@ -262,10 +267,11 @@ Most of the configuration stays editable from the dashboard afterwards — see
 in this release: the security-sensitive settings (payout addresses, view keys, the dashboard
 password, per-rig worker entries) can be set **here, at install**, but not changed from the
 dashboard later — that restriction is deliberate, so a compromised browser session can never
-redirect your payouts. Until the approval flow that lifts it ships, changing those means
-booting the stick again and reinstalling with **"Fresh start, keep the blockchains"** — you
-enter the configuration again (paste your saved one into Advanced), and the synced chains
-survive.
+redirect your payouts. Changing them later does not mean reinstalling: write the new settings to a
+FAT stick as `pithead-config.json`, insert it and reboot — see
+[Changing settings with a USB stick](#changing-settings-with-a-usb-stick). Being able to insert
+media and power-cycle the machine is authority over it already, so that channel may set anything,
+including what no remote channel is allowed to touch.
 
 Keys still at their default are not written to disk, so this machine keeps picking up improved
 defaults from future updates. The configuration it runs is identical either way.

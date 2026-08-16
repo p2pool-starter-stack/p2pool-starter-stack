@@ -47,6 +47,10 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `monero.rpc_lan_access`, `dashboard.secure`, `xvb.enabled`, `dashboard.tari_required` | config → `.env`/Caddyfile | 4 ▶ |
 | `p2pool.pool` main / mini / nano (sidechain, flags) | config | 4 ▶ |
 | `network.subnet` moved off the default /24 (#180/#201): docker bridge, Tor render-at-start IP, monerod proxy IP, SSRF CIDR, onion vhost gateway | config → live (a subnet move needs a down/up) | 1 ✅ (rendered compose) · 4 ▶ (`run.sh --subnet`) |
+| `tari.mode` local vs remote (#103): tari container/onion present/absent, sync gate against a remote target | config | 4 ▶ |
+| `p2pool.stratum_tls` (#261): a live TLS handshake on the published stratum port, served cert matches the pinned fingerprint | config → live dial | 1 ✅ (render) · 4 ▶ (server-side handshake; a real xmrig client with `pools[].tls:true` stays deferred, see Known gaps) |
+| `network.tor_egress_firewall=false` (#270): the opt-out actually opens a direct clearnet dial, not just that no rule installed | config → live kernel | 1 ✅ (stubbed iptables installs no rule) · 4 ▶ (real dial succeeds) |
+| `monero.view_key` / `tari.view_key` (#381/#462): payout-confirmation wallet-rpc/tari-wallet wiring live | config → live | 4 ▶ (needs `IT_MONERO_VIEW_KEY`/`IT_TARI_VIEW_KEY`+`IT_TARI_SPEND_PUBLIC_KEY`; a confirmed payout landing is real-money real-time, not e2e-reachable) |
 
 ### B. Sync lifecycle (#35)
 
@@ -68,6 +72,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Tari down (required or not) → **never rejects**; p2pool keeps mining Monero (#897) | `tari_down` | 1 ✅ · 3 ▶ |
 | Recovery hysteresis — readmit only after monerod stable `NODE_RECOVERY_AFTER_SEC` | reachable again | 1 ✅ |
 | Transient blip / never-reachable → **no** false reject | debounce / `ever_up` | 1 ✅ |
+| Monero node reachable but **out of sync** — the post-tor-restart 0-peer strand (#972): raw `synchronized` passthrough, debounced stale flag, alert via the `node_down` toggle, monerod restarted alongside tor (compose `depends_on: restart` + the #424 auto-heal), `restart monerod` leg, doctor WARN | `synchronized: false` ≥ `NODE_STALE_AFTER_SEC` after being in sync once | 1 ✅ (client/data_service/alert/tor_heal pytest, `tests/stack` doctor + restart + compose invariants) · 2 ✅ (flag over the wire) · 4 (real strand + re-peer needs the bench) |
 | Double outage; readmit follows monerod alone — Tari's state doesn't gate it either way | both down → monerod up | 1 ✅ (added) · 3 ▶ |
 | #35 latch × #31 failover coexist after release | down post-release | 1 ✅ (added) · 3 ▶ |
 | Stop/start fails → retry next cycle (idempotent) | docker error | 1 ✅ |
@@ -106,6 +111,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | `share_stats` series populated on a mining box (#116) | polls land | 1 ✅ (shape) · 4 ▶ (`--check`) |
 | Confirmed running earnings (#787): yesterday as a **calendar** day vs the trailing 24h/7d/30d spans, the DST-length day boundary, partial marking when a window outruns the recorded payout history, and one roll-up feeding both the dashboard card and `/earnings` | stored payouts | 1 ✅ (`test_earnings.py`, `test_telegram_commands.py`, `components.test.mjs`) |
 | Expected-vs-actual earnings summary (#808/#817): one shared 30d window, the combined Monero+XvB row (estimate folded on the expected side because win payouts are inseparable on the actual side), per-stream gates and honest degradation, Tari block counts, XvB win windowing, and the card's render branches in both views | metrics + stored payouts | 1 ✅ (`test_views.py` `TestEarningsVsActual`, `test_metrics.py`, `components.test.mjs`) |
+| Client entry point (#903): the 30s poll with its pre-tick abort so a hung Tor circuit can't latch the in-flight guard (#382), disconnected-banner state and recovery with the last snapshot kept, preference seeding from URL/localStorage through the normalizers, zoom/range/avg query building, and the handler wiring the App receives | injected fetch/storage/timer fakes | 1 ✅ (`dashboard.test.mjs`) |
 | Dashboard reads correct live state on a real stack | real daemons | 4 ▶ |
 
 ### G. CLI lifecycle (`pithead`)
@@ -145,10 +151,12 @@ it — the worker-API **auth model is the #315 none/name/token matrix**, not the
 | Real worker mines through the real proxy: appears via its stratum name, hashrate aggregates, backup-pool failover | live rig + proxy | 4 ▶ (`run.sh --workers`) |
 | Enriched read survives a populated masked-token descriptor — `api_ok` + rigforge feed resolve with `workers.list[].token` (#506; `dashboard.workers[]` legacy fallback) seen only as the `{"__secret__":true}` sentinel (the v1.5.2 regression + #508) | live rig + `workers.list[]` populated | 4 ▶ (`run.sh --rigforge-control`, #514) |
 | Worker Inspect edit lands on the rig: `editable` true, a `max_temp_c` nudge via `/api/control/worker-apply` hits the rig's `/status` + records history, reverted | live rig control API on | 4 ▶ (`run.sh --rigforge-control`, #513) |
+| Worker Inspect edit on a second writable key, `pools` (#1002b): unlike `max_temp_c` the enriched feed exposes no live readback, so the restore target is the dashboard's own `last_applied.pools` record — the same source the real editor prefills from | live rig control API on | 4 ▶ (`run.sh --rigforge-control`, #1002b; operator supplies `IT_RIG_POOLS_PROBE`) |
 | Rig-side edit reflects: a direct rig control-API change shows in the enriched feed; a `config.json` hand-edit shows in the masked prefill | live rig + direct dial | 4 ▶ (`run.sh --rigforge-control`, #516) |
 | Control-apply auto-rollback (rigforge#236): a hashrate-tanking change is recorded `rolled_back` in the worker-apply result + per-worker history | live rig + fault-injection | 4 ▶ (`run.sh --rigforge-control`, #517; operator supplies `IT_RIG_ROLLBACK_CHANGES`) |
 | Per-worker RigForge new-release badge (#596): one fleet-wide latest-release fetch (hourly throttle, disabled = never dials) compared against each rig's reported `version`, bare-vs-`v`-prefixed SemVer | `dashboard.check_for_updates` + rig-reported version | 1 ✅ (`test_update_checker` comparison/throttle/no-dial; `test_views` + node tests for the per-worker plumbing) · 4 (deferred — live badge on a real rig, owed to the #597 gouda loaner session) |
-| One-click rig upgrade (#597): the #596 badge proposes a version, the host re-derives the target from the RigForge release API over Tor and dials the rig's `/upgrade`; refusals (non-latest, GitHub unreachable/no tag, old rig < v1.11.2 non-202), the anti-beacon throttle, and the poll-cap timeout→accepted fallback | `/api/control/worker-upgrade` + host runner + badge render | 1 ✅ (`test_server.py` + `test_control_service.py`, `tests/stack` #597 cases, `workerview.test.mjs`) · 4 (deferred — gouda loaner: badge → click → applied → badge clears, repeat-click throttle, old-rig refusal) |
+| One-click rig upgrade (#597): the #596 badge proposes a version, the host re-derives the target from the RigForge release API over Tor and dials the rig's `/upgrade`; refusals (non-latest, GitHub unreachable/no tag, old rig < v1.11.2 non-202), the anti-beacon throttle, and the poll-cap timeout→accepted fallback | `/api/control/worker-upgrade` + host runner + badge render | 1 ✅ (`test_server.py` + `test_control_service.py`, `tests/stack` #597 cases, `workerview.test.mjs`) · 4 (deferred — gouda loaner: badge → click → **applied** → badge clears, repeat-click throttle, old-rig refusal — a real rebuild) |
+| Remote-upgrade chain, the already-installed version: dashboard → host-runner → rig `/upgrade` converges on `noop` without a rebuild, exercising the same `applied`/`noop`/`throttled`/`rolled_back`/`failed` terminal vocabulary the poller matches | `/api/control/worker-upgrade` + host runner + a real rig | 4 ▶ (`run.sh --rigforge-control --rigforge-upgrade`) |
 | Stratum auth accept/reject: matching `pass` mines, wrong/missing `pass` rejected, rotation | live proxy `--access-password` | 4 (deferred — a headless xmrig login probe, real proxy binary) |
 | Dev-fee independence (#173): proxy `--donate-level` and rig `DONATION` both honored | live proxy + rig | 4 (deferred) |
 
@@ -204,7 +212,8 @@ sudo tests/os/run.sh --image os/rauc/build/system.img
 
 What gates a merge vs. a release, the standards every test holds to, and the known gaps. For the
 full enumerated coverage, `make test-inventory` generates the list on demand (git-ignored — read it
-locally).
+locally). The generator is grep-based, so CI runs it on every PR and fails if any suite it
+enumerates counts zero — the drift a moved or reshaped suite would otherwise hide.
 
 ### What runs where
 
@@ -217,7 +226,7 @@ locally).
 | Compose interpolation + **security/hardening** invariants | 1 | every PR | ✅ required |
 | Fake-daemon **contract test** | 2 | every PR | ✅ required |
 | Integration harness **self-test** | 4 | every PR | ✅ required |
-| **Test-inventory drift** check | — | every PR | ✅ required |
+| **Test-inventory drift** check (the generator still enumerates every suite) | — | every PR | ✅ required |
 | Fake-daemon **docker mini-stack** | 3 | PRs touching the harness/dashboard | ✅ (own workflow) |
 | **Live config matrix** on real nodes | 4 | manual / pre-release | ✅ **release gate** ([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)) |
 | **KVM appliance battery** (`tests/os/run.sh`) | 4 | manual / pre-release | ✅ **release gate for the image** ([appliance-release.md](appliance-release.md)) |
@@ -242,8 +251,8 @@ Every scenario, at every tier, holds to the same rules.
 - Secrets hygiene. Tokens, RPC creds, and onions are never printed; preservation is checked by
   hashing on the box; all artifacts pass a redactor.
 - Reproducible. The live run records a manifest (stack `VERSION`, git rev, image digests).
-- Test code is real code. The same lint (shellcheck), coverage gate, and inventory drift check
-  apply to the tests themselves.
+- Test code is real code. The same lint (shellcheck) and coverage gate apply to the tests
+  themselves, and the inventory generator fails CI if it stops enumerating a suite.
 
 ### Flake policy
 
@@ -335,9 +344,14 @@ tier 3/4:
   restart tor and re-assert both the egress proof and `pithead status`.
   (`check_egress_firewall_installed` and `check_tor_clearnet_egress` still info-skip without a
   running tor container, by design: the dedicated verdict already fails the outage.)
-- **Insecure + main matrix row.** `dashboard.secure=false` only ever pairs with `p2pool.pool=nano`,
-  so the Caddy-scheme / bind assertions for insecure mode are entangled with the nano path; an
-  insecure+main regression has no row.
+- **Insecure + main matrix row.** ✅ Now a dedicated `local-pruned-main-insecure` row: the two axes
+  decouple, so a regression specific to insecure+main (vs. the pre-existing insecure+nano row) has
+  somewhere to fail.
+- **A real xmrig client over stratum TLS.** The `p2pool.stratum_tls=true` row proves the server side
+  live (a real TLS handshake on the published port, served cert matches the pinned fingerprint);
+  a real rig actually mining with `pools[].tls:true` set is deferred, the same class of gap as the
+  stratum-password headless-probe row above (a rig-configuration step outside this harness's
+  control, needing a real xmrig binary).
 - **`verify_release_images()` against a real signed bundle.** ✅ Now exercised directly (not
   reimplemented) by `scripts/release-smoke.sh`: the real function runs in the extracted, published
   bundle dir against the real pinned digests + committed `cosign.pub` (positive, needs a signed

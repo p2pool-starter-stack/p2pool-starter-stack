@@ -83,3 +83,35 @@ export function parseJsonChanges(text, writableKeys) {
   if (bad.length) return { error: `Not writable: ${bad.join(", ")}` };
   return { changes };
 }
+
+// Per-worker hashrate chart markers (#1015): one change-history row -> one tooltip label. The
+// server keeps `status`/`type`/`changes`/`reason` as raw tokens (views.py "formats at the edge"
+// only for display strings); this is the client mapping them to text, the same job STATUS_META
+// already does for the History table's Outcome column, just phrased as a tooltip sentence.
+export function markerLabel(row) {
+  const changes = row.changes || {};
+  if (row.type === "upgrade") {
+    const version = changes.version || "an update";
+    if (row.status === "applied") return `Upgraded to ${version}`;
+    if (row.status === "noop") return `Upgrade to ${version}: rig already current`;
+    return `Upgrade to ${version}: ${row.status}` + (row.reason ? ` — ${row.reason}` : "");
+  }
+  const keys = Object.keys(changes);
+  const changed = keys.length ? keys.join(", ") : "config";
+  if (row.status === "applied") return `Applied: ${changed}`;
+  return `Apply ${row.status}` + (row.reason ? ` — ${row.reason}` : "");
+}
+
+// Change-history rows (server-shaped, range-filtered to match the chart's own hashrate slice) ->
+// WorkerChartCard's marker points. `quiet` covers every outcome where the rig's config/build did
+// NOT actually change (rejected/rolled_back/failed/throttled/noop/accepted) — shown with a muted
+// glyph rather than dropped, so "we tried and it bounced" still explains a flat stretch (#1015).
+export function buildChartMarkers(markers) {
+  return (markers || []).map((row) => ({
+    x: row.x,
+    y: 0.5,
+    label: markerLabel(row),
+    kind: row.type === "upgrade" ? "upgrade" : "apply",
+    quiet: row.status !== "applied",
+  }));
+}

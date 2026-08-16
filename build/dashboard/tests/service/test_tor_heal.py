@@ -58,13 +58,16 @@ class _FailingDocker:
         return False
 
 
-def _healer(clock=None, enabled=True, probe=None, notify=None, docker=None):
+def _healer(clock=None, enabled=True, probe=None, notify=None, docker=None, restart_monerod=None):
+    # restart_monerod=None exercises the config default: the test env's MONERO_NODE_HOST equals
+    # LOCAL_MONERO_HOST (both defaults), i.e. a LOCAL node — heals also cycle monerod (#972).
     return TorEgressHealer(
         docker or _FakeDocker(),
         enabled=enabled,
         probe=probe or (lambda: False),
         notify=notify,
         clock=clock or _Clock(),
+        restart_monerod=restart_monerod,
     )
 
 
@@ -219,7 +222,9 @@ class TestCheck:
         await h.check()
         assert len(calls) == 2
 
-    async def test_heal_restarts_the_tor_container(self, caplog):
+    async def test_heal_restarts_tor_then_monerod(self, caplog):
+        # The tor restart kills monerod's SOCKS peers; the heal cycles monerod right after so
+        # it re-dials (#972) — order matters: monerod must come back to a LIVE tor.
         clock = _Clock()
         docker = _FakeDocker()
         h = _healer(clock, probe=lambda: False, docker=docker)
@@ -227,8 +232,42 @@ class TestCheck:
             await h.check()  # starts the failure streak
             clock.t += BROKEN_AFTER_SEC
             await h.check()  # sustained -> heal
-        assert docker.calls == [("stop", "tor"), ("start", "tor")]
+        assert docker.calls == [
+            ("stop", "tor"),
+            ("start", "tor"),
+            ("stop", "monerod"),
+            ("start", "monerod"),
+        ]
         assert any("Restarting the tor container" in r.message for r in caplog.records)
+
+    async def test_remote_node_heal_touches_only_tor(self):
+        # A remote monerod has no container here — the heal must stay tor-scoped.
+        clock = _Clock()
+        docker = _FakeDocker()
+        h = _healer(clock, probe=lambda: False, docker=docker, restart_monerod=False)
+        await h.check()
+        clock.t += BROKEN_AFTER_SEC
+        await h.check()
+        assert docker.calls == [("stop", "tor"), ("start", "tor")]
+
+    async def test_failed_monerod_cycle_warns_but_keeps_the_tor_attempt(self, caplog):
+        # monerod failing to cycle must not refund the tor budget slot — the tor restart DID
+        # happen; the warning points at the manual leg and the stale alert is the backstop.
+        class _MonerodFailingDocker(_FakeDocker):
+            async def start(self, container, **kwargs):
+                self.calls.append(("start", container))
+                return container != "monerod"
+
+        clock = _Clock()
+        docker = _MonerodFailingDocker()
+        h = _healer(clock, probe=lambda: False, docker=docker)
+        with caplog.at_level("WARNING", logger="TorHeal"):
+            await h.check()
+            clock.t += BROKEN_AFTER_SEC
+            await h.check()
+        assert ("stop", "monerod") in docker.calls
+        assert h._restarts == 1  # tor attempt kept, not refunded
+        assert any("restart monerod" in r.message for r in caplog.records)
 
     async def test_exhausted_warns_but_never_restarts(self, caplog):
         clock = _Clock()
@@ -238,11 +277,11 @@ class TestCheck:
         for _ in range(MAX_RESTARTS):
             clock.t += max(BROKEN_AFTER_SEC, COOLDOWN_SEC)
             await h.check()
-        assert len(docker.calls) == 2 * MAX_RESTARTS  # budget fully spent
+        assert len(docker.calls) == 4 * MAX_RESTARTS  # budget fully spent (tor + monerod each)
         with caplog.at_level("WARNING", logger="TorHeal"):
             clock.t += COOLDOWN_SEC
             await h.check()
-        assert len(docker.calls) == 2 * MAX_RESTARTS  # no further restarts, ever
+        assert len(docker.calls) == 4 * MAX_RESTARTS  # no further restarts, ever
         assert any("STILL broken" in r.message for r in caplog.records)
 
     async def test_recovery_sends_the_one_time_notify(self):
