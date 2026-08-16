@@ -590,6 +590,16 @@ phase_update() {
     fi
 
     info "leg 3 — operator-initiated rollback off a committed update"
+    # Mark the serial BEFORE issuing the reboot that leg 4 provisions against: neither
+    # config.json nor machine-role ever gets written by legs 1-3 (they only drive rauc), so
+    # pithead-firstboot's ConditionPathExists stays satisfied and every one of the five reboots
+    # above re-ran the wizard and minted its own token, none of them flushed by
+    # _vm_boot_disk's one-time truncate (before leg 1). Taking the mark here — not on
+    # entry to _wizard_provision_capture — is what makes it safe: anything already on the
+    # serial before this point is a dead token from an earlier, now-destroyed wizard container,
+    # and everything after belongs to the boot leg 4 actually runs against.
+    local serial_mark
+    serial_mark=$(wc -c <"$SERIAL" 2>/dev/null | tr -d ' ')
     _ssh "$(_rollback_cmd)" || true
     sleep 10
     _wait_ssh 300 || {
@@ -600,38 +610,56 @@ phase_update() {
     [ "$marker" = "v1" ] && ok "ROLLBACK: an operator can return to v1 after committing v2" ||
         bad "expected v1 after the operator rollback, got '$marker'"
 
-    phase_update_dashboard "$bundle"
+    phase_update_dashboard "$bundle" "${serial_mark:-0}"
 }
 
 # Provision the wizard-gated stack over its real HTTP flow — the slim shape of what
 # phase_provision drives with full assertions — and CAPTURE the generated dashboard login for
-# API-driving legs. Sets DASH_USER/DASH_PASS. rc 1 on any failure (the caller reports).
+# API-driving legs. Sets DASH_USER/DASH_PASS. rc 1 on any failure; WIZ_FAIL_REASON names which of
+# the six gates lost (the caller reports it — "no dashboard, no control channel" used to be the
+# whole story, and every diagnostic run since has cost a battery pass to learn nothing more).
 DASH_USER=""
 DASH_PASS=""
-_wizard_provision_capture() {
-    local token="" tries=0 jar scode handoff=""
+WIZ_FAIL_REASON=""
+_wizard_provision_capture() { # <serial-byte-offset-before-this-boot, default 0>
+    local mark="${1:-0}" token="" tries=0 jar scode handoff="" tok_total
+    WIZ_FAIL_REASON=""
     while [ -z "$token" ] && [ "$tries" -lt 40 ]; do
-        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        # Only the tail past $mark: content from before this boot is a dead token from an
+        # earlier, now-destroyed wizard container (see the leg-3 comment on serial_mark).
+        token=$(tail -c "+$((mark + 1))" "$SERIAL" 2>/dev/null | tr -d '\r' | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
         [ -n "$token" ] || sleep 3
         tries=$((tries + 1))
     done
-    [ -n "$token" ] || return 1
-    _wait_setup_page 180 || return 1
+    if [ -z "$token" ]; then
+        WIZ_FAIL_REASON="gate: token — no pit-XXXXXX ever appeared on the serial console for this boot (waited ${tries}x3s)"
+        return 1
+    fi
+    if ! _wait_setup_page 180; then
+        WIZ_FAIL_REASON="gate: setup page — https://$ip/ never answered 'Pithead setup' within 180s (token: $token)"
+        return 1
+    fi
     jar=$(mktemp)
-    curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null || {
+    if ! curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null; then
+        # The number that confirms or kills the stale-token theory in one run: how many DISTINCT
+        # tokens the whole serial (not just this boot's slice) is carrying right now.
+        tok_total=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | sort -u | wc -l | tr -d ' ')
+        WIZ_FAIL_REASON="gate: auth POST — https://$ip/auth rejected token $token ($tok_total distinct pit- token(s) on the serial so far)"
         rm -f "$jar"
         return 1
-    }
-    grep -q "wizard_session" "$jar" || {
+    fi
+    if ! grep -q "wizard_session" "$jar"; then
+        WIZ_FAIL_REASON="gate: session cookie — /auth returned 200 but set no wizard_session cookie (token: $token)"
         rm -f "$jar"
         return 1
-    }
+    fi
     scode=$(curl -sSk -b "$jar" --data "monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini" \
         "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
-    [ "$scode" = "200" ] || {
+    if [ "$scode" != "200" ]; then
+        WIZ_FAIL_REASON="gate: submit — /submit returned $scode, want 200"
         rm -f "$jar"
         return 1
-    }
+    fi
     tries=0
     while [ "$tries" -lt 24 ]; do
         handoff=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null)
@@ -639,14 +667,16 @@ _wizard_provision_capture() {
         sleep 5
         tries=$((tries + 1))
     done
-    printf '%s' "$handoff" | grep -q '"password"' || {
+    if ! printf '%s' "$handoff" | grep -q '"password"'; then
+        WIZ_FAIL_REASON="gate: handoff — /api/handoff never carried a password (waited ${tries}x5s)"
         rm -f "$jar"
         return 1
-    }
+    fi
     DASH_USER=$(printf '%s' "$handoff" | jq -r '.username // "admin"')
     DASH_PASS=$(printf '%s' "$handoff" | jq -r '.password // ""')
     curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null
     rm -f "$jar"
+    [ -n "$DASH_PASS" ] || WIZ_FAIL_REASON="gate: handoff — password came back empty"
     [ -n "$DASH_PASS" ]
 }
 
@@ -723,11 +753,11 @@ PYEOF
 # bundle download are pointed at a bench-local server through the root-owned test seam
 # (os-update-test-base); RAUC signature verification still runs for real against the slot
 # keyring, so the bad-signature refusal is genuine, not simulated.
-phase_update_dashboard() { # <good-bundle-path>
-    local good_bundle="$1" marker
+phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-boot>
+    local good_bundle="$1" serial_mark="${2:-0}" marker
     info "leg 4 — dashboard OS-update action end-to-end (provision, then check/download/verify/install/reboot)"
-    if ! _wizard_provision_capture; then
-        bad "leg 4: could not provision the stack through the wizard (no dashboard, no control channel)"
+    if ! _wizard_provision_capture "$serial_mark"; then
+        bad "leg 4: could not provision the stack through the wizard (${WIZ_FAIL_REASON:-no dashboard, no control channel})"
         return
     fi
     ok "leg 4: stack provisioned; dashboard login captured"
