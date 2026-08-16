@@ -32,10 +32,11 @@ mining, and the **Compose stack** you run on a host you manage.
   operator, no fee, rewards paid to your own wallet. Every hash merge-mines Tari on the same work.
 - 🧠 **XvB switching engine.** Watches the XMRvsBeast raffle and shifts hashrate to hold your tier,
   donating the minimum needed and routing the rest to your P2Pool payouts.
-- 🧅 **Tor-first networking.** A built-in Tor daemon gives Monero, Tari, and P2Pool onion addresses;
-  a host firewall drops any direct clearnet dial from the stack. All runtime egress routes over Tor
-  by default — the one opt-in exception is clearnet initial sync. The [privacy
-  guide](docs/privacy.md) maps every connection.
+- 🧅 **Tor-first networking.** A built-in Tor daemon gives P2Pool an onion address, and the Monero
+  and Tari nodes one each while they run locally; a host firewall drops any direct clearnet dial
+  from the stack. All runtime egress routes over Tor by default; the opt-in exceptions are the
+  clearnet initial sync and a node you run on another machine, which is dialled directly. The
+  [privacy guide](docs/privacy.md) maps every connection.
 - 🔌 **One endpoint for every rig.** Point all workers at a single address on port `3333`. No wallet
   address in the miner config; the stack routes the hashrate.
 - 📊 **Live dashboard, with history.** Hashrate, the P2Pool/XvB split, the PPLNS window, and
@@ -46,10 +47,11 @@ mining, and the **Compose stack** you run on a host you manage.
   see how a rig's hashrate tracks each config version, one-click upgrade to a new release, and read
   the access and config-change audit logs. Every change is gated host-side behind a login. See
   [The Dashboard](docs/dashboard.md).
-- ⚙️ **One config, tuned to your setup.** A local or remote Monero node, pruned or full; the P2Pool
-  tier (`main`, `mini`, or `nano`); XvB donation strategy; per-worker power and API settings; four
-  alert channels; timezone, memory limits, and every privacy toggle — around 113 keys across 13
-  sections, all in one `config.json` and validated on every `apply`. Most have defaults you'll never
+- ⚙️ **One config, tuned to your setup.** A local or remote Monero node, pruned or full, and a local
+  or remote Tari node; the P2Pool tier (`main`, `mini`, or `nano`); XvB donation strategy;
+  per-worker power and API settings; four alert channels; timezone, memory limits, and every privacy
+  toggle — around 90 keys across 14 sections, all in one `config.json` and validated on every
+  `apply`. Most have defaults you'll never
   touch. See [Configuration](docs/configuration.md).
 - 💡 **Energy-aware earnings.** Set your electricity cost and coin prices — typed in, or fetched
   live from CoinGecko over Tor with the opt-in price feed — and add each rig's watts; the earnings
@@ -103,8 +105,9 @@ cp config.minimal.json config.json   # then set your Monero + Tari payout addres
 > build), e.g. to contribute, see [Install from source](docs/getting-started.md#alternative-build-from-source).
 
 > NOTE: Prereqs are Ubuntu Server 24.04 LTS, 16 GB+ RAM, an SSD (~330 GB pruned / ~530 GB full
-> minimum; the chains grow ~100+ GB/year, so 2–4 TB avoids a later resize), and your Monero + Tari
-> payout addresses. Full sizing in [Hardware Requirements](docs/hardware.md).
+> minimum with both nodes local; the chains grow ~100+ GB/year, so 2–4 TB avoids a later resize),
+> and your Monero + Tari payout addresses. Running a node on another machine cuts the disk budget —
+> full sizing in [Hardware Requirements](docs/hardware.md).
 
 `setup` checks dependencies (and offers to install them on Ubuntu), asks for your wallet
 addresses, provisions Tor, tunes HugePages for RandomX, and offers to start the stack. Then:
@@ -135,10 +138,10 @@ Full walkthrough: [docs/getting-started.md](docs/getting-started.md)
 | **[Pithead OS — the appliance](docs/appliance.md)** | Write a USB stick, install on a dedicated machine, configure from a browser. The whole stack as one signed image with automatic fallback. |
 | **[Getting Started](docs/getting-started.md)** | The DIY path: prerequisites, install, first-run setup, and what to expect while the node syncs. |
 | **[Hardware Requirements](docs/hardware.md)** | Minimum vs. recommended specs for the stack host (CPU, RAM, disk, network), and how to run leaner. (Miner specs live in [RigForge](https://github.com/p2pool-starter-stack/rigforge).) |
-| **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero nodes. |
+| **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero or Tari nodes. |
 | **[The Dashboard](docs/dashboard.md)** | Sync Mode, a tour of the live operational view, and the opt-in control channel: editing config, one-click upgrades, and the audit logs from the browser. |
 | **[Connecting Miners](docs/workers.md)** | Point any existing rig at the stack, or spin up a tuned miner with [RigForge](https://github.com/p2pool-starter-stack/rigforge). |
-| **[Architecture](docs/architecture.md)** | The eleven services, the privacy model, and the algorithmic XvB switching engine. |
+| **[Architecture](docs/architecture.md)** | The eleven services (nine on a default install), the privacy model, and the algorithmic XvB switching engine. |
 | **[Privacy & Network Egress](docs/privacy.md)** | Every off-box connection: what's Tor-routed, what's clearnet today, and how to harden it. |
 | **[Operations & Maintenance](docs/operations.md)** | Full command reference, upgrades, backups, and troubleshooting. |
 
@@ -148,10 +151,11 @@ Browse the full index at **[docs/](docs/README.md)**.
 
 ## 🏗️ How it works
 
-The stack orchestrates eleven services via Docker Compose: a Monero full node, P2Pool, a Tari base
-node, an XMRig proxy (your single worker endpoint), Tor for anonymity, the dashboard plus switching
-engine, a read-only Docker socket proxy (plus a tiny start/stop-only control proxy), Caddy for
-HTTPS, and two opt-in view-only wallets that confirm payouts on-chain.
+The stack defines eleven services via Docker Compose — nine on a default install: a Monero full
+node, P2Pool, a Tari base node, an XMRig proxy (your single worker endpoint), Tor for anonymity, the
+dashboard plus switching engine, a read-only Docker socket proxy (plus a tiny start/stop-only
+control proxy), Caddy for HTTPS, and two opt-in view-only wallets that confirm payouts on-chain.
+Either node drops out when you point the stack at one running elsewhere.
 
 ```mermaid
 flowchart TB
@@ -187,7 +191,7 @@ flowchart TB
     Dashboard -.->|"reads stats & sync"| core
 
     Proxy ==>|hashrate| P2Pool
-    Proxy ==>|hashrate| XvB
+    Proxy ==>|"hashrate to XvB · Tor"| Tor
 
     P2Pool <-->|"RPC / ZMQ"| Monerod
     P2Pool -->|merge-mine| Tari
@@ -196,6 +200,7 @@ flowchart TB
     Tari <--> Tor
     P2Pool <--> Tor
     Tor <--> Net
+    Net -.-> XvB
 
     classDef ext fill:#1e293b,stroke:#64748b,color:#e2e8f0;
     classDef ctrl fill:#1d4ed8,stroke:#93c5fd,color:#eff6ff;
