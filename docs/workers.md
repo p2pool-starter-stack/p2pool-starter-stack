@@ -328,15 +328,17 @@ unchanged: send the rig's `token` only if it sets an `ACCESS_TOKEN` (the read AP
 If the block also carries a `control` object — `{change_id, status, reason}`, mirroring the rig's
 own control-API `/status` response read-only — the dashboard reconciles it against the [Worker
 Inspect](dashboard.md#worker-inspect) change history (#579): a still-`accepted` row whose
-`change_id` matches is updated to the reported terminal `status`
-(`applied`/`rejected`/`rolled_back`). This is how a rollback slower than the host runner's 20s
-status-poll deadline still reaches a terminal state without a second authenticated dial to the
+`change_id` matches is updated to the reported terminal `status` — `applied` / `rejected` /
+`rolled_back` / `failed` (a control-apply outcome) or `noop` (already on the target) / `throttled`
+(the rig's own anti-beacon window, retry-later not a fault — both control-upgrade outcomes). This
+is how a rollback, or any other terminal outcome the rig reports past the host runner's own
+status-poll deadline, still reaches a terminal state without a second authenticated dial to the
 control port.
 
-RigForge does not ship this mirror yet — its enriched feed carries `config_meta` provenance
-(revision, `changed_at`, source, `last_change_id`) but no `control` status object — so this parses to
-nothing today, and a rollback slower than the status-poll deadline stays `accepted` until
-the rig ships the mirror.
+RigForge ships this mirror from **v1.15.0** (rigforge#346). A rig on an older release, or one with
+no `control` block at all (plain xmrig, or a rig that has never taken a control-apply/-upgrade),
+parses to nothing — a slow-terminal outcome on those rigs stays `accepted` until the rig reports a
+status the dashboard recognizes.
 
 #### RigForge new-release badge
 

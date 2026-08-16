@@ -23,8 +23,8 @@ transition, not a stream:
 
 | Alert | When it fires |
 |---|---|
-| 🔴 **Node down** | Your Monero (or Tari) node has been unreachable long enough to be considered down — the stack has stopped serving your rigs so they **fail over to their backup pools**. |
-| 🟢 **Node recovered** | The node is back and stable; the stack has readmitted your rigs. |
+| 🔴 **Node down** | Your Monero (or Tari) node has been unreachable long enough to be considered down — or the Monero node is reachable but has sat out of sync for 10+ minutes (the stranded-peers state a Tor restart can leave behind). Either way the stack has stopped serving your rigs so they **fail over to their backup pools**. |
+| 🟢 **Node recovered** | The node is back — reachable and in sync — and stable; the stack has readmitted your rigs. |
 | 🔴 **Worker offline** | A rig stopped hashing and hasn't been seen for a few minutes (a reboot, a dropped connection, a dead miner) — it's showing **DOWN** on the dashboard. |
 | 🟢 **Worker back online** | A rig that had gone offline is hashing again. |
 | 🟢 **New worker joined** | A rig the stack hasn't seen before connected — a new miner joined the fleet. |
@@ -156,8 +156,8 @@ block and set it to `false` — any event you don't list stays on:
 
 | Event key | Default | Alert |
 |---|---|---|
-| `node_down` | `true` | Monero/Tari node went down |
-| `node_recovered` | `true` | …and came back |
+| `node_down` | `true` | Monero/Tari node went down; also the Monero node reachable but out of sync for 10+ minutes (peers lost after a Tor restart) |
+| `node_recovered` | `true` | …and came back / back in sync |
 | `worker_offline` | `true` | A rig went DOWN |
 | `worker_recovered` | `true` | …and came back |
 | `worker_joined` | `true` | A new rig joined the fleet |

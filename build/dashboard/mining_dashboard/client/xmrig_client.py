@@ -79,16 +79,20 @@ def parse_rigforge(payload):
     }
 
 
-# Terminal control-apply outcomes (pithead control_worker_apply / rigforge#236). "accepted" and
-# "running" are non-terminal — never reconciled from a read poll, only ever written by the host
-# runner itself while a change is still in flight.
-_CONTROL_TERMINAL = ("applied", "rejected", "rolled_back")
+# Terminal control outcomes the rig may mirror: applied/rejected/rolled_back/failed from a
+# control-apply (pithead control_worker_apply / rigforge#236), plus noop/throttled from a
+# control-upgrade (rigforge#320, v1.12.0). "started" (rigforge#320's in-flight upgrade marker) and
+# "accepted"/"running" (this dashboard's own still-polling placeholders) are non-terminal — never
+# reconciled from a read poll, only ever written while a change is still in flight. Mirrors
+# pithead's own control_worker_apply/control_worker_upgrade poll cases (#1001) so the mirror-side
+# and poll-side vocabularies can't drift apart again.
+_CONTROL_TERMINAL = ("applied", "rejected", "rolled_back", "failed", "noop", "throttled")
 
 
 def parse_worker_control_status(payload):
-    """The rig's last control-apply outcome, mirrored read-only into the SAME enriched feed body
-    under ``rigforge.control`` (#579) — no new port, no token, it rides the poll that already
-    fetches the ``rigforge`` block for :func:`parse_rigforge`.
+    """The rig's last control-apply/control-upgrade outcome, mirrored read-only into the SAME
+    enriched feed body under ``rigforge.control`` (#579, rigforge#346) — no new port, no token, it
+    rides the poll that already fetches the ``rigforge`` block for :func:`parse_rigforge`.
 
     The host runner's synchronous ``/status`` poll after a worker-apply is capped at 20s
     (rigforge#236's auto-rollback can take minutes); a change still mid-flight past that deadline
@@ -97,10 +101,12 @@ def parse_worker_control_status(payload):
     mirrors its own last outcome into the already-open, unauthenticated read feed so the next
     routine poll can catch up.
 
-    Returns ``{"change_id", "status", "reason"}`` only for a TERMINAL outcome
-    (``applied``/``rejected``/``rolled_back``); ``None`` for a still-in-flight change, a malformed
-    block, or a rig that doesn't mirror this yet (older RigForge, plain xmrig) — so a #185 history
-    row is never force-terminaled on bad or absent data.
+    Returns ``{"change_id", "status", "reason"}`` only for a TERMINAL outcome: applied / rejected /
+    rolled_back / failed (rigforge#236), or noop (already on the target)/throttled (the rig's own
+    anti-beacon window — retry-later, not a fault) from rigforge#320. Returns ``None`` for a
+    still-in-flight change (``started``/``accepted``/``running``), a malformed block, or a rig that
+    doesn't mirror this yet (older RigForge, plain xmrig) — so a #185 history row is never
+    force-terminaled on bad or absent data.
     """
     rf = payload.get("rigforge") if isinstance(payload, dict) else None
     ctrl = rf.get("control") if isinstance(rf, dict) else None

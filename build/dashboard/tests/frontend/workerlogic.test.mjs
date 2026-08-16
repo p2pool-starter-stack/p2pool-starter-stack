@@ -8,9 +8,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildChartMarkers,
   buildFields,
   buildTableChanges,
   jsonSyntaxError,
+  markerLabel,
   parseJsonChanges,
 } from "../../mining_dashboard/web/static/workerlogic.mjs";
 
@@ -111,4 +113,66 @@ test("jsonSyntaxError: live check used for inline feedback while typing", () => 
   assert.equal(jsonSyntaxError("  "), null);
   assert.equal(jsonSyntaxError('{"a": 1}'), null);
   assert.match(jsonSyntaxError("{not json"), /Not valid JSON/);
+});
+
+// --- markerLabel / buildChartMarkers (#1015) ------------------------------------------------
+
+test("markerLabel: an applied config change lists its changed keys", () => {
+  const label = markerLabel({ type: "apply", status: "applied", changes: { DONATION: 3 } });
+  assert.equal(label, "Applied: DONATION");
+});
+
+test("markerLabel: a rejected/rolled_back apply carries its reason, not the changed keys", () => {
+  assert.equal(
+    markerLabel({ type: "apply", status: "rejected", reason: "bad value", changes: { a: 1 } }),
+    "Apply rejected — bad value",
+  );
+  assert.equal(
+    markerLabel({ type: "apply", status: "rolled_back", reason: "miner did not return live" }),
+    "Apply rolled_back — miner did not return live",
+  );
+});
+
+test("markerLabel: an applied upgrade names the version it moved to", () => {
+  const label = markerLabel({ type: "upgrade", status: "applied", changes: { version: "v1.12.0" } });
+  assert.equal(label, "Upgraded to v1.12.0");
+});
+
+test("markerLabel: upgrade noop/throttled read calm, not as a fault", () => {
+  assert.equal(
+    markerLabel({ type: "upgrade", status: "noop", changes: { version: "v1.12.0" } }),
+    "Upgrade to v1.12.0: rig already current",
+  );
+  assert.equal(
+    markerLabel({
+      type: "upgrade",
+      status: "throttled",
+      changes: { version: "v1.12.0" },
+      reason: "retry after the window",
+    }),
+    "Upgrade to v1.12.0: throttled — retry after the window",
+  );
+});
+
+test("buildChartMarkers: maps each row to a chart point, quiet only for a non-applied outcome", () => {
+  const rows = [
+    { x: 1000, status: "applied", type: "apply", changes: { a: 1 } },
+    { x: 2000, status: "rejected", type: "apply", changes: {}, reason: "bad" },
+    { x: 3000, status: "applied", type: "upgrade", changes: { version: "v2" } },
+  ];
+  const pts = buildChartMarkers(rows);
+  assert.deepEqual(
+    pts.map((p) => [p.x, p.y, p.kind, p.quiet]),
+    [
+      [1000, 0.5, "apply", false],
+      [2000, 0.5, "apply", true],
+      [3000, 0.5, "upgrade", false],
+    ],
+  );
+  assert.equal(pts[0].label, "Applied: a");
+});
+
+test("buildChartMarkers: tolerates a missing/empty marker list", () => {
+  assert.deepEqual(buildChartMarkers(undefined), []);
+  assert.deepEqual(buildChartMarkers([]), []);
 });

@@ -76,6 +76,7 @@ class TestGetSyncStatus:
             "target": 100,
             "percent": 50,
             "db_size": 85_000_000_000,
+            "synchronized": False,
         }
 
     def test_synced_via_flag(self):
@@ -89,16 +90,39 @@ class TestGetSyncStatus:
                 "database_size": 200_000_000_000,
             }
         )
-        assert client.get_sync_status() == {"is_syncing": False, "db_size": 200_000_000_000}
+        assert client.get_sync_status() == {
+            "is_syncing": False,
+            "db_size": 200_000_000_000,
+            "synchronized": True,
+        }
 
     def test_synced_via_zero_target(self):
         # Synced monerod reports target_height: 0.
         client = self._client_with_info({"status": "OK", "height": 100, "target_height": 0})
-        assert client.get_sync_status() == {"is_syncing": False, "db_size": 0}
+        assert client.get_sync_status() == {
+            "is_syncing": False,
+            "db_size": 0,
+            "synchronized": False,
+        }
 
     def test_synced_when_height_reaches_target(self):
         client = self._client_with_info({"status": "OK", "height": 100, "target_height": 100})
-        assert client.get_sync_status() == {"is_syncing": False, "db_size": 0}
+        assert client.get_sync_status() == {
+            "is_syncing": False,
+            "db_size": 0,
+            "synchronized": False,
+        }
+
+    def test_stranded_node_reads_synced_but_carries_the_false_flag(self):
+        # The #972 strand: after a tor restart a peerless monerod can report target_height 0
+        # (stale) with synchronized false — the height math calls it "synced", so the raw
+        # `synchronized` passthrough is the ONLY signal the peer-loss detector gets.
+        client = self._client_with_info(
+            {"status": "OK", "synchronized": False, "height": 100, "target_height": 0}
+        )
+        status = client.get_sync_status()
+        assert status["is_syncing"] is False
+        assert status["synchronized"] is False
 
     def test_unreachable_returns_none(self):
         client = self._client_with_info(None)

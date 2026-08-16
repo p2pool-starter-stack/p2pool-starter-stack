@@ -10,9 +10,8 @@ test-dashboard: ## Dashboard unit/component tests with coverage gate (deps from 
 test-frontend: ## Frontend logic tests with Node's built-in runner (#632; same invocation as CI)
 	node --test build/dashboard/tests/frontend/*.test.mjs
 
-test-patch-coverage: ## diff-cover (#286): new/changed lines must be >=90% covered (run after test-dashboard)
-	cd build/dashboard && uv run --locked --extra test \
-		diff-cover coverage.xml --compare-branch=origin/$${GITHUB_BASE_REF:-develop} --fail-under=90
+test-patch-coverage: ## diff-cover (#286) minus its vacuous pass (#1000): >=90% on changed lines (run after test-dashboard)
+	bash scripts/patch-coverage.sh
 
 test-stack: ## pithead shell test suite
 	bash tests/stack/run.sh
