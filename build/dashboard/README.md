@@ -29,10 +29,13 @@ Testing: the Python API, where the logic and formatting live, is unit-tested. Th
 tests run under Node's built-in runner (`node --test build/dashboard/tests/frontend/`) — no
 `package.json`/`node_modules`/build step, so the repo stays Node-free. They cover the pure logic
 (`logic.test.mjs`: worker sort, tooltip formatting, hero-KPI selection), the chart helpers
-(`chart.test.mjs`: `withAlpha`, `padYAxis`), the topology geometry (`topology.test.mjs`), and
+(`chart.test.mjs`: `withAlpha`, `padYAxis`), the topology geometry (`topology.test.mjs`),
 component rendering (`components.test.mjs`: every card driven through `App` against a real
-`build_state()` fixture, via a DOM-free vnode walker). The DOM-bound wiring (Chart.js canvas,
-the SVG topology component) needs a browser and is left to a manual smoke test.
+`build_state()` fixture, via a DOM-free vnode walker), and the entry point
+(`dashboard.test.mjs`: `initDashboard()` takes its browser seams — DOM, storage, fetch, history,
+timer, render — as parameters with real defaults, so the poll loop, its hang-abort, and the
+preference wiring run against fakes). The DOM-bound wiring (Chart.js canvas, the SVG topology
+component) needs a browser and is left to a manual smoke test.
 
 ## Layout
 

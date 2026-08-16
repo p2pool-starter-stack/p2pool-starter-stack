@@ -41,7 +41,7 @@ def test_monero_synced_reads_no_sync_and_db_size():
     with FakeMonerod(database_size=85 * 10**9) as m:
         client = MoneroClient(url=m.url, username="")
         st = client.get_sync_status()
-    assert st == {"is_syncing": False, "db_size": 85 * 10**9}
+    assert st == {"is_syncing": False, "db_size": 85 * 10**9, "synchronized": True}
 
 
 def test_monero_syncing_reports_percent():
@@ -52,6 +52,8 @@ def test_monero_syncing_reports_percent():
     assert st["is_syncing"] is True
     assert st["current"] == 1500 and st["target"] == 3000 and st["percent"] == 50
     assert st["db_size"] == 40 * 10**9
+    # The raw wire flag rides along for the peer-loss detector (#972).
+    assert st["synchronized"] is False
 
 
 def test_monero_down_is_unreachable():
@@ -79,7 +81,7 @@ def test_monero_synced_by_height_even_without_flag():
 def test_monero_db_size_unknown_reads_zero():
     with FakeMonerod(database_size=0) as m:
         st = MoneroClient(url=m.url, username="").get_sync_status()
-    assert st == {"is_syncing": False, "db_size": 0}
+    assert st == {"is_syncing": False, "db_size": 0, "synchronized": True}
 
 
 def test_monero_http_control_mutates_state():
