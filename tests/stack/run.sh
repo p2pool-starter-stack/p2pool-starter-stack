@@ -1652,10 +1652,11 @@ caddy_noaddr="$(
 assert_contains "a box with only a public address still binds loopback" "$caddy_noaddr" "    bind 127.0.0.1 ::1"
 
 # The onion vhost must bind exactly when the LAN vhost does. A site block with no bind asks for a
-# WILDCARD listener, so mixing the two puts a wildcard :80 and a specific NETWORK_PREFIX.1:80 in
-# one file, both claiming the port — Caddy fails to start and takes the dashboard and the onion
-# down together. dashboard.secure:false with the onion enabled is documented and exempted from the
-# insecure-transport warning, so this combination is reachable today.
+# WILDCARD listener, which reopens every address the bound blocks exclude — including the
+# globally-routable one. (It does NOT crash Caddy: SO_REUSEPORT lets a wildcard and a specific
+# listener share a port, measured against the pinned image. The hazard is the socket, not a
+# startup failure.) dashboard.secure:false with the onion enabled is documented and exempted from
+# the insecure-transport warning, so this combination is reachable today.
 # shellcheck disable=SC1090  # STACK path is dynamic by design
 caddy_onion="$(
     # shellcheck disable=SC1090
@@ -1671,6 +1672,88 @@ caddy_onion="$(
 )"
 assert_eq "insecure+onion: both vhosts bind, never one wildcard and one specific" \
     "$(printf '%s' "$caddy_onion" | grep -c '^    bind ')" "2"
+
+# The invariant, checked by counting rather than by naming the blocks: EVERY site block in the
+# rendered file carries a bind, or none does. A hardcoded count only proves the blocks that
+# happened to render, and that is exactly how the HTTPS onion vhost shipped unbound — it renders
+# only once DASHBOARD_ONION holds a provisioned address, so every test that left it empty saw a
+# correct file. `_site_count` counts site openers (a line starting at column 0 and ending in `{`);
+# the global options block opens with a bare `{`, which the leading-character class excludes.
+_site_count() { printf '%s' "$1" | grep -cE '^[^[:space:]{].*\{[[:space:]]*$'; }
+_bind_count() { printf '%s' "$1" | grep -c '^    bind '; }
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_onion_https="$(
+    # shellcheck disable=SC1090
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    is_appliance() { return 0; }
+    appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
+    appliance_mint_cert() { return 1; }
+    hostname() { printf '192.168.1.202 2605:59c8:cd7:ba08::1\n'; }
+    DASHBOARD_SECURE=true HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 \
+        DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION=abcdefghij234567.onion \
+        DASHBOARD_AUTH_USER=admin \
+        DASHBOARD_AUTH_HASH_B64="$(printf 'x' | openssl base64 -A)" \
+        generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_eq "secure+onion+provisioned: the HTTPS onion vhost renders (3 site blocks)" \
+    "$(_site_count "$caddy_onion_https")" "3"
+assert_eq "secure+onion+provisioned: every site block binds — no unbound wildcard on :443" \
+    "$(_bind_count "$caddy_onion_https")" "$(_site_count "$caddy_onion_https")"
+# The same invariant on the binding-off side: a DIY host renders the same three blocks and binds
+# none of them, so there is still no mixed wildcard/specific pair.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_onion_https_diy="$(
+    # shellcheck disable=SC1090
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    is_appliance() { return 1; }
+    hostname() { printf '192.168.1.202\n'; }
+    DASHBOARD_SECURE=true HOST_IP=box.lan NETWORK_PREFIX=172.28.0 \
+        DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION=abcdefghij234567.onion \
+        DASHBOARD_AUTH_USER=admin \
+        DASHBOARD_AUTH_HASH_B64="$(printf 'x' | openssl base64 -A)" \
+        generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_eq "DIY secure+onion+provisioned: no site block binds" \
+    "$(_bind_count "$caddy_onion_https_diy")" "0"
+
+# No two site blocks may name the same scheme://address. Caddy rejects the WHOLE file with
+# "ambiguous site definition" and, under Restart=always, crash-loops — dashboard and onion down
+# together. This is reachable because `hostname -I` reports the container-bridge gateway (it is a
+# real host address), so it landed in the auto-expanded LAN list AND in the onion block, which
+# serves on exactly that address. With dashboard.secure:false the two schemes match and the file
+# is unadaptable. Counting binds cannot see this, which is why it is a separate structural check:
+# these two assertions together are the cheap tier-1 stand-in for the real `caddy adapt` gate
+# tracked in #1037.
+_dupe_sites() {
+    printf '%s' "$1" | grep -E '^[^[:space:]{].*\{[[:space:]]*$' |
+        sed 's/[[:space:]]*{[[:space:]]*$//' | tr ',' '\n' | tr -d ' ' | grep -v '^$' |
+        sort | uniq -d
+}
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_insecure_onion_gw="$(
+    # shellcheck disable=SC1090
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    is_appliance() { return 0; }
+    # The physical appliance set: LAN address plus BOTH podman bridge gateways, as documented above.
+    hostname() { printf '192.168.1.202 10.89.0.1 172.28.0.1\n'; }
+    DASHBOARD_SECURE=false HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 \
+        DASHBOARD_ONION_ENABLED=true DASHBOARD_AUTH_USER=admin \
+        DASHBOARD_AUTH_HASH_B64="$(printf 'x' | openssl base64 -A)" \
+        generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_eq "insecure+onion on a real appliance: no duplicate site definition" \
+    "$(_dupe_sites "$caddy_insecure_onion_gw")" ""
+# The gateway belongs to the onion vhost alone — it must not appear in the LAN block at all.
+case "$(printf '%s' "$caddy_insecure_onion_gw" | head -1)" in
+*172.28.0.1*) bad "the bridge gateway stays out of the LAN site list" "gateway present in: $(printf '%s' "$caddy_insecure_onion_gw" | head -1)" ;;
+*) ok "the bridge gateway stays out of the LAN site list" ;;
+esac
 # And with binding off, NEITHER may bind — the mirror of the case above.
 # shellcheck disable=SC1090  # STACK path is dynamic by design
 caddy_onion_off="$(
@@ -1688,7 +1771,9 @@ caddy_onion_off="$(
 assert_eq "DIY insecure+onion: neither vhost binds — no wildcard/specific clash" \
     "$(printf '%s' "$caddy_onion_off" | grep -c '^    bind ')" "0"
 unset -f _caddy_appliance
-unset caddy_default caddy_optin bindline caddy_pinned caddy_noaddr caddy_onion caddy_onion_off
+unset -f _site_count _bind_count
+unset -f _dupe_sites
+unset caddy_default caddy_optin bindline caddy_pinned caddy_noaddr caddy_onion caddy_onion_off caddy_onion_https caddy_onion_https_diy caddy_insecure_onion_gw
 
 echo "== unit: generate_caddyfile custom port (#740) =="
 # A custom HOST_PORT moves the LAN vhost off the scheme default so a co-hosted reverse proxy keeps

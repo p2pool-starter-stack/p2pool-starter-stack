@@ -6995,6 +6995,19 @@ generate_caddyfile() {
             if [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ] && is_public_ip "$extra_ip"; then
                 continue
             fi
+            # The container-bridge gateway belongs to the ONION vhost, which serves on exactly that
+            # address, and never to the LAN list. `hostname -I` reports it because it is a real host
+            # address, so without this it lands in both blocks — and two site blocks naming the same
+            # scheme://address make Caddy refuse the whole file with "ambiguous site definition".
+            # With dashboard.secure:false the schemes match and that is precisely what happened: an
+            # appliance with the onion enabled rendered a Caddyfile Caddy could not adapt, so Caddy
+            # crash-looped under Restart=always and took the dashboard AND the onion down together.
+            # (With secure:true the LAN block is https:// and the onion block http://, so the clash
+            # is invisible — which is why this survived.) Nothing is lost by excluding it: the LAN
+            # block was never reachable at the bridge gateway by anything except the tor container.
+            if [ -n "${NETWORK_PREFIX:-}" ] && [ "$extra_ip" = "${NETWORK_PREFIX}.1" ]; then
+                continue
+            fi
             site_hosts="$site_hosts $extra_ip"
         done
     fi
@@ -7047,12 +7060,21 @@ generate_caddyfile() {
         [ -n "$bind_addrs" ] || return 0
         printf '    bind %s' "$bind_addrs"
     }
-    # The onion vhost binds ONLY when the LAN vhost does. A site block with no bind asks Caddy for
-    # a wildcard listener, so the two must agree: mixing them puts a wildcard `:80` and a specific
-    # `NETWORK_PREFIX.1:80` in the same file, both claim the same port, and Caddy fails to start —
-    # which takes the dashboard AND the onion down together. That combination is reachable today
-    # (dashboard.secure:false with the onion enabled is documented and explicitly exempted from the
-    # insecure-transport warning), so this is tied deliberately rather than left to chance.
+    # BOTH onion vhosts bind exactly when the LAN vhost does — the plain-HTTP one AND the HTTPS one
+    # on the .onion name. A site block with NO bind asks Caddy for a WILDCARD listener, and that is
+    # the whole reason this matters: an unbound block reopens every address the bound blocks were
+    # written to exclude, including the globally-routable one #1021 exists to close. Verified
+    # against the pinned caddy image: with `bind 127.0.0.1 ::1` on the LAN block and no bind on the
+    # onion block, a request to an address OUTSIDE the bind list carrying the .onion name in Host/SNI
+    # is served. For a Tor-first product that confirms the clearnet address behind the hidden
+    # service and puts the login page back on the internet.
+    #
+    # Note what does NOT happen: a wildcard and a specific listener on one port do NOT collide.
+    # Caddy sets SO_REUSEPORT, so `[::]:443` and `127.0.0.1:443` listen happily side by side —
+    # measured, not assumed. The hazard is the reopened socket, never a startup crash.
+    #
+    # The HTTPS block is the one this originally missed: it renders only after provisioning lands a
+    # real .onion address, so every render before that looked correct.
     _onion_bind_line() {
         [ -n "$bind_addrs" ] || return 0
         printf '    bind %s' "${NETWORK_PREFIX}.1"
@@ -7146,6 +7168,7 @@ EOF
 
 https://${DASHBOARD_ONION} {
     tls internal
+$(_onion_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
