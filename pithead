@@ -5613,6 +5613,10 @@ parse_and_validate_config() {
     fi
     # Ensure a strict true/false string is returned, defaulting to true
     DASHBOARD_SECURE=$(jq -r 'if .dashboard.secure != null then .dashboard.secure | tostring else "true" end' "$CONFIG_FILE")
+    # Deliberate opt-in to serving the dashboard on a globally-routable address. Default false:
+    # the appliance auto-publishes every address it holds, and on any network passing IPv6 through
+    # that silently included a public one. The supported off-LAN route is the onion service.
+    DASHBOARD_EXPOSE_PUBLIC_IP=$(config_bool '.dashboard.expose_public_ip' false)
     # Timezone for the dashboard's timestamps/charts. "auto"/empty -> the host's timezone
     # (auto-detected; falls back to Etc/UTC). Set an IANA name (e.g. America/Chicago) to
     # override. Rendered into .env as DASHBOARD_TZ.
@@ -6849,6 +6853,7 @@ TARI_GRPC_ADDRESS=$tari_grpc_addr
 TARI_GRPC_BIND=$tari_grpc_bind
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
+DASHBOARD_EXPOSE_PUBLIC_IP=$DASHBOARD_EXPOSE_PUBLIC_IP
 DASHBOARD_ONION_ENABLED=$DASHBOARD_ONION_ENABLED
 DASHBOARD_ONION_CLIENT_AUTH=$DASHBOARD_ONION_CLIENT_AUTH
 DASHBOARD_TZ=$DASHBOARD_TZ
@@ -6979,6 +6984,17 @@ generate_caddyfile() {
         local extra_ip
         for extra_ip in $(hostname -I 2>/dev/null) localhost; do
             case " $site_hosts " in *" $extra_ip "*) continue ;; esac
+            # `hostname -I` lists EVERY address on every interface, so on any network whose router
+            # passes IPv6 through, a SLAAC/DHCPv6 global unicast address lands here exactly like a
+            # LAN one — and this list is rebuilt every boot by render_derived. That published the
+            # control panel on a globally-routable address, with nothing but the operator's router
+            # between it and the internet; the product must not depend on that. The documented way
+            # to reach the dashboard off-LAN is the onion service, never a routable address, so
+            # nothing supported regresses. Opt back in with dashboard.expose_public_ip if a
+            # deployment really does want it.
+            if [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ] && is_public_ip "$extra_ip"; then
+                continue
+            fi
             site_hosts="$site_hosts $extra_ip"
         done
     fi
@@ -6988,6 +7004,58 @@ generate_caddyfile() {
             out="${out:+$out, }$1://$h$port_suffix"
         done
         printf '%s' "$out"
+    }
+    # Trimming the address list is necessary but is NOT a boundary on its own. Caddy runs with
+    # network_mode: host and opens ONE WILDCARD listener (verified on the bench: `ss -lnt` shows
+    # `*:443`, not per-address sockets), so a client that reaches the box on a global address still
+    # completes the connection — it only has to send a Host header naming an address that IS in the
+    # list, and Caddy matches on content, never on which interface the connection arrived over.
+    # `bind` is what actually closes the socket: Caddy then listens on these addresses only, so the
+    # global one is never accepted at all.
+    #
+    # LITERAL addresses only. A name would be resolved by Caddy at startup, and the appliance's
+    # mDNS name resolves to every address it has — including the one being excluded, which would
+    # re-open exactly what this closes. Loopback is always added: the host-networked dashboard and
+    # Caddy's own admin healthcheck both arrive that way.
+    # Built from the BOX's own addresses, never from $site_hosts. The two are different questions:
+    # site_hosts is which Host values Caddy vhost-matches, this is which sockets it opens. Deriving
+    # the bind from site_hosts tied it to the auto-expansion, so an operator who pinned
+    # dashboard.host — a documented, supported choice — got a single-host site list and NO bind at
+    # all, which is the wildcard listener and the whole exposure, back again for exactly the
+    # operators who configured the box most deliberately.
+    local bind_addrs="" _bh
+    if is_appliance && [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ]; then
+        for _bh in $(hostname -I 2>/dev/null); do
+            is_public_ip "$_bh" && continue
+            case "$_bh" in
+            *:*) ;;                # IPv6 literal
+            *[!0-9.]*) continue ;; # not an address literal
+            esac
+            bind_addrs="${bind_addrs:+$bind_addrs }$_bh"
+        done
+        # Loopback unconditionally, appended OUTSIDE the loop so it survives a box that reports no
+        # usable non-public address at render time: the host-networked dashboard and Caddy's own
+        # admin healthcheck both arrive this way, and a bind that dropped them would be worse than
+        # no bind at all.
+        bind_addrs="${bind_addrs:+$bind_addrs }127.0.0.1 ::1"
+    fi
+    # NO trailing newline: consumed as $(_bind_line) on its own heredoc line, and command
+    # substitution strips trailing newlines anyway — emitting one here produced
+    # `bind ... ::1    basic_auth {` on a single line, which Caddy will not parse. Same convention
+    # as $auth above. Empty when binding is off, which collapses to a blank line, like $auth.
+    _bind_line() {
+        [ -n "$bind_addrs" ] || return 0
+        printf '    bind %s' "$bind_addrs"
+    }
+    # The onion vhost binds ONLY when the LAN vhost does. A site block with no bind asks Caddy for
+    # a wildcard listener, so the two must agree: mixing them puts a wildcard `:80` and a specific
+    # `NETWORK_PREFIX.1:80` in the same file, both claim the same port, and Caddy fails to start —
+    # which takes the dashboard AND the onion down together. That combination is reachable today
+    # (dashboard.secure:false with the onion enabled is documented and explicitly exempted from the
+    # insecure-transport warning), so this is tied deliberately rather than left to chance.
+    _onion_bind_line() {
+        [ -n "$bind_addrs" ] || return 0
+        printf '    bind %s' "${NETWORK_PREFIX}.1"
     }
 
     : >"Caddyfile"
@@ -7021,6 +7089,7 @@ generate_caddyfile() {
         cat <<EOF >>"Caddyfile"
 $(_site_addresses https) {
 $tls_line
+$(_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -7032,6 +7101,7 @@ EOF
         log "Generating Caddyfile for HTTP ($site_hosts$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >>"Caddyfile"
 $(_site_addresses http) {
+$(_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -7054,6 +7124,7 @@ EOF
         cat <<EOF >>"Caddyfile"
 
 http://${NETWORK_PREFIX}.1 {
+$(_onion_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -9006,6 +9077,8 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_reject "this install builds from source — upgrade from the host with 'git pull' then './pithead upgrade'."
         return 0
     fi
+    # Ordered BEFORE the cosign precondition on purpose: an appliance cannot take a tarball
+    # upgrade at all, whatever the host holds, so the appliance answer is the informative one.
     if is_appliance; then
         _upg_reject "this machine is a Pithead OS appliance — it updates through signed OS images, not release tarballs, and a tarball upgrade would silently revert at the next reboot. The dashboard OS-update flow is tracked work; nothing was changed."
         return 0

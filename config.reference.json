@@ -74,6 +74,7 @@
   "dashboard": {
     "secure": true,
     "host": "auto",
+    "expose_public_ip": false,
     "port": "auto",
     "timezone": "auto",
     "data_dir": "auto",
