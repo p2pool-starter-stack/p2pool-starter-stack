@@ -6,14 +6,34 @@
 # (issue #755). Run `--self-test` to check the scanners themselves against fixtures.
 set -euo pipefail
 
-# Scan a pithead-shaped shell file: print any log/warn/error/info/echo call, or describe_change
-# msg= assignment, whose string carries a #NNN. A comment line (the keyword isn't at the line
-# start) never matches. Prints "line: text" per hit; silent when clean.
-scan_pithead() {
+# Operator-facing message calls in a pithead-shaped shell file: the named call shapes, plus every
+# describe_change msg= assignment (apply-preview text). A comment line never matches, since the
+# keyword has to sit at the line start. Prints "line: text" per hit.
+msg_lines() { # <file> <keyword-alternation>
     {
-        grep -nE '^[[:space:]]*(log|warn|error|info|echo)[[:space:]]*(-[a-zA-Z]+[[:space:]]*)?"' "$1" || true
+        grep -nE "^[[:space:]]*($2)[[:space:]]*(-[a-zA-Z]+[[:space:]]*)?\"" "$1" || true
         grep -n 'msg=' "$1" || true
-    } | grep -E '#[0-9]+' || true
+    }
+}
+
+# Two rules, two widths. The issue-number rule stays on the original call shapes; the doctor's
+# dr_* reporters and the control runner's _upg_* result strings carry a dozen #NNN references that
+# predate this linter and want their own cleanup (issue #1026), so widening it here would fail the
+# build on unrelated debt. The docs-path rule is new and starts clean, so it runs at full width.
+NARROW='log|warn|error|info|echo'
+WIDE="$NARROW|dr_ok|dr_warn|dr_fail|dr_info|_upg_reject|_upg_fail"
+
+# Rule 1: no #NNN in operator text.
+scan_pithead() {
+    msg_lines "$1" "$NARROW" | grep -E '#[0-9]+' || true
+}
+
+# Rule 2: no bare repo doc path in operator text (issue #1024). Release bundles ship the CLI, the
+# compose file, the config files and cosign.pub — no docs/ — so a message naming a repo-relative
+# doc sends the reader to a file that is not on their disk. Messages point at $DOCS_URL instead,
+# which is stripped before the check so a correctly-formed pointer reads as clean.
+scan_pithead_docs() {
+    msg_lines "$1" "$WIDE" | sed 's|\$DOCS_URL/docs/||g' | grep -E 'docs/' || true
 }
 
 # Scan frontend files (.mjs/.js/.html) for a #NNN in user-visible text. Strips `//` (JS) and
@@ -80,6 +100,13 @@ if [ "${1:-}" = "--self-test" ]; then
     printf '%s\n' '    log "held until sync finishes, then starts."' '# see the spool (#42) design note' >"$tmp/clean.sh"
     expect "clean pithead + a #NNN comment is not flagged" clean "$(scan_pithead "$tmp/clean.sh")"
 
+    printf '%s\n' '    error "set it — see docs/configuration.md."' >"$tmp/docs.sh"
+    expect "operator text naming a bare repo doc path is flagged" hit "$(scan_pithead_docs "$tmp/docs.sh")"
+    printf '%s\n' '        dr_warn "install it: docs/dev/releasing.md"' >"$tmp/docs-wide.sh"
+    expect "the doctor/runner call shapes are covered by the docs rule" hit "$(scan_pithead_docs "$tmp/docs-wide.sh")"
+    printf '%s\n' '    log "see $DOCS_URL/docs/workers.md#authentication."' '# docs/configuration.md in a comment' >"$tmp/docs-ok.sh"
+    expect "a \$DOCS_URL pointer and a docs/ comment are not flagged" clean "$(scan_pithead_docs "$tmp/docs-ok.sh")"
+
     printf '%s\n' 'const t = "avg window (#168)";' >"$tmp/hit.mjs"
     expect "frontend user string carrying #NNN is flagged" hit "$(scan_frontend "$tmp/hit.mjs")"
     printf '%s\n' 'const bg = "#3fb950"; const a = "#00000055";' >"$tmp/color.mjs"
@@ -110,6 +137,16 @@ then
     fail=1
 fi
 
+if
+    hits=$(scan_pithead_docs pithead)
+    [ -n "$hits" ]
+then
+    echo "operator strings: repo-relative docs/ path in pithead operator text — release bundles ship no docs/."
+    echo "Point at the published copy instead: \"\$DOCS_URL/docs/<file>.md#anchor\"."
+    echo "$hits"
+    fail=1
+fi
+
 # The static frontend, minus the *.min.js bundles.
 files=$(git ls-files 'build/dashboard/mining_dashboard/web/static/*.mjs' \
     'build/dashboard/mining_dashboard/web/static/*.js' \
@@ -131,4 +168,4 @@ if [ "$fail" -ne 0 ]; then
     exit 1
 fi
 
-echo "operator strings OK — no issue/PR numbers in pithead output or the dashboard frontend"
+echo "operator strings OK — no issue/PR numbers in pithead output or the dashboard frontend, no bare docs/ paths in pithead operator text"

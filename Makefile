@@ -61,7 +61,8 @@ lint-md: ## markdownlint over all Markdown (config: .markdownlint-cli2.jsonc)
 lint-docs-voice: ## Fail if banned marketing words appear in prose docs (house voice: docs/dev/STYLE.md)
 	bash scripts/lint-docs-voice.sh
 
-lint-operator-strings: ## Fail if a #NNN issue/PR number leaks into pithead or dashboard operator-facing text (#755)
+lint-operator-strings: ## Fail if a #NNN issue/PR number or a bare docs/ path leaks into pithead or dashboard operator-facing text (#755, #1024)
+	bash scripts/lint-operator-strings.sh --self-test
 	bash scripts/lint-operator-strings.sh
 
 lint-proto: ## buf lint + build on the vendored Tari protos (config: .../tari/proto/buf.yaml)
