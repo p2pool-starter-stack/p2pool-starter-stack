@@ -157,6 +157,16 @@ _ssh_unreachable_reason() {
         printf 'guest answers on the network but refuses port 22 — sshd is still gated behind the /data mount + host-key generation (pithead-ssh-host-keys.conf), or failed to start; not a network problem'
         return
     fi
+    # An auth rejection is the single most diagnostic answer here and it used to fall through to
+    # the catch-all below, which reported a BENCH KEY MISMATCH as "guest never answered the
+    # network — DHCP/routing/firewall problem". That is the opposite of what happened: sshd was up,
+    # reachable, and said no. The misreport sent several sessions hunting product-side boot theories
+    # (socket activation, RequiresMountsFor=/data) for a harness misconfiguration, so the classifier
+    # names it explicitly and says which key it offered.
+    if grep -qiE 'permission denied|no supported authentication|too many authentication' "$SSH_ERR" 2>/dev/null; then
+        printf 'guest sshd is UP and REJECTED our key (%s) — this is authentication, not boot and not networking. The image bakes the pubkey passed to os/build-image.sh --ssh; if that is not the counterpart of the key this harness probes with, every phase that needs SSH fails like a dead guest' "$KEY"
+        return
+    fi
     printf 'guest never answered the network at all (last ssh error: %s) — DHCP/routing/firewall problem, not an sshd problem' "$(tr -s ' \n' ' ' <"$SSH_ERR" 2>/dev/null || echo none)"
 }
 _marker() { _ssh cat /etc/pithead-test-marker 2>/dev/null | tr -d "\r\n"; }
@@ -220,6 +230,20 @@ _build_image() {
     printf 'os/rauc/build/system.img'
 }
 
+# The checkout's VERSION with the patch component incremented — what an update bundle must stamp
+# to be a genuine update rather than a reinstall. Set by phase_update and read back by leg 4, so
+# the served release tag and the bundle's own stamp cannot drift apart.
+UPDATE_VERSION=""
+_next_patch_version() {
+    local v major minor patch
+    v=$(tr -d ' \t\r\n' <VERSION)
+    major=${v%%.*}
+    patch=${v##*.}
+    minor=${v#*.}
+    minor=${minor%%.*}
+    printf '%s.%s.%s' "$major" "$minor" "$((patch + 1))"
+}
+
 # Build an update bundle carrying $1 as its marker.
 _build_bundle() {
     PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
@@ -281,6 +305,44 @@ require_host() {
             exit 2
         }
     fi
+    require_probe_key_matches_image
+}
+
+# The harness probes the guest as root with $KEY; the image authorizes whatever pubkey was passed
+# to `os/build-image.sh --ssh`. Nothing tied those together, and when they drifted apart — the
+# driver built as an unprivileged user with that user's key while the harness ran under sudo with
+# root's DIFFERENT key — the guest correctly refused every probe. That is indistinguishable from a
+# dead guest once you are only watching a timeout, and it cost several sessions: three separate
+# product-side theories were written up for what was a bench key mismatch, and the boot leg had in
+# fact never once passed. Compare them here, before a multi-minute build and boot, and say so.
+require_probe_key_matches_image() {
+    [ -f "$KEY" ] || {
+        echo "probe key $KEY not found — the harness authenticates to the guest with it" >&2
+        exit 2
+    }
+    [ -n "$IMAGE" ] && [ -f "$IMAGE" ] || return 0
+    local want
+    # ssh-keygen -y derives the public half from the PRIVATE key, so this checks the actual keypair
+    # rather than trusting a .pub file that may not be its counterpart — which is exactly how the
+    # two drifted apart.
+    want=$(ssh-keygen -y -f "$KEY" 2>/dev/null | awk '{print $1" "$2}')
+    [ -n "$want" ] || return 0 # passphrase-protected or unreadable: not our call to judge here
+    # Presence, not "the first key in the image": an image legitimately contains other keys (host
+    # keys, fixtures), so comparing against whichever one appears first would refuse perfectly good
+    # benches. If our pubkey is absent it cannot possibly authorize us, and that is the whole test.
+    # A release image is shell-less and carries no authorized key at all, so only assert on debug
+    # images — the only ones the harness can drive.
+    grep -aq 'pithead-variant\|authorized_keys' "$IMAGE" 2>/dev/null || return 0
+    grep -aqF "$want" "$IMAGE" 2>/dev/null || {
+        echo "refusing to run: this image does not authorize the key the harness probes with." >&2
+        echo "  harness key: $KEY" >&2
+        echo "  its pubkey : $want" >&2
+        echo "Every phase that needs SSH would fail like a dead guest — sshd answers and says no," >&2
+        echo "which reads as a boot or network fault. Rebuild the image with" >&2
+        echo "  os/build-image.sh --ssh $KEY.pub" >&2
+        echo "or point \$KEY at the keypair the image was built with." >&2
+        exit 2
+    }
 }
 
 # A stray VM on the same libvirt network can take the DHCP lease the harness then reads back,
@@ -526,8 +588,17 @@ phase_update() {
         bad "system slot grew to '${slot_gib:-none}' GiB — slots must stay interchangeable"
     fi
 
-    info "building v2 update bundle (marker v2)"
-    bundle=$(_build_bundle v2) || {
+    # Stamp the update bundle one patch NEWER than the running slot. Both images are built from
+    # this one checkout, so without this they stamp the SAME version — and the dashboard update
+    # door refuses an equal target on purpose (an equal-version reinstall is a forced-downtime and
+    # flash-wear loop for a compromised container). Leg 4 could therefore never get past its first
+    # download, and reported the product as broken when the harness had never offered it anything
+    # to install. Legs 1-3 drive the CLI door, which keeps equality for manual slot repair, so a
+    # newer stamp changes nothing for them — and a real update is newer anyway, which makes this
+    # the more faithful fixture for every leg.
+    UPDATE_VERSION=$(_next_patch_version)
+    info "building v2 update bundle (marker v2, stamped v$UPDATE_VERSION)"
+    bundle=$(PITHEAD_OS_VERSION="$UPDATE_VERSION" _build_bundle v2) || {
         bad "v2 bundle build failed (/tmp/os-fault-bundle.log)"
         return
     }
@@ -836,7 +907,9 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
 
     # Bench-local release server: the good v2 bundle plus a corrupted twin, behind the seam.
     local tag srv host_addr port=8931 size srv_pid
-    tag="v$(tr -d ' \t\r\n' <VERSION)"
+    # The tag the bench release server publishes MUST match the bundle's own stamp, or the host
+    # refuses the download as version-mismatched. Both come from UPDATE_VERSION.
+    tag="v${UPDATE_VERSION:-$(_next_patch_version)}"
     srv=$(mktemp -d)
     cp "$good_bundle" "$srv/pithead-os-$tag.raucb"
     size=$(wc -c <"$srv/pithead-os-$tag.raucb" | tr -d ' ')

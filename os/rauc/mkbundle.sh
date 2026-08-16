@@ -28,7 +28,18 @@ TARBALL="os/build/pithead-root.tar"
 #   PITHEAD_MIN_OS_VERSION=X.Y.Z — the lowest OS version that can still read /data once it has.
 # A migrating release MUST name that floor: without it a later rollback silently strands the
 # migrated chain data (os-update reads the floor back to refuse exactly that).
-OS_VERSION=$(tr -d ' \t\r\n' <VERSION)
+#   PITHEAD_OS_VERSION=X.Y.Z     — stamp this version instead of the checkout's VERSION. The
+#     battery needs it: a bundle built from the same tree as the running slot stamps the SAME
+#     version, and the dashboard update door refuses an equal target by design, so the whole
+#     end-to-end leg could never run. Release builds leave it unset and take VERSION.
+OS_VERSION=${PITHEAD_OS_VERSION:-$(tr -d ' \t\r\n' <VERSION)}
+case "$OS_VERSION" in
+[0-9]*.[0-9]*.[0-9]*) ;;
+*)
+    echo "PITHEAD_OS_VERSION must be X.Y.Z, got '$OS_VERSION'" >&2
+    exit 2
+    ;;
+esac
 DATA_MIGRATION=${PITHEAD_DATA_MIGRATION:-false}
 case "$DATA_MIGRATION" in
 true | false) ;;
