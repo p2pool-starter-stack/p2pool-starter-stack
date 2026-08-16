@@ -36,9 +36,12 @@ Include:
 
 The stack's defaults:
 
-- Least-privilege containers: every service runs as a non-root user (not uid 0); leaf services
-  run with `no-new-privileges` and drop all Linux capabilities; internet-facing and
-  Docker-socket-facing services also use a read-only root filesystem.
+- Least-privilege containers: every daemon that touches the network or the chains — `monerod`,
+  P2Pool, the Tari node, `xmrig-proxy`, the dashboard, Tor — runs as a non-root user. Caddy and the
+  two Docker socket proxies run as uid 0 inside their containers, which is why they hold no chain
+  data, drop every Linux capability, and sit on host-loopback-only ports. Leaf services run with
+  `no-new-privileges` and drop all capabilities; internet-facing and Docker-socket-facing services
+  also use a read-only root filesystem.
 - SHA256-verified, version-pinned binaries.
 - Digest-pinned **and signed** images
   ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): the release bundle pins
@@ -100,8 +103,8 @@ The stack's defaults:
   control-channel commit, and a worker control-API report for a change the dashboard never sent,
   and appends both — `host-edit` / `rig-edit` — to the same trail, keys or worker names only. The
   persisted trail (mirrored `control.log` rows plus these two out-of-band kinds) lives in the
-  dashboard's own database, not just the log tail, so the Security panel's hour/day/month grouping
-  covers more than `control.log`'s own trimmed window. The `rig-edit` source reads off the
+  dashboard's own database, not just the log tail, so the Security panel's range presets, date
+  fields and search cover more than `control.log`'s own trimmed window. The `rig-edit` source reads off the
   unauthenticated worker feed, so it is rate-capped per worker (#724): a rig reporting distinct
   change_ids on every poll can add at most a bounded number of rows per hour before the rest are
   dropped behind a single `rate-limited` marker — one LAN device can't grow the database without
