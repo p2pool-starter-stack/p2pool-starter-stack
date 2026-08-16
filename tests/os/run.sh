@@ -1648,6 +1648,13 @@ phase_install() {
     local restore_archive="/tmp/pithead-os-restore-test.tar.gz.enc"
     local restore_pass="pithead-os-restore-test-passphrase" # fixture value, not real secret material
     rm -f "$restore_archive"
+    # State of the two files the backup collects unguarded, captured BEFORE the run (#1059). The
+    # backup failed here with `tar: data/pithead/config.json: Cannot stat` on a machine that was
+    # serving a live stack, and the guest is recycled before anyone can look. `tar` reports exactly
+    # that for a DANGLING SYMLINK as well as for a missing file, and `.env` beside it archived
+    # fine, so what the path actually IS matters more than whether `ls` finds something there.
+    _ssh "ls -la /data/pithead/config.json /data/pithead/.env 2>&1; readlink -f /data/pithead/config.json 2>&1" |
+        tr -d '\r' | sed 's/^/     · /'
     if _ssh "cd /data/pithead && PITHEAD_BACKUP_PASSPHRASE=$restore_pass ./pithead backup -y >/tmp/restore-backup.log 2>&1"; then
         ok "restore leg: took a real encrypted backup off the live machine"
     else
