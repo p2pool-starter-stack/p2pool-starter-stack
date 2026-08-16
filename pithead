@@ -1945,10 +1945,39 @@ consume_install_request() { # <spool-dir>
 # owners run this — pithead-boot on provisioned machines, the first-boot wizard before it
 # serves — so every path converges on the shipped images, and a normal boot pays one sha256
 # per archive.
+# An unclean reset — a power cut, or the hardware watchdog firing while slow media is mid-write —
+# can leave containers/storage with ZERO-LENGTH `lower` files. containers/storage splits an
+# empty-but-present `lower` on ":" into one EMPTY element, joins that onto the graph root and
+# readlinks THAT directory, so every container start dies with
+# "readlink <graphroot>/overlay: invalid argument". The digest records in load_baked_images then
+# report the images as already loaded, so nothing ever reloads: the damage survives every later
+# boot, the wizard never serves, and the console sits on "preparing the setup page" forever. That
+# is how an appliance ended up unable to install from its own stick — the store was broken by the
+# reset, not by anything the wizard did. A correct BASE layer carries no `lower` file at all, so a
+# zero-length one is damage, never a legitimate state.
+#
+# ponytail: rebuilds the WHOLE store, so a machine past provisioning re-pulls whatever is not
+# baked (only the dashboard is). Fine as a floor — a store in this state starts no container at
+# all, so re-pulling beats staying dead. Narrow it to the baked set if that ever bites.
+repair_broken_image_store() { # $1: container engine
+    local engine="$1" root
+    root=$("$engine" info --format '{{.Store.GraphRoot}}' 2>/dev/null) || return 0
+    { [ -n "$root" ] && [ -d "$root/overlay" ]; } || return 0
+    find "$root/overlay" -maxdepth 2 -name lower -size 0 -print -quit 2>/dev/null | grep -q . || return 0
+    warn "The container image store is damaged (an interrupted write left empty layer metadata) — rebuilding it."
+    "$engine" rm -af >/dev/null 2>&1 || true
+    rm -rf "${root:?}"
+    rm -f "$PWD/data"/.loaded-*.sha
+}
+
 load_baked_images() { # $1 (optional): image ref whose absence forces a load despite a matching digest
     local required="${1:-}" dir="${PITHEAD_IMAGES_DIR:-/opt/pithead/images}"
     local engine archive sha rec recorded
     engine=$(container_engine)
+    # Before trusting any digest record: a record describes what was LOADED, and the check below
+    # only asks whether the image still EXISTS. A store damaged as described above satisfies both
+    # and still cannot run a thing, which is exactly how the failure became permanent.
+    repair_broken_image_store "$engine"
     # The wizard-era record lived at a different path; retire it so an upgraded machine doesn't
     # carry a stale file forever (its absence costs one reload on the first boot after upgrading).
     rm -f "$PWD/.wizard-image-sha"

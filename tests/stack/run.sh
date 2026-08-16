@@ -8629,6 +8629,61 @@ unset -f lbl sha_of
 rm -rf "$WSB"
 unset WSB WREC WV2SHA
 
+echo "== unit: load_baked_images — a store damaged by an interrupted write is rebuilt =="
+# An unclean reset mid-load (power cut, or the watchdog firing while slow media is written) leaves
+# ZERO-LENGTH `lower` files; containers/storage then readlinks the graph root itself and EVERY
+# container start fails. The digest record still matches AND the image still exists, so the two
+# guards above both pass and the reload was skipped — which is what made the damage permanent and
+# left an appliance unable to install from its own stick. A base layer carries no `lower` file at
+# all, so a zero-length one is damage, never a legitimate state.
+RSB=$(mktemp -d)
+mkdir -p "$RSB/images" "$RSB/bin" "$RSB/data"
+printf 'archive' >"$RSB/images/dashboard.tar.gz"
+cat >"$RSB/bin/podman" <<'EOF'
+#!/usr/bin/env bash
+echo "[podman] $*" >>"${PODMAN_LOG:-/dev/null}"
+case "$1" in
+info) printf '%s\n' "${FAKE_GRAPHROOT:-}" ;;
+image) exit 0 ;; # the image ALWAYS exists — that is the point of this test
+load) exit 0 ;;
+rm) exit 0 ;;
+esac
+EOF
+chmod +x "$RSB/bin/podman"
+export PODMAN_LOG="$RSB/podman.log" PITHEAD_IMAGES_DIR="$RSB/images" FAKE_GRAPHROOT="$RSB/store"
+rbl() { PITHEAD_ENGINE=podman PATH="$RSB/bin:$PATH" run_sourced "$RSB" load_baked_images; }
+# A healthy store: the base layer has NO `lower`, the layer above carries a real chain.
+mk_store() {
+    rm -rf "$RSB/store"
+    mkdir -p "$RSB/store/overlay/base/diff" "$RSB/store/overlay/top/diff"
+    printf 'l/BASE' >"$RSB/store/overlay/top/lower"
+}
+mk_store
+printf '%s' "$(sha256sum "$RSB/images/dashboard.tar.gz" | cut -d' ' -f1)" >"$RSB/data/.loaded-dashboard.tar.gz.sha"
+: >"$PODMAN_LOG"
+rbl >/dev/null 2>&1
+[ -d "$RSB/store/overlay/top" ] &&
+    ok "a healthy store is left alone — no needless re-pull" ||
+    bad "a healthy store is left alone" "the store was rebuilt"
+grep -q "load -i" "$PODMAN_LOG" &&
+    bad "a healthy store still honours the digest record" "reloaded anyway" ||
+    ok "a healthy store still honours the digest record"
+
+mk_store
+: >"$RSB/store/overlay/base/lower" # zero-length: the corruption itself
+: >"$PODMAN_LOG"
+rbl >/dev/null 2>&1
+[ -d "$RSB/store/overlay" ] &&
+    bad "a damaged store is torn down" "the store survived" ||
+    ok "a damaged store is torn down"
+grep -q "load -i" "$PODMAN_LOG" &&
+    ok "a damaged store reloads the archive despite a matching record" ||
+    bad "a damaged store reloads the archive" "no load call"
+unset PODMAN_LOG PITHEAD_IMAGES_DIR FAKE_GRAPHROOT
+unset -f rbl mk_store
+rm -rf "$RSB"
+unset RSB
+
 echo "== unit: pre-seeding from the installation medium =="
 # The ESP is FAT and anyone can write it, so both readers treat its contents as input, not truth.
 PSD=$(mktemp -d)
