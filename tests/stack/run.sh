@@ -8684,6 +8684,49 @@ unset -f rbl mk_store
 rm -rf "$RSB"
 unset RSB
 
+echo "== unit: load_baked_images — a slow load narrates itself, a fast one stays quiet =="
+# `podman load` prints nothing a console sees and runs for MINUTES on USB media (3m47s measured
+# on the bench) behind a line promising "a minute or two" — so a working box looked hung, twice.
+# A rising elapsed count is what tells slow apart from stuck. The load stays in the FOREGROUND
+# and the heartbeat is the background job: polling a backgrounded load with `kill -0` would make
+# a fast load pay a full sleep, because a finished-but-unwaited child still answers.
+HSB=$(mktemp -d)
+mkdir -p "$HSB/images" "$HSB/bin" "$HSB/data"
+printf 'archive' >"$HSB/images/dashboard.tar.gz"
+cat >"$HSB/bin/podman" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+info) printf '%s\n' "${FAKE_GRAPHROOT:-}" ;;
+image) exit 1 ;;
+load) sleep "${FAKE_LOAD_SECS:-0}" ;;
+rm) exit 0 ;;
+esac
+EOF
+chmod +x "$HSB/bin/podman"
+export PITHEAD_IMAGES_DIR="$HSB/images" FAKE_GRAPHROOT="" PITHEAD_LOAD_HEARTBEAT_SECS=1
+hbl() { PITHEAD_ENGINE=podman PATH="$HSB/bin:$PATH" run_sourced "$HSB" load_baked_images 2>&1; }
+
+export FAKE_LOAD_SECS=3
+hout=$(hbl)
+assert_contains "a slow load reports it is still working" "$hout" "still loading"
+assert_contains "the heartbeat carries elapsed seconds" "$hout" "elapsed"
+
+rm -f "$HSB/data/.loaded-dashboard.tar.gz.sha"
+export FAKE_LOAD_SECS=0
+hstart=$(date +%s)
+hout=$(hbl)
+hlen=$(($(date +%s) - hstart))
+printf '%s' "$hout" | grep -q "still loading" &&
+    bad "a fast load stays quiet" "heartbeat fired anyway" ||
+    ok "a fast load stays quiet — no heartbeat for work already done"
+[ "$hlen" -lt 3 ] &&
+    ok "a fast load does not wait on the heartbeat interval (${hlen}s)" ||
+    bad "a fast load returns promptly" "took ${hlen}s"
+unset PITHEAD_IMAGES_DIR FAKE_GRAPHROOT PITHEAD_LOAD_HEARTBEAT_SECS FAKE_LOAD_SECS
+unset -f hbl
+rm -rf "$HSB"
+unset HSB hout hstart hlen
+
 echo "== unit: pre-seeding from the installation medium =="
 # The ESP is FAT and anyone can write it, so both readers treat its contents as input, not truth.
 PSD=$(mktemp -d)
