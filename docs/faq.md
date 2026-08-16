@@ -54,8 +54,9 @@ differ:
 - **Tor-first by default.** Monero, Tari, and P2Pool reach the network over onion addresses with no
   extra setup. Gupax ships no built-in Tor; a community Docker image adds an optional hidden service.
 - **Tari merge-mining.** A second payout from the same hashes. Gupax does not merge-mine Tari.
-- **Runs unattended.** Nine version-pinned containers on a dedicated Linux box, node-down worker
-  failover, and a LAN web dashboard.
+- **Runs unattended.** Nine version-pinned containers on a dedicated Linux box in the default
+  all-local setup — fewer with a node set to `remote`, more with payout confirmation on — plus
+  node-down worker failover and a LAN web dashboard.
 
 Gupax mines from one machine. Pithead runs the node, privacy, dashboard, and a fleet of workers as
 a server you set up once.
@@ -67,8 +68,9 @@ a server you set up once.
 ### Is my home IP exposed?
 
 With the Tor defaults, the only time your IP leaves the box is the one-time install. A built-in
-Tor daemon gives Monero, Tari, and P2Pool hidden-service (onion) addresses, so inbound connections
-need no port forwarding and do not reveal your IP. Monero and Tari route P2P and transaction
+Tor daemon gives P2Pool a hidden-service (onion) address, and does the same for the Monero and Tari
+nodes it runs itself, so inbound connections need no port forwarding and do not reveal your IP. A
+node set to `remote` publishes no onion here — it accepts its own peers where it runs. Monero and Tari route P2P and transaction
 traffic over Tor, and their old clearnet DNS lookups are closed.
 
 The two former clearnet yield paths are Tor-by-default as of v1.1, each with a yield-vs-privacy opt-out:
@@ -125,22 +127,31 @@ through P2Pool; you earn on both at once for the same RandomX work. You do need 
 address, but a Tari outage never holds up Monero mining — p2pool keeps mining through it, with
 Tari catching up in the background, no matter how `dashboard.tari_required` is set. That flag only
 covers Tari's *sync* holds: set it to `false` to also skip waiting for Tari's initial sync and to
-keep the normal dashboard (instead of the full-screen Sync view) during a Tari resync. See
-[Configuration › `dashboard.tari_required`](configuration.md#configuration-reference).
+keep the normal dashboard (instead of the full-screen Sync view) during a Tari resync. You can also
+skip running the Tari node on this box entirely: `tari.mode: remote` points P2Pool's merge-mine leg
+at a Minotari node you run elsewhere, so no `minotari_node` container starts here and its ~200 GB
+leaves the disk budget. See
+[Configuration › `dashboard.tari_required`](configuration.md#configuration-reference) and
+[Remote Tari node](configuration.md#remote-tari-node).
 
 ### Can I use my existing synced Monero node?
 
 Yes. You can skip most or all of the initial blockchain sync two ways: point the bundled node at
 your existing `.bitmonero` directory via `monero.data_dir`, or switch to remote mode and connect
-to a node you run elsewhere (it must have ZMQ publishing enabled for P2Pool). The same `data_dir`
-trick works for reusing a synced Tari node. See
-[Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
+to a node you run elsewhere (it must have ZMQ publishing enabled for P2Pool). Tari has both options
+too: point `tari.data_dir` at an existing Minotari directory, or set `tari.mode: remote` with
+`tari.remote.host` to merge-mine against a Tari node you already run. See
+[Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node) and
+[Remote Tari node](configuration.md#remote-tari-node).
 
 ### What hardware do I need?
 
-Plan for 16 GB+ RAM, a CPU with AVX2 for RandomX, and an SSD (~330 GB pruned / ~530 GB full
-minimum; Tari's chain alone is ~150 GB, and both chains grow ~100+ GB/year, so a 2–4 TB drive is
-the set-and-forget choice). Full minimum-vs-recommended sizing for the stack host is in
+Plan for 16 GB+ RAM, a 64-bit x86 CPU (AVX2 strongly recommended — RandomX runs far slower without
+it, and setup only warns), and an SSD (~330 GB pruned / ~530 GB full minimum; Tari's chain alone is
+~150 GB, and both chains grow ~100+ GB/year, so a 2–4 TB drive is the set-and-forget choice). Those
+figures assume both nodes run here. A remote node cuts the disk budget — `tari.mode: remote` alone
+takes the pruned total from ~330 GB to ~130 GB — while the 16 GB RAM floor stays as-is, since
+HugePages and P2Pool don't shrink. Full sizing and the per-mode totals are in
 [Hardware Requirements](hardware.md). (Miner hardware is sized separately in
 [RigForge](https://github.com/p2pool-starter-stack/rigforge).)
 
@@ -150,7 +161,10 @@ Give the stack a private view key and it confirms payouts on-chain. Set `monero.
 Tari, `tari.view_key` + `tari.spend_public_key`) and a view-only wallet scans your local node for
 incoming payouts; the dashboard's earnings card then shows confirmed totals beside the estimate,
 and a `payout_confirmed` alert fires once per payout. A view key can see incoming amounts but never
-spend. See [Dashboard › Payout confirmation](dashboard.md#payout-confirmation) — including
+spend. Payout confirmation needs the local node for that chain: a view key set alongside
+`monero.mode: remote` or `tari.mode: remote` is refused at `apply`, since scanning through someone
+else's daemon changes the trust story. See
+[Dashboard › Payout confirmation](dashboard.md#payout-confirmation) — including
 [how to export the keys](dashboard.md#exporting-your-keys) from your wallets.
 
 ### How do I connect my miners?

@@ -27,7 +27,7 @@ dashboard, no Linux to set up.
 | Operating system | Ubuntu Server 24.04 LTS is the supported platform. Other Linux distributions and macOS may work but aren't supported. |
 | CPU | A processor with AVX2 support for RandomX performance. |
 | RAM | 16 GB minimum with HugePages enabled (~6 GB is reserved for RandomX); 32 GB for a full node or long uptimes. |
-| Disk | A pruned Monero node needs ~100 GB and a full one ~270 GB, plus ~150 GB for the Tari node (its chain is the biggest single consumer). Plan for ~330 GB (pruned) or ~530 GB (full) of SSD minimum. Both chains grow ~100+ GB/year, so a 2–4 TB drive is the set-and-forget choice. |
+| Disk | A pruned Monero node needs ~100 GB and a full one ~270 GB, plus ~150 GB for the Tari node (its chain is the biggest single consumer). Plan for ~330 GB (pruned) or ~530 GB (full) of SSD minimum. Both chains grow ~100+ GB/year, so a 2–4 TB drive is the set-and-forget choice. Running either node on another machine drops its share — see [Running a node elsewhere](hardware.md#running-a-node-elsewhere). |
 | Software | Docker Engine, Docker Compose V2, `jq`, and `openssl`. |
 
 > 📐 Sizing guidance for the stack host — minimum vs. recommended specs, plus ways to run leaner —
@@ -36,7 +36,8 @@ dashboard, no Linux to set up.
 
 > 🔎 `setup` checks this for you. Before it starts anything, `./pithead setup` runs a best-effort
 > pre-flight on free disk and total RAM. If either is below the recommended minimums (~330 GB
-> pruned / ~530 GB full disk, 16 GB RAM), it prints a warning. It never blocks setup, so you can
+> pruned / ~530 GB full disk, 16 GB RAM), it prints a warning. The disk figure follows the node
+> modes you configured; the 16 GB RAM warning fires regardless. It never blocks setup, so you can
 > proceed on a smaller host at your own risk. See **[Hardware Requirements](hardware.md)**.
 
 You don't have to install the software dependencies yourself. `setup` checks for them and, on
@@ -102,14 +103,19 @@ Setup walks through five stages. It's interactive on the first run and safe to r
      node's RPC credentials auto-generated; and your P2Pool pool tier (`main`/`mini`/`nano` —
      pick low if you're not sure, a high-hashrate default silently starves a small rig of
      shares). An optional dashboard login, Enter to skip.
+     The wizard asks about the Monero node only. To merge-mine against a Tari node on another
+     machine, set `tari.mode: remote` and `tari.remote.host` in `config.json` afterwards and run
+     `./pithead apply` — see [Remote Tari node](configuration.md#remote-tari-node).
    - **A few more, Enter for the default:** a faster clearnet initial sync instead of the private
-     Tor default; reaching the dashboard from outside your LAN over Tor; Telegram alerts.
+     Tor default; reaching the dashboard from outside your LAN over Tor; Telegram alerts; and
+     whether this machine should also mine with its spare CPU (a co-located RigForge worker).
    - Everything else — ports, XvB tuning, energy pricing, per-worker overrides, and more — keeps
      its documented default; the wizard prints a pointer to `config.json` and
      [Configuration](configuration.md) at the end for anyone who wants it.
 
 3. **Tor provisioning.** Brings up the Tor service and waits for the hidden-service (onion)
-   addresses to be generated for Monero, Tari, and P2Pool.
+   addresses: P2Pool always, plus Monero and Tari for whichever of those nodes runs locally. A node
+   in remote mode gets no inbound onion — it accepts its own peers where it runs.
 
 4. **Kernel optimization (Linux only).** Configures HugePages for RandomX performance. Making
    HugePages persistent edits GRUB and requires a reboot. You're prompted before any GRUB change,
@@ -131,6 +137,9 @@ Setup walks through five stages. It's interactive on the first run and safe to r
 
 ## 4. First boot: the node syncs
 
+This section assumes both nodes run here, the default. A chain served from another machine
+(`monero.mode` / `tari.mode: remote`) never syncs on this host — its container isn't started at all.
+
 The first time the stack starts, your Monero and Tari nodes download and verify the blockchain
 from the network. Until both are fully synced, the dashboard shows a dedicated Sync Mode screen
 with live progress for each chain, and no hashrate is routed yet. When the stack first comes up,
@@ -146,13 +155,18 @@ and blocks remaining while syncing), or in the logs:
 ./pithead logs tari
 ```
 
+Each line applies only to a node this host actually runs — in remote mode that service isn't in the
+stack, so `logs` has nothing to follow.
+
 Once both chains report fully synced, the dashboard switches from Sync Mode to the full
 operational view and the stack begins mining. See [The Dashboard](dashboard.md) for a tour of
 both states.
 
 > Already have a synced Monero node? You can skip most of the initial sync by pointing the stack
 > at your existing blockchain data, or by connecting to a remote node. See
-> [Reusing an existing node](configuration.md#reusing-an-existing-node).
+> [Reusing an existing node](configuration.md#reusing-an-existing-node). The same holds for Tari:
+> point `tari.data_dir` at an existing Minotari chain, or set `tari.mode: remote` to merge-mine
+> against a node on another machine — see [Remote Tari node](configuration.md#remote-tari-node).
 
 > Sync crawling over Tor? The default routes the first sync over Tor for privacy, which is slow.
 > You can opt into a faster clearnet initial sync for Monero and/or Tari; each node switches back
