@@ -284,7 +284,7 @@ stack_down() {
     log "Stack stopped."
 }
 
-stack_restart() { # [tor]
+stack_restart() { # [tor|monerod]
     case "${1:-}" in
     "")
         log "Restarting stack..."
@@ -294,14 +294,28 @@ stack_restart() { # [tor]
     tor)
         # Manual leg of the #424 guard self-heal: restart ONLY tor so it picks fresh guards
         # when clearnet exits are stuck (the doctor Tor clearnet-egress check WARNs on this).
-        # Only tor is accepted here — other containers must go through apply/upgrade, whose
-        # recreate applies current args (a bare restart would reuse stale ones, #273); tor
-        # takes no args from .env, so a plain restart is safe and is exactly the fix.
-        log "Restarting the tor container to pick fresh guards — ALL Tor circuits drop and rebuild (mining onions included; p2pool/monerod re-peer on their own)..."
+        # Tor takes no args from .env, so a plain restart is safe (other containers go
+        # through apply/upgrade, whose recreate applies current args, #273). Compose then
+        # restarts monerod right after tor is healthy again (depends_on restart: true, #972):
+        # monerod does NOT re-peer on its own after a tor restart kills its SOCKS
+        # connections — it can sit at 0 in / 0 out peers for hours; p2pool re-peers fine.
+        log "Restarting the tor container to pick fresh guards — ALL Tor circuits drop and rebuild (mining onions included; p2pool re-peers on its own, and a local monerod is restarted alongside so it re-dials)..."
         docker compose restart tor
         log "tor restarted. Verify egress recovered: './pithead doctor' (Tor clearnet-egress check)."
         ;;
-    *) error "restart takes no argument, or 'tor' (fresh Tor guards when clearnet egress is stuck). Got: '$1'." ;;
+    monerod)
+        # Peer-loss recovery (#972): a tor restart/recreate outside compose (docker itself, or
+        # the #424 auto-heal when its coupled monerod restart could not be issued) leaves
+        # monerod holding dead SOCKS sockets — reachable, healthcheck green, but
+        # `synchronized: false` with 0 peers for hours. A plain restart re-dials through the
+        # running tor and recovers in about a minute. Safe under the #273 recreate-only rule
+        # for the same reason as tor: re-peering wants the container's args EXACTLY as they
+        # are — config changes still go through apply.
+        log "Restarting the monerod container so it re-dials its peers through Tor..."
+        docker compose restart monerod
+        log "monerod restarted. It should report synchronized again within a few minutes — verify: './pithead doctor' (Monero sync check)."
+        ;;
+    *) error "restart takes no argument, 'tor' (fresh Tor guards when clearnet egress is stuck), or 'monerod' (re-dial peers after a Tor restart left the node out of sync). Got: '$1'." ;;
     esac
 }
 
@@ -1149,7 +1163,7 @@ doctor() {
         doctor_prune=$(env_get MONERO_PRUNE)
         [ -n "$doctor_prune" ] || doctor_prune=1
         # A remote node (#103) keeps its chain elsewhere, so its dir must not count toward THIS
-        # host's disk budget — otherwise doctor demands ~120 GiB (Monero) / ~170 GiB (Tari) for a
+        # host's disk budget — otherwise doctor demands ~120 GiB (Monero) / ~200 GiB (Tari) for a
         # container that never runs, on exactly the small-disk hosts remote mode exists for. Read
         # the mode from the profile tokens like the container checks above; a pre-#103 .env has no
         # local_tari token yet, so require a rendered TARI_GRPC_ADDRESS (also new in #103) before
@@ -1257,6 +1271,7 @@ doctor() {
         fi
         check_revenue_containers
         check_dashboard_answers
+        check_monerod_synchronized
     fi
 
     # --- Summary ---
@@ -1945,10 +1960,39 @@ consume_install_request() { # <spool-dir>
 # owners run this — pithead-boot on provisioned machines, the first-boot wizard before it
 # serves — so every path converges on the shipped images, and a normal boot pays one sha256
 # per archive.
+# An unclean reset — a power cut, or the hardware watchdog firing while slow media is mid-write —
+# can leave containers/storage with ZERO-LENGTH `lower` files. containers/storage splits an
+# empty-but-present `lower` on ":" into one EMPTY element, joins that onto the graph root and
+# readlinks THAT directory, so every container start dies with
+# "readlink <graphroot>/overlay: invalid argument". The digest records in load_baked_images then
+# report the images as already loaded, so nothing ever reloads: the damage survives every later
+# boot, the wizard never serves, and the console sits on "preparing the setup page" forever. That
+# is how an appliance ended up unable to install from its own stick — the store was broken by the
+# reset, not by anything the wizard did. A correct BASE layer carries no `lower` file at all, so a
+# zero-length one is damage, never a legitimate state.
+#
+# ponytail: rebuilds the WHOLE store, so a machine past provisioning re-pulls whatever is not
+# baked (only the dashboard is). Fine as a floor — a store in this state starts no container at
+# all, so re-pulling beats staying dead. Narrow it to the baked set if that ever bites.
+repair_broken_image_store() { # $1: container engine
+    local engine="$1" root
+    root=$("$engine" info --format '{{.Store.GraphRoot}}' 2>/dev/null) || return 0
+    { [ -n "$root" ] && [ -d "$root/overlay" ]; } || return 0
+    find "$root/overlay" -maxdepth 2 -name lower -size 0 -print -quit 2>/dev/null | grep -q . || return 0
+    warn "The container image store is damaged (an interrupted write left empty layer metadata) — rebuilding it."
+    "$engine" rm -af >/dev/null 2>&1 || true
+    rm -rf "${root:?}"
+    rm -f "$PWD/data"/.loaded-*.sha
+}
+
 load_baked_images() { # $1 (optional): image ref whose absence forces a load despite a matching digest
     local required="${1:-}" dir="${PITHEAD_IMAGES_DIR:-/opt/pithead/images}"
-    local engine archive sha rec recorded
+    local engine archive sha rec recorded load_pid t0 load_rc
     engine=$(container_engine)
+    # Before trusting any digest record: a record describes what was LOADED, and the check below
+    # only asks whether the image still EXISTS. A store damaged as described above satisfies both
+    # and still cannot run a thing, which is exactly how the failure became permanent.
+    repair_broken_image_store "$engine"
     # The wizard-era record lived at a different path; retire it so an upgraded machine doesn't
     # carry a stale file forever (its absence costs one reload on the first boot after upgrading).
     rm -f "$PWD/.wizard-image-sha"
@@ -1968,7 +2012,31 @@ load_baked_images() { # $1 (optional): image ref whose absence forces a load des
         # The single slowest step of a first or post-update boot, and the one worth narrating.
         _console "Loading this build's container images ($(basename "$archive")) — the slow part..."
         mkdir -p "$PWD/data" 2>/dev/null || true
-        if "$engine" load -i "$archive" >/dev/null 2>&1; then
+        # `podman load` prints nothing a console ever sees, and on USB media this step runs for
+        # MINUTES — measured at 3m47s on the bench, behind a line promising "a minute or two".
+        # A box that is working then looks exactly like a box that has hung, and it was read as
+        # hung twice. A rising elapsed count is the whole fix: it is the one thing that tells
+        # slow apart from stuck. 30s, so a four-minute load costs eight lines, not sixteen.
+        #
+        # The HEARTBEAT is what gets backgrounded, never the load: keeping the load in the
+        # foreground preserves its exit status exactly, and sidesteps the zombie race that
+        # polling a background pid with `kill -0` would introduce (a reaped-but-not-yet-waited
+        # child still answers, so a FAST load would pay a full sleep for nothing).
+        t0=$(date +%s)
+        (
+            while :; do
+                sleep "${PITHEAD_LOAD_HEARTBEAT_SECS:-30}"
+                _console "  still loading — $(($(date +%s) - t0))s elapsed, this is normal on USB media"
+            done
+        ) &
+        load_pid=$!
+        load_rc=0
+        "$engine" load -i "$archive" >/dev/null 2>&1 || load_rc=$?
+        # Stopped on BOTH paths, and before the branch, so no arm can leak a heartbeat that
+        # narrates a load which already finished.
+        kill "$load_pid" 2>/dev/null || true
+        wait "$load_pid" 2>/dev/null || true
+        if [ "$load_rc" -eq 0 ]; then
             printf '%s' "$sha" >"$rec" 2>/dev/null || true # unrecorded -> reloads next boot
         else
             # No record on failure, on purpose: the next boot must retry, not skip.
@@ -2131,8 +2199,18 @@ firstboot_wizard() {
             -e WIZARD_TLS_CERT="${cert_fp:+/wizard-spool/wizard.crt}" \
             -e WIZARD_TLS_KEY="${cert_fp:+/wizard-spool/wizard.key}" \
             -v "$spool":/wizard-spool \
-            "$image" -m mining_dashboard.wizard >/dev/null ||
+            "$image" -m mining_dashboard.wizard >/dev/null || {
+            # `error` writes to stderr, which systemd routes to /dev/console — ONE device,
+            # whichever the kernel cmdline named LAST. On a box whose monitor is not that device
+            # the failure is invisible, so the newest thing on screen stays "preparing the setup
+            # page" and a STOPPED box reads as a slow one for as long as the operator is willing
+            # to wait. That is how a three-minute failure was mistaken for an hour of progress.
+            # _console reaches every physical console, which is the whole point here.
+            _console "" "Setup has STOPPED — this box is no longer preparing a page." \
+                "The container engine could not start the setup page." \
+                "Diagnose with: journalctl -u pithead-firstboot -b"
             error "Could not start the wizard container ($engine, $image). Pre-seed config.json or run '$0 firstboot-wizard --cli'."
+        }
         local mdns_name scheme
         mdns_name="$(hostname).local"
         scheme="http"
@@ -3381,9 +3459,11 @@ Lifecycle:
                             hand after replacing the program under an existing config.
   up                        Start the stack.
   down                      Stop the stack.
-  restart [tor]             Restart the stack — or only the tor container, which picks
-                            fresh guards when Tor clearnet egress is stuck (drops
-                            and rebuilds all Tor circuits).
+  restart [tor|monerod]     Restart the stack — or one container: 'tor' picks fresh
+                            guards when Tor clearnet egress is stuck (drops and rebuilds
+                            all Tor circuits; a local monerod restarts alongside);
+                            'monerod' re-dials peers when the node reports not
+                            synchronized after a Tor restart.
   upgrade                   Re-render generated config and rebuild/restart the stack after
                             an update — a 'git pull' on source installs, or an extracted
                             release bundle (the dashboard's one-click upgrade runs this).
@@ -4086,6 +4166,42 @@ check_tor_clearnet_egress() {
         dr_ok "Tor clearnet egress works — Healthchecks, Telegram, and XvB can reach their services."
     else
         dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this, #424). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself."
+    fi
+    return 0
+}
+
+# doctor (#972): a monerod that survived a tor restart with every SOCKS peer dead looks healthy —
+# container up, healthcheck green (it only probes the RPC), height even creeping on occasional
+# lucky dials — while `get_info` reports `synchronized: false` and mining sits on a stale tip.
+# Probe from the host with the .env digest creds (the monerod image carries no curl) and trust
+# the RAW `synchronized` flag, like the dashboard's out-of-sync alert: a stranded node can report
+# a stale target_height of 0, so any height math reads it as caught up — the flag is the node's
+# own verdict. WARN not FAIL: a node mid-initial-sync legitimately reports the same thing for
+# days. Silently skips when no monerod container runs (remote mode, stack down).
+check_monerod_synchronized() {
+    container_is_running monerod || return 0
+    if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        dr_info "Monero sync check skipped — needs curl and jq."
+        return 0
+    fi
+    local user pass url body
+    user=$(env_get MONERO_NODE_USERNAME 2>/dev/null)
+    pass=$(env_get MONERO_NODE_PASSWORD 2>/dev/null)
+    url=$(env_get MONERO_RPC_URL 2>/dev/null)
+    [ -n "$url" ] || url="http://127.0.0.1:18081"
+    if [ -n "$user" ]; then
+        body=$(curl -fsS --max-time 8 --digest -u "$user:$pass" "$url/get_info" 2>/dev/null)
+    else
+        body=$(curl -fsS --max-time 8 "$url/get_info" 2>/dev/null)
+    fi
+    if [ -z "$body" ]; then
+        dr_info "Monero sync check skipped — monerod's RPC did not answer (the container table above shows whether it is still starting)."
+        return 0
+    fi
+    if printf '%s' "$body" | jq -e '(.status == "OK") and (.synchronized == true)' >/dev/null 2>&1; then
+        dr_ok "monerod reports synchronized with the Monero network."
+    else
+        dr_warn "monerod is running but reports NOT synchronized — normal during initial sync; if it stays like this on a previously-synced node (peers lost after a Tor restart), './pithead restart monerod' re-dials and recovers in about a minute."
     fi
     return 0
 }
@@ -5497,6 +5613,10 @@ parse_and_validate_config() {
     fi
     # Ensure a strict true/false string is returned, defaulting to true
     DASHBOARD_SECURE=$(jq -r 'if .dashboard.secure != null then .dashboard.secure | tostring else "true" end' "$CONFIG_FILE")
+    # Deliberate opt-in to serving the dashboard on a globally-routable address. Default false:
+    # the appliance auto-publishes every address it holds, and on any network passing IPv6 through
+    # that silently included a public one. The supported off-LAN route is the onion service.
+    DASHBOARD_EXPOSE_PUBLIC_IP=$(config_bool '.dashboard.expose_public_ip' false)
     # Timezone for the dashboard's timestamps/charts. "auto"/empty -> the host's timezone
     # (auto-detected; falls back to Etc/UTC). Set an IANA name (e.g. America/Chicago) to
     # override. Rendered into .env as DASHBOARD_TZ.
@@ -6733,6 +6853,7 @@ TARI_GRPC_ADDRESS=$tari_grpc_addr
 TARI_GRPC_BIND=$tari_grpc_bind
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
+DASHBOARD_EXPOSE_PUBLIC_IP=$DASHBOARD_EXPOSE_PUBLIC_IP
 DASHBOARD_ONION_ENABLED=$DASHBOARD_ONION_ENABLED
 DASHBOARD_ONION_CLIENT_AUTH=$DASHBOARD_ONION_CLIENT_AUTH
 DASHBOARD_TZ=$DASHBOARD_TZ
@@ -6863,6 +6984,17 @@ generate_caddyfile() {
         local extra_ip
         for extra_ip in $(hostname -I 2>/dev/null) localhost; do
             case " $site_hosts " in *" $extra_ip "*) continue ;; esac
+            # `hostname -I` lists EVERY address on every interface, so on any network whose router
+            # passes IPv6 through, a SLAAC/DHCPv6 global unicast address lands here exactly like a
+            # LAN one — and this list is rebuilt every boot by render_derived. That published the
+            # control panel on a globally-routable address, with nothing but the operator's router
+            # between it and the internet; the product must not depend on that. The documented way
+            # to reach the dashboard off-LAN is the onion service, never a routable address, so
+            # nothing supported regresses. Opt back in with dashboard.expose_public_ip if a
+            # deployment really does want it.
+            if [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ] && is_public_ip "$extra_ip"; then
+                continue
+            fi
             site_hosts="$site_hosts $extra_ip"
         done
     fi
@@ -6872,6 +7004,58 @@ generate_caddyfile() {
             out="${out:+$out, }$1://$h$port_suffix"
         done
         printf '%s' "$out"
+    }
+    # Trimming the address list is necessary but is NOT a boundary on its own. Caddy runs with
+    # network_mode: host and opens ONE WILDCARD listener (verified on the bench: `ss -lnt` shows
+    # `*:443`, not per-address sockets), so a client that reaches the box on a global address still
+    # completes the connection — it only has to send a Host header naming an address that IS in the
+    # list, and Caddy matches on content, never on which interface the connection arrived over.
+    # `bind` is what actually closes the socket: Caddy then listens on these addresses only, so the
+    # global one is never accepted at all.
+    #
+    # LITERAL addresses only. A name would be resolved by Caddy at startup, and the appliance's
+    # mDNS name resolves to every address it has — including the one being excluded, which would
+    # re-open exactly what this closes. Loopback is always added: the host-networked dashboard and
+    # Caddy's own admin healthcheck both arrive that way.
+    # Built from the BOX's own addresses, never from $site_hosts. The two are different questions:
+    # site_hosts is which Host values Caddy vhost-matches, this is which sockets it opens. Deriving
+    # the bind from site_hosts tied it to the auto-expansion, so an operator who pinned
+    # dashboard.host — a documented, supported choice — got a single-host site list and NO bind at
+    # all, which is the wildcard listener and the whole exposure, back again for exactly the
+    # operators who configured the box most deliberately.
+    local bind_addrs="" _bh
+    if is_appliance && [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ]; then
+        for _bh in $(hostname -I 2>/dev/null); do
+            is_public_ip "$_bh" && continue
+            case "$_bh" in
+            *:*) ;;                # IPv6 literal
+            *[!0-9.]*) continue ;; # not an address literal
+            esac
+            bind_addrs="${bind_addrs:+$bind_addrs }$_bh"
+        done
+        # Loopback unconditionally, appended OUTSIDE the loop so it survives a box that reports no
+        # usable non-public address at render time: the host-networked dashboard and Caddy's own
+        # admin healthcheck both arrive this way, and a bind that dropped them would be worse than
+        # no bind at all.
+        bind_addrs="${bind_addrs:+$bind_addrs }127.0.0.1 ::1"
+    fi
+    # NO trailing newline: consumed as $(_bind_line) on its own heredoc line, and command
+    # substitution strips trailing newlines anyway — emitting one here produced
+    # `bind ... ::1    basic_auth {` on a single line, which Caddy will not parse. Same convention
+    # as $auth above. Empty when binding is off, which collapses to a blank line, like $auth.
+    _bind_line() {
+        [ -n "$bind_addrs" ] || return 0
+        printf '    bind %s' "$bind_addrs"
+    }
+    # The onion vhost binds ONLY when the LAN vhost does. A site block with no bind asks Caddy for
+    # a wildcard listener, so the two must agree: mixing them puts a wildcard `:80` and a specific
+    # `NETWORK_PREFIX.1:80` in the same file, both claim the same port, and Caddy fails to start —
+    # which takes the dashboard AND the onion down together. That combination is reachable today
+    # (dashboard.secure:false with the onion enabled is documented and explicitly exempted from the
+    # insecure-transport warning), so this is tied deliberately rather than left to chance.
+    _onion_bind_line() {
+        [ -n "$bind_addrs" ] || return 0
+        printf '    bind %s' "${NETWORK_PREFIX}.1"
     }
 
     : >"Caddyfile"
@@ -6905,6 +7089,7 @@ generate_caddyfile() {
         cat <<EOF >>"Caddyfile"
 $(_site_addresses https) {
 $tls_line
+$(_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -6916,6 +7101,7 @@ EOF
         log "Generating Caddyfile for HTTP ($site_hosts$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >>"Caddyfile"
 $(_site_addresses http) {
+$(_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -6938,6 +7124,7 @@ EOF
         cat <<EOF >>"Caddyfile"
 
 http://${NETWORK_PREFIX}.1 {
+$(_onion_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -7482,16 +7669,16 @@ prompt_start_stack() {
 
 # Per-component free-disk requirement in GiB — the single source of truth for the stack's disk
 # budget, shared by setup's preflight_resources and doctor's Disk check. Monero (the blockchain) is
-# pruning-aware: ~120 GiB pruned, ~320 GiB full. Tari's chain is the other heavyweight — ~170 GiB and
-# growing fast. Summed, this is ~300 GiB pruned / ~500 GiB full, the documented minimum
+# pruning-aware: ~120 GiB pruned, ~320 GiB full. Tari's chain is the other heavyweight — ~200 GiB and
+# growing fast. Summed, this is ~330 GiB pruned / ~530 GiB full, the documented minimum
 # (docs/hardware.md). These carry generous growth headroom over usage measured on live nodes
-# (Monero pruned ~100 GiB / full ~265 GiB, Tari ~135 GiB) because both chains grow ~100+ GiB/year
-# combined — for a set-and-forget host the docs recommend a 2–4 TB drive.
+# (August 2026: Monero pruned ~100 GiB / full ~267 GiB, Tari ~149 GiB) because both chains grow
+# ~100+ GiB/year combined — for a set-and-forget host the docs recommend a 2–4 TB drive.
 # Args: <component> [<prune>] where prune (1 = on, 0 = off) only matters for "monero". Prints GiB.
 disk_component_gib() {
     case "$1" in
     monero) if [ "${2:-1}" -eq 1 ] 2>/dev/null; then echo 120; else echo 320; fi ;;
-    tari) echo 170 ;;
+    tari) echo 200 ;;
     p2pool) echo 5 ;;
     dashboard) echo 2 ;;
     tor) echo 1 ;;
@@ -7602,7 +7789,7 @@ preflight_resources() {
     # once per volume that can't hold the combined requirement of the components sharing it (so dirs
     # on the same disk produce a single line, not one per dir). check_disk_grouped is WARN-only here.
     # A remote node (#103) keeps its chain elsewhere: blank its dir so the ~120 GiB (Monero) /
-    # ~170 GiB (Tari) budget isn't demanded of THIS host — small disks are exactly why an operator
+    # ~200 GiB (Tari) budget isn't demanded of THIS host — small disks are exactly why an operator
     # goes remote. check_disk_grouped skips empty dirs.
     local pre_mono_dir="${MONERO_DIR:-}" pre_tari_dir="${TARI_DIR:-}"
     [ "$MONERO_MODE" == "remote" ] && pre_mono_dir=""
@@ -8890,8 +9077,24 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_reject "this install builds from source — upgrade from the host with 'git pull' then './pithead upgrade'."
         return 0
     fi
+    # Ordered BEFORE the cosign precondition on purpose: an appliance cannot take a tarball
+    # upgrade at all, whatever the host holds, so the appliance answer is the informative one.
     if is_appliance; then
         _upg_reject "this machine is a Pithead OS appliance — it updates through signed OS images, not release tarballs, and a tarball upgrade would silently revert at the next reboot. The dashboard OS-update flow is tracked work; nothing was changed."
+        return 0
+    fi
+    # #376/#1023: cosign is a PRECONDITION of a one-click upgrade, not a consequence of already
+    # holding a key. Every release bundle ships cosign.pub (make_bundle copies the committed key
+    # unconditionally), so the `pithead upgrade` this runner ends up calling will demand the
+    # verifier at its image gate whatever the current install holds. Testing the LOCAL cosign.pub
+    # instead — what this guard used to do — was blind to the one upgrade that needs it most: an
+    # install cut before signing engaged moving to a signed release, which every fielded install
+    # makes exactly once. That sailed past here and aborted inside the new CLI, after the download,
+    # the extraction, and a full config re-render. Checked with the source-checkout refusal above:
+    # both are "this install cannot take a one-click upgrade at all", and neither claims the
+    # throttle or dials out, so a refusal here costs the operator nothing.
+    if ! command -v cosign >/dev/null 2>&1; then
+        _upg_reject "cosign is not installed on the host — release bundles ship a signing key and every image is verified against it before it is pulled, so this upgrade would fail partway through. Install cosign (docs/dev/releasing.md § Verifying a release) and retry."
         return 0
     fi
     # Throttle: one attempt per 10 minutes, checked before any network dial.
@@ -8940,12 +9143,6 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     fi
     if ! semver_newer "$tag" "v$PITHEAD_VERSION"; then
         _upg_reject "already up to date (running v$PITHEAD_VERSION; latest release is $tag)."
-        return 0
-    fi
-    # #376: with a release key on disk the bundle WILL be verified below — so an install that can't
-    # verify (cosign.pub present, cosign binary missing) is refused here, before the download.
-    if [ -f cosign.pub ] && ! command -v cosign >/dev/null 2>&1; then
-        _upg_reject "cosign.pub is present but cosign is not installed on the host — refusing an unverified bundle (#376). Install cosign (docs/dev/releasing.md § Verifying a release) and retry."
         return 0
     fi
     control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"running",version:$v,ts:(now|floor)}')"
@@ -9445,7 +9642,10 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     # Poll the rig's /status for THIS change_id's terminal outcome. The rig stages → validates →
     # applies → liveness-checks → rolls back if the miner doesn't return live, seconds later. The 20s
     # deadline (plus the 15s dial above) stays under the dashboard's CONTROL_WAIT_S POST wait, so the
-    # dashboard always catches a terminal-ish result and records it in the config history.
+    # dashboard always catches a terminal-ish result and records it in the config history. Terminals
+    # are applied / rejected / rolled_back / failed — failed is the rig unable to restore its own
+    # rollback backup (present since the v1.11.2 fleet floor), a real fault the result must carry
+    # with its reason, never a deadline-burned "accepted".
     local sbody scode status reason ckeys deadline=$((SECONDS + 20))
     while [ "$SECONDS" -lt "$deadline" ]; do
         sleep 2
@@ -9466,7 +9666,7 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
         fi
         status=$(jq -r '.status // ""' "$sbody")
         case "$status" in
-        applied | rejected | rolled_back)
+        applied | rejected | rolled_back | failed)
             # reason is rig-supplied (attacker-influenceable); cap it before it is stored/rendered.
             reason=$(jq -r '.reason // ""' "$sbody" | head -c 500)
             ckeys=$(jq -c '.changed_keys // []' "$sbody")
@@ -9591,11 +9791,12 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
     # well under 90s, while a pin-change rebuild (~10 min) times out to "accepted" below and the
     # badge (#596) clears on its own when the rig reports the new version. Polling the full build
     # would hand a hostile/hung rig 12 minutes of the single-threaded root drain per intent
-    # (sec-review finding) — 90s keeps the stall bound in worker-apply's envelope. There is no
-    # in-progress status (rigforge#320): a non-matching change_id just means pending. Terminals
-    # are applied / rolled_back / failed; a rig-side throttle refusal arrives as
-    # failed+"throttled" and is surfaced as retry-later, not an error. The cap is overridable
-    # (CONTROL_WU_POLL_CAP) so the stack tests can prove the timeout→accepted fallback in seconds.
+    # (sec-review finding) — 90s keeps the stall bound in worker-apply's envelope. Since
+    # rigforge#320 (v1.12.0) the rig writes an in-progress "started" plus first-class noop
+    # (already on the target) and throttled (its own 6h anti-beacon window) terminals; "started",
+    # like a non-matching change_id, just means keep polling. Terminals are applied / noop /
+    # throttled / rolled_back / failed. The cap is overridable (CONTROL_WU_POLL_CAP) so the stack
+    # tests can prove the timeout→accepted fallback in seconds.
     local sbody scode status reason deadline=$((SECONDS + ${CONTROL_WU_POLL_CAP:-90}))
     while [ "$SECONDS" -lt "$deadline" ]; do
         sleep 5
@@ -9617,14 +9818,18 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
         fi
         status=$(jq -r '.status // ""' "$sbody")
         case "$status" in
-        applied | rolled_back | failed)
+        applied | noop | throttled | rolled_back | failed)
             # reason is rig-supplied (attacker-influenceable); cap it before it is stored/rendered.
             reason=$(jq -r '.reason // ""' "$sbody" | head -c 500)
             rm -f "$sbody"
-            # The rig collapses its refusals into failed+free-text (rigforge#320); its 6h
-            # anti-beacon throttle is retry-later, not a fault — give it its own status so the
-            # dashboard renders it calm instead of red.
-            if [ "$status" = "failed" ] && printf '%s' "$reason" | grep -qi "throttl"; then
+            # Legacy remap: a pre-rigforge#320 rig (≤ v1.11.2, the supported floor) collapses its
+            # 6h anti-beacon throttle into failed+"throttled — ..." free text, and retry-later
+            # must render calm, not red. Anchored to that leading word on purpose: a modern rig's
+            # genuine failed can mention the throttle too ("throttle state unavailable",
+            # rigforge#321's fail-closed refusal) and must STAY a fault. Drop the remap once the
+            # fleet floor reaches rigforge v1.12.0 (first-class throttled) — the v2 appliance
+            # bakes v1.15.0, so post-v2 fleets are already past it.
+            if [ "$status" = "failed" ] && printf '%s' "$reason" | grep -qiE '^throttled'; then
                 status="throttled"
             fi
             control_write_result "$results" "$id" "$(jq -n --arg s "$status" --arg c "$change_id" --arg w "$worker" --arg v "$tag" --arg r "$reason" \

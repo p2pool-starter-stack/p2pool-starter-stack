@@ -50,8 +50,10 @@ RUN python -m pytest --cov=mining_dashboard --cov-report=term-missing --cov-fail
 # ==========================================================================
 FROM base AS production
 COPY --from=build /app/.venv /app/.venv
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
+# entrypoint runs the app; healthcheck.sh (#904) HEADs /api/state with the venv's own python3
+# (the slim image ships no curl/wget).
+COPY entrypoint.sh healthcheck.sh ./
+RUN chmod +x entrypoint.sh healthcheck.sh
 
 # Stack version, baked at build so the running container is self-describing (Issue #58).
 # PITHEAD_VERSION comes from the top-level VERSION file (the source of truth); the git args

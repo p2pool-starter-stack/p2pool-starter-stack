@@ -8,6 +8,7 @@ hand-built guess. Regenerate when the payload contract changes.
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -122,7 +123,10 @@ def main():
         "update": {"available": True, "latest": "v9.9.9", "url": "https://example/releases/v9.9.9"},
     }
     state = views.build_state(data, _state_mgr(), "all")
-    out = Path(__file__).with_name("state.json")
+    # Optional output path so the drift guard (tests/web/test_views.py) can regenerate to a temp
+    # file and diff the shape without clobbering the checked-in fixture. This script patches
+    # time.time process-wide, so callers run it as a subprocess, never import it.
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).with_name("state.json")
     out.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
     print(f"wrote {out} ({out.stat().st_size} bytes)")
 
