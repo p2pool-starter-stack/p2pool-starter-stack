@@ -283,6 +283,13 @@ bundle), `upgrade` verifies each image's cosign signature before pulling and abo
 including when the `cosign` binary itself is missing. Install cosign once and the check runs on
 every upgrade; see [Releasing › Verifying a release](dev/releasing.md#verifying-a-release).
 
+**Install cosign before your first upgrade to a signed release.** Every release bundle carries the
+key, so an install cut before signing engaged holds none — there was nothing to make the binary
+necessary, and nothing warns until the upgrade needs it. The one-click upgrade checks first and
+refuses with nothing downloaded; the host `upgrade` aborts at the image gate, after the generated
+config has been re-rendered. Neither touches the running containers, and re-running once cosign is
+installed picks up where it stopped.
+
 Run `./pithead version` to see what is currently installed before and after an upgrade.
 
 ### Switching a source checkout to release images

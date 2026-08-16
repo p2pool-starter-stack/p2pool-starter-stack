@@ -5841,6 +5841,20 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_reject "this install builds from source — upgrade from the host with 'git pull' then './pithead upgrade'."
         return 0
     fi
+    # #376/#1023: cosign is a PRECONDITION of a one-click upgrade, not a consequence of already
+    # holding a key. Every release bundle ships cosign.pub (make_bundle copies the committed key
+    # unconditionally), so the `pithead upgrade` this runner ends up calling will demand the
+    # verifier at its image gate whatever the current install holds. Testing the LOCAL cosign.pub
+    # instead — what this guard used to do — was blind to the one upgrade that needs it most: an
+    # install cut before signing engaged moving to a signed release, which every fielded install
+    # makes exactly once. That sailed past here and aborted inside the new CLI, after the download,
+    # the extraction, and a full config re-render. Checked with the source-checkout refusal above:
+    # both are "this install cannot take a one-click upgrade at all", and neither claims the
+    # throttle or dials out, so a refusal here costs the operator nothing.
+    if ! command -v cosign >/dev/null 2>&1; then
+        _upg_reject "cosign is not installed on the host — release bundles ship a signing key and every image is verified against it before it is pulled, so this upgrade would fail partway through. Install cosign (docs/dev/releasing.md § Verifying a release) and retry."
+        return 0
+    fi
     # Throttle: one attempt per 10 minutes, checked before any network dial.
     local stamp="$cdir/staged/.upgrade-stamp"
     if [ -n "$(find "$stamp" -mmin -10 2>/dev/null)" ]; then
@@ -5887,12 +5901,6 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     fi
     if ! semver_newer "$tag" "v$PITHEAD_VERSION"; then
         _upg_reject "already up to date (running v$PITHEAD_VERSION; latest release is $tag)."
-        return 0
-    fi
-    # #376: with a release key on disk the bundle WILL be verified below — so an install that can't
-    # verify (cosign.pub present, cosign binary missing) is refused here, before the download.
-    if [ -f cosign.pub ] && ! command -v cosign >/dev/null 2>&1; then
-        _upg_reject "cosign.pub is present but cosign is not installed on the host — refusing an unverified bundle (#376). Install cosign (docs/dev/releasing.md § Verifying a release) and retry."
         return 0
     fi
     control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"running",version:$v,ts:(now|floor)}')"

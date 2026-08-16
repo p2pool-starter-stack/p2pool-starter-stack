@@ -5934,6 +5934,12 @@ make_stubs "$UPG/bin"
 # tolerates non-empty dirs and would mask the regression. CI (Linux) and real installs run GNU
 # tar; on a Mac with gnu-tar installed, route this block's tar there too so the bug reproduces.
 command -v gtar >/dev/null 2>&1 && ln -sf "$(command -v gtar)" "$UPG/bin/tar"
+# Every release bundle ships cosign.pub, so the runner requires the verifier before it downloads
+# anything (#1023) — the fixture carries one so the paths that are supposed to proceed do not
+# depend on whether the host happens to have cosign installed. It stays inert: this install has no
+# cosign.pub, so no signature is ever fetched and nothing here invokes it.
+printf '#!/usr/bin/env bash\nexit 0\n' >"$UPG/bin/cosign"
+chmod +x "$UPG/bin/cosign"
 printf '1.3.1' >"$UPG/VERSION"
 printf '{}' >"$UPG/config.json" # #637: the in-place path snapshots config.json before extracting
 # #544/#555: a real release install carries non-empty build/* config-template mounts (see the
@@ -6032,6 +6038,25 @@ assert_contains "channel-off refusal names the flag" "$out" "not enabled"
 [ ! -f "$UPGRESULTS/$UUPG.json" ] && ok "channel-off intent gets no result" || bad "channel-off intent gets no result" "result written"
 rm -f "$UPGREQS/$UUPG.json"
 seed_upgrade_env true
+
+# #1023: no cosign on the host -> refused before a single dial, whether or not this install already
+# holds a key. This fixture has NO cosign.pub (it models an install cut before signing engaged),
+# which is exactly the shape that used to sail past the old `[ -f cosign.pub ] &&` guard, download
+# the bundle, extract it over the install, and only then abort inside the new CLI's image gate.
+# Same pinned PATH as its key-holding twin below, so a host cosign can't decide the test.
+reset_upgrade_state
+ln -sf "$(command -v jq)" "$UPG/bin/jq" # PATH is pinned below, which may not carry jq
+mv "$UPG/bin/cosign" "$UPG/cosign.hidden"
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:/usr/bin:/bin" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+mv "$UPG/cosign.hidden" "$UPG/bin/cosign"
+rm -f "$UPG/bin/jq"
+assert_eq "upgrade without cosign is rejected on a key-less install" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "cosign-missing refusal names the verifier" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "cosign is not installed"
+assert_eq "cosign-missing refusal dials nothing" "$(cat "$UPG/curl.log" 2>/dev/null)" ""
+assert_eq "cosign-missing refusal extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+assert_eq "cosign-missing refusal claims no throttle" "$(ls "$UPG/data/control/staged/.upgrade-stamp" 2>/dev/null)" ""
 
 # Malformed / missing version: refused BEFORE any network dial (curl must never run).
 reset_upgrade_state
@@ -6426,9 +6451,10 @@ assert_eq "missing signature asset reports failed" "$(jq -r '.status' "$UPGRESUL
 assert_contains "missing-signature failure names the asset" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "no bundle signature"
 assert_eq "missing signature extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
 
-# cosign.pub present but no cosign binary: refused BEFORE the download, with an install pointer.
-# PATH is pinned to the stub bin + /usr/bin:/bin so a real host cosign can't leak in; jq rides
-# along as a symlink since the pinned PATH may not carry it.
+# The other half of the same precondition (#1023): an install that already HOLDS the key is
+# refused for the same reason a key-less one is — no cosign, no upgrade — BEFORE the download, with
+# an install pointer. PATH is pinned to the stub bin + /usr/bin:/bin so a real host cosign can't
+# leak in; jq rides along as a symlink since the pinned PATH may not carry it.
 reset_upgrade_state
 ln -sf "$(command -v jq)" "$UPG/bin/jq"
 rm -f "$UPG/bin/cosign"

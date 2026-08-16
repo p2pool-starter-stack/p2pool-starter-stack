@@ -933,12 +933,17 @@ is also cryptographically verified
 ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): with the release public key
 on disk (`cosign.pub`, shipped in every signed bundle), the runner fetches the release's
 `pithead.tar.gz.sig` and checks the download against the key it **already holds** before
-extracting a byte — a bad or missing signature, or a missing cosign binary, fails the upgrade
-with nothing changed, and a swapped key inside a malicious bundle cannot vouch for itself. The
-`pithead upgrade` that follows verifies each image's signature the same way before pulling. An
-install without `cosign.pub` (older than the first signed release) still rests on TLS to GitHub
-(over Tor) plus that tag pinning, and says so in the journal — upgrading once to a signed release
-picks up the key. See [Releasing › Signed releases](dev/releasing.md#signed-releases).
+extracting a byte — a bad or missing signature fails the upgrade with nothing changed, and a
+swapped key inside a malicious bundle cannot vouch for itself. The `pithead upgrade` that follows
+verifies each image's signature the same way before pulling. An install without `cosign.pub`
+(older than the first signed release) still rests on TLS to GitHub (over Tor) plus that tag
+pinning, and says so in the journal — upgrading once to a signed release picks up the key. See
+[Releasing › Signed releases](dev/releasing.md#signed-releases).
+
+The `cosign` binary itself is checked first, before the release API is dialled: every bundle ships
+the key, so the upgrade the runner ends up performing will need the verifier no matter what this
+install currently holds. Without it the request is refused outright, with nothing downloaded and
+the throttle unclaimed — install cosign on the host and retry immediately.
 
 **Upgrading from v1.7.x or older shows one last false failure.** Dashboard versions before
 v1.8.1 treat the reverse proxy's brief 502 — normal while the dashboard container recreates
