@@ -39,21 +39,26 @@ The stack's defaults:
   run with `no-new-privileges` and drop all Linux capabilities; internet-facing and
   Docker-socket-facing services also use a read-only root filesystem.
 - SHA256-verified, version-pinned binaries.
-- Digest-pinned images, unsigned by default
+- Digest-pinned **and signed** images
   ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): the release bundle pins
   every first-party image to an immutable `@sha256` digest, so a tampered registry can't swap what
-  gets pulled, and the bundle itself is fetched over TLS from GitHub Releases. Cosign signing is
-  opt-in and off for every release shipped so far (`scripts/release.sh`) — it turns on only when a
-  signing key is present on the release box and `cosign.pub` is committed alongside it, and fails
-  closed once it is. Today, with no `cosign.pub` next to `pithead`, the script warns and proceeds
-  unverified rather than blocking the pull — the digest pins above are the actual protection, not
-  a signature. Limits: a compromise of the release box itself, which would hold the signing key,
-  is outside what a signature can prove even once signing is on. See
+  gets pulled, and the bundle itself is fetched over TLS from GitHub Releases. `cosign.pub` is
+  committed at the repo root and ships inside the bundle, so a release install has the verifier
+  without a git checkout. `scripts/release.sh` signs each promoted digest and the install bundle
+  whenever the signing key is present on the release box; it warns and ships unsigned if the key is
+  missing, so check a release's signature rather than assuming it. Releases before v1.18.1 are
+  unsigned. Limits: a compromise of the release box itself, which holds the signing key, is outside
+  what a signature can prove. See
   [Releasing › Signed releases](docs/dev/releasing.md#signed-releases) for the verification mechanics.
 - Localhost-only RPC.
 - LAN-scoped (and narrowable) stratum port.
 - Scoped Docker socket proxies.
-- Tor for all node networking.
+- Tor for all node networking with the bundled nodes, enforced fail-closed by a host firewall
+  (`network.tor_egress_firewall`, default on). Two opt-ins leave that path: the clearnet initial
+  sync (`monero.clearnet_initial_sync` / `tari.clearnet_initial_sync`, default off), and remote-node
+  mode (`monero.mode` / `tari.mode: remote`), where the node legs are direct connections to the
+  machine you named. The firewall still confines those to private ranges. See
+  [Privacy & Network Egress](docs/privacy.md).
 - A one-way host-control boundary for dashboard config editing and upgrades (`dashboard.control`,
   default off): the dashboard container can only *ask* — it writes typed JSON intents into a spool
   directory whose other legs (staged configs, results, the audit log) are host-owned and mounted

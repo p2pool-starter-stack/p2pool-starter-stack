@@ -11,8 +11,8 @@ As of v1.1 the stack is Tor-by-default for all runtime egress. Monero and Tari (
 lookups they used to leak), P2Pool's outbound sidechain peers (#165), and XvB donation mining (#166)
 are all Tor-routed by default, each with a documented opt-out for operators who trade privacy for
 yield. What's left is inherent: the one-time install/build reveals your IP to the download host, and
-remote-node mode (`monero.mode: remote`, off by default) talks to the node you choose. Both are
-called out below.
+remote-node mode (`monero.mode: remote` and `tari.mode: remote`, both off by default) talks to the
+node you choose. Both are called out below.
 
 One opt-in deliberately moves a node onto clearnet: an
 [optional clearnet initial sync](#optional-clearnet-initial-sync-off-by-default) that lets Monero
@@ -33,8 +33,14 @@ fails closed instead of leaking your IP.
 
 - Needs root (the firewall rules), like the GRUB/HugePages steps; removed at `pithead down`.
 - Opt out with `network.tor_egress_firewall: false` (then routing falls back to per-app config only).
-- The host-networked dashboard and caddy aren't on the bridge; the dashboard's only external calls
-  already go over the Tor SOCKS (`socks5h`, [#163](#runtime-egress)/#224).
+- The accepted destinations are the private ranges only: `10.0.0.0/8`, `172.16.0.0/12`,
+  `192.168.0.0/16`, and `100.64.0.0/10` (CGNAT, so Tailscale addresses work). A remote Monero or
+  Tari node must sit in one of them — a node at a public IP is dropped with everything else, by
+  design.
+- The host-networked dashboard and caddy aren't on the bridge; the dashboard's external calls go
+  over the Tor SOCKS (`socks5h`, [#163](#runtime-egress)/#224) — with one exception. With
+  `tari.mode: remote` the dashboard reads that node's state over gRPC directly, un-proxied, the same
+  plaintext leg p2pool uses.
 - Verify it live with [`tests/integration/benchmarks/bench-verify-egress.sh`](../tests/integration/benchmarks/bench-verify-egress.sh); it confirms 0 app-container public connections.
 
 ---
@@ -48,12 +54,13 @@ elsewhere (`monero.mode` / `tari.mode: remote`) accepts its own peers, so Tor pu
 it — only services that actually run here get an address. So:
 
 - No public IPv4 port forwarding is required, and your IP is not advertised to inbound peers.
-- The only LAN-facing port is the stratum endpoint `:3333` that your own rigs connect to. It is
-  plain stratum, unauthenticated by default, and must never face the internet: `pithead
-  setup`/`doctor` warn if your host has a public IP. Lock it down with `p2pool.stratum_bind`, a
+- Two things face the LAN by default: the dashboard, served by the host-networked Caddy on `:443`
+  behind its login, and the stratum endpoint your rigs connect to (`p2pool.stratum_port`, default
+  `3333`). Stratum is plain and unauthenticated by default, and neither should ever face the
+  internet: `pithead setup`/`doctor` warn if your host has a public IP. Lock it down with `p2pool.stratum_bind`, a
   firewall, and/or an optional `p2pool.stratum_password` that requires each rig to authenticate.
   See [Connecting Miners › Firewall](workers.md#firewall) and [Authentication](workers.md#authentication).
-- The **dashboard** can get a fourth, optional onion (`dashboard.onion.enabled`, default off) so you
+- The **dashboard** can get one more, optional onion (`dashboard.onion.enabled`, default off) so you
   can reach it remotely over Tor without a port-forward or public IP. It fronts the authenticated
   Caddy login, defaults to Tor v3 client authorization (the onion won't respond without your client
   key), and pithead refuses to publish it without a 16-character password. This is **inbound** access
@@ -70,10 +77,11 @@ What the running stack sends to the internet, connection by connection.
 |---|---|---|---|---|---|
 | **monerod** P2P + tx broadcast | Monero network | — | ✅ Tor (`proxy=` / `tx-proxy=`) | on | Tor by default; **P2P** can opt into clearnet for the initial sync only ([#183](#optional-clearnet-initial-sync-off-by-default)) — tx broadcast stays on Tor regardless |
 | **monerod** DNS (checkpoints, blocklist, update check, priority-node hostnames) | DNS resolvers | "this IP runs Monero" | ✅ **closed** — `disable-dns-checkpoints`, `check-updates=disabled`, `enable-dns-blocklist=0`, hostname priority-nodes dropped (#161) | n/a | — |
-| **monerod RPC to a remote node** (only if `monero.mode: remote`) | the node you configured | **your real home IP**, to that node's operator | ❌ clearnet | **off** — the bundled local node is the default and has no remote-RPC egress | use a node you run/trust, or one reachable as a `.onion` over Tor |
+| **monerod RPC to a remote node** (only if `monero.mode: remote`) | the node you configured | **your real home IP**, to that node's operator | ❌ clearnet | **off** — the bundled local node is the default and has no remote-RPC egress | use a node you run on your LAN or reachable over WireGuard; a `.onion` remote isn't supported — with Tor on, p2pool's socat bridge moves this leg off the SOCKS5 proxy before it could reach Tor |
 | **Tari** P2P | Tari network | — | ✅ Tor (`type = "tor"`) | on | Tor by default; can opt into clearnet (TCP) for the initial sync only ([#183](#optional-clearnet-initial-sync-off-by-default)) |
-| **Tari** DNS seeds + Pulse (`seeds.tari.com`, `checkpoints.tari.com`) | DNS resolvers | "this IP runs Tari" | ✅ **closed** — `dns_seeds = []`, onion `peer_seeds`, resolver pointed at a dead address (#162) | n/a | clearnet sync ([#183](#optional-clearnet-initial-sync-off-by-default)) re-enables the `seeds.tari.com` DNS seed for the sync window |
+| **Tari** DNS seeds + Pulse (`seeds.tari.com`, `checkpoints.tari.com`) | DNS resolvers | "this IP runs Tari" | ✅ **closed** — `dns_seeds = []` and onion `peer_seeds`, so the configured resolvers are never queried (#162) | n/a | clearnet sync ([#183](#optional-clearnet-initial-sync-off-by-default)) re-enables the `seeds.tari.com` DNS seed for the sync window |
 | **P2Pool** merge-mine gRPC to a remote Tari node (only if `tari.mode: remote`) | the node you configured | **your real IP**, to that node's operator | ❌ clearnet — same posture as monerod's own remote-node RPC above | **off** — the bundled local Tari node is the default and this leg only exists in remote mode | use a node on your LAN or reachable over WireGuard; a `.onion` remote isn't supported yet (see [Configuration › Remote Tari node](configuration.md#remote-tari-node)) |
+| **Dashboard** sync poll to a remote Tari node (only if `tari.mode: remote`) | the node you configured | **your real IP**, to that node's operator | ❌ clearnet — a plaintext gRPC dial, and the host-networked dashboard sits outside the Tor-egress firewall | **off** — only exists in remote mode | same as the p2pool leg above: LAN or WireGuard |
 | **P2Pool** inbound peers | reach you via onion | — | ✅ onion hidden service | on | — |
 | **P2Pool** outbound sidechain peers | P2Pool sidechain peers, via Tor | — | ✅ **Tor** (`--socks5`, proxy-type `tor`) by default (#165) | on | opt out with `p2pool.clearnet: true` (exposes your IP for max yield) → [below](#p2pool-outbound-peers-165---tor-by-default) |
 | Dashboard **XvB stats** fetch | `xmrvsbeast.com` | your Monero **wallet** (no longer your IP) | ✅ Tor (`socks5h`, #163) | on, only if XvB enabled | `XVB_ENABLED=false` stops it |
@@ -194,6 +202,10 @@ Per-component flags in `config.json`, both `false` by default:
 Set the one(s) you want to `true` and run `./pithead apply`. Monero and Tari sync independently, so
 you can enable either, both, or neither.
 
+NOTE: both flags act on the bundled daemons only. With `monero.mode` or `tari.mode: remote` there is
+no local daemon here to sync, so the matching flag does nothing — set it back to `false` when you
+switch, or the exposure banner keeps warning about a sync that isn't happening.
+
 ### What it changes
 
 | | Tor-only (default) | Clearnet initial sync (opt-in) |
@@ -275,6 +287,14 @@ single-purpose appliance. One consequence is worth recording explicitly:
   appliance this is a non-issue; if you co-host the stack on a machine shared with other local users,
   treat the monerod RPC credential as visible to them and prefer a single-purpose host for stronger
   isolation.
+- **A remote node sits inside your trust boundary.** With `tari.mode: remote`, p2pool's merge-mine
+  gRPC is plaintext and unauthenticated end to end: p2pool cannot verify that the block template it
+  gets back actually pays `tari.wallet_address`, so the node's operator — or anyone on the network
+  path — can substitute a different payout, and nothing in the stack would catch it. A remote Monero
+  node is the milder version of the same shape: it decides what chain state you mine on. Use nodes
+  you run yourself or trust, on your LAN or over WireGuard. Only Tari yield is exposed this way;
+  Monero mining runs on a separate path. See
+  [Configuration › Trust boundary](configuration.md#trust-boundary).
 
 ## Maximum-privacy checklist
 

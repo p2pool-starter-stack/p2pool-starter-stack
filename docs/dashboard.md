@@ -24,7 +24,8 @@ Sync Mode gives each chain its own progress card:
 
 - **Monero Sync**: verified block height vs. the network tip, with blocks remaining. A green check
   means the chain is caught up. It also shows Pruned or Full mode and the on-disk DB size (also in
-  the **XMR Network** panel of the operational view), so you can confirm a reused chain matches your
+  the **XMR Network** panel of the operational view) — local node only; with `monero.mode: remote`
+  the mode reads `Unknown`, since the stack doesn't probe a node it doesn't run — so you can confirm a reused chain matches your
   `monero.prune` setting.
 - **Tari Sync**: the same, as a percentage ring, for the Minotari chain.
 
@@ -42,6 +43,11 @@ an unsynced node does nothing and floods Tari's logs with merge-mining chatter. 
 is one-way: once it starts it stays up. By default the stack waits for both Monero and Tari. With
 [`dashboard.tari_required: false`](configuration.md) it waits only for Monero and mines while Tari
 finishes syncing in the background.
+
+With `tari.mode: remote` the wait is on that node: the dashboard reads sync state from
+`tari.remote.host` over gRPC, so a remote node still catching up holds the miner exactly as a local
+one would. Set `dashboard.tari_required: false` if you'd rather not have someone else's node gate
+your Monero mining.
 
 > **Want to skip most of the wait?** Point the stack at an existing synced blockchain, or connect
 > to a remote node. See [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
@@ -81,8 +87,9 @@ successful refresh.
 A status strip across the top shows the hostname, host telemetry (CPU, load, RAM, HugePages, disk),
 total hashrate, and 1h / 24h routed averages for both P2Pool and XvB (your split). The disk readout
 switches from GB to TB once the volume reaches 1 TB, on the same scale in the Telegram `/system`
-reply. Next to the disk readout, an `XMR Pruned` / `XMR Full` badge shows the Monero node's
-blockchain mode.
+reply. An `XMR Pruned` / `XMR Full` badge sits with the other badges beside the stack name, showing
+the bundled node's blockchain mode. It appears for a local node only — with `monero.mode: remote`
+the pruning state is unknown, so neither badge is shown.
 
 When the dashboard host is a name (not already an IP), the machine's IP shows beside it as
 `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`), a way back in when the hostname doesn't
@@ -165,7 +172,8 @@ there is no history to show.
 ### Node status & failover
 
 If a local node becomes unreachable, a red `monerod DOWN` or `Tari DOWN` badge appears in the top
-bar (after a short debounce, so a momentary blip doesn't flap). Sync state is read from monerod's
+bar (after 90 seconds continuously unreachable, clearing after 60 seconds of confirmed
+reachability, so a momentary blip doesn't flap). Sync state is read from monerod's
 `get_info` RPC and Tari's gRPC, so "down" means the node itself is unreachable, not just that a log
 line changed.
 
@@ -202,8 +210,10 @@ configured, rather than sitting idle on a stack that can't mine. A sustained out
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.
 monerod is required to mine, so a monerod outage always rejects. Whether a Tari outage rejects
 follows [`dashboard.tari_required`](configuration.md): `true` (default) rejects on a Tari outage;
-`false` keeps mining Monero through it. Rejection never triggers for a remote monerod, since the
-stack doesn't manage that node.
+`false` keeps mining Monero through it. Rejection never triggers for a remote monerod — the stack
+doesn't probe a node it doesn't run, so that node always reads as reachable and p2pool manages the
+connection itself. A remote Tari node is different: the dashboard does dial it over gRPC, so an
+unreachable one reads as down and `tari_required` applies to it just as it would to a local node.
 
 **Non-blocking Tari.** With `tari_required: false`, a Tari-only (re)sync doesn't take over the
 screen: the operational view stays up, mining continues, and a `Tari syncing` badge shows Tari's
@@ -427,7 +437,8 @@ A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) sh
 Overview summary, the [Earnings — Expected vs Actual](#earnings--expected-vs-actual) table, and the
 worker table. **Advanced** swaps the Overview for cards that break out the same data in more
 detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**,
-**Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
+**Tari Merge-Mining**, **Pool Cadence & Luck**, **Stack Topology & Egress**, and the
+**P2Pool Earnings (estimated)** calculator below. The
 expected-vs-actual table stays in both views. The choice is remembered across reloads.
 
 The what-if earnings calculator and the XvB tier calculator live only in Advanced view. Simple view

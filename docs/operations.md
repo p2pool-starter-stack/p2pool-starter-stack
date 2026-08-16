@@ -14,16 +14,36 @@ Command reference for `pithead`, the CLI that manages the stack. Run `./pithead 
 | `./pithead upgrade` | Re-render the generated config, then **pull** (release bundle) or **rebuild** (source checkout) the images and restart. Run after downloading a newer bundle or a `git pull`. |
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status and health-check every expected service. Warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
-| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus runtime checks: the Tor container is actually running while the mining stack runs (a loud FAIL when it's down — the privacy backbone is dead), the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on stratum `:3333` (and whether that port sits on a public IP), the dashboard app answers behind its container, a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — fix with `./pithead restart tor`, or set `tor.auto_heal: true` to automate it), and a local monerod reports `synchronized` from its own RPC (a node stranded at 0 peers by a Tor restart keeps a green healthcheck while mining sits on a stale tip — fix with `./pithead restart monerod`, #972). A paste-able health report. |
+| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus runtime checks: the Tor container is actually running while the mining stack runs (a loud FAIL when it's down — the privacy backbone is dead), the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on the stratum port (`p2pool.stratum_port`, default `3333`, and whether that port sits on a public IP), the dashboard app answers behind its container, a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — fix with `./pithead restart tor`, or set `tor.auto_heal: true` to automate it), and a local monerod reports `synchronized` from its own RPC (a node stranded at 0 peers by a Tor restart keeps a green healthcheck while mining sits on a stale tip — fix with `./pithead restart monerod`, #972). A paste-able health report. |
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped, passphrase-encrypted archive under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `--no-encrypt` writes a plaintext `tar.gz`; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
 | `./pithead restore <archive>` | Restore those files from a backup archive, encrypted or plaintext (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
 | `./pithead rotate-secrets` | Regenerate the stack's internal credentials after a suspected leak: the local Monero RPC password, the stratum access-password (only when `p2pool.stratum_password` is `"auto"`), and the xmrig-proxy control-API token. Recreates the affected containers. `-y` / `--yes` skips the prompt. See [Rotating the internal secrets](#rotating-the-internal-secrets). |
+| `./pithead onion-client-key` | Print the Tor client-auth line for the dashboard onion. This is the client *private* key, deliberately kept out of `status` — add it to your Tor client's `ClientOnionAuthDir`. See [Remote access over Tor](configuration.md#remote-access-over-tor-onion-service). |
+| `./pithead rotate-dashboard-onion` | Mint a new dashboard onion address and client-auth keypair, retiring the old one. Run after a leaked address or key. |
+| `./pithead control-run-pending` | Drain the dashboard's control-request spool once. Fired by the `pithead-control` systemd path unit; run it by hand only when debugging the control channel. See [Editing config from the dashboard](#editing-config-from-the-dashboard). |
 | `./pithead version` | Print the installed stack version on one line (also `-V` / `--version`). Offline; no update check. `doctor` repeats it in its header. |
 | `./pithead help` | Show all commands. |
 
-Service names for `logs` match the containers: `monerod`, `p2pool`, `tari`, `xmrig-proxy`,
-`tor`, `dashboard`, `docker-proxy`, `docker-control`, `caddy`.
+Service names for `logs` match the containers: `p2pool`, `xmrig-proxy`, `tor`, `dashboard`,
+`docker-proxy`, `docker-control`, and `caddy` always; `monerod` only with `monero.mode: local`,
+`tari` only with `tari.mode: local`, and `wallet-rpc` / `tari-wallet` only when the matching
+`view_key` turns payout confirmation on. A service that isn't running has no logs to follow.
+
+### With a node running elsewhere
+
+`monero.mode: remote` and `tari.mode: remote` leave that node's container out of the stack, and the
+commands above follow suit:
+
+- `logs` and `restart` have nothing to address for that node — its chain runs on the other host, so
+  read its logs there.
+- `doctor` drops it from every check it owns: its data directory leaves the disk budget, its inbound
+  onion reports "not needed" rather than missing, and the Monero sync check skips when there is no
+  local `monerod` to ask.
+- `status` is profile-aware, so a container that mode turned off is not reported as down.
+- Switching a node between local and remote takes effect on `./pithead apply`. Going remote stops and
+  removes that node's container first, so the switch can't leave the old one running against a config
+  that no longer points at it. Going local mints the inbound onion that mode never provisioned.
 
 ### Chaining commands
 
@@ -49,7 +69,7 @@ stray argument), so run flagged commands separately.
 ### Tab completion
 
 `pithead-completion.bash` (in the repo root and the release bundle) completes subcommands for
-`./pithead <TAB>`, service names for `./pithead logs <TAB>`, and `tor` for
+`./pithead <TAB>`, service names for `./pithead logs <TAB>`, and `tor` or `monerod` for
 `./pithead restart <TAB>`.
 
 bash — add to `~/.bashrc`:
@@ -144,10 +164,13 @@ off only removes units whose `ExecStart` points at itself, comparing physical pa
 checkout on the same box (an e2e harness, a bundle smoke test) therefore cannot delete the live
 stack's runner and strand its queued requests.
 
-The runner dispatches exactly three actions: `apply --dry-run --porcelain` (preview), `apply -y`
-(commit), and a release upgrade — the dashboard's
+The runner dispatches a fixed set of actions and rejects everything else: `apply --dry-run
+--porcelain` (preview), `apply -y` (commit), a release upgrade — the dashboard's
 [Upgrade button](dashboard.md#upgrading-from-the-dashboard), for which the runner re-derives the
-target from the GitHub release API itself and refuses any other version.
+target from the GitHub release API itself and refuses any other version — the two worker actions
+(`worker-apply`, `worker-upgrade`), which forward a config change or an upgrade to a rig's own
+control API rather than touching this host, and the `restart` / `apply` lifecycle pair. An
+unrecognized action is rejected and audited, never run.
 
 The spool lives under `./data/control/`: `requests/` (the only directory the dashboard container
 can write), `staged/` (host-only), and `results/` + `audit/` + `masked/` (container read-only).
@@ -510,6 +533,8 @@ skip the wait, point the stack at an existing synced blockchain or a remote node
 Most of it is reclaimable disk cache, not a leak. Tari runs under an auto-sized memory limit
 (`tari.mem_limit`) that caps a runaway from affecting the rest of the stack. Change it only if Tari
 restarts repeatedly (raise it) or you need RAM for other apps (lower it), then run `./pithead apply`.
+This covers the bundled node only: with `tari.mode: remote` no Tari container runs here, the limit
+is never applied, and that node's memory is the business of the host running it.
 
 **Browser warns "your connection is not private."**
 Expected with `dashboard.secure: true`: Caddy uses a self-signed certificate. Accept the warning
@@ -523,10 +548,19 @@ worker (firewall on the stack host?). See [Connecting Miners](workers.md).
 Stats take about a minute to populate after a worker connects. Confirm the worker is hashing
 (`./pithead logs xmrig-proxy`).
 
-**P2Pool can't connect to a remote node.**
+**P2Pool can't connect to a remote Monero node.**
 The node must be set up for mining: **ZMQ publishing enabled** (`zmq-pub`) and its RPC reachable
-by P2Pool. Public "open node" endpoints don't qualify; use a node you run and control. See
+by P2Pool. Public "open node" endpoints don't qualify; use a node you run and control. It also has
+to sit in a private range — the Tor-egress firewall drops the dial otherwise. See
 [Configuration › Connecting to a remote Monero node](configuration.md#connecting-to-a-remote-monero-node).
+
+**Tari isn't merge-mining against a remote node.**
+The base node must publish its gRPC where this stack can reach it: a stock Minotari node binds
+`18142` to localhost only. If that node is another Pithead stack, the switch is
+`tari.grpc_lan_access: true` on it. Check `./pithead logs p2pool` for the merge-mine bridge line —
+with Tor on, p2pool bridges the gRPC through loopback `socat` to keep it off the SOCKS proxy, so a
+failure shows up there rather than as a Tor error. Same private-range requirement as Monero. See
+[Configuration › Remote Tari node](configuration.md#remote-tari-node).
 
 **HugePages shows as disabled / low.**
 Persistent HugePages require a GRUB change and a **reboot**. Re-run `./pithead setup` (without
@@ -571,6 +605,9 @@ check) WARNs on the live state. Fix:
 Stack operations don't need the manual step: compose restarts monerod automatically whenever it
 restarts or recreates tor (`up`, `apply`, `upgrade`, `restart tor`), and the `tor.auto_heal`
 restart does the same. (#972)
+
+Local node only. With `monero.mode: remote` there is no `monerod` here to restart and doctor's
+Monero sync check skips, so a stranded node is the remote host's problem to detect and fix.
 
 **The dashboard data looks broken and you want a clean slate.**
 `./pithead reset-dashboard` wipes and recreates the dashboard and P2Pool data. This is

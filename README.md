@@ -30,8 +30,9 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
   operator, no fee, rewards paid to your own wallet. Every hash merge-mines Tari on the same work.
 - 🧠 **XvB switching engine.** Watches the XMRvsBeast raffle and shifts hashrate to hold your tier,
   donating the minimum needed and routing the rest to your P2Pool payouts.
-- 🧅 **Tor-first networking.** A built-in Tor daemon gives Monero, Tari, and P2Pool onion addresses;
-  a host firewall drops any direct clearnet dial from the stack. All runtime egress routes over Tor
+- 🧅 **Tor-first networking.** A built-in Tor daemon gives P2Pool an onion address, and the Monero
+  and Tari nodes one each while they run locally; a host firewall drops any direct clearnet dial
+  from the stack. All runtime egress routes over Tor
   by default — the one opt-in exception is clearnet initial sync. The [privacy
   guide](docs/privacy.md) maps every connection.
 - 🔌 **One endpoint for every rig.** Point all workers at a single address on port `3333`. No wallet
@@ -44,10 +45,11 @@ a Tor daemon. The `pithead` script renders config, provisions Tor, and drives do
   see how a rig's hashrate tracks each config version, one-click upgrade to a new release, and read
   the access and config-change audit logs. Every change is gated host-side behind a login. See
   [The Dashboard](docs/dashboard.md).
-- ⚙️ **One config, tuned to your setup.** A local or remote Monero node, pruned or full; the P2Pool
-  tier (`main`, `mini`, or `nano`); XvB donation strategy; per-worker power and API settings; four
-  alert channels; timezone, memory limits, and every privacy toggle — around 113 keys across 13
-  sections, all in one `config.json` and validated on every `apply`. Most have defaults you'll never
+- ⚙️ **One config, tuned to your setup.** A local or remote Monero node, pruned or full, and a local
+  or remote Tari node; the P2Pool tier (`main`, `mini`, or `nano`); XvB donation strategy;
+  per-worker power and API settings; four alert channels; timezone, memory limits, and every privacy
+  toggle — around 90 keys across 13 sections, all in one `config.json` and validated on every
+  `apply`. Most have defaults you'll never
   touch. See [Configuration](docs/configuration.md).
 - 💡 **Energy-aware earnings.** Set your electricity cost and coin prices — typed in, or fetched
   live from CoinGecko over Tor with the opt-in price feed — and add each rig's watts; the earnings
@@ -85,8 +87,9 @@ cp config.minimal.json config.json   # then set your Monero + Tari payout addres
 > build), e.g. to contribute, see [Install from source](docs/getting-started.md#alternative-build-from-source).
 
 > NOTE: Prereqs are Ubuntu Server 24.04 LTS, 16 GB+ RAM, an SSD (~330 GB pruned / ~530 GB full
-> minimum; the chains grow ~100+ GB/year, so 2–4 TB avoids a later resize), and your Monero + Tari
-> payout addresses. Full sizing in [Hardware Requirements](docs/hardware.md).
+> minimum with both nodes local; the chains grow ~100+ GB/year, so 2–4 TB avoids a later resize),
+> and your Monero + Tari payout addresses. Running a node on another machine cuts the disk budget —
+> full sizing in [Hardware Requirements](docs/hardware.md).
 
 `setup` checks dependencies (and offers to install them on Ubuntu), asks for your wallet
 addresses, provisions Tor, tunes HugePages for RandomX, and offers to start the stack. Then:
@@ -129,10 +132,11 @@ Browse the full index at **[docs/](docs/README.md)**.
 
 ## 🏗️ How it works
 
-The stack orchestrates eleven services via Docker Compose: a Monero full node, P2Pool, a Tari base
-node, an XMRig proxy (your single worker endpoint), Tor for anonymity, the dashboard plus switching
-engine, a read-only Docker socket proxy (plus a tiny start/stop-only control proxy), Caddy for
-HTTPS, and two opt-in view-only wallets that confirm payouts on-chain.
+The stack defines eleven services via Docker Compose — nine on a default install: a Monero full
+node, P2Pool, a Tari base node, an XMRig proxy (your single worker endpoint), Tor for anonymity, the
+dashboard plus switching engine, a read-only Docker socket proxy (plus a tiny start/stop-only
+control proxy), Caddy for HTTPS, and two opt-in view-only wallets that confirm payouts on-chain.
+Either node drops out when you point the stack at one running elsewhere.
 
 ```mermaid
 flowchart TB
@@ -168,7 +172,7 @@ flowchart TB
     Dashboard -.->|"reads stats & sync"| core
 
     Proxy ==>|hashrate| P2Pool
-    Proxy ==>|hashrate| XvB
+    Proxy ==>|"hashrate to XvB · Tor"| Tor
 
     P2Pool <-->|"RPC / ZMQ"| Monerod
     P2Pool -->|merge-mine| Tari
@@ -177,6 +181,7 @@ flowchart TB
     Tari <--> Tor
     P2Pool <--> Tor
     Tor <--> Net
+    Net -.-> XvB
 
     classDef ext fill:#1e293b,stroke:#64748b,color:#e2e8f0;
     classDef ctrl fill:#1d4ed8,stroke:#93c5fd,color:#eff6ff;
