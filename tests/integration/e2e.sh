@@ -18,7 +18,10 @@
 #      images from build/, so a Dockerfile/entrypoint change is actually tested #272) and runs the live
 #      harness (tests/integration/run.sh) DETACHED on the box so an SSH drop can't kill a long matrix.
 #   6. ALWAYS restores: the miner's original pool config, and the canonical baseline stack — even
-#      on failure or Ctrl-C (an EXIT trap). The synced chains are never touched.
+#      on failure or Ctrl-C (an EXIT trap). The synced chains are never touched. The restore then
+#      PROVES the live stack matches the on-disk config (#971): a credential marker baked into a
+#      running container must equal the on-disk .env's line, and monerod must answer a host-side
+#      authed get_info with the on-disk creds. A failed proof exits non-zero, loudly.
 #
 # The Compose project name is pinned to "pithead", so the e2e checkout and the canonical checkout
 # drive the SAME containers + the SAME shared chains — they are two code copies of one stack, run
@@ -169,6 +172,7 @@ on_miner() { ssh "${SSH_OPTS[@]}" "$MINER_HOST" "$1"; }
 SAFETY_ARCHIVE=""
 MINER_CFG_BACKUP=""
 RESTORED=0
+RESTORE_PROOF_FAILED=0
 # Where the LIVE stack actually runs from — resolved in preflight (#454). Defaults to CANONICAL_DIR
 # so the EXIT trap always has a target even if it fires before preflight refines it.
 RESTORE_DIR="$CANONICAL_DIR"
@@ -204,9 +208,13 @@ restore_all() {
     on_bench "cd '$E2E_DIR' && ./pithead down >/dev/null 2>&1 || true"
     if on_bench "cd '$RESTORE_DIR' && ./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"; then
         wait_bench_healthy 300 && ok "baseline stack healthy again" || warn "baseline stack came up but isn't reporting healthy yet — check 'pithead status' on $BENCH_HOST"
+        # Proof, even when the health wait timed out: a stack running the WRONG creds looks
+        # exactly this healthy — that's the incident (#971). Never trust "up" alone.
+        verify_restore_proof || RESTORE_PROOF_FAILED=1
     else
         warn "baseline 'pithead apply/up' returned non-zero in $RESTORE_DIR — check $BENCH_HOST by hand."
         warn "  Safety backup to roll back to: $SAFETY_ARCHIVE"
+        RESTORE_PROOF_FAILED=1
     fi
 
     # 3. Chains sanity: they must be untouched (the whole point).
@@ -214,6 +222,11 @@ restore_all() {
     sync="$(on_bench "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
     [ -n "$sync" ] && step "post-restore sync state (monero/tari): $sync"
 
+    if [ "$RESTORE_PROOF_FAILED" = "1" ]; then
+        warn "RESTORE NOT PROVEN: the live stack on $BENCH_HOST did not prove it matches $RESTORE_DIR's on-disk config (see above)."
+        warn "  Re-bake from disk by hand: cd $RESTORE_DIR && docker compose up -d — then verify with a host-side authed get_info."
+        exit 1
+    fi
     if [ "$rc" -eq 0 ]; then ok "restore complete."; else warn "restore complete (the run itself failed — see above)."; fi
 }
 trap restore_all EXIT INT TERM
@@ -246,6 +259,59 @@ wait_synced() { # <timeout_s>
         }
         sleep 8
     done
+}
+
+# Restore proof (#971): after the restore brings the baseline back up, prove the LIVE stack
+# actually runs RESTORE_DIR's on-disk config. A pre-#921 e2e run once left the containers on
+# harness-rendered creds while the on-disk .env kept the real ones — internally consistent, so it
+# mined and looked healthy for a day, while every host-side RPC probe 401ed. Two checks:
+#   1. The credential marker baked into the running dashboard container (docker inspect) is the
+#      same line as the on-disk .env's — env_bake_verdict (lib.sh) prints verdict words only,
+#      never values.
+#   2. monerod answers a host-side get_info with the on-disk creds — the exact probe the incident
+#      broke. Only .status is required (sync may still be re-confirming); polled briefly because
+#      the containers were just recreated. The probe script travels over ssh stdin (bash -s), so
+#      the creds stay on the box and the remote command string carries no shell parens.
+# Returns 0 when both hold.
+RESTORE_PROOF_VAR="MONERO_NODE_PASSWORD"
+verify_restore_proof() {
+    local prc=0 disk cid baked="" verdict
+    disk="$(on_bench "grep -E '^${RESTORE_PROOF_VAR}=' '$RESTORE_DIR/.env' 2>/dev/null | head -n1" || true)"
+    cid="$(on_bench "docker ps -q --filter label=com.docker.compose.project=pithead --filter label=com.docker.compose.service=dashboard 2>/dev/null | head -n1" || true)"
+    [ -n "$cid" ] && baked="$(on_bench "docker inspect --format '{{json .Config.Env}}' '$cid' 2>/dev/null | jq -r '.[]'" || true)"
+    verdict="$(env_bake_verdict "$RESTORE_PROOF_VAR" "$disk" "$baked")"
+    if [ "$verdict" = "match" ]; then
+        ok "restore proof: dashboard container env matches the on-disk .env ($RESTORE_PROOF_VAR)"
+    else
+        warn "restore proof: $RESTORE_PROOF_VAR baked into the live dashboard container vs $RESTORE_DIR/.env: $verdict"
+        prc=1
+    fi
+
+    local out deadline=$(($(date +%s) + 60))
+    while :; do
+        out="$(
+            on_bench "cd '$RESTORE_DIR' && bash -s" <<'PROBE'
+u=$(grep -E '^MONERO_NODE_USERNAME=' .env 2>/dev/null | cut -d= -f2-)
+p=$(grep -E '^MONERO_NODE_PASSWORD=' .env 2>/dev/null | cut -d= -f2-)
+url=$(grep -E '^MONERO_RPC_URL=' .env 2>/dev/null | cut -d= -f2-)
+[ -n "$url" ] || url="http://127.0.0.1:18081"
+if [ -n "$u" ]; then body=$(curl -fsS --max-time 8 --digest -u "$u:$p" "$url/get_info" 2>/dev/null)
+else body=$(curl -fsS --max-time 8 "$url/get_info" 2>/dev/null); fi
+printf '%s' "$body" | jq -e '.status=="OK"' >/dev/null 2>&1 && echo rpc-ok || echo rpc-fail
+PROBE
+        )" || true
+        if [ "$out" = "rpc-ok" ]; then
+            ok "restore proof: host-side get_info answers with the on-disk creds"
+            break
+        fi
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            warn "restore proof: host-side get_info with the on-disk creds did NOT answer within 60s — the live monerod may be running different creds than $RESTORE_DIR/.env"
+            prc=1
+            break
+        fi
+        sleep 10
+    done
+    return "$prc"
 }
 
 # Nudge the miner's xmrig to reload its (rewritten) config. xmrig watches its config file and

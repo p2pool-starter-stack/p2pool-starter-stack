@@ -84,8 +84,9 @@ an overflowing table, a wrapped stat, a broken breakpoint. Before a PR that touc
 dashboard's look, render the real frontend in a real browser against a canned `/api/state`
 payload — no docker, no stack. The fixture half lives in the repo:
 `tests/frontend/fixtures/_gen_state.py` writes `state.json`, a real `build_state()` payload (the
-exact contract the client renders). Regenerate it whenever the payload contract changes, then
-serve the real app around it:
+exact contract the client renders). Regenerate it whenever the payload contract changes — a
+drift guard in `tests/web/test_views.py` reruns the generator and fails on any structural
+difference from the checked-in fixture, down to nested keys. Then serve the real app around it:
 
 ```bash
 cd build/dashboard
