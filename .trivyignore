@@ -24,10 +24,40 @@ CVE-2026-56852
 CVE-2026-34040
 # Go stdlib (both binaries built with go1.26.4; clears with upstream rebuilds):
 CVE-2026-39822
-# Go stdlib net/http idna + dns/dnsmessage (2026-08 batch, fixed only in go1.25.13/1.26.6 —
-# compose v5.4.0 is still go1.26.5, cosign has no newer release; verified 2026-08-14):
+# Go stdlib net/http idna + dns/dnsmessage (2026-08 batch, fixed only in go1.25.13/1.26.6):
 CVE-2026-39821
 CVE-2026-46600
+
+# Second 2026-08 Go stdlib batch, same two binaries, same clearing condition. Six findings, all
+# HIGH, all fixed upstream in go1.25.13 / 1.26.6 / 1.27.0-rc.3: encoding/asn1 DoS, net/http
+# unencrypted HTTP/2, html/template XSS, encoding/xml DoS, net/url DoS, crypto/tls DoS.
+#
+# VERIFIED 2026-08-16 by downloading the candidate binaries and reading their build stamps, not by
+# reading release notes: cosign v3.1.3 (the newest release) is built with **go1.26.4** — the same
+# toolchain as the pinned v3.1.2, so bumping it clears nothing — and docker-compose v5.4.0 is
+# **go1.26.5**, still below the 1.26.6 that carries the fix. So no pin bump available today can
+# clear these; only an upstream rebuild can.
+#
+# This corrects the note that used to sit above: it claimed cosign had no newer release as of
+# 2026-08-14, when v3.1.3 had been out since 2026-08-06. The conclusion held by luck, not by
+# evidence — the release exists, it is simply built on the same vulnerable toolchain.
+#
+# Exposure, honestly: both binaries are pinned by sha256 and run on the appliance as short-lived
+# CLI invocations, not as network services. cosign verifies a local bundle signature during
+# upgrade; docker-compose talks to a local socket. None of the six reachable paths — an ASN.1
+# parser, an HTTP/2 client, an HTML template renderer, an XML decoder, a URL parser, a TLS
+# handshake — takes attacker-chosen input in that role. That is a reason to accept the finding,
+# not a reason to stop tracking it.
+#
+# Cleared when pin-watch flags a compose or cosign release built on go1.25.13/1.26.6 or newer.
+# Re-verify the toolchain with `strings <binary> | grep -oE '^go1\.[0-9]+(\.[0-9]+)?$'` before
+# assuming a version bump helps; a newer tag is not evidence of a newer toolchain.
+CVE-2026-33818
+CVE-2026-56853
+CVE-2026-56858
+CVE-2026-56859
+CVE-2026-56860
+CVE-2026-56862
 # google.golang.org/grpc vendored in both pinned binaries (GHSA id — Trivy gates on it like a
 # CVE; same clearing condition as the three above: upstream rebuilds on the fixed module):
 GHSA-hrxh-6v49-42gf
