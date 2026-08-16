@@ -44,9 +44,9 @@ image; never hand one to a user.
 ## The manual hardware battery (M1–M10)
 
 Defined in [appliance-release.md](appliance-release.md). Run it on a physical box and record the
-results in the release issue. `tests/os/hw-battery.sh` automates what can be automated (M7, M9,
-and the real-hardware-only assertions) and **requires typed attestation** for the rest — it will
-not mark a physical item passed on its own.
+results in the release issue. Today every item is driven by hand; a harness that automates the
+parts a script can reach, and demands typed attestation for the rest, is tracked as #1022 and is
+not yet merged. Until it is, this whole battery is a human procedure.
 
 Needs hands, every time:
 
@@ -62,7 +62,8 @@ health-gated commit, the migration hold). They have never been proven on real ha
 
 - A **fresh** disk.
 - A disk that **already holds an installation** — choose *keep* and confirm the chain survives
-  (this is M5, and it is where the read-only-root blocker was found).
+  (this is M5, and it is where the corrupt-container-store blocker was found: a partially written
+  image store left every `podman run` failing, so the wizard never served).
 - Reaching the wizard **by mDNS name** and **by IP**, since the appliance serves both.
 - Configuring **by paste** for both addresses (M6): a wallet address typed by hand is a support
   ticket waiting to happen.
@@ -104,8 +105,8 @@ manual run, notice and file:
   roughly how long it will take. A first boot that loads container images from a USB stick is
   the current worst case, and it reads as a hang.
 - Any failure that leaves the console showing a stale progress message. A failed first-boot
-  service currently looks identical to a slow one, forever — which turned a three-minute failure
-  into an hour of waiting.
+  service once looked identical to a slow one, forever, which turned a three-minute failure into
+  an hour of waiting; that one is fixed, and the shape of it is worth watching for elsewhere.
 - Any message that promises a duration the machine cannot keep ("this takes a minute or two").
 - Anything you had to know rather than read.
 
