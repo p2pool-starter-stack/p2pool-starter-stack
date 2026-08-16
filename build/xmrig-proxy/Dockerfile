@@ -24,6 +24,11 @@ RUN wget -O xmrig-proxy.tar.gz https://github.com/xmrig/xmrig-proxy/releases/dow
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Control-API liveness healthcheck (#904) — reads the port from env so nothing rides the compose
+# command line (#90).
+COPY healthcheck.sh /usr/local/bin/xmrig-proxy-healthcheck.sh
+RUN chmod +x /usr/local/bin/xmrig-proxy-healthcheck.sh
+
 # Run non-root (#255) — the easy win: pure network proxy, no bind-mounts, already cap_drop:[ALL]
 # + no-new-privileges in compose. Reuse ubuntu:24.04's 'ubuntu' user (uid 1000) and give it a
 # writable home as the cwd in case xmrig-proxy drops a config/log there.

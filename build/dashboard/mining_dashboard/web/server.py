@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 import mimetypes
@@ -254,32 +255,55 @@ async def handle_backup_download(request):
     )
 
 
-def _record_worker_result(state_mgr, worker, changes, res):
-    """Log a worker-apply outcome to the per-worker config history (#185). Only terminal-ish
-    statuses are kept; ``changes`` carries no secret (the rig token stays host-side)."""
+# Terminal-ish outcomes worth a history row — shared by worker-apply and worker-upgrade (#1014).
+# noop/throttled are upgrade-only (the host runner's control_worker_upgrade case statement); the
+# rest are common to both actions. "accepted" is genuinely non-terminal (still running on the rig
+# past the wait budget) but IS the runner's final write for that request id, so it's recorded too
+# — the alternative is a change the operator made that the dashboard never mentions again.
+_RECORDABLE_WORKER_STATUSES = (
+    "applied",
+    "rejected",
+    "rolled_back",
+    "accepted",
+    "failed",
+    "noop",
+    "throttled",
+)
+
+
+def _record_worker_result(state_mgr, worker, changes, res, change_type="apply"):
+    """Log a worker-apply or worker-upgrade outcome to the per-worker config history (#185/#1014).
+    Only terminal-ish statuses are kept; ``changes`` carries no secret (the rig token stays
+    host-side). ``worker``/``changes`` come from the caller's own request, never ``res`` — the
+    host runner omits ``worker`` from a pre-dial reject, so this stays correct either way."""
     status = res.get("status", "unknown")
-    if status in ("applied", "rejected", "rolled_back", "accepted", "failed"):
+    if status in _RECORDABLE_WORKER_STATUSES:
         state_mgr.add_worker_config_version(
             worker,
             res.get("change_id"),
             status,
             changes,
             res.get("reason") or res.get("error"),
+            change_type=change_type,
         )
 
 
 async def handle_worker_detail(request):
     """Per-worker inspect data (#185): the rig's current enriched telemetry, the writable config the
     dashboard last applied (the prefill — the rig's feed does not expose the writable config values),
-    and the change history with per-change diffs."""
+    the change history with per-change diffs, and (#1013) its own hashrate-over-time chart — same
+    ``range``/``from``/``to`` query params as ``/api/state``, so the per-rig chart can offer its own
+    range control."""
     name = request.query.get("name", "")
     if not name:
         raise web.HTTPBadRequest(text="'name' is required.")
     app = request.app
     data = app["latest_data"] or {}
     state_mgr = app["state_manager"]
+    range_arg = request.query.get("range", "all")
+    window = parse_window(request.query.get("from"), request.query.get("to"))
     try:
-        return web.json_response(build_worker_detail(name, data, state_mgr))
+        return web.json_response(build_worker_detail(name, data, state_mgr, range_arg, window))
     except Exception:
         logger.exception("Error building worker detail")
         return web.json_response({"error": "Failed to build worker detail."}, status=500)
@@ -324,6 +348,25 @@ async def handle_worker_apply(request):
     return web.json_response({"id": rid, **res})
 
 
+async def _finalize_worker_upgrade(state_mgr, worker, version, rid):
+    """The server-side half of recording a worker-upgrade attempt (#1014): ``handle_worker_upgrade``
+    returns 202 before any result exists (a rig rebuild can take minutes, so it never waits inline
+    like ``handle_worker_apply`` does), so this runs as its own background task and records the
+    terminal outcome once the host runner writes it — independent of whether the operator's browser
+    tab stays open to see it land. One row per upgrade attempt, same shape as an apply's (#185)."""
+    try:
+        res = await control_service.wait_result(
+            rid,
+            done=lambda r: r.get("status") != "running",
+            timeout_s=config.CONTROL_WORKER_UPGRADE_WAIT_S,
+        )
+    except Exception:
+        logger.exception("Error waiting for worker-upgrade result (id=%s)", rid)
+        return
+    if res is not None:
+        _record_worker_result(state_mgr, worker, {"version": version}, res, change_type="upgrade")
+
+
 async def handle_worker_upgrade(request):
     """One-click RigForge upgrade for a single rig (#597), via the HOST-side control runner.
 
@@ -332,7 +375,8 @@ async def handle_worker_upgrade(request):
     from the RigForge release API over Tor and refuses a mismatch, then resolves the rig's address
     + bearer from config.json — this container never holds the token and cannot choose what gets
     installed. Returns 202 + the request id immediately (a rig build can take minutes); the client
-    polls /api/control/result. A rig already reporting the requested version short-circuits to a
+    polls /api/control/result, and a background task records the terminal outcome to the per-worker
+    history once it lands (#1014). A rig already reporting the requested version short-circuits to a
     no-op without spooling — a dial would just burn the rig's own 6h upgrade throttle."""
     _require_control_header(request)
     try:
@@ -360,6 +404,11 @@ async def handle_worker_upgrade(request):
     except Exception:
         logger.exception("Error submitting worker-upgrade")
         return web.json_response({"error": "Failed to submit the worker upgrade."}, status=500)
+    state_mgr = request.app["state_manager"]
+    bg_tasks = request.app["_bg_tasks"]
+    task = asyncio.create_task(_finalize_worker_upgrade(state_mgr, worker, version, rid))
+    bg_tasks.add(task)
+    task.add_done_callback(bg_tasks.discard)
     return web.json_response({"id": rid, "status": "pending"}, status=202)
 
 
@@ -492,12 +541,27 @@ async def security_headers_middleware(request, handler):
         raise _apply_security_headers(exc) from exc
 
 
+async def _cancel_bg_tasks(app):
+    """Cancel any still-pending worker-upgrade recorder tasks (#1014) on shutdown — otherwise a
+    task waiting out its up-to-5-minute budget outlives the app and asyncio logs a "Task was
+    destroyed but it is pending" warning at interpreter exit."""
+    tasks = list(app["_bg_tasks"])
+    for t in tasks:
+        t.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def create_app(state_manager, latest_data_ref):
     """Factory to create the web app instance."""
     app = web.Application(middlewares=[security_headers_middleware])
     # Pass shared state objects to the app context
     app["state_manager"] = state_manager
     app["latest_data"] = latest_data_ref
+    # Fire-and-forget recorder tasks (worker-upgrade, #1014) — tracked so they can't be
+    # garbage-collected mid-flight and so shutdown can cancel any still in progress.
+    app["_bg_tasks"] = set()
+    app.on_cleanup.append(_cancel_bg_tasks)
 
     app.add_routes(
         [
