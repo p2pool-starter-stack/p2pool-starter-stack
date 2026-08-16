@@ -142,6 +142,7 @@ export const LOGICAL_GROUPS = [
     prefixes: [
       "dashboard.secure",
       "dashboard.host",
+      "dashboard.expose_public_ip",
       "dashboard.port",
       "dashboard.timezone",
       "dashboard.auth",
