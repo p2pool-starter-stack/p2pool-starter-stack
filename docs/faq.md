@@ -22,8 +22,9 @@ piece and the wiring between them:
 
 Pithead runs that stack from one command and adds the parts that are tedious to build yourself:
 
-- Tor-first networking. A built-in Tor daemon gives Monero, Tari, and P2Pool hidden-service
-  (onion) addresses, so there is no public port forwarding and Monero/Tari traffic runs over Tor.
+- Tor-first networking. A built-in Tor daemon gives P2Pool a hidden-service (onion) address, and
+  the Monero and Tari nodes one each while they run here, so there is no public port forwarding and
+  Monero/Tari traffic runs over Tor.
   A couple of outbound yield paths still use clearnet; see
   [Privacy & network egress](privacy.md) for the full map and how to harden them.
 - One endpoint for every rig. All workers point at a single `xmrig-proxy` endpoint on `:3333`.
@@ -51,8 +52,8 @@ Pithead is an always-on server stack rather than a desktop app. The two overlap 
 own node, take external miners through a proxy, and split hashrate to the XvB raffle. Where they
 differ:
 
-- **Tor-first by default.** Monero, Tari, and P2Pool reach the network over onion addresses with no
-  extra setup. Gupax ships no built-in Tor; a community Docker image adds an optional hidden service.
+- **Tor-first by default.** P2Pool, and each node you run here, reach the network over onion
+  addresses with no extra setup. Gupax ships no built-in Tor; a community Docker image adds an optional hidden service.
 - **Tari merge-mining.** A second payout from the same hashes. Gupax does not merge-mine Tari.
 - **Runs unattended.** Nine version-pinned containers on a dedicated Linux box in the default
   all-local setup — fewer with a node set to `remote`, more with payout confirmation on — plus

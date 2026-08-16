@@ -34,9 +34,9 @@ mining, and the **Compose stack** you run on a host you manage.
   donating the minimum needed and routing the rest to your P2Pool payouts.
 - 🧅 **Tor-first networking.** A built-in Tor daemon gives P2Pool an onion address, and the Monero
   and Tari nodes one each while they run locally; a host firewall drops any direct clearnet dial
-  from the stack. All runtime egress routes over Tor
-  by default — the one opt-in exception is clearnet initial sync. The [privacy
-  guide](docs/privacy.md) maps every connection.
+  from the stack. All runtime egress routes over Tor by default; the opt-in exceptions are the
+  clearnet initial sync and a node you run on another machine, which is dialled directly. The
+  [privacy guide](docs/privacy.md) maps every connection.
 - 🔌 **One endpoint for every rig.** Point all workers at a single address on port `3333`. No wallet
   address in the miner config; the stack routes the hashrate.
 - 📊 **Live dashboard, with history.** Hashrate, the P2Pool/XvB split, the PPLNS window, and
@@ -141,7 +141,7 @@ Full walkthrough: [docs/getting-started.md](docs/getting-started.md)
 | **[Configuration](docs/configuration.md)** | Every `config.json` key, applying changes safely, reusing an existing node, and remote Monero or Tari nodes. |
 | **[The Dashboard](docs/dashboard.md)** | Sync Mode, a tour of the live operational view, and the opt-in control channel: editing config, one-click upgrades, and the audit logs from the browser. |
 | **[Connecting Miners](docs/workers.md)** | Point any existing rig at the stack, or spin up a tuned miner with [RigForge](https://github.com/p2pool-starter-stack/rigforge). |
-| **[Architecture](docs/architecture.md)** | The eleven services, the privacy model, and the algorithmic XvB switching engine. |
+| **[Architecture](docs/architecture.md)** | The eleven services (nine on a default install), the privacy model, and the algorithmic XvB switching engine. |
 | **[Privacy & Network Egress](docs/privacy.md)** | Every off-box connection: what's Tor-routed, what's clearnet today, and how to harden it. |
 | **[Operations & Maintenance](docs/operations.md)** | Full command reference, upgrades, backups, and troubleshooting. |
 
