@@ -8,13 +8,14 @@ hardware, and it handles wallet payout addresses.
 
 ## Supported versions
 
-Security fixes land on the latest `main`. There are no long-lived release branches.
-Make sure you're running an up-to-date checkout before reporting an issue.
+Security fixes land in the latest release. There are no long-lived release branches.
+Run `./pithead version` and report what it prints; upgrade before reporting, in case the issue is
+already fixed — `./pithead upgrade` on a Compose install, `./pithead os-update` on the appliance.
 
-| Version       | Supported          |
-|---------------|--------------------|
-| latest `main` | ✅                 |
-| anything older| ❌ (please update) |
+| Version                              | Supported          |
+|--------------------------------------|--------------------|
+| latest release (`./pithead version`) | ✅                 |
+| anything older                       | ❌ (please update) |
 
 ## Reporting a vulnerability
 
