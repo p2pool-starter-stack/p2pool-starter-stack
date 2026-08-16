@@ -230,18 +230,28 @@ _build_image() {
     printf 'os/rauc/build/system.img'
 }
 
-# The checkout's VERSION with the patch component incremented — what an update bundle must stamp
-# to be a genuine update rather than a reinstall. Set by phase_update and read back by leg 4, so
-# the served release tag and the bundle's own stamp cannot drift apart.
-UPDATE_VERSION=""
-_next_patch_version() {
+# The checkout's VERSION with the patch component DECREMENTED — the version leg 4 makes the guest
+# claim to be running, so that the bundle (stamped with the real VERSION) is a genuine update.
+#
+# It has to be done on this side. The obvious move — stamp the BUNDLE one patch newer — produces a
+# bundle whose manifest and payload disagree, and that breaks two things at once. pithead-boot
+# writes the `rolled_back` verdict purely by comparing the in-flight target to the booted slot's
+# VERSION, before the health gate runs at all, so a mismatch reports a rollback that never
+# happened. And STACK_VERSION is derived from that same VERSION file and tags all five first-party
+# images, so a payload rewritten to match would send the post-update boot hunting image tags that
+# were never published — turning the fake rollback into a real one.
+_prev_patch_version() {
     local v major minor patch
     v=$(tr -d ' \t\r\n' <VERSION)
     major=${v%%.*}
     patch=${v##*.}
     minor=${v#*.}
     minor=${minor%%.*}
-    printf '%s.%s.%s' "$major" "$minor" "$((patch + 1))"
+    [ "$patch" -gt 0 ] 2>/dev/null || {
+        printf '%s' "$v"
+        return 1
+    }
+    printf '%s.%s.%s' "$major" "$minor" "$((patch - 1))"
 }
 
 # Build an update bundle carrying $1 as its marker.
@@ -588,17 +598,8 @@ phase_update() {
         bad "system slot grew to '${slot_gib:-none}' GiB — slots must stay interchangeable"
     fi
 
-    # Stamp the update bundle one patch NEWER than the running slot. Both images are built from
-    # this one checkout, so without this they stamp the SAME version — and the dashboard update
-    # door refuses an equal target on purpose (an equal-version reinstall is a forced-downtime and
-    # flash-wear loop for a compromised container). Leg 4 could therefore never get past its first
-    # download, and reported the product as broken when the harness had never offered it anything
-    # to install. Legs 1-3 drive the CLI door, which keeps equality for manual slot repair, so a
-    # newer stamp changes nothing for them — and a real update is newer anyway, which makes this
-    # the more faithful fixture for every leg.
-    UPDATE_VERSION=$(_next_patch_version)
-    info "building v2 update bundle (marker v2, stamped v$UPDATE_VERSION)"
-    bundle=$(PITHEAD_OS_VERSION="$UPDATE_VERSION" _build_bundle v2) || {
+    info "building v2 update bundle (marker v2)"
+    bundle=$(_build_bundle v2) || {
         bad "v2 bundle build failed (/tmp/os-fault-bundle.log)"
         return
     }
@@ -907,9 +908,9 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
 
     # Bench-local release server: the good v2 bundle plus a corrupted twin, behind the seam.
     local tag srv host_addr port=8931 size srv_pid
-    # The tag the bench release server publishes MUST match the bundle's own stamp, or the host
-    # refuses the download as version-mismatched. Both come from UPDATE_VERSION.
-    tag="v${UPDATE_VERSION:-$(_next_patch_version)}"
+    # The tag the bench release server publishes MUST match the bundle's own stamp, which is the
+    # checkout's VERSION — the bundle is built from this tree.
+    tag="v$(tr -d ' \t\r\n' <VERSION)"
     srv=$(mktemp -d)
     cp "$good_bundle" "$srv/pithead-os-$tag.raucb"
     size=$(wc -c <"$srv/pithead-os-$tag.raucb" | tr -d ' ')
@@ -928,6 +929,25 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
         rm -rf "$srv"
         return
     }
+
+    # A real update arrives at a box running something OLDER, and the dashboard door refuses an
+    # equal target on purpose: an equal-version reinstall is a forced-downtime and flash-wear loop
+    # for a compromised container. Both images here are built from the one checkout, so without
+    # this the guest is already running the version the bundle carries and leg 4 could never get
+    # past its first download — it reported #976's path as broken while never offering it anything
+    # to install. Age the RUNNING side, never the bundle's stamp (see _prev_patch_version).
+    #
+    # Safe here specifically: nothing renders .env or runs compose between this write and the
+    # reboot — `pithead os-update` is a rauc install — and pithead-sync restores the slot's real
+    # VERSION on the next boot, before pithead-boot reads it to judge the update. So the guest
+    # claims the older version exactly for the length of the check/download/install window.
+    local aged
+    if aged=$(_prev_patch_version); then
+        _ssh "printf '%s\n' '$aged' > /data/pithead/VERSION" ||
+            bad "leg 4: could not age the guest's running version to $aged"
+    else
+        bad "leg 4: VERSION patch component is 0 — cannot age the running version below it"
+    fi
 
     local out st
     # Check: the host derives tag + size from the (redirected) release lookup.
