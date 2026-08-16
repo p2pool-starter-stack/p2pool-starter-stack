@@ -24,7 +24,8 @@ Sync Mode gives each chain its own progress card:
 
 - **Monero Sync**: verified block height vs. the network tip, with blocks remaining. A green check
   means the chain is caught up. It also shows Pruned or Full mode and the on-disk DB size (also in
-  the **XMR Network** panel of the operational view), so you can confirm a reused chain matches your
+  the **XMR Network** panel of the operational view) — local node only; with `monero.mode: remote`
+  the mode reads `Unknown`, since the stack doesn't probe a node it doesn't run — so you can confirm a reused chain matches your
   `monero.prune` setting.
 - **Tari Sync**: the same, as a percentage ring, for the Minotari chain.
 
@@ -42,6 +43,11 @@ an unsynced node does nothing and floods Tari's logs with merge-mining chatter. 
 is one-way: once it starts it stays up. By default the stack waits for both Monero and Tari. With
 [`dashboard.tari_required: false`](configuration.md) it waits only for Monero and mines while Tari
 finishes syncing in the background.
+
+With `tari.mode: remote` the wait is on that node: the dashboard reads sync state from
+`tari.remote.host` over gRPC, so a remote node still catching up holds the miner exactly as a local
+one would. Set `dashboard.tari_required: false` if you'd rather not have someone else's node gate
+your Monero mining.
 
 > **Want to skip most of the wait?** Point the stack at an existing synced blockchain, or connect
 > to a remote node. See [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
@@ -79,10 +85,11 @@ successful refresh.
 ### Top bar
 
 A status strip across the top shows the hostname, host telemetry (CPU, load, RAM, HugePages, disk),
-total hashrate, and 1h / 24h routed averages for both P2Pool and XvB (your split). The disk readout
+the last-update time, and 1h / 24h routed averages for both P2Pool and XvB (your split). The disk readout
 switches from GB to TB once the volume reaches 1 TB, on the same scale in the Telegram `/system`
-reply. Next to the disk readout, an `XMR Pruned` / `XMR Full` badge shows the Monero node's
-blockchain mode.
+reply. An `XMR Pruned` / `XMR Full` badge sits with the other badges beside the stack name, showing
+the bundled node's blockchain mode. It appears for a local node only — with `monero.mode: remote`
+the pruning state is unknown, so neither badge is shown.
 
 When the dashboard host is a name (not already an IP), the machine's IP shows beside it as
 `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`), a way back in when the hostname doesn't
@@ -118,6 +125,8 @@ The top bar also surfaces the persistent host conditions that `setup` warns abou
 | `⚠ Memory pressure (N GB free)` | Live signal: under 1.5 GB actually available right now, whatever the machine's size — the next spike can OOM a container. | Check which service is growing on the System panel. |
 | `⚠ No AVX2` | The CPU lacks AVX2, so RandomX mining is much slower. | A hardware limit; nothing to change at runtime. |
 | `⚠ Payout wallet changed` | The wallet p2pool mines to changed within the last 72 hours (old → new, truncated). A confirmation if you changed it; an alarm if you didn't. | Verify `monero.wallet_address` in `config.json`; see [Operations › wallet changes](operations.md). The badge expires on its own after 72 h. |
+| `Disk N% full` | The data filesystem is 85% or more used. | Free space, or move a `data_dir` — the chains keep growing. |
+| `⚠ Disk N% full` | 95% or more used. A full disk corrupts monerod's database mid-write. | Act now: free space or move the chain to a larger volume. |
 
 The first two also push a Telegram alert (`hugepages`, `low_ram`) when first detected, if the bot is
 on; the wallet badge pairs with the `wallet_changed` alert; AVX2 is badge-only (see
@@ -166,7 +175,8 @@ there is no history to show.
 ### Node status & failover
 
 If a local node becomes unreachable, a red `monerod DOWN` or `Tari DOWN` badge appears in the top
-bar (after a short debounce, so a momentary blip doesn't flap). Sync state is read from monerod's
+bar (after 90 seconds continuously unreachable, clearing after 60 seconds of confirmed
+reachability, so a momentary blip doesn't flap). Sync state is read from monerod's
 `get_info` RPC and Tari's gRPC, so "down" means the node itself is unreachable, not just that a log
 line changed.
 
@@ -201,15 +211,17 @@ renderer yet.
 While monerod is down, the dashboard rejects workers so they fail over to the backup pools you've
 configured, rather than sitting idle on a stack that can't mine. A sustained outage stops the
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.
-monerod is required to mine, so a monerod outage always rejects; rejection never triggers for a
-remote monerod, since the stack doesn't manage that node. Readmission waits for monerod to be
+monerod is required to mine, so a monerod outage always rejects. Rejection never triggers for a
+remote monerod — the stack doesn't probe a node it doesn't run, so that node always reads as
+reachable and p2pool manages the connection itself. Readmission waits for monerod to be
 confirmed healthy, not merely no-longer-down, so a dashboard restart mid-outage doesn't wave
 workers back onto a stack that still can't mine.
 
 A Tari outage never rejects workers, regardless of [`dashboard.tari_required`](configuration.md):
 p2pool keeps mining Monero through a Tari-only outage, so kicking workers to their backup pools
 over Tari alone would trade partial revenue for none. The outage still shows up — the Tari panel
-and its alerts track it independently — but the fleet keeps mining.
+and its alerts track it independently — but the fleet keeps mining. That holds for a remote Tari
+node too, which the dashboard reaches over gRPC at `tari.remote.host`.
 
 **Non-blocking Tari.** With `tari_required: false`, a Tari-only (re)sync doesn't take over the
 screen: the operational view stays up, mining continues, and a `Tari syncing` badge shows Tari's
@@ -433,7 +445,8 @@ A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) sh
 Overview summary, the [Earnings — Expected vs Actual](#earnings--expected-vs-actual) table, and the
 worker table. **Advanced** swaps the Overview for cards that break out the same data in more
 detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**,
-**Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
+**Tari Merge-Mining**, **Pool Cadence & Luck**, **Stack Topology & Egress**, and the
+**P2Pool Earnings (estimated)** calculator below. The
 expected-vs-actual table stays in both views. The choice is remembered across reloads.
 
 The what-if earnings calculator and the XvB tier calculator live only in Advanced view. Simple view
@@ -730,7 +743,8 @@ there is nothing to configure.
 Edit `config.json` from the dashboard. Off by default: set `dashboard.control.enabled: true` in
 `config.json`, set a `dashboard.auth.password` (required — this channel can change the payout
 wallet, so it refuses to run without a login), and run `./pithead apply`. A **Configuration**
-button then appears next to the Simple/Advanced toggle.
+button sits next to the Simple/Advanced toggle whether or not the channel is on; with it off, the
+view explains how to turn it on and nothing else.
 
 One editing surface: the form on top and, beneath it, a collapsed **Advanced** pane holding
 the exact configuration that will be applied — both live views of a single candidate. Editing
@@ -758,8 +772,11 @@ the config tab now behave identically.) The pieces:
   A config path no logical section claims still renders, in a catch-all
   **Other** group — a new schema key can't silently vanish from the editor, and a frontend test
   fails loudly if one ever would. `workers.list[]` (the per-rig descriptors) isn't a form field
-  here — a variable-length list has no single form control for it — edit it via
-  [Worker Inspect](#worker-inspect) or `config.json` directly.
+  here — a variable-length list has no single form control for it, and the host gate refuses a
+  change to it in either edit mode, since it carries each rig's host and token. Edit it in
+  `config.json` and run `./pithead apply`. [Worker Inspect](#worker-inspect) is a different thing:
+  it retunes the *rig's own* settings (pools, donation, autotune, watchdog, temperature cap)
+  through that rig's control API, never the stack's descriptor list.
 
   A field the control gate wouldn't actually commit renders **greyed out**
   ([#613](https://github.com/p2pool-starter-stack/pithead/issues/613)): disabled, its value shown
@@ -910,9 +927,9 @@ Either kind is worth treating like a rotate-now signal in the same spirit as
 the change, someone or something with host or rig access did.
 
 The audit trail is no longer only a log tail: entries — both mirrored from `control.log` and the
-two out-of-band kinds above — persist to the dashboard's own database, so the card's grouping
-selector (hour/day/month) can drill back further than the log's own trimmed window. Pick "All" for
-the flat newest-first view, or a coarser grouping to scan a longer history at a glance.
+two out-of-band kinds above — persist to the dashboard's own database, so the range presets, date
+fields and search reach further back than the log's own trimmed tail. Walk the result with the
+page-size control (5, 10, 20, 50 or 100 rows a page), newest first.
 
 ## Upgrading from the dashboard
 

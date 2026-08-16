@@ -60,7 +60,8 @@ Add a `healthchecks` block with your ping URL — that URL is the on switch (see
 }
 ```
 
-`ping_url` is the only key — setting it turns the monitor on, blank keeps it off.
+`ping_url` is the only key — an `http://` or `https://` URL turns the monitor on, blank keeps it
+off. A value with any other scheme is treated as unset: nothing pings, and nothing is logged.
 
 ### 4. Apply
 
@@ -92,9 +93,10 @@ the whole host) and, once the period + grace elapses, Healthchecks.io alerts you
   endpoint only ever sees a Tor exit, not your host IP — it's never a clearnet beacon. This means
   your ping URL must be reachable over Tor (hosted `hc-ping.com` is; a self-hosted instance must be
   public or an onion service — a LAN-only address won't work). See the [Privacy note](#privacy-note).
-- **Fails silently.** A ping that can't get out — you're offline, or Tor is momentarily down — is
-  ignored quietly (logged at debug level only). Healthchecks.io will alert on the missed ping
-  regardless, which is the point.
+- **Fails quietly, rejects loudly.** A ping that can't get out — you're offline, or Tor is
+  momentarily down — is logged at debug level only; Healthchecks.io alerts on the missed ping
+  regardless, which is the point. A ping the endpoint *answers* with a non-2xx status is different:
+  a revoked or mistyped URL logs `Healthchecks ping rejected: HTTP <code>` once, on the transition.
 
 ---
 
@@ -195,7 +197,9 @@ Use a **separate** check for the host timer if you want to tell "the host is up"
   check the dashboard logs (`./pithead logs dashboard`) for a `Healthchecks.io dead-man's switch
   enabled` line at startup — if it's absent, no ping URL is configured. The ping is always over
   Tor, so a URL your Tor exit can't reach (e.g. a LAN-only self-hosted instance) will never land;
-  ping failures themselves are logged at debug level only.
+  unreachable-endpoint failures are logged at debug level only. A URL the endpoint *rejects* logs
+  `Healthchecks ping rejected: HTTP <code>` once — grep the dashboard log for it before assuming
+  the ping is landing.
 - **Test it end to end.** Stop the stack (`./pithead down`) and wait for the period + grace to
   elapse — you should get the alert. Start it again and the check recovers.
 - **Too many false alarms.** Increase the **period** and/or **grace** on Healthchecks.io.
