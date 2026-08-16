@@ -325,7 +325,10 @@ assume that has happened and both channels share one version and one GitHub Rele
    pithead-boot is enabled (and podman-restart is NOT — it started the stack into its own
    oneshot cgroup and systemd SIGKILLed the containers it had just spawned). Every check exists because its absence shipped, or nearly
    shipped, once.
-4. Run the manual battery (M1–M10) on real hardware. Record results.
+4. Run the manual battery (M1–M10) on real hardware. Record results. The human half of a
+   release — every check no harness can make, and the traps that have actually bitten — is
+   collected in [the manual release checklist](manual-release-checklist.md); walk it alongside
+   this list.
 5. Attach image + bundle + checksums to the version's GitHub Release **while it is still a
    draft** (the DIY cut opens it with `release.sh --draft`), then publish once everything is
    attached. Published release assets are immutable — v1.18.0 burned its tag this way — so
