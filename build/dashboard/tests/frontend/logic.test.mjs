@@ -297,6 +297,20 @@ test('computeEarnings: Tari figures are null when merge-mining is unavailable (#
     assert.ok(est.day > 0);   // the XMR estimate is unaffected
 });
 
+test('computeEarnings: a known per-block reward survives a dead channel and a zero hashrate (#992)', () => {
+    // The reward is a chain fact the TariCard prints on the same page — only the estimates
+    // (time-to-block, per-day averages) depend on tari_available and the what-if hashrate.
+    const earnings = { available: true, coeff_day: 1e-7, pool_difficulty: 1,
+                       tari_available: false, tari_coeff_day: 0, tari_difficulty: 0,
+                       tari_reward: 10_709 };
+    const est = computeEarnings(50_000, earnings);
+    assert.equal(est.tariRewardPerBlock, 10_709);
+    assert.equal(est.tariTimeToBlockSec, null);  // the time estimate stays gated
+    assert.equal(est.tariDay, null);
+    // Hashrate-independent: the zero-hashrate early return keeps the known reward too.
+    assert.equal(computeEarnings(0, earnings).tariRewardPerBlock, 10_709);
+});
+
 test('computeEarnings: no time-to-share when share difficulty is unknown', () => {
     const est = computeEarnings(50_000, { available: true, coeff_day: 1e-7, pool_difficulty: 0 });
     assert.equal(est.timeToShareSec, null);
@@ -339,12 +353,15 @@ test('computeXvbTier: between tiers picks the lower one', () => {
     assert.equal(computeXvbTier(60_000, XVB_CALC).threshold, 10_000);
 });
 
-test('computeXvbTier: null when disabled, calc missing, empty tiers, or bad hashrate', () => {
-    assert.equal(computeXvbTier(15_000, { ...XVB_CALC, enabled: false }), null);
+test('computeXvbTier: null when calc missing, empty tiers, or bad hashrate', () => {
     assert.equal(computeXvbTier(15_000, null), null);
     assert.equal(computeXvbTier(15_000, { ...XVB_CALC, tiers: [] }), null);
     assert.equal(computeXvbTier(0, XVB_CALC), null);
     assert.equal(computeXvbTier(null, XVB_CALC), null);
+});
+
+test('computeXvbTier: still computes with XvB disabled — the what-if is the decision aid (#938)', () => {
+    assert.equal(computeXvbTier(15_000, { ...XVB_CALC, enabled: false }).threshold, 10_000);
 });
 
 // --- xvbDecisionRows (#872) — the per-tier decision table's pure math -------------------
@@ -400,7 +417,15 @@ test('xvbDecisionRows: no coeff (network stats down) -> no cost, no net, never a
     assert.equal(whale.cost, null);
     assert.equal(whale.net, null);
     assert.equal(whale.mode, 'none');
-    assert.equal(xvbDecisionRows({ enabled: false }, 1e-7, 200_000).length, 0);
+    assert.equal(xvbDecisionRows(null, 1e-7, 200_000).length, 0);
+});
+
+test('xvbDecisionRows: XvB disabled still prices the table (#938)', () => {
+    // The rows are the enable/don't-enable comparison, so the flag doesn't empty them —
+    // a disabled payload with tiers prices identically to an enabled one.
+    const rows = xvbDecisionRows({ ..._CALC, enabled: false }, 1e-7, 200_000);
+    assert.equal(rows.length, 2);
+    assert.ok(Math.abs(rows[1].cost - 3.65) < 1e-9);
 });
 test('formatXmr: precision scales with magnitude; "—" for null/invalid', () => {
     assert.equal(formatXmr(2.5), '2.5000 XMR');        // >= 1 -> 4 dp

@@ -284,7 +284,7 @@ stack_down() {
     log "Stack stopped."
 }
 
-stack_restart() { # [tor]
+stack_restart() { # [tor|monerod]
     case "${1:-}" in
     "")
         log "Restarting stack..."
@@ -294,14 +294,28 @@ stack_restart() { # [tor]
     tor)
         # Manual leg of the #424 guard self-heal: restart ONLY tor so it picks fresh guards
         # when clearnet exits are stuck (the doctor Tor clearnet-egress check WARNs on this).
-        # Only tor is accepted here — other containers must go through apply/upgrade, whose
-        # recreate applies current args (a bare restart would reuse stale ones, #273); tor
-        # takes no args from .env, so a plain restart is safe and is exactly the fix.
-        log "Restarting the tor container to pick fresh guards — ALL Tor circuits drop and rebuild (mining onions included; p2pool/monerod re-peer on their own)..."
+        # Tor takes no args from .env, so a plain restart is safe (other containers go
+        # through apply/upgrade, whose recreate applies current args, #273). Compose then
+        # restarts monerod right after tor is healthy again (depends_on restart: true, #972):
+        # monerod does NOT re-peer on its own after a tor restart kills its SOCKS
+        # connections — it can sit at 0 in / 0 out peers for hours; p2pool re-peers fine.
+        log "Restarting the tor container to pick fresh guards — ALL Tor circuits drop and rebuild (mining onions included; p2pool re-peers on its own, and a local monerod is restarted alongside so it re-dials)..."
         docker compose restart tor
         log "tor restarted. Verify egress recovered: './pithead doctor' (Tor clearnet-egress check)."
         ;;
-    *) error "restart takes no argument, or 'tor' (fresh Tor guards when clearnet egress is stuck). Got: '$1'." ;;
+    monerod)
+        # Peer-loss recovery (#972): a tor restart/recreate outside compose (docker itself, or
+        # the #424 auto-heal when its coupled monerod restart could not be issued) leaves
+        # monerod holding dead SOCKS sockets — reachable, healthcheck green, but
+        # `synchronized: false` with 0 peers for hours. A plain restart re-dials through the
+        # running tor and recovers in about a minute. Safe under the #273 recreate-only rule
+        # for the same reason as tor: re-peering wants the container's args EXACTLY as they
+        # are — config changes still go through apply.
+        log "Restarting the monerod container so it re-dials its peers through Tor..."
+        docker compose restart monerod
+        log "monerod restarted. It should report synchronized again within a few minutes — verify: './pithead doctor' (Monero sync check)."
+        ;;
+    *) error "restart takes no argument, 'tor' (fresh Tor guards when clearnet egress is stuck), or 'monerod' (re-dial peers after a Tor restart left the node out of sync). Got: '$1'." ;;
     esac
 }
 
@@ -1257,6 +1271,7 @@ doctor() {
         fi
         check_revenue_containers
         check_dashboard_answers
+        check_monerod_synchronized
     fi
 
     # --- Summary ---
@@ -3444,9 +3459,11 @@ Lifecycle:
                             hand after replacing the program under an existing config.
   up                        Start the stack.
   down                      Stop the stack.
-  restart [tor]             Restart the stack — or only the tor container, which picks
-                            fresh guards when Tor clearnet egress is stuck (drops
-                            and rebuilds all Tor circuits).
+  restart [tor|monerod]     Restart the stack — or one container: 'tor' picks fresh
+                            guards when Tor clearnet egress is stuck (drops and rebuilds
+                            all Tor circuits; a local monerod restarts alongside);
+                            'monerod' re-dials peers when the node reports not
+                            synchronized after a Tor restart.
   upgrade                   Re-render generated config and rebuild/restart the stack after
                             an update — a 'git pull' on source installs, or an extracted
                             release bundle (the dashboard's one-click upgrade runs this).
@@ -4149,6 +4166,42 @@ check_tor_clearnet_egress() {
         dr_ok "Tor clearnet egress works — Healthchecks, Telegram, and XvB can reach their services."
     else
         dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this, #424). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself."
+    fi
+    return 0
+}
+
+# doctor (#972): a monerod that survived a tor restart with every SOCKS peer dead looks healthy —
+# container up, healthcheck green (it only probes the RPC), height even creeping on occasional
+# lucky dials — while `get_info` reports `synchronized: false` and mining sits on a stale tip.
+# Probe from the host with the .env digest creds (the monerod image carries no curl) and trust
+# the RAW `synchronized` flag, like the dashboard's out-of-sync alert: a stranded node can report
+# a stale target_height of 0, so any height math reads it as caught up — the flag is the node's
+# own verdict. WARN not FAIL: a node mid-initial-sync legitimately reports the same thing for
+# days. Silently skips when no monerod container runs (remote mode, stack down).
+check_monerod_synchronized() {
+    container_is_running monerod || return 0
+    if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        dr_info "Monero sync check skipped — needs curl and jq."
+        return 0
+    fi
+    local user pass url body
+    user=$(env_get MONERO_NODE_USERNAME 2>/dev/null)
+    pass=$(env_get MONERO_NODE_PASSWORD 2>/dev/null)
+    url=$(env_get MONERO_RPC_URL 2>/dev/null)
+    [ -n "$url" ] || url="http://127.0.0.1:18081"
+    if [ -n "$user" ]; then
+        body=$(curl -fsS --max-time 8 --digest -u "$user:$pass" "$url/get_info" 2>/dev/null)
+    else
+        body=$(curl -fsS --max-time 8 "$url/get_info" 2>/dev/null)
+    fi
+    if [ -z "$body" ]; then
+        dr_info "Monero sync check skipped — monerod's RPC did not answer (the container table above shows whether it is still starting)."
+        return 0
+    fi
+    if printf '%s' "$body" | jq -e '(.status == "OK") and (.synchronized == true)' >/dev/null 2>&1; then
+        dr_ok "monerod reports synchronized with the Monero network."
+    else
+        dr_warn "monerod is running but reports NOT synchronized — normal during initial sync; if it stays like this on a previously-synced node (peers lost after a Tor restart), './pithead restart monerod' re-dials and recovers in about a minute."
     fi
     return 0
 }
@@ -8957,6 +9010,20 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_reject "this machine is a Pithead OS appliance — it updates through signed OS images, not release tarballs, and a tarball upgrade would silently revert at the next reboot. The dashboard OS-update flow is tracked work; nothing was changed."
         return 0
     fi
+    # #376/#1023: cosign is a PRECONDITION of a one-click upgrade, not a consequence of already
+    # holding a key. Every release bundle ships cosign.pub (make_bundle copies the committed key
+    # unconditionally), so the `pithead upgrade` this runner ends up calling will demand the
+    # verifier at its image gate whatever the current install holds. Testing the LOCAL cosign.pub
+    # instead — what this guard used to do — was blind to the one upgrade that needs it most: an
+    # install cut before signing engaged moving to a signed release, which every fielded install
+    # makes exactly once. That sailed past here and aborted inside the new CLI, after the download,
+    # the extraction, and a full config re-render. Checked with the source-checkout refusal above:
+    # both are "this install cannot take a one-click upgrade at all", and neither claims the
+    # throttle or dials out, so a refusal here costs the operator nothing.
+    if ! command -v cosign >/dev/null 2>&1; then
+        _upg_reject "cosign is not installed on the host — release bundles ship a signing key and every image is verified against it before it is pulled, so this upgrade would fail partway through. Install cosign (docs/dev/releasing.md § Verifying a release) and retry."
+        return 0
+    fi
     # Throttle: one attempt per 10 minutes, checked before any network dial.
     local stamp="$cdir/staged/.upgrade-stamp"
     if [ -n "$(find "$stamp" -mmin -10 2>/dev/null)" ]; then
@@ -9003,12 +9070,6 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     fi
     if ! semver_newer "$tag" "v$PITHEAD_VERSION"; then
         _upg_reject "already up to date (running v$PITHEAD_VERSION; latest release is $tag)."
-        return 0
-    fi
-    # #376: with a release key on disk the bundle WILL be verified below — so an install that can't
-    # verify (cosign.pub present, cosign binary missing) is refused here, before the download.
-    if [ -f cosign.pub ] && ! command -v cosign >/dev/null 2>&1; then
-        _upg_reject "cosign.pub is present but cosign is not installed on the host — refusing an unverified bundle (#376). Install cosign (docs/dev/releasing.md § Verifying a release) and retry."
         return 0
     fi
     control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"running",version:$v,ts:(now|floor)}')"
@@ -9508,7 +9569,10 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
     # Poll the rig's /status for THIS change_id's terminal outcome. The rig stages → validates →
     # applies → liveness-checks → rolls back if the miner doesn't return live, seconds later. The 20s
     # deadline (plus the 15s dial above) stays under the dashboard's CONTROL_WAIT_S POST wait, so the
-    # dashboard always catches a terminal-ish result and records it in the config history.
+    # dashboard always catches a terminal-ish result and records it in the config history. Terminals
+    # are applied / rejected / rolled_back / failed — failed is the rig unable to restore its own
+    # rollback backup (present since the v1.11.2 fleet floor), a real fault the result must carry
+    # with its reason, never a deadline-burned "accepted".
     local sbody scode status reason ckeys deadline=$((SECONDS + 20))
     while [ "$SECONDS" -lt "$deadline" ]; do
         sleep 2
@@ -9529,7 +9593,7 @@ control_worker_apply() { # <claimed-file> <id> <actor> <control-dir>
         fi
         status=$(jq -r '.status // ""' "$sbody")
         case "$status" in
-        applied | rejected | rolled_back)
+        applied | rejected | rolled_back | failed)
             # reason is rig-supplied (attacker-influenceable); cap it before it is stored/rendered.
             reason=$(jq -r '.reason // ""' "$sbody" | head -c 500)
             ckeys=$(jq -c '.changed_keys // []' "$sbody")
@@ -9654,11 +9718,12 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
     # well under 90s, while a pin-change rebuild (~10 min) times out to "accepted" below and the
     # badge (#596) clears on its own when the rig reports the new version. Polling the full build
     # would hand a hostile/hung rig 12 minutes of the single-threaded root drain per intent
-    # (sec-review finding) — 90s keeps the stall bound in worker-apply's envelope. There is no
-    # in-progress status (rigforge#320): a non-matching change_id just means pending. Terminals
-    # are applied / rolled_back / failed; a rig-side throttle refusal arrives as
-    # failed+"throttled" and is surfaced as retry-later, not an error. The cap is overridable
-    # (CONTROL_WU_POLL_CAP) so the stack tests can prove the timeout→accepted fallback in seconds.
+    # (sec-review finding) — 90s keeps the stall bound in worker-apply's envelope. Since
+    # rigforge#320 (v1.12.0) the rig writes an in-progress "started" plus first-class noop
+    # (already on the target) and throttled (its own 6h anti-beacon window) terminals; "started",
+    # like a non-matching change_id, just means keep polling. Terminals are applied / noop /
+    # throttled / rolled_back / failed. The cap is overridable (CONTROL_WU_POLL_CAP) so the stack
+    # tests can prove the timeout→accepted fallback in seconds.
     local sbody scode status reason deadline=$((SECONDS + ${CONTROL_WU_POLL_CAP:-90}))
     while [ "$SECONDS" -lt "$deadline" ]; do
         sleep 5
@@ -9680,14 +9745,18 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
         fi
         status=$(jq -r '.status // ""' "$sbody")
         case "$status" in
-        applied | rolled_back | failed)
+        applied | noop | throttled | rolled_back | failed)
             # reason is rig-supplied (attacker-influenceable); cap it before it is stored/rendered.
             reason=$(jq -r '.reason // ""' "$sbody" | head -c 500)
             rm -f "$sbody"
-            # The rig collapses its refusals into failed+free-text (rigforge#320); its 6h
-            # anti-beacon throttle is retry-later, not a fault — give it its own status so the
-            # dashboard renders it calm instead of red.
-            if [ "$status" = "failed" ] && printf '%s' "$reason" | grep -qi "throttl"; then
+            # Legacy remap: a pre-rigforge#320 rig (≤ v1.11.2, the supported floor) collapses its
+            # 6h anti-beacon throttle into failed+"throttled — ..." free text, and retry-later
+            # must render calm, not red. Anchored to that leading word on purpose: a modern rig's
+            # genuine failed can mention the throttle too ("throttle state unavailable",
+            # rigforge#321's fail-closed refusal) and must STAY a fault. Drop the remap once the
+            # fleet floor reaches rigforge v1.12.0 (first-class throttled) — the v2 appliance
+            # bakes v1.15.0, so post-v2 fleets are already past it.
+            if [ "$status" = "failed" ] && printf '%s' "$reason" | grep -qiE '^throttled'; then
                 status="throttled"
             fi
             control_write_result "$results" "$id" "$(jq -n --arg s "$status" --arg c "$change_id" --arg w "$worker" --arg v "$tag" --arg r "$reason" \

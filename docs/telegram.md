@@ -23,8 +23,8 @@ transition, not a stream:
 
 | Alert | When it fires |
 |---|---|
-| 🔴 **Node down** | Your Monero (or Tari) node has been unreachable long enough to be considered down — the stack has stopped serving your rigs so they **fail over to their backup pools**. |
-| 🟢 **Node recovered** | The node is back and stable; the stack has readmitted your rigs. |
+| 🔴 **Node down** | Your Monero (or Tari) node has been unreachable long enough to be considered down — or the Monero node is reachable but has sat out of sync for 10+ minutes (the stranded-peers state a Tor restart can leave behind). Either way the stack has stopped serving your rigs so they **fail over to their backup pools**. |
+| 🟢 **Node recovered** | The node is back — reachable and in sync — and stable; the stack has readmitted your rigs. |
 | 🔴 **Worker offline** | A rig stopped hashing and hasn't been seen for a few minutes (a reboot, a dropped connection, a dead miner) — it's showing **DOWN** on the dashboard. |
 | 🟢 **Worker back online** | A rig that had gone offline is hashing again. |
 | 🟢 **New worker joined** | A rig the stack hasn't seen before connected — a new miner joined the fleet. |
@@ -41,6 +41,8 @@ transition, not a stream:
 | ⚠️ **Hashrate drop** | Total fleet hashrate fell sharply below its recent normal and **stayed down** — a rig gone dark, a network cut, or a stalled miner. The dashboard also drops a marker on the hashrate chart at the moment it happened. Fires once on the drop and again on recovery. Thresholds are tunable (`dashboard.hashrate_drop_threshold`, `dashboard.hashrate_drop_minutes`). |
 | 🧠 **HugePages not reserved** | RandomX runs capped until HugePages are reserved. Fires when the dashboard first sees them missing and again once a reboot applies them — so you know the tuning took. |
 | 💾 **Low RAM** | This host has less RAM than the stack wants (syncing is memory-heavy; Tari can OOM). Sent once when first detected — a heads-up that instability may be under-provisioning, not a bug. |
+| ⚠ **High reject rate** | The pool-wide reject rate over the trailing hour crossed 5% — a bad overclock, clock drift, or a flaky link wasting hashrate. Clears when it drops back. |
+| 💰 **Payout found / confirmed** | A block paid you (this node held a share in the PPLNS window), and — with a view key set — again once the payout is confirmed on-chain by the view-only wallet. |
 | 🚨 **Payout wallet changed** | The wallet p2pool mines to differs from the last one seen — every future reward goes to the new address. Fires on **every** change, including one you made yourself with `./pithead apply`, so treat it as a confirmation; if you didn't change it, your rewards are being redirected. Addresses appear truncated to 8 characters (full addresses never leave the host), and the dashboard shows a matching top-bar warning for 72 hours — the dashboard warning works even with Telegram off. |
 | 🎉 **Block found** | The P2Pool sidechain found a Monero block. Pool-wide: every miner with a PPLNS share gets paid from it. |
 | 💰 **Payout incoming** | That block pays **you** — this node held a share in the PPLNS window when it was found. The amount lands in your wallet once the block matures (about two hours). |
@@ -154,8 +156,8 @@ block and set it to `false` — any event you don't list stays on:
 
 | Event key | Default | Alert |
 |---|---|---|
-| `node_down` | `true` | Monero/Tari node went down |
-| `node_recovered` | `true` | …and came back |
+| `node_down` | `true` | Monero/Tari node went down; also the Monero node reachable but out of sync for 10+ minutes (peers lost after a Tor restart) |
+| `node_recovered` | `true` | …and came back / back in sync |
 | `worker_offline` | `true` | A rig went DOWN |
 | `worker_recovered` | `true` | …and came back |
 | `worker_joined` | `true` | A new rig joined the fleet |
@@ -276,14 +278,15 @@ How the gating works:
 - **Operator allow-list.** A control command is accepted **only** from the numeric Telegram **user
   ids** in `allowed_ids` — being in the right `chat_id` is not enough. Every other sender is refused
   and dropped silently (no reply, so the bot can't be used to probe who is authorised). Find your
-  user id the same way you found your chat id ([step 3](#3-find-your-chat-id)); with an **empty**
-  allow-list the whole feature stays off.
+  user id the same way you found your chat id ([step 3](#3-find-your-chat-id)). An **empty**
+  allow-list is refused outright: `apply` fails until you list at least one numeric user id, so a
+  control-enabled stack can never run with nobody authorised.
 - **Per-action confirmation, deny-on-timeout.** Issuing `/restart` or `/apply` doesn't do anything
   yet — the bot replies with the concrete action and a single **Confirm** button. Nothing happens
   until you tap it, and if you don't within `confirm_timeout` seconds (default 60) the request is
   **denied**, never queued. Only the operator who issued the command can confirm it, and each button
   is one-shot.
-- **Per-operator rate limit.** Each allow-listed operator can be issued at most a handful of confirm
+- **Per-operator rate limit.** Each allow-listed operator can be issued at most 10 confirm
   prompts per rolling hour; past that, `/restart` / `/apply` from that operator are dropped without a
   prompt (an anti-fatigue guard so a stuck or compromised session can't spam approvals). The budget is
   keyed per operator, so one hitting the cap never locks the others out. Not configurable.
@@ -291,7 +294,7 @@ How the gating works:
   one of them, it never becomes a host command. There is no arbitrary execution.
 - **It rides the config-editor's channel, not a new one.** Both verbs act by dropping a typed intent
   into the same host-control spool the dashboard config editor uses (`dashboard.control.enabled`,
-  see [Editing config from the dashboard](configuration.md)); the root runner on the host validates
+  see [Editing config from the dashboard](operations.md#editing-config-from-the-dashboard)); the root runner on the host validates
   and runs the fixed verb. The dashboard container never runs a host command itself. That is why
   `dashboard.control.enabled` (and its login) is a prerequisite — `apply` refuses to enable the
   Telegram control commands without it.
