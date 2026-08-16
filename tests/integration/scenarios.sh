@@ -18,10 +18,16 @@
 #   dashboard.tari_required .. true (blocking) | false (non-blocking)
 #   monero/tari.clearnet_initial_sync (#183) .. true (clearnet IBD) | false (Tor, the default)
 #   network.subnet (#180/#201) .. default 172.28.0.0/24 | a moved /24 (e.g. 10.84.0.0/24)
+#   tari.mode ................ local | remote (#103)
+#   p2pool.stratum_tls ........ false | true (#261)
+#   network.tor_egress_firewall .. true (default) | false (#270)
+#   payout confirmation ...... unset (default) | monero.view_key (+ optional tari pair, #381/#462)
 #
 # The clearnet_initial_sync `false` value is the default exercised by every other scenario (they
 # never set the key); only the `true` value needs a dedicated case, so axis_coverage lists just
 # the `true`s — run.sh asserts the rendered Tor-vs-clearnet config for both states on every run.
+# tari.mode/stratum_tls/tor_egress_firewall follow the same rule: only the non-default value gets
+# a dedicated case.
 #
 # Prerequisite-gated axes (skipped-with-a-loud-log, never silently, when the box can't host
 # them — see run.sh):
@@ -30,11 +36,18 @@
 #     SKIPPED so we never silently drop coverage or mutate the canonical chain.
 #   * monero.mode=remote needs a reachable external node (REMOTE_MONERO_HOST); the natural
 #     choice is the box's own synced monerod on its LAN address.
+#   * tari.mode=remote (#103) needs its own reachable external node (REMOTE_TARI_HOST) — the
+#     same shape as monero's, an already-synced Tari node.
 #   * network.subnet is a set-at-install knob: moving it changes the docker bridge's IPAM subnet,
 #     which Compose cannot recreate while containers are attached — a hot `apply` fails. So the
 #     matrix line documents the axis for coverage, resolve_overrides SKIPS it in the hot-apply
 #     loop (with a loud reason), and run.sh's `--subnet` phase runs it for real via a full
 #     down -> up on the moved subnet (chains are bind-mounted by path, so they are never touched).
+#   * Payout confirmation (#381/#462) needs a REAL Monero view key for the box's own wallet
+#     (IT_MONERO_VIEW_KEY) — never hardcoded here. The row carries the marker
+#     "payout_confirm=env"; resolve_overrides swaps it for the real monero.view_key override (and
+#     folds in tari.view_key/spend_public_key too when IT_TARI_VIEW_KEY + IT_TARI_SPEND_PUBLIC_KEY
+#     are BOTH set), or SKIPs the row when the env var is absent.
 
 # Emit the matrix as `NAME<TAB>overrides…`, one scenario per line. Lines starting with the
 # canonical-first scenario are ordered so the cheapest, most-common config runs first.
@@ -50,6 +63,11 @@ local-pruned-main-tari-optional	monero.mode=local monero.prune=true p2pool.pool=
 local-pruned-main-clearnet-sync	monero.mode=local monero.prune=true monero.clearnet_initial_sync=true tari.clearnet_initial_sync=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true
 remote-main-secure-tari	monero.mode=remote p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true
 local-pruned-main-subnet	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true network.subnet=10.84.0.0/24
+remote-tari-main-secure	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true tari.mode=remote
+local-pruned-main-stratum-tls	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true p2pool.stratum_tls=true
+local-pruned-main-firewall-off	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true network.tor_egress_firewall=false
+local-pruned-main-payout-confirm	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=true dashboard.secure=true dashboard.tari_required=true payout_confirm=env
+local-pruned-main-insecure	monero.mode=local monero.prune=true p2pool.pool=main xvb.enabled=true dashboard.secure=false dashboard.tari_required=true
 EOF
 }
 
@@ -75,6 +93,10 @@ dashboard.tari_required=false
 monero.clearnet_initial_sync=true
 tari.clearnet_initial_sync=true
 network.subnet=10.84.0.0/24
+tari.mode=remote
+p2pool.stratum_tls=true
+network.tor_egress_firewall=false
+payout_confirm=env
 EOF
 }
 

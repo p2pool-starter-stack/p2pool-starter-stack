@@ -582,23 +582,38 @@ function XvbDecisionTable({ calc, coeffDay, hr, energy }) {
 // own auto rule), what holding it costs, and the current vs target tier for context. Labelled
 // raffle status, never a payout. The draw is random above the threshold — donating more within
 // a tier buys nothing — but the odds themselves ARE knowable (#872: qualifier counts from XvB's
-// winners file), so the comparison dropdown shows them. Hidden entirely while XvB is disabled.
+// winners file), so the comparison dropdown shows them. Rendered with XvB disabled too (#938) —
+// the block is the enable/don't-enable decision aid — but the live-credit cards (Current/Target
+// tier) stand down with the flag: there is no credited donation to report.
 // `coeffDay` (earnings.coeff_day) feeds the per-tier payout comparison dropdown below.
 function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
-  if (!calc || !calc.enabled) return null;
+  if (!calc) return null;
   const t = computeXvbTier(hr, calc);
   return html`
     <div class="xvb-tier-block">
         <h4>XvB Tier (raffle)</h4>
+        ${
+          calc.enabled
+            ? null
+            : html`<p class="text-muted text-xs" id="xvb-disabled-note">
+                XvB donation is off — this table prices what enabling it would earn and cost at
+                your hashrate. Nothing is fetched from xmrvsbeast.com while it is off, so the
+                odds and reward columns run from the last cached read.</p>`
+        }
         <div class="stat-grid">
             <${StatCard} label="Sustainable Tier" value=${t ? t.tier : "None"} cls="c-purple"
                          title="The highest XvB donor tier this hashrate sustains while leaving P2Pool its share — the same auto rule the donation controller uses." />
             <${StatCard} label="Hashrate Cost" value=${t ? fmtHashrate(t.cost) : "—"}
                          title="Holding the tier means continuously donating about its threshold — hashrate that earns no P2Pool shares while donated." />
+            ${
+              calc.enabled
+                ? html`
             <${StatCard} label="Current Tier" value=${calc.current_tier}
                          title="The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages)." />
             <${StatCard} label="Target Tier" value=${calc.target_tier}
-                         title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />
+                         title=${"The tier the donation controller is configured to aim for" + (calc.sustainable ? "." : " — currently NOT sustainable at your hashrate.")} />`
+                : null
+            }
         </div>
         ${
           // Current-tier expected reward (#712) in the same standardized Day/Month/Year table
@@ -640,6 +655,14 @@ function ExpectedVsActualCard({ summary }) {
   const partialMark = (row, text) => (row.partial ? text + " *" : text);
   const anyPartial = (xmr.enabled && xmr.partial) || (tari.enabled && tari.partial);
   const rows = [];
+  // The server withholds pct past 999%: a near-zero expectation (a box idle for most of the
+  // window) turns the ratio into a five-digit figure that reads as a bug. Once available and
+  // enabled both hold, a null pct means exactly that — the tooltip owns the explanation.
+  const pctNote =
+    xmr.available && xmr.enabled && xmr.pct === null
+      ? " No percentage shown: the expected figure is near zero for this window — the miner " +
+        "was idle or unrecorded for most of it, so a ratio against it would be noise."
+      : "";
   rows.push({
     label: xmr.includes_xvb ? "Monero + XvB (30d)" : "Monero (30d)",
     expected: xmr.available ? formatXmr(xmr.expected_30d) : "—",
@@ -647,23 +670,24 @@ function ExpectedVsActualCard({ summary }) {
       ? "set monero.view_key"
       : partialMark(xmr, formatXmr(xmr.actual_30d) + (xmr.pct !== null ? ` (${xmr.pct}%)` : "")),
     dim: !xmr.enabled,
-    title: xmr.includes_xvb
-      ? "Confirmed on-chain payouts over the trailing 30 days vs the P2Pool linear expectation " +
-        "at your 30-day average hashrate PLUS XvB's estimate for your tier — combined " +
-        "on both sides, because an XvB win pays out through ordinary payouts that cannot be " +
-        "told apart from P2Pool payouts. " +
-        (xmr.xvb_realization_pct !== null
-          ? `The XvB share is tempered to this wallet's measured win payouts — ` +
-            `${xmr.xvb_realization_pct}% of XvB's published face value over the last ` +
-            `${xmr.xvb_wins_measured} wins. `
-          : "The XvB share is XvB's published face-value estimate — an upper bound: it prices " +
-            "every bonus hash at full block reward and assumes every won round runs to " +
-            "completion. ") +
-        "Payouts swing with luck; a sustained gap is the signal worth checking, not one window."
-      : "Confirmed on-chain payouts over the trailing 30 days vs the linear expectation at " +
-        "your 30-day average P2Pool hashrate. Any XvB win payouts land in the actual too — " +
-        "they cannot be told apart from P2Pool payouts. Payouts swing with luck; a sustained " +
-        "gap is the signal worth checking, not one window.",
+    title:
+      (xmr.includes_xvb
+        ? "Confirmed on-chain payouts over the trailing 30 days vs the P2Pool linear expectation " +
+          "at your 30-day average hashrate PLUS XvB's estimate for your tier — combined " +
+          "on both sides, because an XvB win pays out through ordinary payouts that cannot be " +
+          "told apart from P2Pool payouts. " +
+          (xmr.xvb_realization_pct !== null
+            ? `The XvB share is tempered to this wallet's measured win payouts — ` +
+              `${xmr.xvb_realization_pct}% of XvB's published face value over the last ` +
+              `${xmr.xvb_wins_measured} wins. `
+            : "The XvB share is XvB's published face-value estimate — an upper bound: it prices " +
+              "every bonus hash at full block reward and assumes every won round runs to " +
+              "completion. ") +
+          "Payouts swing with luck; a sustained gap is the signal worth checking, not one window."
+        : "Confirmed on-chain payouts over the trailing 30 days vs the linear expectation at " +
+          "your 30-day average P2Pool hashrate. Any XvB win payouts land in the actual too — " +
+          "they cannot be told apart from P2Pool payouts. Payouts swing with luck; a sustained " +
+          "gap is the signal worth checking, not one window.") + pctNote,
   });
   rows.push({
     label: "Tari (30d)",
@@ -817,14 +841,17 @@ class EarningsCard extends Component {
     const est = computeEarnings(hr, e);
     const xvb = this.props.xvb;
     const energy = this.props.energy;
-    // Tabs split the (now multi-domain) card body. XvB only appears when it's enabled and Energy only
-    // when the fleet reports any power — there's nothing to show otherwise. The one what-if input
-    // above the strip drives every tab's estimate.
+    // Tabs split the (now multi-domain) card body. The XvB tab stays with XvB disabled (#938) —
+    // its decision table is exactly the "should I enable it?" aid — as long as the server sent a
+    // tier table (a pre-#938 disabled payload carries none, and enabled always does). Energy only
+    // appears when the fleet reports any power — there's nothing to show otherwise. The one
+    // what-if input above the strip drives every tab's estimate.
+    const showXvb = !!(xvb && (xvb.enabled || (xvb.tiers || []).length));
     const tabs = [
       { id: "monero", label: "Monero" },
       { id: "tari", label: "Tari" },
     ];
-    if (xvb && xvb.enabled) tabs.push({ id: "xvb", label: "XvB" });
+    if (showXvb) tabs.push({ id: "xvb", label: "XvB" });
     if (energy && energy.available) tabs.push({ id: "energy", label: "Energy" });
     const active = tabs.some((t) => t.id === tab) ? tab : "monero";
     // Fiat estimates (#520): each tab grows ≈-fiat rows once its coin's price is known — static
@@ -886,7 +913,7 @@ class EarningsCard extends Component {
             </div>
 
             ${
-              xvb && xvb.enabled
+              showXvb
                 ? html`
             <div role="tabpanel" id="epanel-xvb" aria-labelledby="etab-xvb" hidden=${active !== "xvb"}>
                 <${XvbTierBlock} calc=${xvb} hr=${hr} coeffDay=${e.coeff_day} energy=${energy} est=${est} />

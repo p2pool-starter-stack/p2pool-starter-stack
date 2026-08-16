@@ -1326,6 +1326,38 @@ class TestRunIteration:
             with pytest.raises(StopAsyncIteration):
                 await svc.run()
 
+    async def test_stale_monitor_not_fed_without_a_synchronized_verdict(self):
+        # No `synchronized` key (log-scrape fallback / remote node) = no verdict (#972): the
+        # stale monitor must not be fed, so its streaks stay put across blind cycles.
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+        svc.monero_sync_stale = MagicMock()
+        svc.monero_sync_stale.down = False
+        await self._run_one_iteration(
+            svc,
+            monero_sync={"is_syncing": False, "reachable": True},
+            tari_sync={"is_syncing": False, "reachable": True},
+        )
+        svc.monero_sync_stale.update.assert_not_called()
+        assert svc.latest_data["monero_sync"]["stale"] is False
+
+    async def test_stale_flag_fed_surfaced_and_passed_to_the_alerter(self):
+        # RPC verdict present (#972): the monitor is fed the raw flag, its debounced `down`
+        # lands in the snapshot as `stale`, and the alerter receives it as monero_stale.
+        svc, sm, proxy = _make_service()
+        proxy.get_workers.return_value = {"workers": []}
+        svc.monero_sync_stale = MagicMock()
+        svc.monero_sync_stale.down = True
+        svc.alert_service.process = AsyncMock(return_value=[])
+        await self._run_one_iteration(
+            svc,
+            monero_sync={"is_syncing": False, "reachable": True, "synchronized": False},
+            tari_sync={"is_syncing": False, "reachable": True},
+        )
+        svc.monero_sync_stale.update.assert_called_once_with(False)
+        assert svc.latest_data["monero_sync"]["stale"] is True
+        assert svc.alert_service.process.await_args.kwargs["monero_stale"] is True
+
     async def test_healthchecks_pinged_when_healthy(self):
         # Enabled + healthy → a plain liveness ping (no args) each cycle.
         svc, sm, proxy = _make_service()
@@ -2122,6 +2154,34 @@ class TestReconcileWorkerConfig:
             assert row["reason"] == "miner did not return to a live hashrate"
             # A known change_id reconciles quietly — no audit row for the dashboard's own change.
             assert sm.get_audit_events() == []
+        finally:
+            sm.close()
+
+    def test_terminal_report_reconciles_accepted_row_for_the_1009_vocabulary(self):
+        # #1009: failed/noop/throttled (rigforge#320) must reach the SAME reconcile path as
+        # applied/rejected/rolled_back — the mirror now ships live (rigforge v1.15.0, #346), and
+        # the pre-#1009 three-status allowlist dropped exactly these on the floor as "accepted"
+        # forever.
+        svc, sm = self._svc_with_real_storage()
+        try:
+            for status in ("failed", "noop", "throttled"):
+                cid = f"cid-{status}"
+                self._seed(sm, "accepted", change_id=cid)
+                worker_results = [
+                    {
+                        "rigforge": {
+                            "control": {
+                                "change_id": cid,
+                                "status": status,
+                                "reason": "rig-supplied",
+                            }
+                        }
+                    }
+                ]
+                asyncio.run(svc._reconcile_worker_config(self._workers("rig1"), worker_results))
+                row = self._status_of(sm, change_id=cid)
+                assert row["status"] == status
+                assert row["reason"] == "rig-supplied"
         finally:
             sm.close()
 

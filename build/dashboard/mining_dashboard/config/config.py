@@ -418,6 +418,11 @@ DASHBOARD_ENERGY = load_energy_config()
 # How long a preview/commit POST waits for the host-side runner's result before returning 202 and
 # leaving the client to poll /api/control/result. The systemd path unit fires within seconds.
 CONTROL_WAIT_S = float(os.environ.get("CONTROL_WAIT_S", 30))
+# A worker-upgrade POST never waits inline (a rig rebuild can run minutes) — it returns 202 at
+# once and a background task records the terminal outcome once the host runner writes it. This
+# bounds that background wait; matches the client's own polling budget (workerview.mjs
+# UPGRADE_POLL_MAX = 150 * 2s = 300s), well past the host's own ~90s dial+poll cap.
+CONTROL_WORKER_UPGRADE_WAIT_S = float(os.environ.get("CONTROL_WORKER_UPGRADE_WAIT_S", 300))
 GITHUB_RELEASES_API = os.environ.get(
     "GITHUB_RELEASES_API",
     "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest",
@@ -508,6 +513,13 @@ DASHBOARD_FAIL_CLOSED = os.environ.get("DASHBOARD_FAIL_CLOSED", "false").strip()
 # kick every miner to their backups (and back) on a blip.
 NODE_DOWN_AFTER_SEC = int(os.environ.get("NODE_DOWN_AFTER_SEC", 90))
 NODE_RECOVERY_AFTER_SEC = int(os.environ.get("NODE_RECOVERY_AFTER_SEC", 60))
+
+# Peer-loss staleness (#972): a reachable monerod reporting `synchronized: false` must persist
+# this long before the out-of-sync alert fires. 10 minutes rides out normal tip-lag blips AND
+# the coupled monerod restart after a tor recreate (compose depends_on restart / tor_heal), so
+# only a node that genuinely failed to re-peer alarms. Env-only (tests/mini-stack), not a
+# config.json knob — nobody should have to tune a detector.
+NODE_STALE_AFTER_SEC = int(os.environ.get("NODE_STALE_AFTER_SEC", 600))
 
 # --- Healthchecks.io dead-man's switch (Issue #79) ---
 # Optional external liveness monitor. Set a ping URL and the dashboard loop pings it every cycle;

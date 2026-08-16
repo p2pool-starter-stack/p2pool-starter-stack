@@ -78,6 +78,12 @@ class MoneroClient:
         `db_size` is monerod's on-disk database size in bytes (from get_info, available even
         under restricted RPC). The UI shows it next to the configured pruned/full mode so a
         config/DB mismatch is visible at a glance (Issue #32).
+
+        `synchronized` is monerod's raw network-sync verdict, passed through for the peer-loss
+        detector (#972): after a tor restart a stranded node can read as "synced" here (stale
+        target_height 0) while `synchronized` is false. Only this RPC path sets the key — the
+        log-scrape fallback and remote nodes have no verdict, and the detector treats absence
+        as no verdict.
         """
         info = self.get_info()
         if info is None:
@@ -86,12 +92,13 @@ class MoneroClient:
         height = int(info.get("height", 0) or 0)
         target = int(info.get("target_height", 0) or 0)
         db_size = int(info.get("database_size", 0) or 0)
+        synchronized = bool(info.get("synchronized", False))
 
         # `synchronized` is monerod's authoritative "caught up" flag; once synced it also
         # reports target_height: 0. Trust it over the height comparison (mirrors how the
         # Tari client trusts initial_sync_achieved).
-        if info.get("synchronized") or target == 0 or height >= target:
-            return {"is_syncing": False, "db_size": db_size}
+        if synchronized or target == 0 or height >= target:
+            return {"is_syncing": False, "db_size": db_size, "synchronized": synchronized}
 
         percent = int((height / target) * 100)
         return {
@@ -100,4 +107,5 @@ class MoneroClient:
             "target": target,
             "percent": percent,
             "db_size": db_size,
+            "synchronized": synchronized,
         }

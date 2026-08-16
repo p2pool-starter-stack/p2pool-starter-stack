@@ -8,13 +8,14 @@ hardware, and it handles wallet payout addresses.
 
 ## Supported versions
 
-Security fixes land on the latest `main`. There are no long-lived release branches.
-Make sure you're running an up-to-date checkout before reporting an issue.
+Security fixes land in the latest release. There are no long-lived release branches.
+Run `./pithead version` and report what it prints; upgrade before reporting, in case the issue is
+already fixed — `./pithead upgrade` on a Compose install, `./pithead os-update` on the appliance.
 
-| Version       | Supported          |
-|---------------|--------------------|
-| latest `main` | ✅                 |
-| anything older| ❌ (please update) |
+| Version                              | Supported          |
+|--------------------------------------|--------------------|
+| latest release (`./pithead version`) | ✅                 |
+| anything older                       | ❌ (please update) |
 
 ## Reporting a vulnerability
 
@@ -35,25 +36,33 @@ Include:
 
 The stack's defaults:
 
-- Least-privilege containers: every service runs as a non-root user (not uid 0); leaf services
-  run with `no-new-privileges` and drop all Linux capabilities; internet-facing and
-  Docker-socket-facing services also use a read-only root filesystem.
+- Least-privilege containers: every daemon that touches the network or the chains — `monerod`,
+  P2Pool, the Tari node, `xmrig-proxy`, the dashboard, Tor — runs as a non-root user. Caddy and the
+  two Docker socket proxies run as uid 0 inside their containers, which is why they hold no chain
+  data, drop every Linux capability, and sit on host-loopback-only ports. Leaf services run with
+  `no-new-privileges` and drop all capabilities; internet-facing and Docker-socket-facing services
+  also use a read-only root filesystem.
 - SHA256-verified, version-pinned binaries.
-- Digest-pinned images, unsigned by default
+- Digest-pinned **and signed** images
   ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): the release bundle pins
   every first-party image to an immutable `@sha256` digest, so a tampered registry can't swap what
-  gets pulled, and the bundle itself is fetched over TLS from GitHub Releases. Cosign signing is
-  opt-in and off for every release shipped so far (`scripts/release.sh`) — it turns on only when a
-  signing key is present on the release box and `cosign.pub` is committed alongside it, and fails
-  closed once it is. Today, with no `cosign.pub` next to `pithead`, the script warns and proceeds
-  unverified rather than blocking the pull — the digest pins above are the actual protection, not
-  a signature. Limits: a compromise of the release box itself, which would hold the signing key,
-  is outside what a signature can prove even once signing is on. See
+  gets pulled, and the bundle itself is fetched over TLS from GitHub Releases. `cosign.pub` is
+  committed at the repo root and ships inside the bundle, so a release install has the verifier
+  without a git checkout. `scripts/release.sh` signs each promoted digest and the install bundle
+  whenever the signing key is present on the release box; it warns and ships unsigned if the key is
+  missing, so check a release's signature rather than assuming it. Releases before v1.18.1 are
+  unsigned. Limits: a compromise of the release box itself, which holds the signing key, is outside
+  what a signature can prove. See
   [Releasing › Signed releases](docs/dev/releasing.md#signed-releases) for the verification mechanics.
 - Localhost-only RPC.
 - LAN-scoped (and narrowable) stratum port.
 - Scoped Docker socket proxies.
-- Tor for all node networking.
+- Tor for all node networking with the bundled nodes, enforced fail-closed by a host firewall
+  (`network.tor_egress_firewall`, default on). Two opt-ins leave that path: the clearnet initial
+  sync (`monero.clearnet_initial_sync` / `tari.clearnet_initial_sync`, default off), and remote-node
+  mode (`monero.mode` / `tari.mode: remote`), where the node legs are direct connections to the
+  machine you named. The firewall still confines those to private ranges. See
+  [Privacy & Network Egress](docs/privacy.md).
 - A one-way host-control boundary for dashboard config editing and upgrades (`dashboard.control`,
   default off): the dashboard container can only *ask* — it writes typed JSON intents into a spool
   directory whose other legs (staged configs, results, the audit log) are host-owned and mounted
@@ -105,8 +114,8 @@ The stack's defaults:
   control-channel commit, and a worker control-API report for a change the dashboard never sent,
   and appends both — `host-edit` / `rig-edit` — to the same trail, keys or worker names only. The
   persisted trail (mirrored `control.log` rows plus these two out-of-band kinds) lives in the
-  dashboard's own database, not just the log tail, so the Security panel's hour/day/month grouping
-  covers more than `control.log`'s own trimmed window. The `rig-edit` source reads off the
+  dashboard's own database, not just the log tail, so the Security panel's range presets, date
+  fields and search cover more than `control.log`'s own trimmed window. The `rig-edit` source reads off the
   unauthenticated worker feed, so it is rate-capped per worker (#724): a rig reporting distinct
   change_ids on every poll can add at most a bounded number of rows per hour before the rest are
   dropped behind a single `rate-limited` marker — one LAN device can't grow the database without
