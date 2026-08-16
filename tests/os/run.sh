@@ -2300,7 +2300,20 @@ phase_provision() {
     local ou_out
     if ! ou_out=$(_ssh "cd /data/pithead && ./pithead os-update /data/update.bundle --yes 2>&1"); then
         printf '     os-update output: %s\n' "$(printf '%s' "$ou_out" | tail -8)"
-        bad "pithead os-update failed on the guest (manifest unreadable, or a guard misfired)"
+        # Capture the guest's own account BEFORE the assertion, because the guest is recycled
+        # moments later and this failure has outlived three batteries without anyone seeing it
+        # (#1060). It stops dead partway through "Copying image to rootfs.1" with no rauc error,
+        # which is the signature of a KILLED command rather than a failed one — so the kernel log
+        # and the memory picture are the evidence, not the CLI output. This leg runs after
+        # provisioning, so hugepages are already carved out of the guest's RAM before a multi-GB
+        # slot copy starts, which is the standing hypothesis this is here to confirm or kill.
+        printf '     --- guest evidence (#1060) ---\n'
+        _ssh "journalctl -k --no-pager 2>/dev/null | grep -iE 'out of memory|oom-kill|killed process' | tail -5
+              echo '-- rauc unit --'; journalctl -u rauc --no-pager -n 8 2>/dev/null
+              echo '-- memory --'; free -m | head -2
+              grep -E 'MemAvailable|HugePages_Total|^Dirty|^Writeback:' /proc/meminfo" 2>/dev/null |
+            tr -d '\r' | sed 's/^/     · /'
+        bad "pithead os-update failed on the guest — see the guest evidence above, and do not restate the cause without reading it"
         return
     fi
     marker=$(_ssh "cat /data/pithead/.os-migration-pending 2>/dev/null" | tr -d ' \r\n')
