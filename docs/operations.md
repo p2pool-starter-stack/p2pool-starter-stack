@@ -1,8 +1,8 @@
 # Operations & Maintenance
 
-Command reference for `pithead`, the CLI that manages the stack. `./pithead help` lists these plus
-the appliance-image commands (`os-update`, `factory-reset`, `support-bundle`, and the rest), which
-belong to [the appliance](appliance.md) rather than to a package install.
+Command reference for `pithead`, the CLI that manages the stack. Run `./pithead help` for the same
+list. The commands that only mean something on [the appliance image](appliance.md) are grouped
+separately, [below](#appliance-only-commands).
 
 ## Command reference
 
@@ -24,6 +24,10 @@ belong to [the appliance](appliance.md) rather than to a package install.
 | `./pithead onion-client-key` | Print the Tor client-auth line for the dashboard onion. This is the client *private* key, deliberately kept out of `status` — add it to your Tor client's `ClientOnionAuthDir`. See [Remote access over Tor](configuration.md#remote-access-over-tor-onion-service). |
 | `./pithead rotate-dashboard-onion` | Mint a new dashboard onion address and client-auth keypair, retiring the old one. Run after a leaked address or key. |
 | `./pithead control-run-pending` | Drain the dashboard's control-request spool once. Fired by the `pithead-control` systemd path unit; run it by hand only when debugging the control channel. See [Editing config from the dashboard](#editing-config-from-the-dashboard). |
+| `./pithead render` | Regenerate every derived file (`.env`, the Caddyfile, service configs, host units) from `config.json` without touching containers. The appliance runs this every boot; run it by hand after replacing the program under an existing config. |
+| `./pithead support-bundle` | Collect a `chmod 600` diagnostics tarball for a bug report: host facts, `doctor` in prose and JSON, a masked config, a redacted `.env`, and the last 200 log lines per container with launch-line credentials scrubbed. Read-only, and nothing leaves the box — review it, then share it. |
+| `./pithead config-reset` | **DESTRUCTIVE**. Clear the configuration and reopen the setup wizard, keeping every data directory — chains, wallets, Tor onion keys and dashboard history all stay, so reconfiguring costs no resync. Type-to-confirm unless `-y` / `--yes`. |
+| `./pithead uninstall` | **DESTRUCTIVE**. The clean exit: stops the stack, removes its containers and images, the rendered `.env` and Caddyfile, this checkout's control-runner units, and the egress firewall rules. Keeps what's yours — `config.json`, `backups/`, and the data dirs — and lists them for manual removal. Type-to-confirm unless `-y` / `--yes`. |
 | `./pithead version` | Print the installed stack version on one line (also `-V` / `--version`). Offline; no update check. `doctor` repeats it in its header. |
 | `./pithead help` | Show all commands. |
 
@@ -31,6 +35,20 @@ Service names for `logs` match the containers: `p2pool`, `xmrig-proxy`, `tor`, `
 `docker-proxy`, `docker-control`, and `caddy` always; `monerod` only with `monero.mode: local`,
 `tari` only with `tari.mode: local`, and `wallet-rpc` / `tari-wallet` only when the matching
 `view_key` turns payout confirmation on. A service that isn't running has no logs to follow.
+
+### Appliance-only commands
+
+These exist on every install but only do something on [the appliance image](appliance.md), where the
+boot path drives most of them for you:
+
+| Command | Description |
+|---|---|
+| `./pithead os-update BUNDLE` | Install an OS update bundle into the spare A/B slot (`rauc install`). Refuses a bundle older than the running OS — a signed downgrade re-opens fixed holes — and refuses one below the `/data` migration floor outright. `--allow-downgrade` overrides the first, never the second. On a debug build (SSH baked in) installing a non-debug bundle, it warns first: that install removes the SSH channel you're driving it over. `-y` / `--yes` skips the prompt. |
+| `./pithead factory-reset` | **DESTRUCTIVE**, appliance only. Erase the whole data partition back to a blank machine — chains, wallets, Tor keys and settings all go — then reboot into the setup wizard. The resync that follows costs days, so reach for `config-reset` first. Type-to-confirm unless `-y`. |
+| `./pithead firstboot-wizard` | Browser-first setup for an unconfigured install: serves a token-gated form on `http://<this-host>/`, validates the answers host-side, then runs setup. A pre-seeded `config.json` skips the form; `--cli` runs the terminal wizard instead. The one-time token prints to the console, and five wrong tries mint a fresh one. |
+| `./pithead load-images` | Load the baked container-image archives from `/opt/pithead/images` into the engine when their content changed since the last load. The boot path runs this every boot, so a reinstall or update that ships new images converges with no wizard involvement. |
+| `./pithead local-miner` | Converge this machine's RigForge worker to what the machine is: on a coordinator it follows `local_miner.enabled` (RigForge setup in appliance mode when on, the miner stopped when off); on a rig it follows `rig.json`. Run every boot; a no-op outside the appliance. |
+| `./pithead render-quadlet` | Render Podman Quadlet units — the appliance runtime — from a rendered `.env`. Defaults to `--env .env` and `--out ./quadlet`. The `os/quadlet/` fixtures pin its output byte for byte. |
 
 ### With a node running elsewhere
 
