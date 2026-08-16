@@ -5,8 +5,9 @@ Two are opt-in view-only wallets for payout confirmation, and either bundled nod
 point the stack at one running elsewhere. This doc lists each service and how they connect.
 
 The services provide a Monero full node, P2Pool sidechain mining, Tari merge-mining, a single worker
-endpoint, and a monitoring dashboard. All node P2P and transaction traffic routes over Tor; no public
-port forwarding is required.
+endpoint, and a monitoring dashboard. A node running here routes its P2P and transaction traffic
+over Tor, and no public port forwarding is required; a node you point at over the network is reached
+directly instead.
 
 ## The services
 
