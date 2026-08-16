@@ -90,6 +90,10 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 KEY="$HOME/.ssh/pithead-os-test"
 ip=""
+# Overwritten by every _ssh call with that call's stderr (empty on success). Not a log — just the
+# LAST attempt's error text, so a caller that just gave up can classify why without another round
+# trip. See _ssh_unreachable_reason.
+SSH_ERR="/tmp/pithead-os-ssh.err"
 
 # The wallet every phase submits. It must be checksum-VALID: p2pool refuses a well-formed but
 # checksum-invalid address at startup with a SIGABRT and crash-loops (#829), which killed the
@@ -102,21 +106,28 @@ HARNESS_WALLET="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F
 # handoff. Same throwaway address the stack suite uses.
 HARNESS_TARI="126J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5BJ"
 
-# Every remote call is bounded. Debian socket-activates sshd: the socket unit accepts the TCP
-# connection as soon as it listens and only THEN starts ssh@.service, so a guest that is still
-# booting satisfies ConnectTimeout and stalls in the handshake — which no ssh option bounds.
-# An unbounded call therefore outlives its caller's deadline instead of failing it: on 2026-08-15
-# one boot-phase probe held for five hours against a guest that answered ssh normally the whole
-# time, and the phase reported "SSH never came up" the instant that probe was killed. SSH_TIMEOUT
-# is the per-call ceiling. The default is deliberately far larger than any legitimate call (the
-# longest here is the 1800 s local-miner wait; a slot copy on slow storage is the other long one):
-# this exists ONLY to stop an infinite hang, so it must never be the thing that ends real work —
-# if a call is legitimately slower than this, raise it rather than let the ceiling arbitrate.
+# Every remote call is bounded. CORRECTION (this comment used to claim Debian socket-activates
+# sshd — disproven): os/rootfs/Dockerfile only ever `systemctl enable`/`disable`s the plain
+# ssh.service; no ssh.socket unit is ever enabled. What actually gates it is
+# os/overlay/pithead-ssh-host-keys.conf, a drop-in that adds RequiresMountsFor=/data plus an
+# ExecStartPre chain (generate the host key onto /data, then `sshd -t`) — so ssh.service cannot
+# even begin starting until data.mount is active, and /data is freshly mkfs'd and grown by
+# systemd-repart (os/rootfs/repart.d/40-data.conf) on every first boot. A guest whose sshd has
+# not started yet therefore just refuses the connection (nothing is listening); it does not stall
+# the handshake. The five-hour stall this bound exists for (2026-08-15: one boot-phase probe held
+# for five hours against a guest that answered ssh normally the whole time, and the phase reported
+# "SSH never came up" the instant that probe was killed) was an unbounded remote call outliving
+# its own caller's deadline, not sshd's start order — bounding every call here is what fixed it,
+# regardless of which cause produces the next stall. SSH_TIMEOUT is the per-call ceiling. The
+# default is deliberately far larger than any legitimate call (the longest here is the 1800 s
+# local-miner wait; a slot copy on slow storage is the other long one): this exists ONLY to stop
+# an infinite hang, so it must never be the thing that ends real work — if a call is legitimately
+# slower than this, raise it rather than let the ceiling arbitrate.
 # ponytail: polling loops lower it to a few seconds — a stalled handshake must read as "not ready
 # yet" so the loop re-evaluates its own deadline, which is the whole point of having one.
 _ssh() {
     timeout "${SSH_TIMEOUT:-5400}" ssh -i "$KEY" -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "root@$ip" "$@" 2>"$SSH_ERR"
 }
 _wait_ssh() { # $1 seconds — the definition of "not bricked"
     local deadline=$(($(date +%s) + $1)) SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}"
@@ -125,6 +136,28 @@ _wait_ssh() { # $1 seconds — the definition of "not bricked"
         sleep 5
     done
     return 1
+}
+# Classify why _wait_ssh gave up, using only signals that do NOT need a working SSH session — the
+# guest either isn't running, isn't the one we're still probing, or is running and refusing the
+# connection (sshd not up yet, or genuinely dead) vs. not answering the network at all. $1 is the
+# ip that was being probed.
+_ssh_unreachable_reason() {
+    local probed_ip="$1" state cur_ip
+    state=$(virsh domstate "$VM" 2>/dev/null || echo unknown)
+    if [ "$state" != "running" ]; then
+        printf 'guest VM is not running (libvirt state: %s) — it never had a chance to answer SSH' "$state"
+        return
+    fi
+    cur_ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+    if [ -n "$cur_ip" ] && [ "$cur_ip" != "$probed_ip" ]; then
+        printf 'guest now holds a DIFFERENT DHCP lease (%s, was probing %s) — it rebooted mid-boot and the probe was aimed at a dead lease, not a dead sshd' "$cur_ip" "$probed_ip"
+        return
+    fi
+    if grep -qi refused "$SSH_ERR" 2>/dev/null; then
+        printf 'guest answers on the network but refuses port 22 — sshd is still gated behind the /data mount + host-key generation (pithead-ssh-host-keys.conf), or failed to start; not a network problem'
+        return
+    fi
+    printf 'guest never answered the network at all (last ssh error: %s) — DHCP/routing/firewall problem, not an sshd problem' "$(tr -s ' \n' ' ' <"$SSH_ERR" 2>/dev/null || echo none)"
 }
 _marker() { _ssh cat /etc/pithead-test-marker 2>/dev/null | tr -d "\r\n"; }
 
@@ -281,7 +314,7 @@ cleanup() {
         return
     fi
     vm_destroy
-    rm -f "$DISK" "$SERIAL"
+    rm -f "$DISK" "$SERIAL" "$SSH_ERR"
 }
 trap cleanup EXIT
 
@@ -363,8 +396,17 @@ phase_boot() {
     # and it starts while the image build's export I/O is still settling. 420 s passed idle but
     # clipped under full-battery load (proven both ways on the bench, 2026-08-15); the budget is
     # sized for the loaded case because a deadline that only holds on an idle host is a flake.
+    #
+    # NOT raised again here even though 900 s has since been seen to time out too: that number was
+    # only just proven sufficient on the bench the same day, on the same class of run, so a bigger
+    # arbitrary guess would repeat the exact mistake this file's own history warns about (raising
+    # the ceiling instead of finding out why it was hit) rather than fix anything. What changed
+    # instead is the failure message below — it tells the NEXT run which of three things happened
+    # (guest never running at all, guest rebooted onto a different lease mid-boot, or guest is up
+    # and simply refusing port 22) instead of one flat "never came up", so the next bench timeout
+    # carries the evidence a budget change would need.
     _wait_ssh 900 || {
-        bad "host SSH never came up after the wizard gate — cannot read hugepages/machine-id"
+        bad "host SSH never came up after the wizard gate — cannot read hugepages/machine-id ($(_ssh_unreachable_reason "$ip"))"
         return
     }
 
