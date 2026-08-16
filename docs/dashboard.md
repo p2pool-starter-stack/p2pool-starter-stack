@@ -737,7 +737,8 @@ there is nothing to configure.
 Edit `config.json` from the dashboard. Off by default: set `dashboard.control.enabled: true` in
 `config.json`, set a `dashboard.auth.password` (required — this channel can change the payout
 wallet, so it refuses to run without a login), and run `./pithead apply`. A **Configuration**
-button then appears next to the Simple/Advanced toggle.
+button sits next to the Simple/Advanced toggle whether or not the channel is on; with it off, the
+view explains how to turn it on and nothing else.
 
 Two edit modes build the same candidate config and submit it through the same pipeline below
 ([#529](https://github.com/p2pool-starter-stack/pithead/issues/529)):
@@ -761,8 +762,11 @@ Two edit modes build the same candidate config and submit it through the same pi
   A config path no logical section claims still renders, in a catch-all
   **Other** group — a new schema key can't silently vanish from the editor, and a frontend test
   fails loudly if one ever would. `workers.list[]` (the per-rig descriptors) isn't a form field
-  here — a variable-length list has no single form control for it — edit it via
-  [Worker Inspect](#worker-inspect) or `config.json` directly.
+  here — a variable-length list has no single form control for it, and the host gate refuses a
+  change to it in either edit mode, since it carries each rig's host and token. Edit it in
+  `config.json` and run `./pithead apply`. [Worker Inspect](#worker-inspect) is a different thing:
+  it retunes the *rig's own* settings (pools, donation, autotune, watchdog, temperature cap)
+  through that rig's control API, never the stack's descriptor list.
 
   A field the control gate wouldn't actually commit renders **greyed out**
   ([#613](https://github.com/p2pool-starter-stack/pithead/issues/613)): disabled, its value shown
@@ -907,9 +911,9 @@ Either kind is worth treating like a rotate-now signal in the same spirit as
 the change, someone or something with host or rig access did.
 
 The audit trail is no longer only a log tail: entries — both mirrored from `control.log` and the
-two out-of-band kinds above — persist to the dashboard's own database, so the card's grouping
-selector (hour/day/month) can drill back further than the log's own trimmed window. Pick "All" for
-the flat newest-first view, or a coarser grouping to scan a longer history at a glance.
+two out-of-band kinds above — persist to the dashboard's own database, so the range presets, date
+fields and search reach further back than the log's own trimmed tail. Walk the result with the
+page-size control (5, 10, 20, 50 or 100 rows a page), newest first.
 
 ## Upgrading from the dashboard
 

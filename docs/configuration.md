@@ -81,7 +81,8 @@ The table below has ~90 keys across 13 sections — every leaf key of
 block (the pre-rename alias for `xvb.*`, still read from old configs) — most of it you'll never
 touch. A handful of keys
 are **core**: wallet addresses, `monero.mode`, `p2pool.pool`, the dashboard login and host, and
-`workers.list` — the ones `./pithead setup` asks about (see
+`workers.list` — the group `./pithead setup` asks about, apart from `workers.list` itself, which the
+wizard never prompts for (see
 [Getting Started › Run setup](getting-started.md#3-run-setup)) and, if `dashboard.control.enabled`
 is on, the group the dashboard's [Configuration view](dashboard.md#configuration-view) pins at the
 top of its form. Both read the exact same list, [`config.core-keys.json`](../config.core-keys.json)

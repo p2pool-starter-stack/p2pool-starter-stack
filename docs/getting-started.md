@@ -102,6 +102,8 @@ Setup walks through five stages. It's interactive on the first run and safe to r
      The wizard asks about the Monero node only. To merge-mine against a Tari node on another
      machine, set `tari.mode: remote` and `tari.remote.host` in `config.json` afterwards and run
      `./pithead apply` — see [Remote Tari node](configuration.md#remote-tari-node).
+   - Once the config is written, setup asks one more thing: the hostname you'll use to reach the
+     dashboard in a browser. Enter accepts this machine's hostname.
    - **A few more, Enter for the default:** a faster clearnet initial sync instead of the private
      Tor default; reaching the dashboard from outside your LAN over Tor; Telegram alerts; and
      whether this machine should also mine with its spare CPU (a co-located RigForge worker).

@@ -36,9 +36,12 @@ Include:
 
 The stack's defaults:
 
-- Least-privilege containers: every service runs as a non-root user (not uid 0); leaf services
-  run with `no-new-privileges` and drop all Linux capabilities; internet-facing and
-  Docker-socket-facing services also use a read-only root filesystem.
+- Least-privilege containers: every daemon that touches the network or the chains — `monerod`,
+  P2Pool, the Tari node, `xmrig-proxy`, the dashboard, Tor — runs as a non-root user. Caddy and the
+  two Docker socket proxies run as uid 0 inside their containers, which is why they hold no chain
+  data, drop every Linux capability, and sit on host-loopback-only ports. Leaf services run with
+  `no-new-privileges` and drop all capabilities; internet-facing and Docker-socket-facing services
+  also use a read-only root filesystem.
 - SHA256-verified, version-pinned binaries.
 - Digest-pinned **and signed** images
   ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): the release bundle pins
