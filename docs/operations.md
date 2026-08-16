@@ -231,8 +231,8 @@ both are the same rotate-now signal as an unexplained `control.log` entry.
 
 Unlike `control.log`, which the writer trims to bound its size, the audit trail served by the
 dashboard persists to its own database — mirrored `control.log` rows plus the two out-of-band
-kinds above — so the Security panel's hour/day/month grouping can look back further than the log's
-own trimmed window. Because `rig-edit` reads off the unauthenticated worker feed, it is rate-capped
+kinds above — so the Security panel's range presets, date fields and search look back further than
+the log's own trimmed window. Because `rig-edit` reads off the unauthenticated worker feed, it is rate-capped
 per worker ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a
 fresh change_id every poll can add only a bounded number of `rig-edit` rows per hour before the
 rest are dropped behind a single `rate-limited` marker, so no one LAN device can grow the database
