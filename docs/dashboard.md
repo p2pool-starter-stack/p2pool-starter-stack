@@ -85,7 +85,7 @@ successful refresh.
 ### Top bar
 
 A status strip across the top shows the hostname, host telemetry (CPU, load, RAM, HugePages, disk),
-total hashrate, and 1h / 24h routed averages for both P2Pool and XvB (your split). The disk readout
+the last-update time, and 1h / 24h routed averages for both P2Pool and XvB (your split). The disk readout
 switches from GB to TB once the volume reaches 1 TB, on the same scale in the Telegram `/system`
 reply. An `XMR Pruned` / `XMR Full` badge sits with the other badges beside the stack name, showing
 the bundled node's blockchain mode. It appears for a local node only — with `monero.mode: remote`
@@ -124,6 +124,8 @@ The top bar also surfaces the persistent host conditions that `setup` warns abou
 | `⚠ Low RAM (N GB)` | Under 16 GB of RAM — syncing is memory-heavy and Tari can OOM. | Add RAM for a stable node. |
 | `⚠ No AVX2` | The CPU lacks AVX2, so RandomX mining is much slower. | A hardware limit; nothing to change at runtime. |
 | `⚠ Payout wallet changed` | The wallet p2pool mines to changed within the last 72 hours (old → new, truncated). A confirmation if you changed it; an alarm if you didn't. | Verify `monero.wallet_address` in `config.json`; see [Operations › wallet changes](operations.md). The badge expires on its own after 72 h. |
+| `Disk N% full` | The data filesystem is 85% or more used. | Free space, or move a `data_dir` — the chains keep growing. |
+| `⚠ Disk N% full` | 95% or more used. A full disk corrupts monerod's database mid-write. | Act now: free space or move the chain to a larger volume. |
 
 The first two also push a Telegram alert (`hugepages`, `low_ram`) when first detected, if the bot is
 on; the wallet badge pairs with the `wallet_changed` alert; AVX2 is badge-only (see
