@@ -5550,6 +5550,10 @@ parse_and_validate_config() {
     fi
     # Ensure a strict true/false string is returned, defaulting to true
     DASHBOARD_SECURE=$(jq -r 'if .dashboard.secure != null then .dashboard.secure | tostring else "true" end' "$CONFIG_FILE")
+    # Deliberate opt-in to serving the dashboard on a globally-routable address. Default false:
+    # the appliance auto-publishes every address it holds, and on any network passing IPv6 through
+    # that silently included a public one. The supported off-LAN route is the onion service.
+    DASHBOARD_EXPOSE_PUBLIC_IP=$(config_bool '.dashboard.expose_public_ip' false)
     # Timezone for the dashboard's timestamps/charts. "auto"/empty -> the host's timezone
     # (auto-detected; falls back to Etc/UTC). Set an IANA name (e.g. America/Chicago) to
     # override. Rendered into .env as DASHBOARD_TZ.
@@ -6786,6 +6790,7 @@ TARI_GRPC_ADDRESS=$tari_grpc_addr
 TARI_GRPC_BIND=$tari_grpc_bind
 COMPOSE_PROFILES=$profiles
 DASHBOARD_SECURE=$DASHBOARD_SECURE
+DASHBOARD_EXPOSE_PUBLIC_IP=$DASHBOARD_EXPOSE_PUBLIC_IP
 DASHBOARD_ONION_ENABLED=$DASHBOARD_ONION_ENABLED
 DASHBOARD_ONION_CLIENT_AUTH=$DASHBOARD_ONION_CLIENT_AUTH
 DASHBOARD_TZ=$DASHBOARD_TZ
@@ -6916,6 +6921,17 @@ generate_caddyfile() {
         local extra_ip
         for extra_ip in $(hostname -I 2>/dev/null) localhost; do
             case " $site_hosts " in *" $extra_ip "*) continue ;; esac
+            # `hostname -I` lists EVERY address on every interface, so on any network whose router
+            # passes IPv6 through, a SLAAC/DHCPv6 global unicast address lands here exactly like a
+            # LAN one — and this list is rebuilt every boot by render_derived. That published the
+            # control panel on a globally-routable address, with nothing but the operator's router
+            # between it and the internet; the product must not depend on that. The documented way
+            # to reach the dashboard off-LAN is the onion service, never a routable address, so
+            # nothing supported regresses. Opt back in with dashboard.expose_public_ip if a
+            # deployment really does want it.
+            if [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ] && is_public_ip "$extra_ip"; then
+                continue
+            fi
             site_hosts="$site_hosts $extra_ip"
         done
     fi
@@ -6925,6 +6941,36 @@ generate_caddyfile() {
             out="${out:+$out, }$1://$h$port_suffix"
         done
         printf '%s' "$out"
+    }
+    # Trimming the address list is necessary but is NOT a boundary on its own. Caddy runs with
+    # network_mode: host and opens ONE WILDCARD listener (verified on the bench: `ss -lnt` shows
+    # `*:443`, not per-address sockets), so a client that reaches the box on a global address still
+    # completes the connection — it only has to send a Host header naming an address that IS in the
+    # list, and Caddy matches on content, never on which interface the connection arrived over.
+    # `bind` is what actually closes the socket: Caddy then listens on these addresses only, so the
+    # global one is never accepted at all.
+    #
+    # LITERAL addresses only. A name would be resolved by Caddy at startup, and the appliance's
+    # mDNS name resolves to every address it has — including the one being excluded, which would
+    # re-open exactly what this closes. Loopback is always added: the host-networked dashboard and
+    # Caddy's own admin healthcheck both arrive that way.
+    _bind_line() {
+        local h out=""
+        [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" == "true" ] && return 0
+        is_appliance && [ -z "${DASHBOARD_HOST:-}" ] || return 0
+        for h in $site_hosts; do
+            case "$h" in
+            *:*) ;;                # IPv6 literal
+            *[!0-9.]*) continue ;; # a name, not an address
+            esac
+            out="${out:+$out }$h"
+        done
+        [ -n "$out" ] || return 0
+        # NO trailing newline: this is consumed as $(_bind_line) on its own heredoc line, and
+        # command substitution strips trailing newlines anyway — emitting one here produced
+        # `bind ... ::1    basic_auth {` on a single line, which Caddy will not parse. Same
+        # convention as $auth above.
+        printf '    bind %s 127.0.0.1 ::1' "$out"
     }
 
     : >"Caddyfile"
@@ -6958,6 +7004,7 @@ generate_caddyfile() {
         cat <<EOF >>"Caddyfile"
 $(_site_addresses https) {
 $tls_line
+$(_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -6969,6 +7016,7 @@ EOF
         log "Generating Caddyfile for HTTP ($site_hosts$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >>"Caddyfile"
 $(_site_addresses http) {
+$(_bind_line)
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {
@@ -6991,6 +7039,7 @@ EOF
         cat <<EOF >>"Caddyfile"
 
 http://${NETWORK_PREFIX}.1 {
+    bind ${NETWORK_PREFIX}.1
 $auth
 $logblk
     reverse_proxy 127.0.0.1:8000 {

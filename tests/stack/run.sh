@@ -1556,6 +1556,62 @@ case "$caddy_http" in
 *) ok "caddyfile insecure has no TLS" ;;
 esac
 
+echo "== unit: generate_caddyfile never publishes or binds a globally-routable address =="
+# The appliance auto-publishes every address `hostname -I` reports, so on any network passing IPv6
+# through, a GLOBAL unicast address was silently added — the control panel reachable from the open
+# internet with nothing but the operator's router in the way. Filtering the SITE LIST is necessary
+# and NOT sufficient: Caddy runs host-networked and opens ONE WILDCARD listener (`*:443`, observed
+# on the bench), and it matches on Host content, never on which interface a connection arrived on
+# — so a client reaching the box on the global address only has to send a Host header naming an
+# address that IS listed. `bind` is the actual boundary. Addresses below are the real set from the
+# physical appliance: LAN v4, two podman bridge gateways, a GLOBAL v6 (2605:) and a ULA (fd1c:).
+_caddy_appliance() { # $1 = value for DASHBOARD_EXPOSE_PUBLIC_IP
+    # shellcheck disable=SC1090  # STACK path is dynamic by design
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    is_appliance() { return 0; }
+    appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
+    appliance_mint_cert() { return 1; }
+    hostname() { printf '192.168.1.202 10.89.0.1 172.28.0.1 2605:59c8:cd7:ba08::1 fd1c:1d5:225c:8::1\n'; }
+    DASHBOARD_SECURE=true HOST_IP=pithead.local DASHBOARD_AUTH_HASH_B64="" \
+        DASHBOARD_EXPOSE_PUBLIC_IP="$1" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+}
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_default="$(_caddy_appliance false)"
+case "$caddy_default" in
+*2605:*) bad "the global v6 is not published as a site" "2605: appears in the Caddyfile" ;;
+*) ok "the global v6 is not published as a site" ;;
+esac
+assert_contains "the LAN address is still published" "$caddy_default" "192.168.1.202"
+assert_contains "the ULA is still published — private scope, not routable" "$caddy_default" "fd1c:1d5:225c:8::1"
+assert_contains "a bind line closes the wildcard listener" "$caddy_default" "    bind "
+assert_contains "bind keeps loopback for the host-networked dashboard" "$caddy_default" "127.0.0.1 ::1"
+# The bind line is the boundary — it specifically must not carry the global address.
+bindline=$(printf '%s' "$caddy_default" | grep '^    bind ')
+case "$bindline" in
+*2605:*) bad "the bind line excludes the global v6" "global address present in: $bindline" ;;
+*) ok "the bind line excludes the global v6" ;;
+esac
+# The bind directive must stand ALONE on its line. `$(...)` strips trailing newlines, so emitting
+# one inside the helper silently glued the next directive on: `bind ... ::1    basic_auth {`,
+# which Caddy will not parse — a config that would have taken the dashboard down. Caught on the
+# bench, not here, so pin the shape: nothing may follow the last bound address.
+case "$bindline" in
+*"::1") ok "the bind directive stands alone on its line" ;;
+*) bad "the bind directive stands alone on its line" "another directive was glued on: $bindline" ;;
+esac
+# Opt-in restores the old behaviour for a deployment that genuinely wants it.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_optin="$(_caddy_appliance true)"
+assert_contains "the opt-in publishes the global v6 again" "$caddy_optin" "2605:59c8:cd7:ba08::1"
+case "$caddy_optin" in
+*"    bind "*) bad "the opt-in leaves the listener open" "a bind line was still emitted" ;;
+*) ok "the opt-in leaves the listener open" ;;
+esac
+unset -f _caddy_appliance
+unset caddy_default caddy_optin bindline
+
 echo "== unit: generate_caddyfile custom port (#740) =="
 # A custom HOST_PORT moves the LAN vhost off the scheme default so a co-hosted reverse proxy keeps
 # 80/443. In HTTPS mode it also emits the global `auto_https disable_redirects` so nothing holds :80.
