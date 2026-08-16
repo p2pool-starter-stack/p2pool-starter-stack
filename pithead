@@ -1987,7 +1987,7 @@ repair_broken_image_store() { # $1: container engine
 
 load_baked_images() { # $1 (optional): image ref whose absence forces a load despite a matching digest
     local required="${1:-}" dir="${PITHEAD_IMAGES_DIR:-/opt/pithead/images}"
-    local engine archive sha rec recorded
+    local engine archive sha rec recorded load_pid t0 load_rc
     engine=$(container_engine)
     # Before trusting any digest record: a record describes what was LOADED, and the check below
     # only asks whether the image still EXISTS. A store damaged as described above satisfies both
@@ -2012,7 +2012,31 @@ load_baked_images() { # $1 (optional): image ref whose absence forces a load des
         # The single slowest step of a first or post-update boot, and the one worth narrating.
         _console "Loading this build's container images ($(basename "$archive")) — the slow part..."
         mkdir -p "$PWD/data" 2>/dev/null || true
-        if "$engine" load -i "$archive" >/dev/null 2>&1; then
+        # `podman load` prints nothing a console ever sees, and on USB media this step runs for
+        # MINUTES — measured at 3m47s on the bench, behind a line promising "a minute or two".
+        # A box that is working then looks exactly like a box that has hung, and it was read as
+        # hung twice. A rising elapsed count is the whole fix: it is the one thing that tells
+        # slow apart from stuck. 30s, so a four-minute load costs eight lines, not sixteen.
+        #
+        # The HEARTBEAT is what gets backgrounded, never the load: keeping the load in the
+        # foreground preserves its exit status exactly, and sidesteps the zombie race that
+        # polling a background pid with `kill -0` would introduce (a reaped-but-not-yet-waited
+        # child still answers, so a FAST load would pay a full sleep for nothing).
+        t0=$(date +%s)
+        (
+            while :; do
+                sleep "${PITHEAD_LOAD_HEARTBEAT_SECS:-30}"
+                _console "  still loading — $(($(date +%s) - t0))s elapsed, this is normal on USB media"
+            done
+        ) &
+        load_pid=$!
+        load_rc=0
+        "$engine" load -i "$archive" >/dev/null 2>&1 || load_rc=$?
+        # Stopped on BOTH paths, and before the branch, so no arm can leak a heartbeat that
+        # narrates a load which already finished.
+        kill "$load_pid" 2>/dev/null || true
+        wait "$load_pid" 2>/dev/null || true
+        if [ "$load_rc" -eq 0 ]; then
             printf '%s' "$sha" >"$rec" 2>/dev/null || true # unrecorded -> reloads next boot
         else
             # No record on failure, on purpose: the next boot must retry, not skip.
@@ -2175,8 +2199,18 @@ firstboot_wizard() {
             -e WIZARD_TLS_CERT="${cert_fp:+/wizard-spool/wizard.crt}" \
             -e WIZARD_TLS_KEY="${cert_fp:+/wizard-spool/wizard.key}" \
             -v "$spool":/wizard-spool \
-            "$image" -m mining_dashboard.wizard >/dev/null ||
+            "$image" -m mining_dashboard.wizard >/dev/null || {
+            # `error` writes to stderr, which systemd routes to /dev/console — ONE device,
+            # whichever the kernel cmdline named LAST. On a box whose monitor is not that device
+            # the failure is invisible, so the newest thing on screen stays "preparing the setup
+            # page" and a STOPPED box reads as a slow one for as long as the operator is willing
+            # to wait. That is how a three-minute failure was mistaken for an hour of progress.
+            # _console reaches every physical console, which is the whole point here.
+            _console "" "Setup has STOPPED — this box is no longer preparing a page." \
+                "The container engine could not start the setup page." \
+                "Diagnose with: journalctl -u pithead-firstboot -b"
             error "Could not start the wizard container ($engine, $image). Pre-seed config.json or run '$0 firstboot-wizard --cli'."
+        }
         local mdns_name scheme
         mdns_name="$(hostname).local"
         scheme="http"
