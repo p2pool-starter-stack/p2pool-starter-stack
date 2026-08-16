@@ -11,7 +11,11 @@ manage the host.
 ## What you need
 
 - An x86-64 machine with UEFI you can dedicate to mining. It will be **erased**.
-- 16 GB RAM or more, and an internal SSD or NVMe with room for the chains. The stack budgets
+- 16 GB RAM or more — that is the supported floor, not a suggestion: the appliance reserves
+  6 GB of it for mining at every boot. With less RAM it still boots, but it prints a warning
+  on the machine's screen and shrinks that reservation — mining runs slower and everything
+  else runs squeezed, at every boot until the machine has 16 GB.
+- An internal SSD or NVMe with room for the chains. The stack budgets
   about 120 GB for pruned Monero and about 200 GB for a local Tari node (measured chains:
   roughly 100 GB and 150 GB in August 2026, and growing — the budget is the growth room), so
   **400 GB or more** runs both locally: the appliance keeps a 256 MB boot partition and two 4 GB
@@ -145,9 +149,10 @@ look at it, the same way you would watch any other machine on the network.
 
 **Pithead + RigForge** asks every coordinator question below, unchanged, and adds the built-in
 miner on top. The two mining workloads on that one box do not compete for HugePages: the
-appliance reserves a fixed 6 GiB RandomX pool at boot, and the built-in miner is told to leave
-the coordinator's share alone (`hugepages_reserve_extra_mb` in its own config) rather than the
-two halves independently growing into each other's reservation.
+appliance reserves a RandomX pool sized to its RAM at boot (6 GiB on the supported 16 GB
+machine), and the built-in miner is told to leave the coordinator's share alone
+(`hugepages_reserve_extra_mb` in its own config) rather than the two halves independently
+growing into each other's reservation.
 
 Switching back to plain **Pithead** after trying one of the others resets the local-miner switch
 to its documented default (off) and, on the installation medium, clears a disk choice of "run
@@ -295,12 +300,18 @@ came up. If it did not — it fails to boot, or the stack does not start — **t
 goes back to the previous version on its own**, with nobody present. That is the entire
 point of keeping two copies.
 
-**In this test build there is no update button yet.** Applying an OS image update from
-the dashboard — and rolling back from it — is being built; until it ships, updates to a
-test machine are applied by the release process, not by you. The dashboard's update
-notice may still tell you a newer version exists; the one-click action it offers on
-other installs refuses on the appliance on purpose, because it would apply the wrong
-kind of update.
+Updates are applied from the dashboard: an **OS updates** control in the header checks
+for a new release, downloads its signed image to the data partition (over Tor, resumable
+— mining keeps running), verifies the file on the machine before anything is written to
+the idle copy, installs it, and then waits for you: **nothing reboots on its own**. The
+reboot is a separately confirmed step, the only one that pauses mining — typically under
+five minutes — and after it the machine runs its normal health checks before keeping the
+new version. A banner reports the outcome, including an automatic return to the previous
+version if the new one failed. The machine refuses images that are unsigned, built for
+different hardware, or older than what it runs; there is no override. See
+[Dashboard › Updating the appliance OS](dashboard.md#updating-the-appliance-os) for the
+step-by-step. The one-click tarball upgrade other installs offer refuses on the
+appliance on purpose — it would apply the wrong kind of update.
 
 Your data is never part of an update. Wallets, settings and the chain live on a separate
 partition that updates and rollbacks do not touch.
@@ -412,11 +423,14 @@ you have a monitor and a working password. It is the recovery path when the dash
 is lost.
 
 Prepare the stick with a normal FAT32 partition and a `pithead-config.json` at its root — copy
-`config.json` from a machine you already set up, or write one by hand (see
-[configuration](configuration.md)). At boot:
+`config.json` from a machine you already set up, or write just the settings you want to change
+(see [configuration](configuration.md)). Settings the file does not name keep their current
+values: `{"p2pool": {"pool": "nano"}}` changes the pool tier and nothing else — the dashboard
+login, the generated node credentials, and every other setting stay as they are. To clear a
+setting instead of keeping it, name it with a value of `null`. At boot:
 
-- If the staged file matches the running configuration exactly, the console says so and the
-  boot carries on without stopping.
+- If the staged file changes nothing — every setting it names already holds that value — the
+  console says so and the boot carries on without stopping.
 - If it differs, the console prints every changed setting: the old value, the new value, and
   for a password, token or RPC credential, that it changed — never what it changed to. Wallet
   addresses print in full; confirming the payout address is the point of the display.

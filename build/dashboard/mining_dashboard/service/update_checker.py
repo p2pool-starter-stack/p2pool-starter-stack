@@ -69,7 +69,18 @@ class GitHubReleaseClient:
                 return None
             data = resp.json()
             tag, url = data.get("tag_name"), data.get("html_url")
-            return {"tag": tag, "url": url} if tag and url else None
+            if not (tag and url):
+                return None
+            rel = {"tag": tag, "url": url}
+            # The appliance's OS bundle rides the same release as a .raucb asset; surface its
+            # size so the OS-update control can say what a download costs before it starts.
+            # Releases without one (every DIY-only release, and RigForge's) just omit the key.
+            for asset in data.get("assets") or []:
+                if isinstance(asset, dict) and str(asset.get("name", "")).endswith(".raucb"):
+                    if isinstance(asset.get("size"), int) and asset["size"] > 0:
+                        rel["raucb_size"] = asset["size"]
+                    break
+            return rel
         except (requests.RequestException, ValueError) as e:
             logger.debug("Update check failed (kept silent): %s", e)
             return None
@@ -114,4 +125,6 @@ class UpdateChecker:
         rel = self.latest_release_cached(now)
         if rel:
             self.result = compute_update(self.running, rel["tag"], rel["url"])
+            if self.result and rel.get("raucb_size"):
+                self.result = {**self.result, "raucb_size": rel["raucb_size"]}
         return self.result

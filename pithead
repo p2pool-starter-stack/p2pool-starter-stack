@@ -938,6 +938,19 @@ docker_boot_enabled() {
     systemctl is-enabled docker.service >/dev/null 2>&1 || systemctl is-enabled docker.socket >/dev/null 2>&1
 }
 
+# Appliance low-RAM degrade: the boot-time sizing (os/overlay/pithead-hugepages) leaves its
+# marker in /run when it shrank or released the RandomX reservation — the plain-words message
+# first, then the machine-readable "pages=N" record hugepages_decision_pages reads — and doctor
+# repeats the words here, not the record. WARN, not FAIL, on purpose — the appliance's A/B
+# commit gate takes doctor's exit code, and a degraded-but-serving box must still commit its
+# slot. The file never exists off the appliance, so this is a no-op everywhere else. A separate
+# function so the marker read is unit-testable; the marker path override matches the overlay's.
+check_hugepages_degraded() {
+    local marker="${PITHEAD_HUGEPAGES_MARKER:-/run/pithead-hugepages-degraded}"
+    [ -f "$marker" ] || return 0
+    dr_warn "$(head -n 1 "$marker" | tr '\t' ' ')"
+}
+
 # True (rc 0) when the host CPU advertises AVX2 — RandomX wants it, but it's performance-only,
 # not fatal. Linux reads /proc/cpuinfo; macOS reads sysctl's machdep CPU features.
 cpu_has_avx2() {
@@ -1083,6 +1096,7 @@ doctor() {
         else
             dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run './pithead setup' (kernel optimization) to reserve them."
         fi
+        check_hugepages_degraded
 
         # Runtime counterpart to setup's capacity pre-flight: preflight_resources checks MemTotal
         # (does the host have enough RAM at all), this checks MemAvailable (is enough free right
@@ -2610,13 +2624,19 @@ announce_stratum_auth() {
 rigforge_dir() { printf '%s' "${PITHEAD_RIGFORGE_DIR:-/data/rigforge}"; }
 
 # RigForge's config.json is a DERIVED file on the appliance — a pure function of pithead's
-# config.json + .env, rebuilt on every render like the Caddyfile. It carries the three values
-# the miner needs: the stack's own stratum over loopback, the stratum password when one is set,
-# and the stack's HugePages budget as hugepages_reserve_extra_mb — the hand-off that makes
-# RigForge the pool's single writer. Its grow-only sysctl sizes the whole pool (miner need +
-# this headroom); pithead's own write never shrinks it back (optimize_kernel). Declaring the
-# budget beats maxing the two reservations: both sides hold pages at the same time, so only the
-# sum survives one side growing into its own reservation.
+# config.json + .env + the boot-time sizing decision, rebuilt on every render like the
+# Caddyfile. It carries the three values the miner needs: the stack's own stratum over
+# loopback, the stratum password when one is set, and the stack's ACTUAL reservation as
+# hugepages_reserve_extra_mb — the hand-off that makes RigForge the pool's single writer. Its
+# grow-only sysctl sizes the whole pool (miner need + this headroom); pithead's own write
+# never grows past the same decision (optimize_kernel). Declaring the budget beats maxing the
+# two reservations: both sides hold pages at the same time, so only the sum survives one side
+# growing into its own reservation. The headroom follows hugepages_decision_pages, NOT the
+# baked constant (#977): on a degraded box a constant 6144 had RigForge's sysctl re-inflate
+# the shrunk pool every boot — and not the live HugePages_Total either, because a mid-run
+# `apply` re-renders after RigForge has already grown the pool, and handing the grown pool
+# back as headroom would ratchet it up on every apply. Healthy hardware has no marker, so the
+# declared value is the same 6144 MB it has always been.
 render_local_miner_config() {
     is_appliance || return 0
     # Not on a rig, ever. This function's "switched off" branch DELETES the miner's config, and
@@ -2638,7 +2658,7 @@ render_local_miner_config() {
     local port secret
     port=$(stratum_port_effective)
     secret=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
-    jq -n --arg url "127.0.0.1:$port" --arg pass "$secret" --argjson reserve "$((PITHEAD_HUGEPAGES * 2))" \
+    jq -n --arg url "127.0.0.1:$port" --arg pass "$secret" --argjson reserve "$(($(hugepages_decision_pages) * 2))" \
         '{pools: [({url: $url} + (if $pass != "" then {pass: $pass} else {} end))], hugepages_reserve_extra_mb: $reserve}' \
         >"$dir/config.json"
     log "Local miner config rendered to $dir/config.json (pool 127.0.0.1:$port)."
@@ -2842,6 +2862,50 @@ os_migration_hold_active() { # rc 0 when this boot is the held, pre-commit boot 
     [ -n "$v" ] && [ "$v" = "$(os_running_version)" ]
 }
 
+# The version floor + downgrade refusals, shared verbatim by the `os-update` CLI and the
+# dashboard's os-verify/os-install control verbs so the two doors can never drift apart. Echoes
+# the refusal reason (empty = pass). A correctly-signed bundle is not automatically a safe one:
+# an OLDER image re-introduces the holes the newer one fixed under our own signature, and an
+# image below the /data migration floor cannot read the chain data a newer release migrated.
+# Both guards fail CLOSED: a version the comparator cannot parse (a pre-release/-prep suffix,
+# garbage, or an absent stamp) is not proof of safety, so it refuses rather than skips.
+# semver_newer only understands clean X.Y.Z, so os_semver_ok gates every comparison.
+os_update_version_guard() { # $1: bundle version, $2: allow_downgrade 0|1 — echoes refusal or nothing
+    local bundle_version="$1" allow_downgrade="${2:-0}" running_version floor_file floor
+    running_version=$(os_running_version)
+
+    # The data floor is not a policy knob — installing below it strands the migrated chain data,
+    # so it refuses with no override. A floor FILE that exists is authoritative: a corrupt or
+    # unparseable floor, or a bundle we cannot prove is at or above it, refuses. The escape is a
+    # factory reset or restoring a matching backup.
+    floor_file=$(os_data_floor_file)
+    if [ -f "$floor_file" ]; then
+        floor=$(os_data_floor)
+        if ! os_semver_ok "$floor"; then
+            printf '%s' "Refusing: the /data migration floor is unreadable ('${floor:-empty}'). A corrupt floor is not permission to install over migrated chain data — restore it, or recover with a factory reset (loses the chain) or a matching backup."
+            return 0
+        fi
+        if ! os_semver_ok "$bundle_version" || semver_newer "$floor" "$bundle_version"; then
+            printf '%s' "Refusing: /data was migrated forward and now needs OS >= $floor to read; this bundle is '${bundle_version:-unstamped}'. Installing it would strand the chain data. Recover with a factory reset (loses the chain) or by restoring a backup taken on $floor or newer."
+            return 0
+        fi
+    fi
+
+    # Downgrade guard: install without --allow-downgrade ONLY when the bundle is a clean release
+    # semver provably newer than or equal to the running one. An older, pre-release, or unstamped
+    # bundle re-opens fixed holes under a valid signature — it needs the explicit flag. Skipped
+    # only when we cannot read our OWN version (a source checkout; os-update is appliance-only in
+    # practice, where the running version is always the baked release stamp).
+    if os_semver_ok "$running_version" &&
+        { ! os_semver_ok "$bundle_version" || semver_newer "$running_version" "$bundle_version"; }; then
+        if [ "$allow_downgrade" -eq 0 ]; then
+            printf '%s' "Refusing a possible downgrade: bundle version '${bundle_version:-unstamped}', running $running_version. Only a clean X.Y.Z release at or newer than the running one installs without confirmation. Pass --allow-downgrade to install an older, pre-release, or unstamped bundle on purpose."
+            return 0
+        fi
+    fi
+    return 0
+}
+
 os_update_needs_confirmation() { # $1: running variant, $2: bundle variant — rc 0 = confirm first
     # Consent is needed whenever an install flips the box's shell/SSH posture, in EITHER direction,
     # or when the bundle's posture can't be verified. A debug image bakes a standing root
@@ -2877,43 +2941,17 @@ os_update() {
         error "rauc is not available here — OS updates apply to the appliance image, not a checkout install."
     [ -f "$bundle" ] || error "No such bundle: $bundle"
 
-    # Version floor + data-migration guards. A correctly-signed bundle is not automatically a safe
-    # one: an OLDER image re-introduces the holes the newer one fixed under our own signature, and
-    # an image below the /data migration floor cannot read the chain data a newer release migrated.
-    # Both guards fail CLOSED: a version the comparator cannot parse (a pre-release/-prep suffix,
-    # garbage, or an absent stamp) is not proof of safety, so it refuses rather than skips.
-    # semver_newer only understands clean X.Y.Z, so os_semver_ok gates every comparison.
-    local bundle_version bundle_min bundle_migrates running_version floor_file floor
+    # Version floor + data-migration guards — the exact refusals the dashboard's os-verify/
+    # os-install verbs run (os_update_version_guard, shared so the two doors never drift).
+    local bundle_version bundle_min bundle_migrates running_version guard_reason
     bundle_version=$(os_bundle_meta "$bundle" version)
     bundle_min=$(os_bundle_meta "$bundle" minimum_os_version)
     bundle_migrates=$(os_bundle_meta "$bundle" data_migration)
     running_version=$(os_running_version)
-
-    # The data floor is not a policy knob — installing below it strands the migrated chain data, so
-    # it hard-refuses with no --allow-downgrade override. A floor FILE that exists is authoritative:
-    # a corrupt/unparseable floor, or a bundle we cannot prove is at or above it, refuses. The escape
-    # is a factory reset or restoring a matching backup.
-    floor_file=$(os_data_floor_file)
-    if [ -f "$floor_file" ]; then
-        floor=$(os_data_floor)
-        if ! os_semver_ok "$floor"; then
-            error "Refusing: the /data migration floor is unreadable ('${floor:-empty}'). A corrupt floor is not permission to install over migrated chain data — restore it, or recover with a factory reset (loses the chain) or a matching backup."
-        fi
-        if ! os_semver_ok "$bundle_version" || semver_newer "$floor" "$bundle_version"; then
-            error "Refusing: /data was migrated forward and now needs OS >= $floor to read; this bundle is '${bundle_version:-unstamped}'. Installing it would strand the chain data. Recover with a factory reset (loses the chain) or by restoring a backup taken on $floor or newer."
-        fi
-    fi
-
-    # Downgrade guard: install without --allow-downgrade ONLY when the bundle is a clean release
-    # semver provably newer than or equal to the running one. An older, pre-release, or unstamped
-    # bundle re-opens fixed holes under a valid signature — it needs the explicit flag. Skipped only
-    # when we cannot read our OWN version (a source checkout; os-update is appliance-only in practice,
-    # where the running version is always the baked release stamp).
-    if os_semver_ok "$running_version" &&
+    guard_reason=$(os_update_version_guard "$bundle_version" "$allow_downgrade")
+    [ -z "$guard_reason" ] || error "$guard_reason"
+    if [ "$allow_downgrade" -eq 1 ] && os_semver_ok "$running_version" &&
         { ! os_semver_ok "$bundle_version" || semver_newer "$running_version" "$bundle_version"; }; then
-        if [ "$allow_downgrade" -eq 0 ]; then
-            error "Refusing a possible downgrade: bundle version '${bundle_version:-unstamped}', running $running_version. Only a clean X.Y.Z release at or newer than the running one installs without confirmation. Pass --allow-downgrade to install an older, pre-release, or unstamped bundle on purpose."
-        fi
         warn "Installing a bundle that is not a verified upgrade (version '${bundle_version:-unstamped}', running $running_version) — downgrade explicitly allowed."
     fi
 
@@ -5810,6 +5848,9 @@ readonly CURL_CAP_SMALL=1048576 # 1 MiB — GitHub release JSON, rig control res
 # ponytail: 16 MiB, ~128× today's ~126 KB bundle; bump if a real bundle ever approaches it (a
 # cap-hit surfaces as _upg_fail's "could not download over Tor", loud but network-flavoured).
 readonly CURL_CAP_BUNDLE=16777216 # 16 MiB — the pithead.tar.gz release bundle (code + configs)
+# The signed OS image bundle (.raucb) is a whole rootfs — its own envelope, ~3× today's size so a
+# grown release still downloads while a runaway stream is still cut off.
+readonly CURL_CAP_OS_BUNDLE=3221225472 # 3 GiB — the pithead-os .raucb A/B update bundle
 
 # Render the pre-masked prefill copy (#440): the live config with every SET secret leaf replaced
 # by the {"__secret__":true} sentinel, written atomically to <control-dir>/masked/config.json.
@@ -5863,6 +5904,12 @@ render_masked_config() { # <control-dir>
 prepare_control_dirs() {
     mkdir -p "$CONTROL_DIR/requests" "$CONTROL_DIR/staged" "$CONTROL_DIR/results" "$CONTROL_DIR/audit"
     ensure_owner "$CONTROL_DIR/requests" "$APP_UID" "$APP_GID"
+    # Appliance only: seed the OS-update state file the dashboard reads through the results/
+    # mount. Its presence is what tells the container "this is an appliance — render the OS
+    # update control"; the os-* verbs and pithead-boot keep it current from then on.
+    if is_appliance && [ ! -f "$CONTROL_DIR/results/os-update-state.json" ]; then
+        os_state_write "$CONTROL_DIR" '{"step":"idle"}'
+    fi
     # Re-render the masked prefill copy on every setup/apply/upgrade (#440) — any path that can
     # change config.json runs through here, so the copy can never serve a stale schema for long.
     render_masked_config "$CONTROL_DIR"
@@ -7554,6 +7601,26 @@ EOF
 # so the reservation and the declaration cannot drift apart.
 readonly PITHEAD_HUGEPAGES=3072
 
+# The budget this MACHINE actually gets (#977). On the appliance, the boot-time sizing
+# (os/overlay/pithead-hugepages) may have chosen a smaller pool for the fitted RAM and recorded
+# the chosen page count as the marker's "pages=N" line — that record is the single authority
+# every later writer honours: optimize_kernel caps its grow at it, and render_local_miner_config
+# declares it (never the baked constant) as RigForge's headroom. Without the record both writers
+# re-inflated the pool the sizing had just shrunk, while the marker and doctor kept saying
+# "reduced". No marker — every DIY host, every healthy appliance — means the full budget.
+hugepages_decision_pages() {
+    local pages
+    # || true: no marker means sed fails under pipefail, and that is the normal case everywhere
+    # but a degraded appliance — it must read as "full budget", never abort under set -e.
+    pages=$(sed -n 's/^pages=\([0-9][0-9]*\)$/\1/p' \
+        "${PITHEAD_HUGEPAGES_MARKER:-/run/pithead-hugepages-degraded}" 2>/dev/null | head -n 1) || true
+    if [ -n "$pages" ] && [ "$pages" -lt "$PITHEAD_HUGEPAGES" ]; then
+        echo "$pages"
+    else
+        echo "$PITHEAD_HUGEPAGES"
+    fi
+}
+
 # Kernel boot params pithead appends to GRUB_CMDLINE_LINUX_DEFAULT for RandomX: reserve 6 GiB of
 # 2 MiB HugePages and disable Transparent HugePages. NOTE the THP param is SINGULAR
 # (transparent_hugepage) — the plural form is an unrecognized param the kernel silently ignores,
@@ -7609,13 +7676,18 @@ optimize_kernel() {
         # and whoever writes an absolute value last steals the other side's pages — the kernel
         # shrinks the pool to the in-use floor and leaves zero headroom for a restart on either
         # side. RigForge's own write is grow-only for the same reason, so write ordering between
-        # the two products stays safe regardless of who runs first.
-        local current_hugepages
+        # the two products stays safe regardless of who runs first. The grow TARGET is the
+        # sizing decision, not the raw constant (#977): on a degraded appliance the wizard-accept
+        # path runs setup as root, and growing to the full budget here re-inflated the pool the
+        # boot-time sizing had just shrunk. No marker (DIY, healthy appliance) — full budget,
+        # exactly the old behavior.
+        local current_hugepages hp_target
+        hp_target=$(hugepages_decision_pages)
         current_hugepages=$(cat "${PITHEAD_NR_HUGEPAGES_FILE:-/proc/sys/vm/nr_hugepages}" 2>/dev/null || echo 0)
-        if [ "${current_hugepages:-0}" -ge "$PITHEAD_HUGEPAGES" ] 2>/dev/null; then
-            log "HugePages pool already holds $current_hugepages pages (>= $PITHEAD_HUGEPAGES) — leaving it as is."
+        if [ "${current_hugepages:-0}" -ge "$hp_target" ] 2>/dev/null; then
+            log "HugePages pool already holds $current_hugepages pages (>= $hp_target) — leaving it as is."
         else
-            sudo sysctl -w vm.nr_hugepages="$PITHEAD_HUGEPAGES"
+            sudo sysctl -w vm.nr_hugepages="$hp_target"
         fi
 
         if [ -f "/etc/default/grub" ]; then
@@ -9080,7 +9152,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # Ordered BEFORE the cosign precondition on purpose: an appliance cannot take a tarball
     # upgrade at all, whatever the host holds, so the appliance answer is the informative one.
     if is_appliance; then
-        _upg_reject "this machine is a Pithead OS appliance — it updates through signed OS images, not release tarballs, and a tarball upgrade would silently revert at the next reboot. The dashboard OS-update flow is tracked work; nothing was changed."
+        _upg_reject "this machine is a Pithead OS appliance — it updates through signed OS images, not release tarballs, and a tarball upgrade would silently revert at the next reboot. Use the OS update control in the dashboard header; nothing was changed."
         return 0
     fi
     # #376/#1023: cosign is a PRECONDITION of a one-click upgrade, not a consequence of already
@@ -9849,6 +9921,454 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
     control_audit "$auditf" "$id" "$actor" "worker-upgrade" "accepted"
 }
 
+# --- OS update over the control channel (appliance A/B slots, dashboard-driven) ---------------
+# The dashboard container only ASKS; every verb below re-derives, re-verifies and executes on the
+# HOST, and every one refuses outright on a non-appliance host (no RAUC, nothing to update).
+# The flow is deliberately staged — check, download (resumable, to /data), verify the LOCAL file,
+# install the verified local bundle, then an EXPLICIT reboot — so every network step is separated
+# from every destructive step and a bundle is never stream-installed over Tor.
+
+os_update_staging_dir() { printf '%s' "${PITHEAD_OS_UPDATE_DIR:-$PWD/data/os-update}"; }
+os_update_inflight_file() { printf '%s/in-flight.json' "$(os_update_staging_dir)"; }
+os_update_target_file() { printf '%s/target.json' "$(os_update_staging_dir)"; }
+
+# The persistent OS-update state the dashboard renders (step across reloads and reboots, and the
+# post-reboot verdict). Lives in the results/ leg of the control spool under a fixed non-uuid
+# name, so it rides the existing read-only mount into the container — its presence is also how
+# the dashboard knows it runs on an appliance at all. Atomic like control_write_result.
+os_state_write() { # <control-dir> <json>
+    mkdir -p "$1/results" 2>/dev/null || true
+    printf '%s\n' "$2" >"$1/results/.os-update-state.tmp" &&
+        mv "$1/results/.os-update-state.tmp" "$1/results/os-update-state.json"
+}
+
+# ponytail: test seam for the KVM battery — a root-owned `os-update-test-base` file beside the
+# checkout redirects the release lookup and the bundle download to a local URL (and drops the
+# Tor SOCKS, which cannot reach the bench). The ownership check stops a non-root plant from
+# steering root's downloads; verification still runs for real against the slot keyring either
+# way, so the seam can redirect WHERE the bytes come from but never what installs.
+os_update_test_base() {
+    local f="$PWD/os-update-test-base"
+    { [ -f "$f" ] && [ -O "$f" ]; } || return 1
+    tr -d ' \t\r\n' <"$f"
+}
+
+# The latest-release JSON, over the stack's own Tor SOCKS like every other stack egress.
+os_release_fetch() {
+    local base
+    if base=$(os_update_test_base); then
+        curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" "$base/releases-latest.json" 2>/dev/null
+        return
+    fi
+    local prefix socks
+    prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
+    [ -n "$prefix" ] || prefix="172.28.0"
+    socks="${prefix}.25:9050"
+    curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
+        -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest" 2>/dev/null
+}
+
+# One shared refusal writer for the os-* verbs (they share one result/audit shape).
+control_os_refuse() { # <cdir> <id> <actor> <action> <status rejected|failed> <reason>
+    control_write_result "$1/results" "$2" "$(jq -n --arg s "$5" --arg e "$6" '{status:$s,error:$e,ts:(now|floor)}')"
+    control_audit "$1/audit/control.log" "$2" "$3" "$4" "$5"
+}
+
+# The gate every os-* verb opens with: appliance only, and at most ONE os verb per drain — a
+# download or install holds the single-threaded root runner for minutes, so a compromised
+# container queueing a flood must not starve commit/restart intents (the worker-upgrade lesson).
+control_os_gate() { # <cdir> <id> <actor> <action> — rc 0 = proceed (budget consumed)
+    if ! is_appliance; then
+        control_os_refuse "$1" "$2" "$3" "$4" rejected "OS updates apply only to a Pithead OS appliance — this install updates through release tarballs (the header upgrade button). Nothing was changed."
+        return 1
+    fi
+    if [ "${CONTROL_OS_BUDGET:-0}" -le 0 ]; then
+        control_os_refuse "$1" "$2" "$3" "$4" rejected "another OS-update step is already running in this cycle — retry in a moment."
+        return 1
+    fi
+    CONTROL_OS_BUDGET=$((CONTROL_OS_BUDGET - 1))
+    return 0
+}
+
+# The local-bundle refusals shared by os-verify and os-install (install re-runs them so a result
+# can never go stale between the two clicks). Echoes the refusal reason; empty = pass. Returns 0
+# for a real verdict — the caller deletes a refused bundle, only bundles that verify may sit
+# staged — and 3 when rauc itself could not run, where the caller KEEPS the bundle: deleting a
+# multi-GB Tor download is a verdict too, and a tool that never ran has not earned one.
+os_verify_bundle_reason() { # <bundle> <target-tag>
+    local bundle="$1" tag="$2" rc=0
+    # Signature first: `rauc info` verifies the bundle signature against the system keyring
+    # before it prints anything, so an unsigned or mis-signed file fails here, before any
+    # metadata is trusted. A nonzero exit is only a signature verdict when rauc actually ran
+    # and judged the file — an exec failure or a crash (rc 126/127, or death by signal) gets
+    # one retry and then its own honest reason instead of masquerading as a bad signature.
+    rauc info "$bundle" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -ge 126 ]; then
+        rc=0
+        rauc info "$bundle" >/dev/null 2>&1 || rc=$?
+        if [ "$rc" -ge 126 ]; then
+            printf '%s' "rauc could not run to judge the downloaded bundle — the file was kept; retry, and check the host journal if this repeats."
+            return 3
+        fi
+    fi
+    if [ "$rc" -ne 0 ]; then
+        printf '%s' "the downloaded file failed signature verification against this machine's release keys — it was deleted; check for updates and download again."
+        return 0
+    fi
+    # Compatible: refuse a definite mismatch early. `rauc install` re-enforces this
+    # authoritatively either way, so an unparseable value falls through rather than refusing.
+    local sys_compat bundle_compat
+    sys_compat=$(sed -n 's/^compatible=//p' "${PITHEAD_RAUC_SYSTEM_CONF:-/etc/rauc/system.conf}" 2>/dev/null | head -1)
+    bundle_compat=$(rauc info --output-format=shell "$bundle" 2>/dev/null |
+        sed -n "s/^RAUC_MF_COMPATIBLE='\(.*\)'\$/\1/p" | head -1)
+    if [ -n "$sys_compat" ] && [ -n "$bundle_compat" ] && [ "$sys_compat" != "$bundle_compat" ]; then
+        printf '%s' "the bundle is built for '$bundle_compat' but this machine is '$sys_compat' — it cannot install here and was deleted."
+        return 0
+    fi
+    # Variant: a bundle that would flip the machine's SSH/shell posture needs the CLI's explicit
+    # consent flow, never a dashboard click — no override is surfaced here on purpose.
+    local bundle_version
+    if os_update_needs_confirmation "$(os_running_variant)" "$(os_bundle_variant "$bundle")"; then
+        printf '%s' "this bundle would change the machine's shell/SSH build variant — that consent belongs at the machine, not on the dashboard. The bundle was deleted; nothing was changed."
+        return 0
+    fi
+    # Version floor + downgrade: the same refusals `pithead os-update` enforces (shared code) —
+    # a valid signature does not stop replaying an old vulnerable release.
+    bundle_version=$(os_bundle_meta "$bundle" version)
+    local reason
+    reason=$(os_update_version_guard "$bundle_version" 0)
+    if [ -n "$reason" ]; then
+        printf '%s' "$reason"
+        return 0
+    fi
+    # Equality passes the shared guard on purpose — the CLI keeps same-version installs for
+    # manual slot repair at the machine — but on the dashboard door an equal bundle is only a
+    # lever for looped reinstall-and-reboot downtime, so it refuses here.
+    if os_semver_ok "$bundle_version" && [ "$bundle_version" = "$(os_running_version)" ]; then
+        printf '%s' "already on v$bundle_version, nothing to update — the bundle was deleted."
+        return 0
+    fi
+    # The bundle's own stamp must match the host-derived target — a mirror serving an OLDER
+    # genuinely-signed bundle at the newest tag's URL would otherwise still pass the floor.
+    if [ "v$bundle_version" != "$tag" ]; then
+        printf '%s' "the downloaded bundle stamps itself '${bundle_version:-unstamped}' but the published release is $tag — refusing a version-mismatched file; it was deleted."
+        return 0
+    fi
+    return 0
+}
+
+# os-check: re-derive the latest release + its .raucb asset on the HOST, over Tor. The container
+# proposes nothing here; the cached derivation is what os-download later holds the container's
+# proposal against. Claim-before-dial throttle (one lookup per 10 minutes), the anti-beacon
+# lesson from the one-click upgrade; a fresh cache answers without dialing at all.
+control_os_check() { # <claimed-file> <id> <actor> <control-dir>
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    control_os_gate "$cdir" "$id" "$actor" "os-check" || return 0
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "os-check" "started"
+    local osdir tagf stampf tag size notes rel
+    osdir=$(os_update_staging_dir)
+    mkdir -p "$osdir"
+    tagf=$(os_update_target_file)
+    stampf="$osdir/.check-stamp"
+    if [ -z "$(find "$tagf" -mmin -10 2>/dev/null)" ]; then
+        if [ -n "$(find "$stampf" -mmin -10 2>/dev/null)" ]; then
+            control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "an update check ran less than 10 minutes ago — retry in a few minutes."
+            return 0
+        fi
+        touch "$stampf"
+        if ! rel=$(os_release_fetch); then
+            control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "could not reach the release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+            return 0
+        fi
+        tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
+        if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "the release API returned no usable release tag — nothing was changed."
+            return 0
+        fi
+        size=$(printf '%s' "$rel" | jq -r --arg n "pithead-os-$tag.raucb" \
+            '[.assets[]? | select(.name == $n)][0].size // 0' 2>/dev/null)
+        notes=$(printf '%s' "$rel" | jq -r '.html_url // ""' 2>/dev/null | head -c 300)
+        if ! printf '%s' "$size" | grep -qE '^[0-9]+$' || [ "$size" -le 0 ]; then
+            control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "the latest release ($tag) publishes no appliance OS bundle — nothing to download."
+            return 0
+        fi
+        jq -n --arg t "$tag" --argjson s "$size" --arg n "$notes" \
+            '{tag:$t,size:$s,notes:$n,ts:(now|floor)}' >"$tagf.tmp" && mv "$tagf.tmp" "$tagf"
+    fi
+    tag=$(jq -r '.tag // ""' "$tagf" 2>/dev/null) || tag=""
+    size=$(jq -r '.size // 0' "$tagf" 2>/dev/null) || size=0
+    notes=$(jq -r '.notes // ""' "$tagf" 2>/dev/null) || notes=""
+    if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        rm -f "$tagf"
+        control_os_refuse "$cdir" "$id" "$actor" "os-check" failed "the cached update target is unreadable — it was cleared; check again in a few minutes."
+        return 0
+    fi
+    local newer=false running
+    running=$(os_running_version)
+    if os_semver_ok "$running" && os_semver_ok "$tag" && semver_newer "$tag" "v$running"; then
+        newer=true
+    fi
+    # A manual check moves the operator on — drop any leftover verdict banner with it.
+    if [ -f "$cdir/results/os-update-state.json" ] &&
+        [ "$(jq -r '.step // "idle"' "$cdir/results/os-update-state.json" 2>/dev/null)" = "idle" ]; then
+        os_state_write "$cdir" '{"step":"idle"}'
+    fi
+    control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --argjson s "$size" --arg n "$notes" --argjson nw "$newer" \
+        '{status:"checked",version:$v,size:$s,notes:$n,newer:$nw,ts:(now|floor)}')"
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "os-check" "checked"
+}
+
+# os-download: fetch the .raucb for the HOST-derived target to /data, resumable (`curl -C -`).
+# Each intent is one bounded attempt — the dashboard resubmits on a "partial" result and the
+# transfer resumes, so a Tor-slow gigabyte arrives across attempts while the runner is never
+# held longer than the attempt cap. Mining is untouched throughout; nothing installs from here.
+control_os_download() { # <claimed-file> <id> <actor> <control-dir>
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    control_os_gate "$cdir" "$id" "$actor" "os-download" || return 0
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "os-download" "started"
+    local osdir tagf tag size proposed final part
+    osdir=$(os_update_staging_dir)
+    tagf=$(os_update_target_file)
+    tag=$(jq -r '.tag // ""' "$tagf" 2>/dev/null) || tag=""
+    size=$(jq -r '.size // 0' "$tagf" 2>/dev/null) || size=0
+    if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-download" rejected "no update target is known — check for updates first."
+        return 0
+    fi
+    proposed=$(jq -r '.version // ""' "$file")
+    if [ "$proposed" != "$tag" ]; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-download" rejected "requested version ${proposed:-none} is not the checked release ($tag) — reload the dashboard and retry."
+        return 0
+    fi
+    # An equal version is nothing to update — refused before a byte moves, or a compromised
+    # container could loop a same-version download (gigabytes over Tor) into install and reboot
+    # for forced downtime and flash wear. Same-version slot repair stays with `pithead
+    # os-update` at the machine, which allows equality on purpose.
+    if [ "$tag" = "v$(os_running_version)" ]; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-download" rejected "already on $tag, nothing to update."
+        return 0
+    fi
+    mkdir -p "$osdir"
+    final="$osdir/pithead-os-$tag.raucb"
+    part="$final.partial"
+    # One update at a time: a partial or staged bundle for any OTHER version is superseded.
+    find "$osdir" -maxdepth 1 -name 'pithead-os-*.raucb*' \
+        ! -name "pithead-os-$tag.raucb" ! -name "pithead-os-$tag.raucb.partial" -delete 2>/dev/null || true
+    local have=0
+    [ -f "$part" ] && have=$(wc -c <"$part" | tr -d ' ')
+    if [ -f "$final" ]; then
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --argjson b "$(wc -c <"$final" | tr -d ' ')" \
+            '{status:"downloaded",version:$v,bytes:$b,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "os-download" "downloaded"
+        os_state_write "$cdir" "$(jq -n --arg v "$tag" '{step:"downloaded",version:$v}')"
+        return 0
+    fi
+    # Disk headroom for the REMAINDER plus a 1 GiB margin, refused up front — a download that
+    # fills /data would starve the chain databases mid-write, which is far worse than waiting,
+    # and the LMDB chain stores degrade well before the disk actually fills. The margin has to
+    # absorb the .partial in flight plus results growth for the whole transfer.
+    local avail_kb need
+    avail_kb=$(df -Pk "$osdir" 2>/dev/null | awk 'NR==2{print $4}') || avail_kb=0
+    need=$(((size - have) / 1024 + 1048576))
+    if [ -z "$avail_kb" ] || [ "$avail_kb" -lt "$need" ]; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-download" rejected "not enough free space on /data for the update bundle (need about $((need / 1024)) MiB free, have $((${avail_kb:-0} / 1024)) MiB) — free space and retry."
+        return 0
+    fi
+    local url socks="" base prefix
+    if base=$(os_update_test_base); then
+        url="$base/pithead-os-$tag.raucb"
+    else
+        prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
+        [ -n "$prefix" ] || prefix="172.28.0"
+        socks="${prefix}.25:9050"
+        url="https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead-os-$tag.raucb"
+    fi
+    control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --argjson b "$have" --argjson t "$size" \
+        '{status:"downloading",version:$v,bytes:$b,total:$t,ts:(now|floor)}')"
+    os_state_write "$cdir" "$(jq -n --arg v "$tag" '{step:"downloading",version:$v}')"
+    # Bounded attempt in the background; the loop surfaces live progress into the result the
+    # dashboard is polling. curl -C - resumes from whatever the partial file already holds.
+    # (Two invocations, not a conditional argument array — macOS's bash 3.2 rejects an empty
+    # array expansion under set -u, and the tier-1 suite runs this function there.)
+    local attempt="${PITHEAD_OS_DL_ATTEMPT:-600}" pid rc=0 bytes
+    if [ -n "$socks" ]; then
+        curl -fSL -C - --max-time "$attempt" --max-filesize "$CURL_CAP_OS_BUNDLE" \
+            --socks5-hostname "$socks" -o "$part" "$url" >/dev/null 2>&1 &
+    else
+        curl -fSL -C - --max-time "$attempt" --max-filesize "$CURL_CAP_OS_BUNDLE" \
+            -o "$part" "$url" >/dev/null 2>&1 &
+    fi
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 5
+        bytes=0
+        [ -f "$part" ] && bytes=$(wc -c <"$part" | tr -d ' ')
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --argjson b "$bytes" --argjson t "$size" --argjson r "$have" \
+            '{status:"downloading",version:$v,bytes:$b,total:$t,resumed_from:$r,ts:(now|floor)}')"
+    done
+    # Not `if ! wait`: inside that branch $? is the negation's status (always 0), which silently
+    # ate every curl exit code the first time the tier-1 suite ran this.
+    wait "$pid" && rc=0 || rc=$?
+    bytes=0
+    [ -f "$part" ] && bytes=$(wc -c <"$part" | tr -d ' ')
+    if [ "$rc" -eq 0 ] && [ "$bytes" -eq "$size" ]; then
+        mv "$part" "$final"
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --argjson b "$bytes" --argjson r "$have" \
+            '{status:"downloaded",version:$v,bytes:$b,resumed_from:$r,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "os-download" "downloaded"
+        os_state_write "$cdir" "$(jq -n --arg v "$tag" '{step:"downloaded",version:$v}')"
+        return 0
+    fi
+    if [ "$rc" -eq 0 ]; then
+        # The server sent a complete-but-wrong-sized body — not resumable, not trustworthy.
+        rm -f "$part"
+        control_os_refuse "$cdir" "$id" "$actor" "os-download" failed "the download completed at $bytes bytes but the release publishes $size — the file was discarded; retry, and check for updates again if this repeats."
+        return 0
+    fi
+    # rc 28 is curl's --max-time: the attempt window closed mid-transfer. The partial file is
+    # kept either way — the next attempt resumes from it.
+    if [ "$rc" -eq 28 ]; then
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --argjson b "$bytes" --argjson t "$size" --argjson r "$have" \
+            '{status:"partial",version:$v,bytes:$b,total:$t,resumed_from:$r,ts:(now|floor)}')"
+        control_audit "$cdir/audit/control.log" "$id" "$actor" "os-download" "partial"
+        return 0
+    fi
+    control_os_refuse "$cdir" "$id" "$actor" "os-download" failed "the download failed over Tor at $bytes of $size bytes — nothing was installed; Retry resumes from where it stopped."
+}
+
+# os-verify: judge the fully-downloaded LOCAL file before anything touches a slot — signature,
+# compatible, variant posture, version floor and downgrade, and the stamp-vs-tag match. A refused
+# bundle is deleted; there is no override. Read-only otherwise: verifying changes nothing.
+control_os_verify() { # <claimed-file> <id> <actor> <control-dir>
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    control_os_gate "$cdir" "$id" "$actor" "os-verify" || return 0
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "os-verify" "started"
+    local osdir tag bundle reason keep=0
+    osdir=$(os_update_staging_dir)
+    tag=$(jq -r '.tag // ""' "$(os_update_target_file)" 2>/dev/null) || tag=""
+    bundle="$osdir/pithead-os-$tag.raucb"
+    if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || [ ! -f "$bundle" ]; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-verify" rejected "no fully downloaded update bundle is staged — download it first."
+        return 0
+    fi
+    reason=$(os_verify_bundle_reason "$bundle" "$tag") || keep=1
+    if [ -n "$reason" ]; then
+        # rc 3 = rauc never ran, so no verdict was reached: the download stays staged for the
+        # retry instead of being deleted on a broken tool.
+        if [ "$keep" -eq 0 ]; then
+            rm -f "$bundle"
+            os_state_write "$cdir" '{"step":"idle"}'
+        fi
+        control_os_refuse "$cdir" "$id" "$actor" "os-verify" rejected "$reason"
+        return 0
+    fi
+    control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --arg va "$(os_bundle_variant "$bundle")" \
+        '{status:"verified",version:$v,variant:$va,ts:(now|floor)}')"
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "os-verify" "verified"
+    os_state_write "$cdir" "$(jq -n --arg v "$tag" '{step:"verified",version:$v}')"
+}
+
+# os-install: write the verified local bundle into the inactive slot via the SAME `os_update`
+# path the CLI takes (guards, floor raise, migration marker — one code path, two doors). Mining
+# keeps running: RAUC writes the slot the machine is not using. On success the in-flight flag is
+# persisted so the boot after the operator's explicit reboot can render an honest verdict.
+control_os_install() { # <claimed-file> <id> <actor> <control-dir>
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    control_os_gate "$cdir" "$id" "$actor" "os-install" || return 0
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "os-install" "started"
+    local osdir tag bundle reason keep=0
+    osdir=$(os_update_staging_dir)
+    tag=$(jq -r '.tag // ""' "$(os_update_target_file)" 2>/dev/null) || tag=""
+    bundle="$osdir/pithead-os-$tag.raucb"
+    if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || [ ! -f "$bundle" ]; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-install" rejected "no fully downloaded update bundle is staged — download and verify it first."
+        return 0
+    fi
+    # Re-run the whole verify gate: a result can go stale between the verify click and this one,
+    # and the install must never trust a judgment it did not just make itself.
+    reason=$(os_verify_bundle_reason "$bundle" "$tag") || keep=1
+    if [ -n "$reason" ]; then
+        # Same keep rule as os-verify: only a real verdict deletes the staged download.
+        if [ "$keep" -eq 0 ]; then
+            rm -f "$bundle"
+            os_state_write "$cdir" '{"step":"idle"}'
+        fi
+        control_os_refuse "$cdir" "$id" "$actor" "os-install" rejected "$reason"
+        return 0
+    fi
+    local running logf pid rc=0 pct
+    running=$(os_running_version)
+    logf="$osdir/.install.log"
+    control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"installing",version:$v,percent:0,ts:(now|floor)}')"
+    os_state_write "$cdir" "$(jq -n --arg v "$tag" '{step:"installing",version:$v}')"
+    # os_update -y in a subshell: error() exits the subshell, never this runner, and the -y only
+    # waives a variant confirmation the gate above has already refused to reach. RAUC's progress
+    # lines land in the log; the loop surfaces the latest percentage to the polling dashboard.
+    (os_update "$bundle" -y </dev/null) >"$logf" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 5
+        pct=$(grep -oE '[0-9]+%' "$logf" 2>/dev/null | tail -1 | tr -d '%') || pct=""
+        control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --argjson p "${pct:-0}" \
+            '{status:"installing",version:$v,percent:$p,ts:(now|floor)}')"
+    done
+    # Same wait shape as the download's: `if ! wait` would eat the subshell's exit code.
+    wait "$pid" && rc=0 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        # The raw install log is a host detail (staging paths, slot devices) and stays host-side:
+        # the full tail goes to the journal, and the container-visible result carries only the
+        # final error line whitelist-extracted from the log — rauc's own last word, or nothing.
+        local detail
+        detail=$(grep -aE '^LastError: |^\[ERROR\] |[Ff]ailed' "$logf" 2>/dev/null |
+            grep -av 'pithead aborted unexpectedly' |
+            tail -1 | tr -d '[:cntrl:]' | head -c 300) || detail=""
+        warn "OS install failed (rc=$rc); log tail: $(tail -c 500 "$logf" 2>/dev/null | tr -d '[:cntrl:]')"
+        control_os_refuse "$cdir" "$id" "$actor" "os-install" failed "the install did not complete — the running system is untouched and mining continues.${detail:+ $detail} The full install log is in the host journal."
+        rm -f "$logf"
+        return 0
+    fi
+    local bundle_version
+    bundle_version="${tag#v}"
+    jq -n --arg f "$running" --arg t "$bundle_version" '{from:$f,to:$t,ts:(now|floor)}' \
+        >"$(os_update_inflight_file)"
+    # The staged bundle did its job — free the space before the reboot the operator will order.
+    rm -f "$bundle" "$(os_update_target_file)" "$logf"
+    control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --arg f "$running" \
+        '{status:"installed",version:$v,from:$f,ts:(now|floor)}')"
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "os-install" "installed"
+    os_state_write "$cdir" "$(jq -n --arg v "$bundle_version" --arg f "$running" \
+        '{step:"reboot-pending",version:$v,from:$f}')"
+}
+
+# os-reboot: the ONLY verb that interrupts mining, in its own allowlisted intent so rebooting the
+# machine never rides implicitly on any other action. Refused unless an installed update is
+# actually waiting — the dashboard must never be a general reboot lever.
+control_os_reboot() { # <claimed-file> <id> <actor> <control-dir>
+    local file="$1" id="$2" actor="$3" cdir="$4"
+    control_os_gate "$cdir" "$id" "$actor" "os-reboot" || return 0
+    if [ ! -f "$(os_update_inflight_file)" ]; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-reboot" rejected "no installed update is waiting for a reboot — nothing to finish."
+        return 0
+    fi
+    # The install result authorizes the reboot for 24 hours, then goes stale. The gate proves
+    # "an installed update is waiting", never "the operator asked just now" — within the window
+    # a spool writer can still time the reboot, so the TTL bounds how long that lever stays
+    # armed rather than pretending it does not exist. An unreadable timestamp is not proof of
+    # freshness and refuses too; a fresh verify and install re-arms it.
+    local armed_ts
+    armed_ts=$(jq -r '.ts // 0' "$(os_update_inflight_file)" 2>/dev/null) || armed_ts=0
+    printf '%s' "$armed_ts" | grep -qE '^[0-9]+$' || armed_ts=0
+    if [ "$armed_ts" -le 0 ] || [ $(($(date +%s) - armed_ts)) -gt 86400 ]; then
+        control_os_refuse "$cdir" "$id" "$actor" "os-reboot" rejected "the installed update has been waiting more than a day — run the update again; a fresh verify and install re-arms the reboot."
+        return 0
+    fi
+    # The result must land BEFORE the reboot order or the page never learns the reboot is real.
+    control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rebooting",ts:(now|floor)}')"
+    control_audit "$cdir/audit/control.log" "$id" "$actor" "os-reboot" "rebooting"
+    systemctl reboot 2>/dev/null || true
+}
+
 control_process_request() { # <claimed-file> <control-dir>
     local file="$1" cdir="$2" id action actor size
     # Refuse a symlinked / non-regular claimed file (graft #437): a symlink dropped in requests/
@@ -9895,6 +10415,13 @@ control_process_request() { # <claimed-file> <control-dir>
     worker-upgrade) control_worker_upgrade "$file" "$id" "$actor" "$cdir" ;;
     restart | apply) control_lifecycle "$action" "$id" "$actor" "$cdir" ;;
     backup) control_backup "$id" "$actor" "$cdir" ;;
+    # Appliance OS update, one verb per step so every network move stays separate from every
+    # destructive one; each refuses outright off the appliance.
+    os-check) control_os_check "$file" "$id" "$actor" "$cdir" ;;
+    os-download) control_os_download "$file" "$id" "$actor" "$cdir" ;;
+    os-verify) control_os_verify "$file" "$id" "$actor" "$cdir" ;;
+    os-install) control_os_install "$file" "$id" "$actor" "$cdir" ;;
+    os-reboot) control_os_reboot "$file" "$id" "$actor" "$cdir" ;;
     *)
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unknown action",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "${action:-none}" "rejected"
@@ -9941,6 +10468,9 @@ control_run_pending() {
     # Worker-upgrade budget (#597): an upgrade blocks the runner on a rig build (minutes), so
     # exactly one runs per drain; the rest reject with a retry hint.
     CONTROL_WU_BUDGET=1
+    # OS-update budget: a bundle download attempt or a slot install holds the runner for minutes
+    # too, so exactly one os-* verb runs per drain; the rest reject with a retry hint.
+    CONTROL_OS_BUDGET=1
     names=$(cd "$cdir/requests" 2>/dev/null && ls -1tr -- *.json 2>/dev/null) || true
     if [ -z "$names" ]; then
         log "No pending control requests."

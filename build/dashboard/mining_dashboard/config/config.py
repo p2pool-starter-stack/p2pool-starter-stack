@@ -253,6 +253,12 @@ HOST_REFERENCE_PATH = os.environ.get("HOST_REFERENCE_PATH", "/host-config/config
 # the form instead of hand-maintaining a duplicate list. A missing/unreadable file degrades to no
 # core group (control_service.read_config falls back to an empty list).
 HOST_CORE_KEYS_PATH = os.environ.get("HOST_CORE_KEYS_PATH", "/host-config/config.core-keys.json")
+# The appliance OS-update state, host-written into the read-only results/ mount under a fixed
+# name (never a request id). Only a Pithead OS appliance seeds it, so its presence is also the
+# container's "render the OS update control" signal; a DIY install simply never has the file.
+OS_UPDATE_STATE_PATH = os.environ.get(
+    "OS_UPDATE_STATE_PATH", "/control/results/os-update-state.json"
+)
 
 # --- Per-worker endpoint descriptors (#172, config.json: workers.list[]) ---
 # [{name, host?, port?, token?}] — per-rig overrides for the worker API probe when a rig doesn't

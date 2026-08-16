@@ -185,6 +185,7 @@ class TestControlRoutesDisabled:
         assert (await client.get("/api/control/result?id=x")).status == 404
         assert (await client.post("/api/control/backup")).status == 404
         assert (await client.get("/api/control/backup-download?id=x")).status == 404
+        assert (await client.post("/api/control/os-update", json={})).status == 404
         # The config-change audit view is a control-channel artifact — absent with it (#349).
         assert (await client.get("/api/audit")).status == 404
 
@@ -413,6 +414,76 @@ class TestControlRoutesEnabled:
         monkeypatch.setattr(control_service.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests")
         resp = await control_client.post(
             "/api/control/upgrade", json={"version": "v9.9.9"}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 500
+        assert "nonexistent" not in json.dumps(await resp.json())
+
+    async def test_os_update_submits_typed_intent_and_returns_pending(
+        self, control_client, control_spool
+    ):
+        # 202 straight away: downloads/installs run long and a reboot takes the machine away —
+        # the outcome is polled. The action becomes the os-* verb the host runner dispatches on.
+        resp = await control_client.post(
+            "/api/control/os-update",
+            json={"action": "download", "version": "v9.9.9"},
+            headers={**CONTROL_HEADERS, "X-Auth-User": "admin"},
+        )
+        assert resp.status == 202
+        body = await resp.json()
+        assert body["status"] == "pending"
+        req = json.loads((control_spool / "requests" / f"{body['id']}.json").read_text())
+        # Closed shape: exactly these keys — no free-form target or path for the runner.
+        assert req == {
+            "id": body["id"],
+            "action": "os-download",
+            "actor": "admin",
+            "version": "v9.9.9",
+        }
+
+    async def test_os_update_actionless_steps_carry_no_version(self, control_client, control_spool):
+        resp = await control_client.post(
+            "/api/control/os-update", json={"action": "check"}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 202
+        body = await resp.json()
+        req = json.loads((control_spool / "requests" / f"{body['id']}.json").read_text())
+        assert req == {"id": body["id"], "action": "os-check", "actor": ""}
+
+    @pytest.mark.parametrize("action", ["", "format-disk", "os-check", "reboot; rm", 42, None])
+    async def test_os_update_rejects_unknown_action(self, control_client, control_spool, action):
+        # A closed action set, checked before anything touches the spool.
+        resp = await control_client.post(
+            "/api/control/os-update", json={"action": action}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+        assert list((control_spool / "requests").iterdir()) == []
+
+    @pytest.mark.parametrize("version", ["9.9.9", "latest", "v9.9.9\n", 42])
+    async def test_os_update_rejects_malformed_version(
+        self, control_client, control_spool, version
+    ):
+        resp = await control_client.post(
+            "/api/control/os-update",
+            json={"action": "download", "version": version},
+            headers=CONTROL_HEADERS,
+        )
+        assert resp.status == 400
+        assert list((control_spool / "requests").iterdir()) == []
+
+    async def test_os_update_requires_the_control_header(self, control_client):
+        resp = await control_client.post("/api/control/os-update", json={"action": "check"})
+        assert resp.status == 403
+
+    async def test_os_update_rejects_non_json_body(self, control_client):
+        resp = await control_client.post(
+            "/api/control/os-update", data=b"not json", headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+
+    async def test_os_update_spool_failure_is_sanitized(self, control_client, monkeypatch):
+        monkeypatch.setattr(control_service.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests")
+        resp = await control_client.post(
+            "/api/control/os-update", json={"action": "check"}, headers=CONTROL_HEADERS
         )
         assert resp.status == 500
         assert "nonexistent" not in json.dumps(await resp.json())

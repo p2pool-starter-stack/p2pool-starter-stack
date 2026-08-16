@@ -9420,13 +9420,24 @@ export PITHEAD_RIGFORGE_DIR="$LMR/rigforge"
 PITHEAD_APPLIANCE=0 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
 [ -f "$LMR/rigforge/config.json" ] && bad "DIY host -> nothing written" "file exists" ||
     ok "DIY host -> nothing written"
-PITHEAD_APPLIANCE=1 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/no-marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
 assert_eq "pool url is the stack's own stratum over loopback" \
     "$(jq -r '.pools[0].url' "$LMR/rigforge/config.json")" "127.0.0.1:3333"
 assert_eq "no stratum password -> no pass key at all" \
     "$(jq -r '.pools[0] | has("pass")' "$LMR/rigforge/config.json")" "false"
-assert_eq "the stack's HugePages budget is declared as headroom (3072 pages -> 6144 MB)" \
+assert_eq "no degrade marker -> the full budget is declared as headroom (3072 pages -> 6144 MB)" \
     "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "6144"
+# Degraded box (#977): the boot-time sizing recorded a smaller reservation in the marker, and
+# the render declares THAT — a constant 6144 here had RigForge's grow-only sysctl size the pool
+# to miner-need + 6 GiB on the low-RAM machine, every boot.
+printf 'reduced-reservation words\npages=2560\n' >"$LMR/marker"
+PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+assert_eq "degrade marker -> headroom follows the recorded reservation (2560 pages -> 5120 MB)" \
+    "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "5120"
+printf 'released-reservation words\npages=0\n' >"$LMR/marker"
+PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
+assert_eq "released reservation -> zero headroom (RigForge sizes for the miner alone)" \
+    "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "0"
 printf 'STRATUM_PORT=13333\nPROXY_STRATUM_PASSWORD=s3cret\n' >"$LMR/.env"
 PITHEAD_APPLIANCE=1 run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
 assert_eq "custom stratum port lands in the pool url" \
@@ -9685,7 +9696,7 @@ printf '#!/usr/bin/env bash\necho "sudo:$*" >>"${OKLOG:?}"\n' >"$OKSB/bin/sudo"
 printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec /usr/bin/uname "$@"\n' >"$OKSB/bin/uname"
 chmod +x "$OKSB/bin/sudo" "$OKSB/bin/uname"
 export OKLOG="$OKSB/calls"
-okrun() { # <pages currently in the pool>
+okrun() { # <pages currently in the pool> [degrade-marker file]
     printf '%s\n' "$1" >"$OKSB/nr"
     (
         cd "$OKSB" || exit
@@ -9695,7 +9706,8 @@ okrun() { # <pages currently in the pool>
         set +e
         log() { :; }
         warn() { :; }
-        PITHEAD_NR_HUGEPAGES_FILE="$OKSB/nr" optimize_kernel </dev/null
+        PITHEAD_NR_HUGEPAGES_FILE="$OKSB/nr" PITHEAD_HUGEPAGES_MARKER="${2:-$OKSB/no-marker}" \
+            optimize_kernel </dev/null
     )
 }
 : >"$OKLOG"
@@ -9707,6 +9719,22 @@ assert_not_contains "a larger pool (the miner's merged budget) is never shrunk" 
 : >"$OKLOG"
 okrun 3072 >/dev/null 2>&1
 assert_not_contains "an exact pool is left alone" "$(cat "$OKLOG")" "vm.nr_hugepages"
+# The degrade cap (#977): the boot-time sizing's marker records the chosen page count, and that
+# record caps the grow. Without it the wizard-accept path (setup runs as root on the appliance)
+# re-inflated the pool the sizing had just shrunk, while the marker and doctor kept saying
+# "reduced". A pool at the recorded size is left alone; one below it grows only to the record.
+printf 'reduced-reservation words for the operator\npages=2560\n' >"$OKSB/marker"
+: >"$OKLOG"
+okrun 2560 "$OKSB/marker" >/dev/null 2>&1
+assert_not_contains "a marker-sized pool is never re-inflated to the full budget" "$(cat "$OKLOG")" "vm.nr_hugepages"
+: >"$OKLOG"
+okrun 100 "$OKSB/marker" >/dev/null 2>&1
+assert_contains "a pool below the record grows to the record" "$(cat "$OKLOG")" "sudo:sysctl -w vm.nr_hugepages=2560"
+assert_not_contains "the grow never passes the marker's cap" "$(cat "$OKLOG")" "3072"
+printf 'released-reservation words\npages=0\n' >"$OKSB/marker"
+: >"$OKLOG"
+okrun 0 "$OKSB/marker" >/dev/null 2>&1
+assert_not_contains "a released (0-page) decision writes nothing at all" "$(cat "$OKLOG")" "vm.nr_hugepages"
 unset OKLOG
 unset -f okrun
 rm -rf "$OKSB"
@@ -9888,6 +9916,12 @@ assert_contains "rauc install ran under --allow-downgrade" "$(cat "$RAUC_LOG")" 
 ourun_v "1.10.0" "" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
 assert_rc "a newer bundle installs" "$?" "0"
 assert_contains "rauc install ran for the newer bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
+# The CLI door keeps same-version installs — manual slot repair at the machine is its job.
+# The dashboard door refuses equality (covered in the control os-* block below).
+: >"$RAUC_LOG"
+ourun_v "1.17.0" "" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
+assert_rc "a same-version bundle installs at the CLI (slot repair)" "$?" "0"
+assert_contains "rauc install ran for the same-version bundle" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 
 # #851: below the /data migration floor is refused OUTRIGHT — --allow-downgrade does not override it.
 printf '2.0.0\n' >"$OUSB/floor-2"
@@ -9974,6 +10008,390 @@ unset RAUC_LOG
 unset -f ourun
 rm -rf "$OUSB"
 unset OUSB
+
+echo "== black-box: control os-update verbs (appliance A/B, dashboard-driven) =="
+# A release-shaped appliance sandbox: control channel on, PITHEAD_APPLIANCE forced, and the whole
+# toolchain stubbed (rauc/curl/systemctl/df) so every refusal and the full check → download →
+# verify → install → reboot chain runs for real with no network, no RAUC, no root.
+OSC="$SANDBOX/os-control"
+OSREQS="$OSC/data/control/requests"
+OSRES="$OSC/data/control/results"
+OSSTATE="$OSRES/os-update-state.json"
+OSDIR="$OSC/osdir"
+mkdir -p "$OSREQS" "$OSC/data/control/staged" "$OSRES" "$OSC/data/control/audit" "$OSDIR"
+cp "$STACK" "$OSC/pithead"
+make_stubs "$OSC/bin"
+printf '1.3.1' >"$OSC/VERSION"
+printf '{}' >"$OSC/config.json"
+cat >"$OSC/.env" <<EOF
+DEPLOYMENT_COMPLETED=true
+DASHBOARD_CONTROL_ENABLED=true
+CONTROL_DIR=$OSC/data/control
+NETWORK_PREFIX=10.9.0
+EOF
+printf 'release\n' >"$OSC/variant-release"
+printf 'compatible=pithead-os\n' >"$OSC/system.conf"
+# The published release the stub API serves: tag + the .raucb asset with its size.
+printf '{"tag_name":"v9.9.9","html_url":"https://example.invalid/rel","assets":[{"name":"pithead-os-v9.9.9.raucb","size":1000}]}' >"$OSC/api.json"
+# The 1000-byte bundle fixture the stub curl serves (deterministic bytes so resume can append).
+yes x | head -c 1000 >"$OSC/fixture.raucb"
+printf "RAUC_MF_COMPATIBLE='pithead-os'\nRAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='9.9.9'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OSC/info-good.txt"
+printf "RAUC_MF_COMPATIBLE='pithead-os'\nRAUC_META_PITHEAD_VARIANT='debug'\nRAUC_META_PITHEAD_VERSION='9.9.9'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OSC/info-debug.txt"
+printf "RAUC_MF_COMPATIBLE='pithead-os'\nRAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='9.9.8'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OSC/info-mismatch.txt"
+printf "RAUC_MF_COMPATIBLE='other-machine'\nRAUC_META_PITHEAD_VARIANT='release'\nRAUC_META_PITHEAD_VERSION='9.9.9'\nRAUC_META_PITHEAD_DATA_MIGRATION='false'\n" >"$OSC/info-othercompat.txt"
+cat >"$OSC/bin/rauc" <<'EOF'
+#!/usr/bin/env bash
+echo "[rauc] $*" >>"${RAUC_LOG:?}"
+case "$1" in
+info)
+    [ "${RAUC_RUN_FAIL:-}" = "1" ] && exit 127 # rauc never ran (exec failure), no verdict
+    [ "${RAUC_SIG_FAIL:-}" = "1" ] && exit 1
+    [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT"
+    exit 0
+    ;;
+install)
+    [ "${RAUC_INSTALL_FAIL:-}" = "1" ] && {
+        echo "slot device /dev/hostdisk3 staging $PWD" # host detail that must stay out of the result
+        echo "installing failed"
+        exit 1
+    }
+    echo "installing bundle: 50%"
+    echo "installing bundle: 100%"
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+# Stub curl: serves the canned API JSON, and for the bundle URL either appends the fixture's
+# remainder onto -o's target (a genuine resume when the partial exists) or, told CURL_RC=28,
+# writes CURL_PARTIAL_BYTES and exits like --max-time closing the window mid-transfer.
+cat >"$OSC/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+echo "[curl] $*" >>"${CURL_LOG:-/dev/null}"
+url="${*: -1}"
+out=""
+prev=""
+for a in "$@"; do
+    [ "$prev" = "-o" ] && out="$a"
+    prev="$a"
+done
+case "$url" in
+*api.github.com*) cat "${CURL_API_RESPONSE:?}" ;;
+*releases/download/*)
+    if [ "${CURL_RC:-0}" = "28" ]; then
+        head -c "${CURL_PARTIAL_BYTES:-300}" "${CURL_BUNDLE:?}" >"$out"
+        exit 28
+    fi
+    have=0
+    [ -f "$out" ] && have=$(wc -c <"$out" | tr -d ' ')
+    tail -c "+$((have + 1))" "${CURL_BUNDLE:?}" >>"$out"
+    ;;
+*) exit 22 ;;
+esac
+exit 0
+EOF
+cat >"$OSC/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+echo "[systemctl] $*" >>"${SYSCTL_LOG:?}"
+exit 0
+EOF
+# Stub df: the headroom gate reads column 4 (Available, KiB) of the second line.
+cat >"$OSC/bin/df" <<'EOF'
+#!/usr/bin/env bash
+echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+echo "fake 1000000 0 ${DF_AVAIL_KB:-999999999} 0% /data"
+EOF
+chmod +x "$OSC/bin/rauc" "$OSC/bin/curl" "$OSC/bin/systemctl" "$OSC/bin/df"
+osrun() { # [env pairs...] — drain the spool inside the appliance sandbox
+    (cd "$OSC" && PATH="$OSC/bin:$PATH" RAUC_LOG="$OSC/rauc.log" CURL_LOG="$OSC/curl.log" \
+        SYSCTL_LOG="$OSC/sysctl.log" CURL_API_RESPONSE="$OSC/api.json" CURL_BUNDLE="$OSC/fixture.raucb" \
+        RAUC_INFO_OUT="$OSC/info-good.txt" PITHEAD_APPLIANCE=1 PITHEAD_OS_UPDATE_DIR="$OSDIR" \
+        PITHEAD_VARIANT_FILE="$OSC/variant-release" PITHEAD_DATA_FLOOR_FILE="$OSC/floor" \
+        PITHEAD_RAUC_SYSTEM_CONF="$OSC/system.conf" PITHEAD_OS_DL_ATTEMPT=60 \
+        PITHEAD_MIGRATION_MARKER_FILE="$OSC/marker-scratch" \
+        env "$@" ./pithead control-run-pending 2>&1)
+}
+os_intent() { # <id> <action> [version]
+    if [ "$#" -ge 3 ]; then
+        printf '{"id":"%s","action":"%s","actor":"admin","version":"%s"}\n' "$1" "$2" "$3" >"$OSREQS/$1.json"
+    else
+        printf '{"id":"%s","action":"%s","actor":"admin"}\n' "$1" "$2" >"$OSREQS/$1.json"
+    fi
+}
+UOS="77777777-7777-4777-8777-777777777777"
+os_reset() { rm -f "$OSRES/$UOS.json"; }
+: >"$OSC/rauc.log"
+: >"$OSC/curl.log"
+: >"$OSC/sysctl.log"
+
+# Off the appliance every verb refuses outright — there is no RAUC and nothing to update.
+os_intent "$UOS" os-check
+osrun PITHEAD_APPLIANCE=0 >/dev/null
+assert_eq "os-check off the appliance is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal names the appliance" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "appliance"
+os_reset
+os_intent "$UOS" os-reboot
+osrun PITHEAD_APPLIANCE=0 >/dev/null
+assert_eq "os-reboot off the appliance is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+os_reset
+
+# Download before any check: there is no host-derived target to hold the proposal against.
+os_intent "$UOS" os-download "v9.9.9"
+osrun >/dev/null
+assert_eq "os-download without a prior check is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal says to check first" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "check for updates"
+os_reset
+
+# os-check derives tag + asset size on the host and reports newer honestly.
+os_intent "$UOS" os-check
+osrun >/dev/null
+assert_eq "os-check reports checked" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "checked"
+assert_eq "os-check carries the host-derived version" "$(jq -r '.version' "$OSRES/$UOS.json" 2>/dev/null)" "v9.9.9"
+assert_eq "os-check carries the bundle size" "$(jq -r '.size' "$OSRES/$UOS.json" 2>/dev/null)" "1000"
+assert_eq "os-check reports newer against the running 1.3.1" "$(jq -r '.newer' "$OSRES/$UOS.json" 2>/dev/null)" "true"
+assert_eq "os-check caches the derived target" "$(jq -r '.tag' "$OSDIR/target.json" 2>/dev/null)" "v9.9.9"
+os_reset
+# A second check answers from the fresh cache — no second dial (anti-beacon).
+dials_before=$(grep -c 'api.github.com' "$OSC/curl.log" || true)
+os_intent "$UOS" os-check
+osrun >/dev/null
+assert_eq "a fresh cache answers the second check" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "checked"
+assert_eq "the second check dials nothing" "$(grep -c 'api.github.com' "$OSC/curl.log" || true)" "$dials_before"
+os_reset
+
+# The container cannot steer the download target: a proposal that isn't the checked tag refuses.
+os_intent "$UOS" os-download "v1.0.0"
+osrun >/dev/null
+assert_eq "a non-checked download version is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal names the checked release" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "v9.9.9"
+os_reset
+
+# Equality is still an honest CHECK — up to date reports normally; only fetch and install refuse.
+# pithead re-reads the VERSION file at startup (env cannot override it through the black-box
+# door), so the sandbox's running version is swapped to the target and back.
+printf '9.9.9' >"$OSC/VERSION"
+os_intent "$UOS" os-check
+osrun >/dev/null
+assert_eq "a same-version check still reports checked" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "checked"
+assert_eq "a same-version check reports not newer" "$(jq -r '.newer' "$OSRES/$UOS.json" 2>/dev/null)" "false"
+os_reset
+
+# The dashboard door refuses a same-version fetch outright, before a byte moves — a compromised
+# container must not loop gigabytes over Tor into reinstalls and forced reboots. (The CLI keeps
+# equality for manual slot repair, proven in the os-update unit block above.)
+dials_before=$(grep -c 'releases/download' "$OSC/curl.log" || true)
+os_intent "$UOS" os-download "v9.9.9"
+osrun >/dev/null
+assert_eq "a same-version download is rejected on the dashboard door" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal says already on it" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "already on v9.9.9"
+assert_eq "no bytes moved for the refused same-version fetch" "$(grep -c 'releases/download' "$OSC/curl.log" || true)" "$dials_before"
+printf '1.3.1' >"$OSC/VERSION"
+os_reset
+
+# No disk headroom: refused before a byte moves.
+os_intent "$UOS" os-download "v9.9.9"
+osrun DF_AVAIL_KB=1000 >/dev/null
+assert_eq "a full /data refuses the download" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal names free space" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "free space"
+assert_eq "no bundle bytes landed" "$(find "$OSDIR" -name '*.raucb*' | wc -l | tr -d ' ')" "0"
+os_reset
+
+# The attempt window closes mid-transfer: partial result, partial file KEPT for the resume.
+os_intent "$UOS" os-download "v9.9.9"
+osrun CURL_RC=28 CURL_PARTIAL_BYTES=300 >/dev/null
+assert_eq "a mid-transfer timeout reports partial" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "partial"
+assert_eq "partial reports the bytes so far" "$(jq -r '.bytes' "$OSRES/$UOS.json" 2>/dev/null)" "300"
+assert_eq "the partial file is kept for the resume" "$(wc -c <"$OSDIR/pithead-os-v9.9.9.raucb.partial" | tr -d ' ')" "300"
+os_reset
+
+# The retry RESUMES: curl is asked to continue (-C -) and the result names where it picked up.
+os_intent "$UOS" os-download "v9.9.9"
+osrun >/dev/null
+assert_eq "the resumed download completes" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "downloaded"
+assert_eq "the resume started from the kept bytes" "$(jq -r '.resumed_from' "$OSRES/$UOS.json" 2>/dev/null)" "300"
+assert_contains "curl was asked to continue the transfer" "$(cat "$OSC/curl.log")" "-C -"
+assert_eq "the staged bundle is complete" "$(wc -c <"$OSDIR/pithead-os-v9.9.9.raucb" | tr -d ' ')" "1000"
+assert_eq "the state file records the staged download" "$(jq -r '.step' "$OSSTATE" 2>/dev/null)" "downloaded"
+os_reset
+# A repeated download of a staged bundle is an idempotent no-op, not a re-download.
+dials_before=$(grep -c 'releases/download' "$OSC/curl.log" || true)
+os_intent "$UOS" os-download "v9.9.9"
+osrun >/dev/null
+assert_eq "an already-staged bundle answers downloaded" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "downloaded"
+assert_eq "no second transfer for a staged bundle" "$(grep -c 'releases/download' "$OSC/curl.log" || true)" "$dials_before"
+os_reset
+
+# os-verify: signature first — a mis-signed file is refused AND deleted, no override.
+os_intent "$UOS" os-verify
+osrun RAUC_SIG_FAIL=1 >/dev/null
+assert_eq "a mis-signed bundle is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal names signature verification" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "signature"
+assert_eq "the mis-signed bundle was deleted" "$([ -f "$OSDIR/pithead-os-v9.9.9.raucb" ] && echo present || echo absent)" "absent"
+os_reset
+
+# Verify with nothing staged: refused with the honest next step.
+os_intent "$UOS" os-verify
+osrun >/dev/null
+assert_eq "verify with no staged bundle is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal says to download first" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "download it first"
+os_reset
+
+os_restage() { cp "$OSC/fixture.raucb" "$OSDIR/pithead-os-v9.9.9.raucb"; }
+
+# rauc failing to RUN is not a signature verdict: one retry, a distinct honest reason, and the
+# download is KEPT for the retry — deleting a multi-GB Tor fetch is a verdict a broken tool
+# has not earned.
+os_restage
+: >"$OSC/rauc.log"
+os_intent "$UOS" os-verify
+osrun RAUC_RUN_FAIL=1 >/dev/null
+assert_eq "a rauc that cannot run rejects the verify" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the reason says rauc could not run, not signature" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "could not run"
+assert_not_contains "the reason does not claim a signature verdict" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "signature"
+assert_eq "the bundle is kept when rauc never judged it" "$([ -f "$OSDIR/pithead-os-v9.9.9.raucb" ] && echo present || echo absent)" "present"
+assert_eq "the failed rauc run was retried once" "$(grep -c 'info' "$OSC/rauc.log" || true)" "2"
+os_reset
+
+# Wrong compatible: built for another machine class, refused and deleted.
+os_restage
+os_intent "$UOS" os-verify
+osrun RAUC_INFO_OUT="$OSC/info-othercompat.txt" >/dev/null
+assert_eq "a wrong-compatible bundle is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal names both machine classes" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "other-machine"
+assert_eq "the wrong-compatible bundle was deleted" "$([ -f "$OSDIR/pithead-os-v9.9.9.raucb" ] && echo present || echo absent)" "absent"
+os_reset
+
+# A variant flip (release box, debug bundle) never installs from the dashboard — CLI consent only.
+os_restage
+os_intent "$UOS" os-verify
+osrun RAUC_INFO_OUT="$OSC/info-debug.txt" >/dev/null
+assert_eq "a variant-flipping bundle is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal names the variant consent" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "variant"
+os_reset
+
+# The /data migration floor refuses through the dashboard door exactly as it does at the CLI —
+# a valid signature is not permission to replay below the floor (shared os_update_version_guard).
+os_restage
+printf '99.0.0\n' >"$OSC/floor"
+os_intent "$UOS" os-verify
+osrun >/dev/null
+assert_eq "a bundle below the /data floor is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the floor refusal warns about the chain data" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "strand the chain data"
+rm -f "$OSC/floor"
+os_reset
+
+# A stamp that isn't the published tag is a possible replay — refused.
+os_restage
+os_intent "$UOS" os-verify
+osrun RAUC_INFO_OUT="$OSC/info-mismatch.txt" >/dev/null
+assert_eq "a tag-mismatched stamp is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal names the mismatch" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "9.9.8"
+os_reset
+
+# A same-version bundle refuses at verify too — download refuses it first, but verify holds the
+# line for a bundle already staged when the versions converged, and the bundle is deleted.
+# Same VERSION-file swap as the check/download equality tests above.
+os_restage
+printf '9.9.9' >"$OSC/VERSION"
+os_intent "$UOS" os-verify
+osrun >/dev/null
+assert_eq "a same-version bundle is rejected at verify" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the verify refusal says already on it" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "already on v9.9.9"
+assert_eq "the same-version bundle was deleted" "$([ -f "$OSDIR/pithead-os-v9.9.9.raucb" ] && echo present || echo absent)" "absent"
+printf '1.3.1' >"$OSC/VERSION"
+os_reset
+
+# The happy verify: signed, compatible, newer, stamped as published.
+os_restage
+os_intent "$UOS" os-verify
+osrun >/dev/null
+assert_eq "a good bundle verifies" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "verified"
+assert_eq "verify reports the version" "$(jq -r '.version' "$OSRES/$UOS.json" 2>/dev/null)" "v9.9.9"
+assert_eq "the state file records verified" "$(jq -r '.step' "$OSSTATE" 2>/dev/null)" "verified"
+os_reset
+
+# Reboot with no installed update waiting: refused — the dashboard is not a reboot lever.
+rm -f "$OSDIR/in-flight.json"
+os_intent "$UOS" os-reboot
+osrun >/dev/null
+assert_eq "os-reboot with nothing installed is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_eq "no reboot was ordered" "$(grep -c reboot "$OSC/sysctl.log" || true)" "0"
+os_reset
+
+# A failing install reports failed and the running system is untouched (no in-flight flag).
+# The result carries only the whitelist-extracted final error line — the raw log tail (staging
+# paths, slot devices) stays host-side, in the journal.
+os_intent "$UOS" os-install
+out=$(osrun RAUC_INSTALL_FAIL=1)
+assert_eq "a failing install reports failed" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "failed"
+assert_contains "the failure says the system is untouched" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "untouched"
+assert_contains "the result carries rauc's final error line" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "installing failed"
+assert_not_contains "the raw log tail stays out of the result" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "hostdisk3"
+assert_contains "the full log tail lands host-side for the journal" "$out" "hostdisk3"
+assert_eq "no in-flight flag after a failed install" "$([ -f "$OSDIR/in-flight.json" ] && echo present || echo absent)" "absent"
+os_reset
+
+# The happy install: the SAME os_update path the CLI takes writes the spare slot, the in-flight
+# flag arms the post-reboot verdict, and the staged bundle is cleaned up.
+os_intent "$UOS" os-install
+osrun >/dev/null
+assert_eq "the install reports installed" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "installed"
+assert_contains "rauc install ran with the staged bundle" "$(cat "$OSC/rauc.log")" "install $OSDIR/pithead-os-v9.9.9.raucb"
+assert_eq "the in-flight flag names the target" "$(jq -r '.to' "$OSDIR/in-flight.json" 2>/dev/null)" "9.9.9"
+assert_eq "the in-flight flag names the origin" "$(jq -r '.from' "$OSDIR/in-flight.json" 2>/dev/null)" "1.3.1"
+assert_eq "the state file records reboot-pending" "$(jq -r '.step' "$OSSTATE" 2>/dev/null)" "reboot-pending"
+assert_eq "the staged bundle was cleaned up" "$([ -f "$OSDIR/pithead-os-v9.9.9.raucb" ] && echo present || echo absent)" "absent"
+os_reset
+
+# Now the reboot goes through — the install result is FRESH: result lands BEFORE the order,
+# then systemctl reboot.
+os_intent "$UOS" os-reboot
+osrun >/dev/null
+assert_eq "os-reboot with a fresh install reports rebooting" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rebooting"
+assert_contains "systemctl reboot was ordered" "$(cat "$OSC/sysctl.log")" "reboot"
+os_reset
+
+# The install result authorizes a reboot for 24 hours, then goes stale: refused with the re-arm
+# path, and no reboot is ordered. An in-flight flag with no readable timestamp refuses too —
+# unreadable is not proof of freshness.
+jq -n '{from:"1.3.1",to:"9.9.9",ts:((now|floor) - 90000)}' >"$OSDIR/in-flight.json"
+os_intent "$UOS" os-reboot
+osrun >/dev/null
+assert_eq "a stale install no longer authorizes a reboot" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "the stale refusal names the re-arm path" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "re-arms the reboot"
+assert_eq "no second reboot was ordered" "$(grep -c reboot "$OSC/sysctl.log" || true)" "1"
+os_reset
+jq -n '{from:"1.3.1",to:"9.9.9"}' >"$OSDIR/in-flight.json"
+os_intent "$UOS" os-reboot
+osrun >/dev/null
+assert_eq "an in-flight flag without a timestamp refuses the reboot" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+os_reset
+
+# One os-* verb per drain: a second one in the same cycle rejects with a retry hint.
+UOS2="88888888-8888-4888-8888-888888888888"
+rm -f "$OSDIR/in-flight.json" "$OSDIR/.check-stamp" # a fresh dial, not the check throttle
+os_intent "$UOS" os-check
+sleep 1 # distinct mtimes so the drain order is deterministic (oldest first)
+os_intent "$UOS2" os-check
+osrun >/dev/null
+assert_eq "the first os verb in a drain runs" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "checked"
+assert_eq "the second os verb in the same drain is rejected" "$(jq -r '.status' "$OSRES/$UOS2.json" 2>/dev/null)" "rejected"
+assert_contains "the budget refusal says retry" "$(jq -r '.error' "$OSRES/$UOS2.json" 2>/dev/null)" "retry"
+rm -f "$OSRES/$UOS.json" "$OSRES/$UOS2.json"
+
+# The battery's test seam only redirects for a ROOT-owned file: written by anyone else it is
+# ignored and the flow stays on the GitHub-over-Tor path. Running unprivileged here, our own
+# file IS owner-matched — assert the redirect engages, which is the seam's whole contract.
+printf 'http://bench.invalid/updates' >"$OSC/os-update-test-base"
+rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp"
+os_intent "$UOS" os-check
+osrun >/dev/null
+assert_contains "the test seam redirects the release lookup" "$(cat "$OSC/curl.log")" "bench.invalid/updates/releases-latest.json"
+rm -f "$OSC/os-update-test-base" "$OSRES/$UOS.json"
+
+unset -f osrun os_intent os_reset os_restage
+rm -rf "$OSC"
+unset OSC OSREQS OSRES OSSTATE OSDIR UOS UOS2 dials_before
 
 # --- os/rauc stale-tarball guard (verify_tarball_commit in populate-slot.sh). A present-but-stale
 # os/build/pithead-root.tar looks identical to a fresh one to `[ -s ]` — a bench deploy once
@@ -10339,6 +10757,119 @@ else
 fi
 assert_eq "empty-adopt persists nothing" "$(cat "$MID/data-id" 2>/dev/null || echo absent)" "absent"
 
+echo "== unit: pithead-hugepages — the RandomX reservation fits the machine's RAM (#977) =="
+# The appliance bakes a 6 GiB hugepages reservation sized for the supported 16 GB machine; the
+# boot-time sizing shrinks it LOUDLY on smaller RAM. The tier function is pure over a
+# meminfo-shaped file, so every branch is provable here; the only thing left for the battery is
+# that on the 16 GiB harness VM the sizing is a no-op (full pool intact, no marker).
+HG="$SANDBOX/hugepages"
+mkdir -p "$HG"
+printf 'MemTotal:       16250000 kB\nMemFree:        16000000 kB\n' >"$HG/meminfo-16g"
+printf 'MemTotal:       8050000 kB\n' >"$HG/meminfo-8g"
+printf 'MemTotal:       4000000 kB\n' >"$HG/meminfo-4g"
+printf 'MemTotal:       15728640 kB\n' >"$HG/meminfo-at-floor"
+printf 'MemTotal:       15728639 kB\n' >"$HG/meminfo-under-floor"
+printf 'MemTotal:       banana kB\n' >"$HG/meminfo-garbage"
+printf 'MemFree:        123 kB\n' >"$HG/meminfo-no-total"
+
+hg_want() {
+    (
+        # shellcheck disable=SC1091
+        source "$ROOT/os/overlay/pithead-hugepages"
+        hugepages_want "$1"
+    )
+}
+assert_eq "16 GiB machine keeps the full 3072-page pool" "$(hg_want "$HG/meminfo-16g")" "3072"
+assert_eq "exactly the 15 GiB floor keeps the full pool (a real 16 GB box clears it)" "$(hg_want "$HG/meminfo-at-floor")" "3072"
+assert_eq "just under the floor reduces to 2560 pages (both RandomX datasets still fit)" "$(hg_want "$HG/meminfo-under-floor")" "2560"
+assert_eq "8 GiB machine reduces to 2560 pages" "$(hg_want "$HG/meminfo-8g")" "2560"
+assert_eq "4 GiB machine releases the reservation (0 pages)" "$(hg_want "$HG/meminfo-4g")" "0"
+assert_eq "garbage MemTotal keeps the full baked pool (degrade only on evidence)" "$(hg_want "$HG/meminfo-garbage")" "3072"
+assert_eq "missing MemTotal keeps the full baked pool" "$(hg_want "$HG/meminfo-no-total")" "3072"
+
+# ONE definition, three copies: the overlay script's full value must match the CLI's
+# PITHEAD_HUGEPAGES and the rootfs's baked sysctl line — drift here re-opens the silent floor.
+cli_pages=$(run_sourced "$SANDBOX" eval 'echo "$PITHEAD_HUGEPAGES"')
+overlay_pages=$(
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    echo "$FULL_PAGES"
+)
+assert_eq "overlay full pool matches the CLI's PITHEAD_HUGEPAGES" "$overlay_pages" "$cli_pages"
+if grep -q "vm.nr_hugepages=$cli_pages" "$ROOT/os/rootfs/Dockerfile"; then
+    ok "rootfs bakes the same sysctl value the CLI and overlay declare ($cli_pages)"
+else
+    bad "rootfs bakes the same sysctl value the CLI and overlay declare ($cli_pages)" \
+        "no vm.nr_hugepages=$cli_pages line in os/rootfs/Dockerfile"
+fi
+
+# main, degraded tier: shrinks the pool file, leaves the plain-words marker doctor reads.
+printf '3072\n' >"$HG/nr_hugepages"
+out=$(
+    export PITHEAD_MEMINFO="$HG/meminfo-8g" PITHEAD_NR_HUGEPAGES_FILE="$HG/nr_hugepages" \
+        PITHEAD_HUGEPAGES_MARKER="$HG/marker"
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    main
+)
+assert_eq "low-RAM boot shrinks the pool to the reduced target" "$(cat "$HG/nr_hugepages")" "2560"
+assert_contains "low-RAM boot announces the degrade on the console/journal" "$out" "below the supported 16 GB"
+assert_contains "degraded marker names the supported floor in plain words" "$(cat "$HG/marker" 2>/dev/null)" "16 GB"
+assert_eq "marker records the chosen page count — the authority later writers honour" \
+    "$(sed -n 's/^pages=//p' "$HG/marker" 2>/dev/null)" "2560"
+assert_not_contains "degrade message carries no issue numbers (operator text)" "$out" "#9"
+
+# main, too-small tier: releases the pool entirely and says the stack will not run.
+printf '3072\n' >"$HG/nr_hugepages"
+out=$(
+    export PITHEAD_MEMINFO="$HG/meminfo-4g" PITHEAD_NR_HUGEPAGES_FILE="$HG/nr_hugepages" \
+        PITHEAD_HUGEPAGES_MARKER="$HG/marker"
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    main
+)
+assert_eq "far-below-floor boot releases the reservation" "$(cat "$HG/nr_hugepages")" "0"
+assert_contains "far-below-floor boot says the stack will not run reliably" "$out" "will not run reliably"
+assert_eq "released marker records zero pages" "$(sed -n 's/^pages=//p' "$HG/marker" 2>/dev/null)" "0"
+
+# main, supported tier: a strict no-op — pool untouched, no marker, nothing said.
+printf '3072\n' >"$HG/nr_hugepages"
+rm -f "$HG/marker"
+out=$(
+    export PITHEAD_MEMINFO="$HG/meminfo-16g" PITHEAD_NR_HUGEPAGES_FILE="$HG/nr_hugepages" \
+        PITHEAD_HUGEPAGES_MARKER="$HG/marker"
+    # shellcheck disable=SC1091
+    source "$ROOT/os/overlay/pithead-hugepages"
+    main
+)
+assert_eq "supported machine leaves the baked pool alone" "$(cat "$HG/nr_hugepages")" "3072"
+assert_eq "supported machine writes no degraded marker" "$(cat "$HG/marker" 2>/dev/null || echo absent)" "absent"
+assert_eq "supported machine says nothing" "$out" ""
+
+# doctor reads the marker as a WARN — never FAIL, so the A/B commit gate (which takes doctor's
+# exit code) still commits a degraded-but-serving box. The words on line one are for the human;
+# the pages= record under them is for the writers, and doctor must not leak it.
+printf 'This machine has 7.7 GiB of RAM - below the supported 16 GB. Reduced reservation.\npages=2560\n' >"$HG/marker"
+out=$(PITHEAD_HUGEPAGES_MARKER="$HG/marker" run_sourced "$SANDBOX" check_hugepages_degraded 2>&1)
+assert_contains "doctor surfaces the degraded-hugepages message as a WARN" "$out" "WARN"
+assert_contains "doctor repeats the boot-time message verbatim" "$out" "below the supported 16 GB"
+assert_not_contains "doctor never FAILs on the degrade (commit gate must still pass)" "$out" "FAIL"
+assert_not_contains "doctor repeats the words, not the machine record" "$out" "pages=2560"
+rc=$(
+    PITHEAD_HUGEPAGES_MARKER="$HG/absent-marker" run_sourced "$SANDBOX" check_hugepages_degraded >/dev/null 2>&1
+    echo $?
+)
+assert_rc "no marker, no verdict (rc 0, silent off the appliance)" "$rc" "0"
+
+# The decision reader (hugepages_decision_pages) can only ever LOWER the budget: a corrupt
+# record at or above the full pool reads as the full pool, and no marker means the full budget
+# — so DIY hosts and healthy appliances keep the exact pre-#977 behavior.
+printf 'words\npages=9999\n' >"$HG/marker"
+assert_eq "a record above the budget is capped at the budget" \
+    "$(PITHEAD_HUGEPAGES_MARKER="$HG/marker" run_sourced "$SANDBOX" hugepages_decision_pages)" "3072"
+assert_eq "no marker reads as the full budget" \
+    "$(PITHEAD_HUGEPAGES_MARKER="$HG/absent-marker" run_sourced "$SANDBOX" hugepages_decision_pages)" "3072"
+
 echo "== unit: pithead-media-config — physical-presence media channel (#786 sub-issue D) =="
 # Source the boot leg (functions only — its main is guarded) and drive its pieces with stubbed
 # lsblk/mount/umount and a real (sandboxed) copy of pithead for validation — the same two-layer
@@ -10372,6 +10903,15 @@ exit 0
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"$MC/bin/umount"
 chmod +x "$MC/bin/lsblk" "$MC/bin/mount" "$MC/bin/umount"
+
+# A merged config that carries dashboard.auth.password sends media_validate_config's fresh bash
+# into parse_and_validate_config's caddy hash branch, which greps docker-compose.yml at CWD for
+# the pinned image and shells out to `docker run`. Give this section the #8 auth tests' hash-
+# answering docker stub plus a caddy-pinned one-line compose fixture, and run those legs from
+# $MC — the hash lands on the stub, never on a real (network-reaching) docker or the repo's
+# compose file.
+make_stubs "$MC/bin"
+printf 'image: caddy:0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000\n' >"$MC/docker-compose.yml"
 
 printf 'sda\tdisk\t0\t\nsda1\tpart\t0\text4\nsdb\tdisk\t1\t\nsdb1\tpart\t1\tvfat\n' >"$MC/lsblk-out"
 
@@ -10411,6 +10951,47 @@ rc=$(
     echo $?
 )
 assert_eq "media_find_config returns 1 when no candidate carries the file" "$rc" "1"
+
+echo "== unit: media_merge_config (settings the stick does not name keep their running values) =="
+cat >"$MC/running-full.json" <<EOF
+{"monero":{"wallet_address":"$VALID_PRIMARY","node_username":"admin","node_password":"a-generated-password-1"},"tari":{"wallet_address":"$VALID_TARI"},"p2pool":{"pool":"mini","stratum_password":"auto"},"dashboard":{"auth":{"password":"the-firstboot-password"},"control":{"enabled":true}},"tor":{"auto_heal":true}}
+EOF
+printf '{"p2pool":{"pool":"nano"}}' >"$MC/minimal-stick.json"
+merged=$(
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_merge_config "$MC/running-full.json" "$MC/minimal-stick.json"
+)
+assert_eq "the named setting changes" "$(jq -r '.p2pool.pool' "$merged")" "nano"
+assert_eq "the unnamed dashboard password is preserved, not dropped" \
+    "$(jq -r '.dashboard.auth.password' "$merged")" "the-firstboot-password"
+assert_eq "the unnamed appliance defaults are preserved (control.enabled)" \
+    "$(jq -r '.dashboard.control.enabled' "$merged")" "true"
+assert_eq "the unnamed appliance defaults are preserved (tor.auto_heal)" \
+    "$(jq -r '.tor.auto_heal' "$merged")" "true"
+assert_eq "unnamed node credentials carry forward — validation has nothing left to regenerate" \
+    "$(jq -r '.monero.node_password' "$merged")" "a-generated-password-1"
+rm -f "$merged"
+
+printf '{"tor":{"auto_heal":null}}' >"$MC/null-stick.json"
+merged=$(
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_merge_config "$MC/running-full.json" "$MC/null-stick.json"
+)
+assert_eq "naming a setting null clears it — the documented unset spelling" \
+    "$(jq -r '.tor.auto_heal == null' "$merged")" "true"
+rm -f "$merged"
+
+printf 'not json at all' >"$MC/broken-stick.json"
+merged=$(
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_merge_config "$MC/running-full.json" "$MC/broken-stick.json"
+)
+if cmp -s "$MC/broken-stick.json" "$merged"; then
+    ok "an unmergeable stick file passes through as-is, so validation reports ITS error"
+else
+    bad "an unmergeable stick file passes through as-is" "merge altered or dropped it"
+fi
+rm -f "$merged"
 
 echo "== unit: media_validate_config (reuses the pre-seed validation engine) =="
 cat >"$MC/good.json" <<EOF
@@ -10469,6 +11050,7 @@ assert_eq "identical configs -> media_config_identical true" "$rc" "0"
 rc=$(
     export PITHEAD_MEDIA_BIN="$MC/pithead"
     source "$ROOT/os/overlay/pithead-media-config"
+    # shellcheck disable=SC2034 # read by the sourced media_config_* functions, not directly here
     SECRET_PATHS_JSON=$(_secret_paths_json)
     media_config_identical "$MC/good.json" "$MC/changed.json"
     echo $?
@@ -10570,6 +11152,7 @@ mkdir -p "$STICK4"
 cp "$MC/changed.json" "$STICK4/pithead-config.json"
 : >"$MC/mount.log"
 (
+    cd "$MC" || exit 1 # changed.json carries dashboard.auth.password — the hash branch needs $MC's compose fixture + docker stub
     export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
     export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK4" MOUNT_LOG="$MC/mount.log"
     export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
@@ -10577,10 +11160,12 @@ cp "$MC/changed.json" "$STICK4/pithead-config.json"
     media_confirm_gate() { echo apply; }
     main
 ) >"$MC/apply.out" 2>&1
-if cmp -s "$MC/changed.json" "$RUN_CFG"; then
+# jq-level equality, not cmp: the merge stage reformats, and changed.json names every key
+# good.json has, so the merged result must equal changed.json setting-for-setting.
+if [ "$(jq -S . "$MC/changed.json")" = "$(jq -S . "$RUN_CFG")" ]; then
     ok "a confirmed change is written to the running config.json — the changed setting took effect"
 else
-    bad "a confirmed change is written to the running config.json" "$(diff "$MC/changed.json" "$RUN_CFG" 2>&1 | head -3)"
+    bad "a confirmed change is written to the running config.json" "$(diff <(jq -S . "$MC/changed.json") <(jq -S . "$RUN_CFG") 2>&1 | head -3)"
 fi
 mounted_at=$(tail -1 "$MC/mount.log")
 [ -n "$mounted_at" ] && [ ! -f "$mounted_at/pithead-config.json" ] &&
@@ -10594,6 +11179,7 @@ cp "$MC/changed.json" "$STICK5/pithead-config.json"
 cp "$MC/good.json" "$RUN_CFG"
 : >"$MC/mount.log"
 (
+    cd "$MC" || exit 1 # changed.json carries dashboard.auth.password — see the stub note above
     export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
     export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK5" MOUNT_LOG="$MC/mount.log"
     export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
@@ -10617,6 +11203,7 @@ cp "$MC/changed.json" "$STICK6/pithead-config.json"
 cp "$MC/good.json" "$RUN_CFG"
 : >"$MC/mount.log"
 (
+    cd "$MC" || exit 1 # changed.json carries dashboard.auth.password — see the stub note above
     export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
     export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK6" MOUNT_LOG="$MC/mount.log"
     # Validation still works (real pithead), but the secret-path fetch reads a DIFFERENT, broken
@@ -10631,6 +11218,34 @@ cp "$MC/good.json" "$RUN_CFG"
 assert_eq "no secret list -> the running config is never rewritten" "$(cmp -s "$MC/good.json" "$RUN_CFG" && echo same)" "same"
 assert_not_contains "no secret list -> no diff is ever displayed" "$(cat "$MC/nosecrets.out")" "DIFF-WAS-SHOWN"
 assert_contains "no secret list -> the stage refuses out loud" "$(cat "$MC/nosecrets.out")" "cannot read the secret-path list"
+
+# The issue-965 shape end to end: a stick naming ONLY the pool tier must change the pool tier
+# and NOTHING else — the generated dashboard login, the appliance defaults and the node
+# credentials all survive, and none of them appear in the console diff as a change.
+STICK7="$MC/stick-minimal"
+mkdir -p "$STICK7"
+cp "$MC/minimal-stick.json" "$STICK7/pithead-config.json"
+cp "$MC/running-full.json" "$RUN_CFG"
+: >"$MC/mount.log"
+(
+    cd "$MC" || exit 1 # the merged config carries the running dashboard.auth.password — see the stub note above
+    export PATH="$MC/bin:$PATH" LSBLK_OUT="$MC/lsblk-out"
+    export MOUNT_DEVICE="/dev/sdb1" MOUNT_SRC="$STICK7" MOUNT_LOG="$MC/mount.log"
+    export PITHEAD_MEDIA_BIN="$MC/pithead" PITHEAD_MEDIA_CONFIG="$RUN_CFG" PITHEAD_MEDIA_DIR="$MC"
+    source "$ROOT/os/overlay/pithead-media-config"
+    media_confirm_gate() { echo apply; }
+    main
+) >"$MC/minimal.out" 2>&1
+assert_eq "minimal stick: the named setting applies (p2pool.pool)" "$(jq -r '.p2pool.pool' "$RUN_CFG")" "nano"
+assert_eq "minimal stick: the dashboard password it never named is kept, not dropped or regenerated" \
+    "$(jq -r '.dashboard.auth.password' "$RUN_CFG")" "the-firstboot-password"
+assert_eq "minimal stick: dashboard.control.enabled survives" "$(jq -r '.dashboard.control.enabled' "$RUN_CFG")" "true"
+assert_eq "minimal stick: tor.auto_heal survives" "$(jq -r '.tor.auto_heal' "$RUN_CFG")" "true"
+assert_eq "minimal stick: node credentials do not churn" "$(jq -r '.monero.node_password' "$RUN_CFG")" "a-generated-password-1"
+assert_contains "minimal stick: the diff names the one real change" "$(cat "$MC/minimal.out")" "p2pool.pool: mini -> nano"
+assert_not_contains "minimal stick: nothing unnamed shows up as changed" "$(cat "$MC/minimal.out")" "dashboard.auth.password"
+assert_contains "minimal stick: the console states the keep-what-you-do-not-name rule" \
+    "$(cat "$MC/minimal.out")" "Settings the file does not name keep their current values."
 
 echo "== unit: os/build-image.sh — --fresh-index flag parsing + the 404 remedy hint (#929) =="
 # PITHEAD_BUILD_IMAGE_TEST makes the script return right after arg parsing (before docker), so
@@ -10672,6 +11287,124 @@ run_hint() {
 assert_contains "404 signature triggers the --fresh-index remedy" "$(run_hint 'E: Failed to fetch ... 404  Not Found')" "--fresh-index"
 assert_contains "'Unable to fetch' signature triggers the remedy" "$(run_hint 'E: Unable to fetch some archives, maybe run apt-get update')" "--fresh-index"
 assert_eq "an unrelated failure prints no hint" "$(run_hint 'E: some other build error')" ""
+
+echo "== unit: pithead-ssh-host-keys — per-machine host key on /data, generated once (#894/#980) =="
+# Real ssh-keygen against a sandboxed key dir (PITHEAD_SSH_HOST_KEYS_DIR — the same env-seam
+# shape pithead-machine-id carries). chown is PATH-stubbed: the suite is not root, and ownership
+# on the box is systemd's root context, not logic this tier can prove. stdin is /dev/null on
+# every run — the systemd condition the wedge-recovery case below depends on.
+SHK="$SANDBOX/ssh-host-keys"
+mkdir -p "$SHK/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$SHK/bin/chown"
+chmod +x "$SHK/bin/chown"
+shk_key="$SHK/data-ssh/ssh_host_ed25519_key"
+shk_run() {
+    (
+        export PATH="$SHK/bin:$PATH" PITHEAD_SSH_HOST_KEYS_DIR="$SHK/data-ssh"
+        sh "$ROOT/os/overlay/pithead-ssh-host-keys" </dev/null 2>&1
+    )
+}
+out=$(shk_run)
+assert_rc "first run on an empty /data generates the key" "$?" "0"
+assert_contains "generation is announced (a silent identity change is the bug class)" "$out" "generated a new host key"
+shk_fp1=$(ssh-keygen -lf "$shk_key" 2>/dev/null | awk '{print $2}')
+[ -n "$shk_fp1" ] && ok "the generated key is a loadable ed25519 key ($shk_fp1)" ||
+    bad "the generated key is a loadable ed25519 key" "ssh-keygen -lf failed on $shk_key"
+assert_eq "key dir is owner-only (700)" "$(stat -c '%a' "$SHK/data-ssh" 2>/dev/null || stat -f '%Lp' "$SHK/data-ssh")" "700"
+assert_eq "private key is owner-only (600)" "$(stat -c '%a' "$shk_key" 2>/dev/null || stat -f '%Lp' "$shk_key")" "600"
+assert_eq "public key is world-readable (644)" "$(stat -c '%a' "$shk_key.pub" 2>/dev/null || stat -f '%Lp' "$shk_key.pub")" "644"
+# Idempotence IS the identity contract (#894): a second start must find the key and change
+# NOTHING — a regeneration here is exactly the host-key churn an A/B update must never cause.
+out=$(shk_run)
+assert_rc "second run exits 0" "$?" "0"
+assert_not_contains "second run regenerates nothing" "$out" "generated"
+assert_eq "second run leaves the key byte-identical" "$(ssh-keygen -lf "$shk_key" | awk '{print $2}')" "$shk_fp1"
+# Wedge recovery: an interrupted prior run leaves an empty key file (+ stale .pub). ssh-keygen
+# prompts before overwriting an existing path, and with stdin on /dev/null that prompt reads EOF
+# and refuses — the script must clear the partial file first or sshd wedges forever.
+: >"$shk_key"
+out=$(shk_run)
+assert_rc "a stale empty key file is regenerated, not wedged on the overwrite prompt" "$?" "0"
+shk_fp2=$(ssh-keygen -lf "$shk_key" 2>/dev/null | awk '{print $2}')
+[ -n "$shk_fp2" ] && ok "recovery produced a loadable key again" ||
+    bad "recovery produced a loadable key again" "ssh-keygen -lf failed on $shk_key"
+
+echo "== unit: pithead-mount-generator — /data + ESP follow the BOOTED disk, never a label (#926/#980) =="
+# The generator against staged mountinfo files (PITHEAD_MOUNTINFO seam; GENDIR is already an
+# argument). The staged lines keep the real shape — surrounding mounts, optional fields before
+# the "-" separator — so the awk root-line/source extraction runs against what a kernel writes.
+MG="$SANDBOX/mount-generator"
+mkdir -p "$MG"
+mg_run() { # $1 mountinfo file, $2 gendir
+    (
+        export PITHEAD_MOUNTINFO="$1"
+        sh "$ROOT/os/overlay/pithead-mount-generator" "$2"
+    )
+}
+cat >"$MG/mi-sda" <<'EOF'
+24 30 0:22 / /proc rw,nosuid,nodev,noexec,relatime shared:5 - proc proc rw
+29 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw,stripe=32
+32 29 8:4 / /data rw,noatime shared:2 - ext4 /dev/sda4 rw
+EOF
+mg_run "$MG/mi-sda" "$MG/gen-sda"
+assert_rc "generator succeeds on a /dev/sda2 root" "$?" "0"
+mg_data=$(cat "$MG/gen-sda/data.mount" 2>/dev/null)
+mg_esp=$(cat "$MG/gen-sda/boot-efi.mount" 2>/dev/null)
+assert_contains "data.mount is partition 4 OF THE BOOT DISK" "$mg_data" "What=/dev/sda4"
+assert_contains "data.mount mounts /data" "$mg_data" "Where=/data"
+assert_contains "data.mount is ext4" "$mg_data" "Type=ext4"
+assert_not_contains "data.mount never mounts by label" "$mg_data" "LABEL"
+assert_contains "boot-efi.mount is partition 1 of the boot disk" "$mg_esp" "What=/dev/sda1"
+assert_contains "boot-efi.mount mounts /boot/efi" "$mg_esp" "Where=/boot/efi"
+assert_contains "the ESP mount is root-only (RAUC boot state lives there)" "$mg_esp" "Options=umask=0077"
+assert_contains "the data mount orders before local-fs.target" "$mg_data" "Before=local-fs.target"
+for u in data.mount boot-efi.mount; do
+    if [ "$(readlink "$MG/gen-sda/local-fs.target.requires/$u")" = "../$u" ]; then
+        ok "$u is required by local-fs.target (the boot waits for it)"
+    else
+        bad "$u is required by local-fs.target" "missing or wrong symlink"
+    fi
+done
+# nvme/mmc naming: the partition number strips AND the 'p' separator comes back on the
+# partition paths (nvme0n1p2 -> disk nvme0n1 -> partitions nvme0n1p4 / nvme0n1p1).
+printf '29 1 259:2 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw\n' >"$MG/mi-nvme"
+mg_run "$MG/mi-nvme" "$MG/gen-nvme"
+assert_contains "an nvme root keeps the p separator: data" "$(cat "$MG/gen-nvme/data.mount")" "What=/dev/nvme0n1p4"
+assert_contains "an nvme root keeps the p separator: ESP" "$(cat "$MG/gen-nvme/boot-efi.mount")" "What=/dev/nvme0n1p1"
+# A root line with NO optional fields (the "-" comes right after the options) still parses —
+# and vda-style names get no separator (vda2 -> vda4).
+printf '29 1 254:2 / / rw,relatime - ext4 /dev/vda2 rw\n' >"$MG/mi-vda"
+mg_run "$MG/mi-vda" "$MG/gen-vda"
+assert_contains "a no-optional-fields root line parses (vda2 -> vda4)" "$(cat "$MG/gen-vda/data.mount")" "What=/dev/vda4"
+# A container/unexpected root (source is not /dev/*) generates NOTHING rather than guessing.
+printf '29 1 0:35 / / rw,relatime - overlay overlay rw\n' >"$MG/mi-ovl"
+mg_run "$MG/mi-ovl" "$MG/gen-ovl"
+assert_rc "a non-/dev root exits 0 (a generator must not fail the boot)" "$?" "0"
+assert_eq "a non-/dev root generates no units" "$([ -e "$MG/gen-ovl" ] || echo none)" "none"
+
+echo "== unit: os/rauc/loop-wait.sh — the partition wait demands block devices and polls its budget =="
+# The negative half of the contract — all a non-root tier can prove: absent nodes and
+# regular-file impostors both exhaust the poll and return 1. sleep/udevadm are function-stubbed
+# so the 25-poll budget runs instantly. The positive half (real nodes appearing) runs for real
+# on every image build — mkimage.sh and verify-image.sh both call this.
+LW="$SANDBOX/loop-wait"
+mkdir -p "$LW"
+lw_run() { # $1 device path
+    (
+        # shellcheck disable=SC1091  # path is dynamic by design
+        source "$ROOT/os/rauc/loop-wait.sh"
+        udevadm() { :; }
+        sleep() { echo x >>"$LW/sleeps"; }
+        wait_loop_partitions "$1"
+    )
+}
+: >"$LW/sleeps"
+lw_run "$LW/loop0"
+assert_rc "nodes that never appear -> rc 1" "$?" "1"
+assert_eq "the wait polls its full 25-try budget, not a single-shot check" "$(wc -l <"$LW/sleeps" | tr -d ' ')" "25"
+touch "$LW/loop0p1" "$LW/loop0p2"
+lw_run "$LW/loop0"
+assert_rc "regular files at p1/p2 do not satisfy the wait — block devices required" "$?" "1"
 
 # ---------------------------------------------------------------------------
 echo ""
