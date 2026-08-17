@@ -12,3 +12,11 @@ CVE-2026-45447
 # /app/.venv and never invoked at runtime (the entrypoint runs the venv's python). Cleared by a base bump.
 CVE-2026-23949
 CVE-2026-24049
+
+# util-linux family (bsdutils, libmount1, libuuid1, login, mount, util-linux): the fix is a
+# base-distro point release, 2.41.5-0+deb13u1, and no published python:3.11-slim carries it yet —
+# the newest digest still ships 2.41-5. Same shape as CVE-2026-45447 above: `--ignore-unfixed` hid
+# this until Debian published a fix, at which point it reddened every branch at once without any
+# change on our side. Cleared when a base bump brings 2.41.5-0+deb13u1 in; the weekly CVE sweep
+# (#833) re-surfaces it regardless, so this cannot rot silently.
+CVE-2026-53615
