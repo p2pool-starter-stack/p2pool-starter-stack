@@ -302,16 +302,16 @@ the new release *before* pulling/rebuilding, so a release that changes a config 
 blockchain sync and settings survive an upgrade.
 
 On a release install with the release public key on disk (`cosign.pub`, shipped in every signed
-bundle), `upgrade` verifies each image's cosign signature before pulling and aborts on any failure —
-including when the `cosign` binary itself is missing. Install cosign once and the check runs on
-every upgrade; see [Releasing › Verifying a release](dev/releasing.md#verifying-a-release).
+bundle), `upgrade` verifies each image's cosign signature before pulling and aborts on any failure.
+There is nothing to install for this: the verifier runs as a digest-pinned container, so Docker —
+already a prerequisite — is the only thing it needs. The first upgrade fetches that image once and
+never mentions it again. See
+[Releasing › Verifying a release](dev/releasing.md#verifying-a-release) for what is checked.
 
-**Install cosign before your first upgrade to a signed release.** Every release bundle carries the
-key, so an install cut before signing engaged holds none — there was nothing to make the binary
-necessary, and nothing warns until the upgrade needs it. The one-click upgrade checks first and
-refuses with nothing downloaded; the host `upgrade` aborts at the image gate, after the generated
-config has been re-rendered. Neither touches the running containers, and re-running once cosign is
-installed picks up where it stopped.
+Verification fails closed. A bad signature, a stripped `pithead.tar.gz.sig`, or an image the bundle
+does not pin by digest each abort the upgrade before anything is pulled, and the stack keeps running
+the version it was on. The one and only way to end up unverified is an install older than the first
+signed release, which carries no `cosign.pub` at all — that case warns loudly and proceeds.
 
 Run `./pithead version` to see what is currently installed before and after an upgrade.
 

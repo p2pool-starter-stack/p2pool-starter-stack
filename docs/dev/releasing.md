@@ -184,9 +184,18 @@ digests — the exact bytes the smoke stage validated — never a mutable tag.
   trust anchor for its own verification, so a malicious bundle cannot vouch for itself; a key
   rotation reaches installs through a bundle signed with the previous key.
 - Verification fails closed. With `cosign.pub` present, a bad signature, a stripped
-  `pithead.tar.gz.sig`, or a missing `cosign` binary each abort the upgrade with a message naming
-  the fix. Only an install with no `cosign.pub` at all — older than the first signed release —
-  proceeds unverified, with a warning saying exactly that; `pithead doctor` reports the state.
+  `pithead.tar.gz.sig`, or an image the bundle does not pin by digest each abort the upgrade with a
+  message naming the fix. Only an install with no `cosign.pub` at all — older than the first signed
+  release — proceeds unverified, with a warning saying exactly that; `pithead doctor` reports the
+  state.
+- The verifier is a container, not a host binary
+  ([#1072](https://github.com/p2pool-starter-stack/pithead/issues/1072)): `cosign_run` invokes a
+  digest-pinned `cosign` image with the install dir mounted read-only. Operators install nothing,
+  and cosign never appears in the prerequisites. Requiring it on the host made signing a hidden
+  dependency that no prerequisite listed and no dependency check installed — a fresh bundle install
+  dead-ended at first `up`, and every install cut before signing engaged hit the same wall on its
+  first signed upgrade, after the download and the extract. The release box is the exception: it
+  signs, so it keeps a real pinned cosign (see [release-server.md](release-server.md)).
 - Source checkouts skip verification: locally built images are unsigned by design.
 
 What the signature does and does not prove: it proves the artifact was produced by the holder of
@@ -196,10 +205,9 @@ holds the key and cuts the releases.
 
 ### Verifying a release
 
-`pithead upgrade` runs the checks automatically once `cosign` is installed
-(pinned install: [release-server.md](release-server.md#the-release-signing-key) — the same
-snippet works on any host). To verify by hand against the committed
-`cosign.pub`:
+`pithead upgrade` runs the checks automatically, with no cosign install on the host — it calls a
+digest-pinned cosign image. To verify by hand instead, use a cosign of your own (pinned install:
+[release-server.md](release-server.md#the-release-signing-key)) against the committed `cosign.pub`:
 
 ```bash
 # An image (repeat per image, or pin the digest from the ingredients manifest):
