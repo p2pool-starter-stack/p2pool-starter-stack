@@ -31,3 +31,10 @@ CVE-2026-46600
 # google.golang.org/grpc vendored in both pinned binaries (GHSA id — Trivy gates on it like a
 # CVE; same clearing condition as the three above: upstream rebuilds on the fixed module):
 GHSA-hrxh-6v49-42gf
+# util-linux family (bsdutils, libmount1, libuuid1, login, mount, util-linux): the fix is a
+# base-distro point release, 2.41.5-0+deb13u1, and no published python:3.11-slim carries it yet —
+# the newest digest still ships 2.41-5. Same shape as CVE-2026-45447 above: `--ignore-unfixed` hid
+# this until Debian published a fix, at which point it reddened every branch at once without any
+# change on our side. Cleared when a base bump brings 2.41.5-0+deb13u1 in; the weekly CVE sweep
+# (#833) re-surfaces it regardless, so this cannot rot silently.
+CVE-2026-53615
