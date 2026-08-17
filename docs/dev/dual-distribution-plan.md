@@ -65,7 +65,7 @@ the DIY channel changes nothing.
   prod never migrate.
 - **Appliance**: `pithead render-quadlet` writes `.container`/`.network` units from
   `config.json` into `/etc/containers/systemd/` — same pattern as the `.env` render.
-  Disabled profiles (local_node, payout_confirm, tari_payout_confirm) get no units.
+  Disabled profiles (local_node, local_tari, payout_confirm, tari_payout_confirm) get no units.
   The renderer is an internal step, not a user-facing verb: appliance users run the
   same `pithead setup` / config-apply flow as every other channel, and the runtime
   stays invisible.

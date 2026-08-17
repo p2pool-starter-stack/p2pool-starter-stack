@@ -18,7 +18,10 @@
 #      images from build/, so a Dockerfile/entrypoint change is actually tested #272) and runs the live
 #      harness (tests/integration/run.sh) DETACHED on the box so an SSH drop can't kill a long matrix.
 #   6. ALWAYS restores: the miner's original pool config, and the canonical baseline stack — even
-#      on failure or Ctrl-C (an EXIT trap). The synced chains are never touched.
+#      on failure or Ctrl-C (an EXIT trap). The synced chains are never touched. The restore then
+#      PROVES the live stack matches the on-disk config (#971): a credential marker baked into a
+#      running container must equal the on-disk .env's line, and monerod must answer a host-side
+#      authed get_info with the on-disk creds. A failed proof exits non-zero, loudly.
 #
 # The Compose project name is pinned to "pithead", so the e2e checkout and the canonical checkout
 # drive the SAME containers + the SAME shared chains — they are two code copies of one stack, run
@@ -44,6 +47,7 @@ GIT_REMOTE_URL="${GIT_REMOTE_URL:-https://github.com/p2pool-starter-stack/pithea
 MODE="targeted" # targeted (default, lean) | check | matrix (full sweep, opt-in)
 WORKERS=1
 BORROW_MINER=1
+SKIP_PREFLIGHT=0
 KEEP=0
 BRANCH=""
 
@@ -92,7 +96,10 @@ OPTIONS:
   --workers <n>     workers expected mining through the stack (default: 1 — the borrowed miner)
   --bench <host>    SSH host of the test bench to deploy onto (or set BENCH_HOST)
   --miner <host>    SSH host of the miner to borrow (or set MINER_HOST)
-  --no-miner        don't borrow a miner (mining assertions will be skipped/limited)
+  --no-miner        don't borrow a miner; the harness skips its two mining assertions
+                    (workers online, stratum hashes) with a logged notice — everything else binds
+  --skip-preflight  skip the bench-chains-synced pre-flight (a cold bench then fails the
+                    required-sync assertions as environment noise — use knowingly)
   --keep            don't restore at the end (leave the branch deployed + miner repointed — debugging)
   -h, --help        this help
 
@@ -128,6 +135,10 @@ while [ $# -gt 0 ]; do
         BORROW_MINER=0
         shift
         ;;
+    --skip-preflight)
+        SKIP_PREFLIGHT=1
+        shift
+        ;;
     --keep)
         KEEP=1
         shift
@@ -161,6 +172,7 @@ on_miner() { ssh "${SSH_OPTS[@]}" "$MINER_HOST" "$1"; }
 SAFETY_ARCHIVE=""
 MINER_CFG_BACKUP=""
 RESTORED=0
+RESTORE_PROOF_FAILED=0
 # Where the LIVE stack actually runs from — resolved in preflight (#454). Defaults to CANONICAL_DIR
 # so the EXIT trap always has a target even if it fires before preflight refines it.
 RESTORE_DIR="$CANONICAL_DIR"
@@ -196,9 +208,13 @@ restore_all() {
     on_bench "cd '$E2E_DIR' && ./pithead down >/dev/null 2>&1 || true"
     if on_bench "cd '$RESTORE_DIR' && ./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"; then
         wait_bench_healthy 300 && ok "baseline stack healthy again" || warn "baseline stack came up but isn't reporting healthy yet — check 'pithead status' on $BENCH_HOST"
+        # Proof, even when the health wait timed out: a stack running the WRONG creds looks
+        # exactly this healthy — that's the incident (#971). Never trust "up" alone.
+        verify_restore_proof || RESTORE_PROOF_FAILED=1
     else
         warn "baseline 'pithead apply/up' returned non-zero in $RESTORE_DIR — check $BENCH_HOST by hand."
         warn "  Safety backup to roll back to: $SAFETY_ARCHIVE"
+        RESTORE_PROOF_FAILED=1
     fi
 
     # 3. Chains sanity: they must be untouched (the whole point).
@@ -206,6 +222,11 @@ restore_all() {
     sync="$(on_bench "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
     [ -n "$sync" ] && step "post-restore sync state (monero/tari): $sync"
 
+    if [ "$RESTORE_PROOF_FAILED" = "1" ]; then
+        warn "RESTORE NOT PROVEN: the live stack on $BENCH_HOST did not prove it matches $RESTORE_DIR's on-disk config (see above)."
+        warn "  Re-bake from disk by hand: cd $RESTORE_DIR && docker compose up -d — then verify with a host-side authed get_info."
+        exit 1
+    fi
     if [ "$rc" -eq 0 ]; then ok "restore complete."; else warn "restore complete (the run itself failed — see above)."; fi
 }
 trap restore_all EXIT INT TERM
@@ -238,6 +259,59 @@ wait_synced() { # <timeout_s>
         }
         sleep 8
     done
+}
+
+# Restore proof (#971): after the restore brings the baseline back up, prove the LIVE stack
+# actually runs RESTORE_DIR's on-disk config. A pre-#921 e2e run once left the containers on
+# harness-rendered creds while the on-disk .env kept the real ones — internally consistent, so it
+# mined and looked healthy for a day, while every host-side RPC probe 401ed. Two checks:
+#   1. The credential marker baked into the running dashboard container (docker inspect) is the
+#      same line as the on-disk .env's — env_bake_verdict (lib.sh) prints verdict words only,
+#      never values.
+#   2. monerod answers a host-side get_info with the on-disk creds — the exact probe the incident
+#      broke. Only .status is required (sync may still be re-confirming); polled briefly because
+#      the containers were just recreated. The probe script travels over ssh stdin (bash -s), so
+#      the creds stay on the box and the remote command string carries no shell parens.
+# Returns 0 when both hold.
+RESTORE_PROOF_VAR="MONERO_NODE_PASSWORD"
+verify_restore_proof() {
+    local prc=0 disk cid baked="" verdict
+    disk="$(on_bench "grep -E '^${RESTORE_PROOF_VAR}=' '$RESTORE_DIR/.env' 2>/dev/null | head -n1" || true)"
+    cid="$(on_bench "docker ps -q --filter label=com.docker.compose.project=pithead --filter label=com.docker.compose.service=dashboard 2>/dev/null | head -n1" || true)"
+    [ -n "$cid" ] && baked="$(on_bench "docker inspect --format '{{json .Config.Env}}' '$cid' 2>/dev/null | jq -r '.[]'" || true)"
+    verdict="$(env_bake_verdict "$RESTORE_PROOF_VAR" "$disk" "$baked")"
+    if [ "$verdict" = "match" ]; then
+        ok "restore proof: dashboard container env matches the on-disk .env ($RESTORE_PROOF_VAR)"
+    else
+        warn "restore proof: $RESTORE_PROOF_VAR baked into the live dashboard container vs $RESTORE_DIR/.env: $verdict"
+        prc=1
+    fi
+
+    local out deadline=$(($(date +%s) + 60))
+    while :; do
+        out="$(
+            on_bench "cd '$RESTORE_DIR' && bash -s" <<'PROBE'
+u=$(grep -E '^MONERO_NODE_USERNAME=' .env 2>/dev/null | cut -d= -f2-)
+p=$(grep -E '^MONERO_NODE_PASSWORD=' .env 2>/dev/null | cut -d= -f2-)
+url=$(grep -E '^MONERO_RPC_URL=' .env 2>/dev/null | cut -d= -f2-)
+[ -n "$url" ] || url="http://127.0.0.1:18081"
+if [ -n "$u" ]; then body=$(curl -fsS --max-time 8 --digest -u "$u:$p" "$url/get_info" 2>/dev/null)
+else body=$(curl -fsS --max-time 8 "$url/get_info" 2>/dev/null); fi
+printf '%s' "$body" | jq -e '.status=="OK"' >/dev/null 2>&1 && echo rpc-ok || echo rpc-fail
+PROBE
+        )" || true
+        if [ "$out" = "rpc-ok" ]; then
+            ok "restore proof: host-side get_info answers with the on-disk creds"
+            break
+        fi
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            warn "restore proof: host-side get_info with the on-disk creds did NOT answer within 60s — the live monerod may be running different creds than $RESTORE_DIR/.env"
+            prc=1
+            break
+        fi
+        sleep 10
+    done
+    return "$prc"
 }
 
 # Nudge the miner's xmrig to reload its (rewritten) config. xmrig watches its config file and
@@ -292,6 +366,24 @@ preflight() {
     else
         warn "couldn't resolve the live stack's working dir — restore will use CANONICAL_DIR=$CANONICAL_DIR."
     fi
+    # Chains at tip BEFORE anything is locked or borrowed (#914): a bench that starts hours
+    # behind fails the required-sync assertions as environment noise — not a regression — and
+    # burns the borrowed-rig hour finding out. Same dashboard sync signal wait_synced polls.
+    if [ "$SKIP_PREFLIGHT" = "1" ]; then
+        warn "--skip-preflight: not checking the bench chains are synced."
+    else
+        local sync_line mst mheights tst theights
+        sync_line="$(on_bench "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '$E2E_SYNC_SUMMARY_JQ' 2>/dev/null" || true)"
+        [ -n "$sync_line" ] || die "Cannot read the bench dashboard's sync state (127.0.0.1:8000/api/state on $BENCH_HOST) — is the stack up? --skip-preflight overrides."
+        read -r mst mheights tst theights <<<"$sync_line"
+        if [ "$mst" = "done" ] && [ "$tst" = "done" ]; then
+            ok "bench chains synced (monero done, tari done)"
+        else
+            warn "monero: $mst (current/target $mheights)"
+            warn "tari:   $tst (current/target $theights)"
+            die "Bench chains are not at tip — the required-sync assertions would fail on the environment, not the branch (#914). Let the bench catch up, or pass --skip-preflight to run anyway."
+        fi
+    fi
     if [ "$BORROW_MINER" = "1" ]; then
         on_miner 'echo ok >/dev/null' || die "Cannot SSH to miner '$MINER_HOST' (use --no-miner to skip)."
         on_miner "test -f '$MINER_XMRIG_CONFIG'" || die "No xmrig config at $MINER_XMRIG_CONFIG on $MINER_HOST."
@@ -336,24 +428,29 @@ provision() {
     # Seed from the LIVE release bundle when one exists (#880): the canonical checkout's config can
     # drift far behind what's actually deployed (a release bumps config.json/.env in the bundle dir,
     # not in CANONICAL_DIR), so seeding from canonical silently exercises + deploys a stale config.
-    # The bundle lives at the "current" symlink sibling of CANONICAL_DIR (e.g. /srv/code/current).
+    # The bundle lives at the "current" symlink sibling of CANONICAL_DIR (e.g. /srv/code/current) —
+    # readlink -f so the log names the real per-version bundle dir this run seeded from.
     local live_link live_cfg=""
     live_link="$(dirname "$CANONICAL_DIR")/current"
-    on_bench "test -e '$live_link/config.json' -a -e '$live_link/.env'" && live_cfg="$live_link"
+    live_cfg="$(on_bench "readlink -f '$live_link' 2>/dev/null" || true)"
+    [ -n "$live_cfg" ] && on_bench "test -e '$live_cfg/config.json' -a -e '$live_cfg/.env'" || live_cfg=""
     if [ -n "$live_cfg" ]; then
         step "seeding the e2e checkout with the live bundle's config.json/.env ($live_cfg)"
         on_bench "cp -a '$live_cfg/config.json' '$E2E_DIR/config.json' && cp -a '$live_cfg/.env' '$E2E_DIR/.env'" ||
             die "Failed to seed config.json/.env from $live_cfg into $E2E_DIR."
         ok "config seeded from the live bundle (data dirs point at the shared chains)"
-        # Cheap drift check, not a full config differ: canonical is read-only and can lag the bundle
-        # for months, so a top-level-key diff is enough to catch a whole feature silently missing.
+        # Drift diff (#880), ALWAYS printed when both configs exist: canonical is read-only and can
+        # lag the bundle for months. Full dotted key paths, not just top-level keys — the drift that
+        # bit dropped nested keys (monero.view_key, dashboard.energy) whose parents exist in both.
         local live_keys canon_keys key_diff
-        live_keys="$(on_bench "jq -r 'keys[]' '$live_cfg/config.json' 2>/dev/null | sort")"
-        canon_keys="$(on_bench "jq -r 'keys[]' '$CANONICAL_DIR/config.json' 2>/dev/null | sort")"
-        key_diff="$(diff <(echo "$live_keys") <(echo "$canon_keys") 2>/dev/null)"
+        live_keys="$(on_bench "jq -r '$CONFIG_KEY_PATHS_JQ' '$live_cfg/config.json' 2>/dev/null")"
+        canon_keys="$(on_bench "jq -r '$CONFIG_KEY_PATHS_JQ' '$CANONICAL_DIR/config.json' 2>/dev/null")"
+        key_diff="$(diff <(echo "$live_keys") <(echo "$canon_keys") 2>/dev/null | grep '^[<>]')"
         if [ -n "$key_diff" ]; then
-            warn "canonical config.json's top-level keys differ from the live bundle's ($live_cfg) — canonical is drifting:"
+            warn "bundle vs canonical config drift ('<' = bundle only, '>' = canonical only):"
             echo "$key_diff" | sed 's/^/      /' >&2
+        else
+            ok "bundle vs canonical config: no key-level drift"
         fi
     else
         warn "no live bundle at $live_link — seeding from the canonical checkout ($CANONICAL_DIR) instead (may be stale)."
@@ -434,6 +531,11 @@ run_harness() {
     # its control API opted in. matrix only (it mutates config + dials the rig); each leg self-skips
     # loudly when its prerequisite is missing, so this stays safe on a bench without the descriptor.
     [ "$BORROW_MINER" = "1" ] && [ "$MODE" = "matrix" ] && phases="$phases --rigforge-control"
+    # #905: no borrowed miner means no worker will ever appear — tell the harness to SKIP its two
+    # mining assertions (workers online, stratum hashes) instead of failing a healthy stack.
+    local no_mining=""
+    [ "$BORROW_MINER" = "1" ] || no_mining="--no-mining-asserts"
+    phases="$phases $no_mining"
     log "Running the live harness on $BENCH_HOST (mode=$MODE, detached so an SSH drop can't kill it)"
     step "phases: $phases  (workers=$WORKERS)"
 
@@ -455,7 +557,7 @@ RUNNER
     # For non-check modes, run the safe readiness + current-state assertions inline first (fast,
     # gives early signal), then the destructive phases detached.
     if [ "$MODE" != "check" ]; then
-        on_bench "cd '$E2E_DIR' && bash tests/integration/run.sh --local --dir '$E2E_DIR' --readiness --check" ||
+        on_bench "cd '$E2E_DIR' && bash tests/integration/run.sh --local --dir '$E2E_DIR' --readiness --check $no_mining" ||
             warn "readiness/check reported issues (see above) — continuing to the destructive phases"
     fi
 

@@ -41,6 +41,7 @@ RUN_AUTH_FAIL_CLOSED=0
 RUN_HARDENING=0
 RUN_RIGFORGE=0
 RUN_RIGFORGE_CONTROL=0
+RUN_RIGFORGE_UPGRADE=0
 RUN_SUBNET=0
 RIG_HOST=""
 RIG_CONTROL_PORT="8082"
@@ -48,7 +49,9 @@ SAFETY_BACKUP=0
 SAFETY_ARCHIVE=""
 KEEP_STATE=0
 EXPECTED_WORKERS=2
+SKIP_MINING_ASSERTS=0
 REMOTE_MONERO_HOST=""
+REMOTE_TARI_HOST=""
 PRUNED_DATA_DIR=""
 FULL_DATA_DIR=""
 OUT_DIR="$HERE/results"
@@ -83,8 +86,13 @@ MATRIX:
                          headroom, secrets not world-readable, dashboard localhost-only).
   --scenario <name>      run only one scenario (see --list)
   --workers <n>          miners expected online while mining (default: 2)
+  --no-mining-asserts    SKIP the two mining assertions (workers online, stratum hashes) with a
+                         logged notice — for a box with no miner connected (e2e --no-miner, #905).
+                         Every other assertion stays binding.
   --remote-monero-host <h>  external node endpoint for the remote-mode scenario
                             (e.g. the box's own synced node on its LAN IP)
+  --remote-tari-host <h>  external Tari node endpoint for the tari.mode=remote scenario (#103;
+                         e.g. an already-synced Tari node on the LAN)
   --pruned-data-dir <d>  synced PRUNED monero data dir (enables the pruned case when the
                          box's baseline is full)
   --full-data-dir <d>    synced FULL monero data dir (enables the full case when the box's
@@ -120,19 +128,28 @@ MATRIX:
   --rigforge             also run the RigForge integration phase (#185/#235/#260): assert the
                          dashboard consumed a REAL rigforge rig's enriched feed and Worker Inspect
                          reads it. Non-destructive; self-skips if no rigforge rig is connected.
-  --rigforge-control     also run the RigForge control phase (#513/#514/#516/#517), local mode only:
-                         with dashboard.control ON and workers.list[] populated for the borrowed rig
-                         (masked-token descriptor, #440/#506 — the box's pre-existing dashboard.workers[]
-                         legacy descriptor is honored as-is if that's what the baseline already carries),
-                         assert the enriched read path survives populated descriptors (#514) and the rig
-                         is editable (#508/#513), drive a reversible Worker Inspect edit end-to-end to the
-                         rig's control API (#513), reflect a rig-side edit back into the dashboard (#516),
+  --rigforge-control     also run the RigForge control phase (#513/#514/#516/#517/#1002b), local mode
+                         only: with dashboard.control ON and workers.list[] populated for the borrowed
+                         rig (masked-token descriptor, #440/#506 — the box's pre-existing
+                         dashboard.workers[] legacy descriptor is honored as-is if that's what the
+                         baseline already carries), assert the enriched read path survives populated
+                         descriptors (#514) and the rig is editable (#508/#513), drive a reversible
+                         Worker Inspect edit end-to-end to the rig's control API on TWO of the six
+                         writable keys — max_temp_c (#513) and pools (#1002b, needs
+                         IT_RIG_POOLS_PROBE) — reflect a rig-side edit back into the dashboard (#516),
                          and record an auto-rollback (#517). DESTRUCTIVE-then-restored. Needs a real rig
                          with its control API opted in; each leg self-skips loudly without its
                          prerequisites.
   --rig-host <h>         the borrowed rig's LAN host/IP for control dials — needed to inject a
                          workers.list[] descriptor when the box's baseline lacks one (#513/#514/#506).
   --rig-control-port <p> the rig's writable control API port (default: 8082, #185).
+  --rigforge-upgrade     with --rigforge-control, also POST the rig's own ALREADY-INSTALLED version
+                         through /api/control/worker-upgrade and assert it converges on noop
+                         (#1002a) — non-destructive, never rebuilds the rig. Exercises the real
+                         dashboard -> host-runner -> rig /upgrade route end to end, including the
+                         #1001 noop/throttled/failed poll vocabulary on whichever run hits it (the
+                         common case is the dashboard's own already-on-this-version shortcut, which
+                         answers noop without ever dialing the rig). Needs --rigforge-control.
   --subnet               also run the moved-subnet phase (#201/#180), local mode only: bring the
                          stack DOWN then UP on a non-default network.subnet (10.84.0.0/24) — the one
                          axis a hot apply can't move — and assert the moved prefix reached .env, the
@@ -198,8 +215,16 @@ parse_args() {
             EXPECTED_WORKERS="$2"
             shift 2
             ;;
+        --no-mining-asserts)
+            SKIP_MINING_ASSERTS=1
+            shift
+            ;;
         --remote-monero-host)
             REMOTE_MONERO_HOST="$2"
+            shift 2
+            ;;
+        --remote-tari-host)
+            REMOTE_TARI_HOST="$2"
             shift 2
             ;;
         --pruned-data-dir)
@@ -232,6 +257,10 @@ parse_args() {
             ;;
         --rigforge-control)
             RUN_RIGFORGE_CONTROL=1
+            shift
+            ;;
+        --rigforge-upgrade)
+            RUN_RIGFORGE_UPGRADE=1
             shift
             ;;
         --rig-host)
@@ -421,10 +450,11 @@ run_scenario() {
         return 0
     fi
 
-    # Wait for the stack to settle on real readiness signals before asserting.
+    # Wait for the stack to settle on real readiness signals before asserting. The miner/hash
+    # waits are pointless with --no-mining-asserts (nothing will ever connect) — skip the stall.
     wait_status_ok 240 || true
     wait_monero_synced 120 || true
-    wait_miner_running 180 || true
+    [ "$SKIP_MINING_ASSERTS" = "1" ] || wait_miner_running 180 || true
     # p2pool infers its sidechain from connected peers, so after a pool switch it reads "Unknown"
     # until peers on the new chain connect — wait for the dashboard to classify it (issue #54).
     local _pool
@@ -433,7 +463,7 @@ run_scenario() {
     wait_pool_ready 180 "$(pool_label "$_pool")" || true
     # End-to-end mining: p2pool's stratum hash counter resets on restart and climbs only once the
     # proxy's upstream reconnects and a share lands — wait for it before asserting hashes>0 (issue #54).
-    wait_hashes_flowing 300 || true
+    [ "$SKIP_MINING_ASSERTS" = "1" ] || wait_hashes_flowing 300 || true
     # When Tari is a required sync gate, give it the same treatment as Monero: after a restart it
     # must close its offline gap before the .sync.tari.state assertion, or we'd catch it mid-"loading".
     if [ "$(jq_get "$config" '.dashboard.tari_required')" = "true" ]; then
@@ -455,9 +485,11 @@ run_scenario() {
 # first poll lands after a restart. proxy_workers signals mining liveness (stratum.conns can read 0).
 assert_running_state() {
     local name="$1" config="$2"
-    local st mode pool secure tari_req xvb rpc_lan monero_clearnet tari_clearnet
+    local st mode tmode pool secure tari_req xvb rpc_lan monero_clearnet tari_clearnet
     mode="$(jq_get "$config" '.monero.mode')"
     mode="${mode:-local}"
+    tmode="$(jq_get "$config" '.tari.mode')"
+    tmode="${tmode:-local}"
     pool="$(jq_get "$config" '.p2pool.pool')"
     pool="${pool:-main}"
     secure="$(jq_get "$config" '.dashboard.secure')"
@@ -512,18 +544,36 @@ assert_running_state() {
         *) it_pass "monerod absent in remote mode" ;;
         esac
     fi
-    # 1b. A node's inbound onion follows the node (#103): the LIVE torrc must carry the Monero
+    # tari.mode is an independent axis from monero.mode (#103/#942): the bundled tari container
+    # must be absent whenever it's remote, same as monerod above. Exact-line match, not a
+    # substring case — "tari" is a prefix of "tari-wallet" (the payout-confirm container, #462),
+    # so a loose `*tari*` pattern would false-positive on a box also running that.
+    if [ "$tmode" = "remote" ]; then
+        if printf '%s\n' "$running" | grep -qx tari; then
+            it_fail "tari absent in remote mode (#103/#942)" "tari is running"
+        else
+            it_pass "tari absent in remote mode (#103/#942)"
+        fi
+    fi
+    # 1b. A node's inbound onion follows the node (#103): the LIVE torrc must carry the node's
     #     hidden service only in local mode, or the stack advertises an onion address that accepts
     #     connections into a container that never started. Tier-1 proves the rendering; only here
     #     can we prove the running container actually got the gate through compose. Read the torrc
     #     rather than the hostname file — a key minted during an earlier local scenario stays on
-    #     disk, so its presence proves nothing; what tor publishes is what the torrc lists.
-    local hs_monero
+    #     disk, so its presence proves nothing; what tor publishes is what the torrc lists. Monero
+    #     and Tari toggle this independently (their onions are gated by separate compose profiles).
+    local hs_monero hs_tari
     hs_monero="$(rx "docker exec tor grep -c -F 'HiddenServiceDir /var/lib/tor/monero/' /tmp/torrc 2>/dev/null")"
     if [ "$mode" = "remote" ]; then
         assert_eq "no Monero inbound onion in remote mode (#103)" "${hs_monero:-0}" "0"
     else
         assert_num_ge "Monero inbound onion published in local mode (#103)" "${hs_monero:-0}" 1
+    fi
+    hs_tari="$(rx "docker exec tor grep -c -F 'HiddenServiceDir /var/lib/tor/tari/' /tmp/torrc 2>/dev/null")"
+    if [ "$tmode" = "remote" ]; then
+        assert_eq "no Tari inbound onion in remote mode (#103/#942)" "${hs_tari:-0}" "0"
+    else
+        assert_num_ge "Tari inbound onion published in local mode (#103)" "${hs_tari:-0}" 1
     fi
 
     # 2. pithead status is green for a healthy config.
@@ -576,15 +626,21 @@ assert_running_state() {
     #    minute later, and which scenario loses that race moves run to run. The re-fetched
     #    assertion below stays the arbiter: a rig that never returns still fails after the
     #    timeout.
-    local workers conns hashes
-    wait_stratum_hashes 180 || true
-    st="$(api_state)" # re-fetch so this step and everything after read post-wait state
-    workers="$(jq_get "$st" '.proxy_workers')"
-    conns="$(jq_get "$st" '.stratum.conns')"
-    hashes="$(jq_get "$st" '.stratum.total_hashes')"
-    assert_num_ge "workers online (>= $EXPECTED_WORKERS)" "${workers:-0}" "$EXPECTED_WORKERS"
-    assert_num_gt "stratum total hashes > 0" "${hashes:-0}" 0
-    it_step "stratum conns=${conns:-?} (informational)"
+    if [ "$SKIP_MINING_ASSERTS" = "1" ]; then
+        # #905: no miner is connected on purpose (e2e --no-miner), so a live worker/hash count
+        # would fail a healthy stack. Skip these two loudly; every other assertion stays binding.
+        it_warn "SKIPPED mining assertions (workers online, stratum hashes): --no-mining-asserts"
+    else
+        local workers conns hashes
+        wait_stratum_hashes 180 || true
+        st="$(api_state)" # re-fetch so this step and everything after read post-wait state
+        workers="$(jq_get "$st" '.proxy_workers')"
+        conns="$(jq_get "$st" '.stratum.conns')"
+        hashes="$(jq_get "$st" '.stratum.total_hashes')"
+        assert_num_ge "workers online (>= $EXPECTED_WORKERS)" "${workers:-0}" "$EXPECTED_WORKERS"
+        assert_num_gt "stratum total hashes > 0" "${hashes:-0}" 0
+        it_step "stratum conns=${conns:-?} (informational)"
+    fi
 
     # 7. Tari sync-gate posture matches tari_required. The sync verdict tolerates post-restart
     #    target re-discovery ONLY once Tari has proved "done" earlier this run (#746).
@@ -684,6 +740,57 @@ assert_running_state() {
         *'--access-password='*) it_fail "default-off stratum: no --access-password live (#152)" "found --access-password with no stratum_password set — would reject rigs" ;;
         *) it_pass "default-off stratum: no --access-password live (#152)" ;;
         esac
+    fi
+
+    # 8c. Stratum-over-TLS (#261/#942): tier 1 proves the render (PROXY_STRATUM_TLS -> the
+    # wrapper's cert flags); nothing before this dialed it. A LIVE TLS handshake against the
+    # published stratum port proves xmrig-proxy actually terminates TLS there, and that the
+    # served certificate is the SAME one the operator was told to pin (announce_stratum_tls's
+    # fingerprint) — not just that a keypair exists on disk. Same-port cleartext/TLS
+    # autodetection means already-connected cleartext rigs are unaffected (the mining assertions
+    # above already prove they keep hashing); a real xmrig client dialing with pools[].tls:true is
+    # a rig-configuration step outside this harness's control, deferred like the stratum-password
+    # headless-probe gap (docs/dev/testing-strategy.md).
+    if [ "$mode" = "local" ] && [ "$(jq_get "$config" '.p2pool.stratum_tls')" = "true" ]; then
+        local tls_port tls_dir served_fp announced_fp
+        tls_port="$(env_on_box STRATUM_PORT)"
+        [ -n "$tls_port" ] || tls_port=3333
+        tls_dir="$(env_on_box PROXY_TLS_DIR)"
+        served_fp="$(rx "openssl s_client -connect 127.0.0.1:$tls_port </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]'")"
+        assert_ne "stratum TLS handshake succeeds on the published port (#261/#942)" "$served_fp" ""
+        announced_fp="$(rx "openssl x509 -in $(quote_arg "$tls_dir/cert.pem") -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]'")"
+        assert_eq "live-served cert fingerprint matches the one rigs are told to pin (#261/#942)" "$served_fp" "$announced_fp"
+    fi
+
+    # 8d. Firewall opt-out actually opens the path (#270/#942) — the mirror of the fail-closed
+    # default that assert_egress_posture/fault_firewall_rollback prove elsewhere: no rule
+    # installed is necessary but not sufficient, so dial a real clearnet IP DIRECTLY from a
+    # mining_net container (bypassing its own --socks5 config) with wget (already present in every
+    # first-party image for the build-time binary download — no new tool). Read the CONNECT-phase
+    # line, not the HTTP result — a 403/redirect still proves the TCP handshake got through, while
+    # a DROPped SYN would just hang to wget's own timeout instead.
+    if [ "$mode" = "local" ] && [ "$(jq_get "$config" '.network.tor_egress_firewall')" = "false" ]; then
+        assert_eq "no pithead-tagged firewall rule installed when opted out (#270/#942)" \
+            "$(rx "sudo iptables-save 2>/dev/null | grep -c pithead-tor-egress")" "0"
+        local dial
+        dial="$(rx "docker exec xmrig-proxy wget -T 8 -t 1 -O /dev/null http://1.1.1.1/ 2>&1")"
+        assert_contains "clearnet dial SUCCEEDS with the firewall opted out (#270/#942)" "$dial" "connected."
+    fi
+
+    # 8e. Payout confirmation is live (#381/#462/#942) — the flagship feature's live leg. A real
+    # payout landing (and thus a non-empty confirmed total) needs days of chain time no e2e run
+    # has; what IS honestly provable now is that the view-only wallet-rpc/tari-wallet actually
+    # started (expected_services already asserts the container up) and that the dashboard's own
+    # feature flag — the same one build_earnings reads to decide "on, nothing confirmed yet" vs.
+    # "off" — reads ON. .earnings.confirmed.enabled is False only when payouts is None
+    # (service/earnings.py:confirmed_payouts_summary), i.e. exactly PAYOUT_CONFIRM_ENABLED.
+    if [ "$mode" = "local" ] && [ -n "$(jq_get "$config" '.monero.view_key')" ]; then
+        assert_eq "PAYOUT_CONFIRM_ENABLED matches config (#381/#942)" "$(env_on_box PAYOUT_CONFIRM_ENABLED)" "true"
+        assert_eq "dashboard confirms Monero payout tracking is live (#381/#942)" "$(jq_get "$st" '.earnings.confirmed.enabled')" "true"
+    fi
+    if [ "$mode" = "local" ] && [ -n "$(jq_get "$config" '.tari.view_key')" ]; then
+        assert_eq "TARI_PAYOUT_CONFIRM_ENABLED matches config (#462/#942)" "$(env_on_box TARI_PAYOUT_CONFIRM_ENABLED)" "true"
+        assert_eq "dashboard confirms Tari payout tracking is live (#462/#942)" "$(jq_get "$st" '.earnings.tari_confirmed.enabled')" "true"
     fi
 
     # 9. Caddy scheme matches dashboard.secure.
@@ -1915,8 +2022,8 @@ run_subnet_scenario() {
     fi
     wait_status_ok 300 || true
     wait_monero_synced 120 || true
-    wait_miner_running 180 || true
-    wait_hashes_flowing 300 || true
+    [ "$SKIP_MINING_ASSERTS" = "1" ] || wait_miner_running 180 || true
+    [ "$SKIP_MINING_ASSERTS" = "1" ] || wait_hashes_flowing 300 || true
     # The down/up restarted Tari too, so — like the per-scenario deploy path — let it close its
     # post-restart offline gap before assert_running_state's sync check, or we catch it mid-"loading".
     if [ "$(jq_get "$config" '.dashboard.tari_required')" = "true" ]; then
@@ -2091,11 +2198,49 @@ run_rigforge_control() {
             "$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)" "applied"
     fi
 
+    # ---- #1002b: a second writable key (pools) proves the edit isn't max_temp_c-specific ----
+    # pools is the repoint-your-hashrate key; unlike max_temp_c its CURRENT value has no live
+    # telemetry readback — the enriched feed carries no writable-config VALUES at all (only
+    # health/power/tune telemetry), which is exactly why Worker Inspect's own editor prefills from
+    # the dashboard's last-applied record instead of a live rig read (docs/dashboard.md, "Worker
+    # Inspect": "the rig's enriched feed doesn't expose the writable config values"). So the honest
+    # "original" here is GET /api/worker's .last_applied.pools — the same source the real editor
+    # prefills from — and the probe value is operator-supplied (IT_RIG_POOLS_PROBE): pithead treats
+    # `pools` as opaque passthrough (WORKER_WRITABLE_KEYS only checks the key NAME, never the
+    # value shape), so guessing a value shaped wrong for this rig's RigForge version risks a real
+    # rejected/failed instead of proving the round trip — the same reasoning
+    # IT_RIG_ROLLBACK_CHANGES already applies to the #517 leg below.
+    if [ -z "${IT_RIG_POOLS_PROBE:-}" ]; then
+        it_warn "no IT_RIG_POOLS_PROBE (a JSON pools value safe to apply to rig '$rig') — skipping the pools write leg (#1002b)"
+    elif ! printf '%s' "$IT_RIG_POOLS_PROBE" | jq -e . >/dev/null 2>&1; then
+        it_fail "IT_RIG_POOLS_PROBE is valid JSON (#1002b)" "got [$IT_RIG_POOLS_PROBE]"
+    else
+        local orig_pools
+        orig_pools="$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null | jq -c '.last_applied.pools // empty' 2>/dev/null)"
+        if [ -z "$orig_pools" ]; then
+            it_warn "rig '$rig' has no dashboard-applied pools on record (.last_applied.pools) — skipping the pools write leg (can't read the original to restore it) (#1002b)"
+        else
+            it_step "Worker Inspect edit: pools -> the operator-supplied probe via /api/control/worker-apply…"
+            res="$(_worker_apply "$rig" "{\"pools\":$IT_RIG_POOLS_PROBE}")"
+            status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
+            ckeys="$(printf '%s' "$res" | jq -r '(.changed_keys // []) | join(",")' 2>/dev/null)"
+            assert_eq "pools edit applied on the rig (#1002b)" "$status" "applied"
+            assert_contains "the rig's /status confirms pools changed (#1002b)" "$ckeys" "pools"
+            it_step "reverting pools to the dashboard's last-applied value…"
+            res="$(_worker_apply "$rig" "{\"pools\":$orig_pools}")"
+            assert_eq "pools edit reverted on the rig (#1002b)" \
+                "$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)" "applied"
+        fi
+    fi
+
     # ---- #516: a rig-side edit reflects in the dashboard's enriched feed + the masked prefill ----
     run_rigforge_reverse "$rig" "$orig_maxt"
 
     # ---- #517: an auto-rollback (rigforge#236) is recorded end-to-end from the dashboard ----
     run_rigforge_rollback "$rig"
+
+    # ---- #1002a: the already-installed version converges on noop end-to-end (opt-in: --rigforge-upgrade) ----
+    [ "$RUN_RIGFORGE_UPGRADE" = "1" ] && run_rigforge_upgrade "$rig"
 
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "rigforge-control" "$OUT_DIR"
 
@@ -2251,6 +2396,57 @@ run_rigforge_rollback() { # <rig-name>
     rolled_back | accepted) it_pass "the dashboard's per-worker history records the change (#517: $histstatus)" ;;
     *) it_fail "the dashboard's per-worker history records the change (#517)" "expected rolled_back|accepted, got [$histstatus]" ;;
     esac
+}
+
+# --- RigForge upgrade leg (--rigforge-upgrade, #1002a) ----------------------
+# POST the rig's OWN already-installed version back through /api/control/worker-upgrade and assert
+# the terminal status is noop — non-destructive (no rebuild, no rig restart) proof of the dashboard
+# -> host-runner -> rig /upgrade route, including the #1001 status vocabulary control_worker_upgrade's
+# poll loop just learned (noop/throttled/failed, rigforge#320). Two honest paths reach that terminal
+# and which one fires depends on the DASHBOARD's own poll cache, not on us:
+#   - cache already agrees the rig is on the requested version (the common steady-state case):
+#     handle_worker_upgrade's client-side shortcut answers noop SYNCHRONOUSLY, never dialing the rig
+#     or spending its 6h anti-beacon window — proves a repeat click on an up-to-date rig costs it
+#     nothing.
+#   - cache is momentarily stale: the request proceeds through control_service.submit_worker_upgrade
+#     -> the host runner's control_worker_upgrade -> a REAL dial to the rig's /upgrade -> its own
+#     /status poll -> the rig's first-class noop terminal (rigforge#320) — the #1001 poll-vocabulary
+#     path itself.
+# Either way the host independently re-derives "latest" from GitHub and refuses ANY mismatch before
+# dialing (ADR 0002 D4: the rig never decides its own target), so proposing "what's already
+# installed" can only ever terminate noop or (on host-side version drift) a safe rejected — never a
+# real upgrade. Called from run_rigforge_control, which has already put the rig in a dialable state
+# (dashboard.control on, host+token pinned); this leg's own prerequisite is just a clean vX.Y.Z
+# version in the live feed to build a valid request from.
+run_rigforge_upgrade() { # <rig-name>
+    local rig="$1" ver posted body id status result_body deadline
+    it_log "   #1002a: --rigforge-upgrade: already-installed version converges on noop"
+    ver="$(printf '%s' "$(api_state)" | jq -r --arg n "$rig" 'first(.workers[]? | select(.name==$n) | .rigforge.version) // empty' 2>/dev/null)"
+    posted="v${ver#v}"
+    if ! printf '%s' "$posted" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        it_warn "rig '$rig' isn't reporting a clean vX.Y.Z version (got [$ver]) — skipping the upgrade leg (#1002a)"
+        return 0
+    fi
+
+    body="$(rx "curl -fsS --max-time 15 -X POST -H 'Content-Type: application/json' -H 'X-Pithead-Control: 1' --data $(quote_arg "$(jq -nc --arg w "$rig" --arg v "$posted" '{worker:$w,version:$v}')") http://127.0.0.1:8000/api/control/worker-upgrade" 2>/dev/null)"
+    status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null)"
+    if [ "$status" = "pending" ]; then
+        id="$(printf '%s' "$body" | jq -r '.id // empty' 2>/dev/null)"
+        if [ -z "$id" ]; then
+            it_fail "worker-upgrade request accepted with a pollable id (#1002a)" "no id in [$body]"
+            return 0
+        fi
+        it_step "cache was stale — upgrade running on the host; polling /api/control/result for a terminal…"
+        deadline=$((SECONDS + 200))
+        while [ "$SECONDS" -lt "$deadline" ]; do
+            sleep 5
+            result_body="$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/control/result?id=$id")" 2>/dev/null)"
+            status="$(printf '%s' "$result_body" | jq -r '.status // empty' 2>/dev/null)"
+            case "$status" in "" | pending | running) continue ;; esac
+            break
+        done
+    fi
+    assert_eq "already-installed version converges on noop (#1002a)" "$status" "noop"
 }
 
 # --- Main -------------------------------------------------------------------

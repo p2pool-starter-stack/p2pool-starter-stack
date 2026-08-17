@@ -24,7 +24,8 @@ Sync Mode gives each chain its own progress card:
 
 - **Monero Sync**: verified block height vs. the network tip, with blocks remaining. A green check
   means the chain is caught up. It also shows Pruned or Full mode and the on-disk DB size (also in
-  the **XMR Network** panel of the operational view), so you can confirm a reused chain matches your
+  the **XMR Network** panel of the operational view) — local node only; with `monero.mode: remote`
+  the mode reads `Unknown`, since the stack doesn't probe a node it doesn't run — so you can confirm a reused chain matches your
   `monero.prune` setting.
 - **Tari Sync**: the same, as a percentage ring, for the Minotari chain.
 
@@ -42,6 +43,11 @@ an unsynced node does nothing and floods Tari's logs with merge-mining chatter. 
 is one-way: once it starts it stays up. By default the stack waits for both Monero and Tari. With
 [`dashboard.tari_required: false`](configuration.md) it waits only for Monero and mines while Tari
 finishes syncing in the background.
+
+With `tari.mode: remote` the wait is on that node: the dashboard reads sync state from
+`tari.remote.host` over gRPC, so a remote node still catching up holds the miner exactly as a local
+one would. Set `dashboard.tari_required: false` if you'd rather not have someone else's node gate
+your Monero mining.
 
 > **Want to skip most of the wait?** Point the stack at an existing synced blockchain, or connect
 > to a remote node. See [Configuration › Reusing an existing node](configuration.md#reusing-an-existing-node).
@@ -79,10 +85,11 @@ successful refresh.
 ### Top bar
 
 A status strip across the top shows the hostname, host telemetry (CPU, load, RAM, HugePages, disk),
-total hashrate, and 1h / 24h routed averages for both P2Pool and XvB (your split). The disk readout
+the last-update time, and 1h / 24h routed averages for both P2Pool and XvB (your split). The disk readout
 switches from GB to TB once the volume reaches 1 TB, on the same scale in the Telegram `/system`
-reply. Next to the disk readout, an `XMR Pruned` / `XMR Full` badge shows the Monero node's
-blockchain mode.
+reply. An `XMR Pruned` / `XMR Full` badge sits with the other badges beside the stack name, showing
+the bundled node's blockchain mode. It appears for a local node only — with `monero.mode: remote`
+the pruning state is unknown, so neither badge is shown.
 
 When the dashboard host is a name (not already an IP), the machine's IP shows beside it as
 `hostname @ ip` (e.g. `pithead.local @ 192.168.1.42`), a way back in when the hostname doesn't
@@ -117,6 +124,8 @@ The top bar also surfaces the persistent host conditions that `setup` warns abou
 | `⚠ Low RAM (N GB)` | Under 16 GB of RAM — syncing is memory-heavy and Tari can OOM. | Add RAM for a stable node. |
 | `⚠ No AVX2` | The CPU lacks AVX2, so RandomX mining is much slower. | A hardware limit; nothing to change at runtime. |
 | `⚠ Payout wallet changed` | The wallet p2pool mines to changed within the last 72 hours (old → new, truncated). A confirmation if you changed it; an alarm if you didn't. | Verify `monero.wallet_address` in `config.json`; see [Operations › wallet changes](operations.md). The badge expires on its own after 72 h. |
+| `Disk N% full` | The data filesystem is 85% or more used. | Free space, or move a `data_dir` — the chains keep growing. |
+| `⚠ Disk N% full` | 95% or more used. A full disk corrupts monerod's database mid-write. | Act now: free space or move the chain to a larger volume. |
 
 The first two also push a Telegram alert (`hugepages`, `low_ram`) when first detected, if the bot is
 on; the wallet badge pairs with the `wallet_changed` alert; AVX2 is badge-only (see
@@ -165,7 +174,8 @@ there is no history to show.
 ### Node status & failover
 
 If a local node becomes unreachable, a red `monerod DOWN` or `Tari DOWN` badge appears in the top
-bar (after a short debounce, so a momentary blip doesn't flap). Sync state is read from monerod's
+bar (after 90 seconds continuously unreachable, clearing after 60 seconds of confirmed
+reachability, so a momentary blip doesn't flap). Sync state is read from monerod's
 `get_info` RPC and Tari's gRPC, so "down" means the node itself is unreachable, not just that a log
 line changed.
 
@@ -202,8 +212,10 @@ configured, rather than sitting idle on a stack that can't mine. A sustained out
 `xmrig-proxy` container (a `Workers rejected` badge shows) and a confirmed recovery restarts it.
 monerod is required to mine, so a monerod outage always rejects. Whether a Tari outage rejects
 follows [`dashboard.tari_required`](configuration.md): `true` (default) rejects on a Tari outage;
-`false` keeps mining Monero through it. Rejection never triggers for a remote monerod, since the
-stack doesn't manage that node.
+`false` keeps mining Monero through it. Rejection never triggers for a remote monerod — the stack
+doesn't probe a node it doesn't run, so that node always reads as reachable and p2pool manages the
+connection itself. A remote Tari node is different: the dashboard does dial it over gRPC, so an
+unreachable one reads as down and `tari_required` applies to it just as it would to a local node.
 
 **Non-blocking Tari.** With `tari_required: false`, a Tari-only (re)sync doesn't take over the
 screen: the operational view stays up, mining continues, and a `Tari syncing` badge shows Tari's
@@ -274,7 +286,7 @@ trailing **30-day** window:
 
 | Row | Expected | Actual |
 |---|---|---|
-| **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** the XvB share for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). Once enough of your wins have confirmed payouts to measure, the XvB share is XvB's published figure **scaled to what your wins actually paid** — the tooltip names the measured percentage and sample. Until then the published face value stands, and the tooltip says it is an upper bound. | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. |
+| **Monero + XvB (30d)** | The P2Pool linear estimate at your **30-day average** routed hashrate — the hashrate that actually ran the window — **plus** the XvB share for your current tier, when XvB is on and the estimate is fresh (the label drops "+ XvB" otherwise). Once enough of your wins have confirmed payouts to measure, the XvB share is XvB's published figure **scaled to what your wins actually paid** — the tooltip names the measured percentage and sample. Until then the published face value stands, and the tooltip says it is an upper bound. | All confirmed on-chain payouts over the window ([payout confirmation](#payout-confirmation)), with a percent-of-expected. The percent is withheld past 999% — a box idle for most of the window that still confirmed normal payouts would otherwise show a five-digit ratio against a near-zero expectation; the row's tooltip says so. |
 | **Tari (30d)** | Expected **blocks** (hashrate × window ÷ Tari difficulty). Tari is merge-mined solo, so blocks are the honest unit — at fractions of a block per month, zero found is the normal case, not a fault. | Blocks found (each confirmed Tari payout is one solo-found block) and the XTM they paid. |
 | **XvB wins (30d)** | Forecast wins for your tier, from XvB's own winners file: how often your tier's rounds are drawn ÷ how many qualifiers they have (summed with the lower donor rounds you also qualify for). While no tier is held yet — a fleet still ramping, or an operator weighing whether donating is worth it — the forecast uses your **target** tier instead. `—` while the file hasn't been read or has gone stale. | Raffle wins recorded in the window, and how long ago the most recent win on record landed (which can predate the window). |
 
@@ -340,9 +352,19 @@ crosses 5%.
 ### Worker Inspect
 
 With the control channel on (`dashboard.control.enabled`), a worker's name in the Workers Alive table
-is a link. Click it to open **Worker Inspect** — a dialog with that rig's live telemetry, an editor
-for the writable slice of its config, and the change history. Close it with the ✕ button, a click
-outside it, or Escape.
+is a link. Click it to open **Worker Inspect** — a dialog with that rig's live telemetry, a hashrate
+chart, an editor for the writable slice of its config, and the change history. Close it with the ✕
+button, a click outside it, or Escape.
+
+A **hashrate** chart sits above the editor: the rig's own `worker_history` samples (~5-minute
+cadence) as a line, with **24 Hr / 1 Wk / All** range buttons — no "1 Mo" button, since at the
+30-day retention it would show the same thing "All" already does. There's no averaging-window
+toggle here (unlike the [main chart](#hashrate-chart)) — the per-rig table stores only one window.
+Every config apply and rig upgrade in the change history below also marks the chart, so a step in
+the line has a visible cause; hover a marker for what changed. A rejected or rolled-back attempt
+still gets a marker, muted rather than dropped, since it tried but nothing on the rig actually
+changed. A rig with no samples yet (just added, or never online) shows an empty-chart message
+instead of a blank axis.
 
 The editor covers the keys RigForge lets the control path change: `pools`, `DONATION`, `autotune`,
 `watchdog`, `watchdog_interval_min`, and `max_temp_c`. Nothing else (identity, filesystem paths, API
@@ -358,7 +380,8 @@ same `{worker, changes}` request:
 
 Either way, click **Apply to rig**; RigForge validates the change, applies it, and — if the miner
 doesn't come back to a live hashrate — rolls it back on its own. The panel shows the outcome
-(applied / rejected / rolled back) and appends it to the history.
+(applied / rejected / rolled back — or failed with the rig's reason, when its own rollback
+path broke) and appends it to the history.
 
 To make a rig editable, give it `host`, `token`, and (unless it's the default `8082`) `control_port`
 in its [`workers.list[]`](configuration.md#configuration-reference) descriptor. Without a host, or
@@ -368,8 +391,12 @@ When the rig's [new-release badge](#workers-alive) shows and the rig is editable
 rig…** button appears beside it: arm it, confirm, and the rig upgrades its own RigForge to the
 latest release — the per-worker twin of the stack's one-click upgrade. The rig may rebuild its
 miner (about ten minutes when the XMRig pin changed) and rolls itself back if the miner doesn't
-come back live. The panel shows the outcome (applied / rolled back / failed); a repeat click inside
-the rig's own six-hour upgrade window reads as "throttled — retry later", not an error. See
+come back live. The panel shows the outcome (applied / already up to date / rolled back / failed);
+a repeat click inside the rig's own six-hour upgrade window reads as "throttled — retry later",
+not an error. Like a config apply, the outcome appends to the change history — with the version it
+moved to — so it isn't lost once the dialog closes, and both the hashrate chart above and the
+hashrate-by-config table below attribute what the hashrate does next to the upgrade, not to
+whatever config version happened to be active when it ran. See
 [Connecting Miners › One-click rig upgrade](workers.md#one-click-rig-upgrade) for what the rig
 must enable and how the target is derived.
 
@@ -395,14 +422,16 @@ config *values*, the editor prefills from the last config the dashboard applied 
 the rig — so a change made directly on the rig (via `rigforge.sh`) won't show here until the next
 dashboard apply.
 
-Below the change history sits a **Hashrate by config version** table: each *applied* change, with the
-rig's measured hashrate (the same per-rig `worker_history` samples, taken roughly every 5 minutes)
-averaged over the window that version was active — from the moment it was applied to the moment the
-next one was, or now for the current version. A version with no samples yet (just applied) shows a
-dash rather than zero. This is a correlation over existing data, not a new measurement — no rig-side
-change was needed to add it — so use it to compare versions empirically ("config #3 did 5.1 kH/s,
-config #4 did 4.8 kH/s") rather than as a precise A/B test; a version's window can include restarts,
-sync gaps, or other noise the average doesn't separate out.
+Below the change history sits a **Hashrate by config version** table: each *applied* change — a
+config apply or a rig upgrade — with the rig's measured hashrate (the same per-rig `worker_history`
+samples, taken roughly every 5 minutes) averaged over the window that change was active — from the
+moment it was applied to the moment the next one was, or now for the current one. A rig upgrade
+starts its own window the same way a config change does, so a version comparison here reflects a
+build change, not whatever config value happened to be active when the build changed. A row with no
+samples yet (just applied) shows a dash rather than zero. This is a correlation over existing data,
+not a new measurement — no rig-side change was needed to add it — so use it to compare changes
+empirically ("v1.11 did 5.1 kH/s, v1.12 did 4.8 kH/s") rather than as a precise A/B test; a window
+can include restarts, sync gaps, or other noise the average doesn't separate out.
 
 ### Simple vs. Advanced view
 
@@ -410,7 +439,8 @@ A **Simple / Advanced** toggle sits above the chart. **Simple** (the default) sh
 Overview summary, the [Earnings — Expected vs Actual](#earnings--expected-vs-actual) table, and the
 worker table. **Advanced** swaps the Overview for cards that break out the same data in more
 detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats**, **XMR Network**,
-**Tari Merge-Mining**, and the **P2Pool Earnings (estimated)** calculator below. The
+**Tari Merge-Mining**, **Pool Cadence & Luck**, **Stack Topology & Egress**, and the
+**P2Pool Earnings (estimated)** calculator below. The
 expected-vs-actual table stays in both views. The choice is remembered across reloads.
 
 The what-if earnings calculator and the XvB tier calculator live only in Advanced view. Simple view
@@ -431,9 +461,11 @@ figures.
 The card is split into tabs — **Monero**, **Tari**, **XvB**, and **Energy** — driven by one
 **what-if hashrate** input that sits above the tabs, so switching tabs keeps the value you entered.
 Monero holds the XMR estimate, time-to-share, and block reward; Tari holds the solo time-to-block,
-per-block reward, and long-run average; XvB holds the tier/cost block, the current tier's published
-expected reward, and the per-tier payout comparison. The XvB tab appears only when XvB is enabled,
-and the Energy tab only when the fleet reports power (see [Energy & profit](#energy--profit)).
+per-block reward, and long-run average; XvB holds the tier/cost block, the current tier's expected
+reward (tempered by measured delivery — see the decision table below), and the per-tier payout
+comparison. The XvB tab stays with XvB disabled — its decision table is the "should I enable
+it?" aid — and the Energy tab appears only when the fleet reports power (see
+[Energy & profit](#energy--profit)).
 
 Every tab presents its rate estimate in the same **Day / Month / Year** table: the coin figure,
 plus a `≈` fiat column once that coin's price is known (see *Prices* under
@@ -458,7 +490,9 @@ It is scoped to P2Pool — **not** an XvB calculator:
   honest headline is the expected **time to a Tari block** (`difficulty ÷ hashrate`) and the full
   **per-block reward** — the per-day XTM figure is only a long-run average, not steady income. The
   estimate assumes the merge-mine channel stays connected; while merge-mining is inactive or Tari is
-  still syncing, the XTM rows show `—` and the XMR figures are unaffected. XvB-donated hashrate does
+  still syncing, the XTM estimates show `—` and the XMR figures are unaffected — only the per-block
+  reward keeps showing once known, because it is a fact about the Tari chain, not about your
+  hashrate. XvB-donated hashrate does
   not merge-mine, so the same P2Pool-only default keeps the XTM estimate honest too.
 
 | Field | Meaning |
@@ -466,7 +500,7 @@ It is scoped to P2Pool — **not** an XvB calculator:
 | **Your P2Pool Hashrate** | The hashrate the estimate is based on. Defaults to your **P2Pool 1h average** (the same figure the header shows, excluding any XvB-donated portion); type a different value (e.g. `50k`, `1.2 MH/s`) to see a **what-if** projection if you added or removed P2Pool hashpower. |
 | **XMR Day / Month / Year** | Expected Monero earned over each horizon, computed as `hashrate × block reward ÷ network difficulty`, the standard variance-free mining expectation. P2Pool's zero-fee PPLNS payout makes this the right long-run expectation. |
 | **Est. Time to Tari Block** | Expected time for your hashrate to solo-find one Tari block: `network difficulty ÷ hashrate`. This is the honest headline for solo merge-mining — the reward lands here, all at once. `—` while merge-mining is inactive or Tari is still syncing. |
-| **XTM per Block** | The full Tari block reward paid when you find a block — you get all of it at once, not spread over time. |
+| **XTM per Block** | The full Tari block reward paid when you find a block — you get all of it at once, not spread over time. Shown whenever the reward is known (the Tari Merge-Mining card shows the same figure): it depends on the Tari chain, not on your hashrate or the merge-mine channel. |
 | **Long-run Average (XTM)** | The Tari tab's Day / Month / Year table: the per-block reward spread across the expected time-to-block — a **long-run average**, not steady income, and headed as such. `—` while merge-mining is inactive or Tari is still syncing. |
 | **Time / Share** | How long, on average, that hashrate takes to find one P2Pool (sidechain) share. |
 | **XMR Block Reward** | The current Monero block reward, for context. |
@@ -495,7 +529,7 @@ current draw) is always there; three optional prices add the money columns:
 | Config | Adds |
 |---|---|
 | `dashboard.energy.cost_per_kwh` | The **Power Cost** column (`kWh × price`). |
-| `dashboard.energy.xmr_price`    | The **Revenue (est.)** and **Net** columns: P2Pool XMR earnings × your XMR price, gross and then minus power cost. Needs `cost_per_kwh` set too — without a power cost there is no net for revenue to lead into. Also values the current-tier XvB expected reward (an estimate) into both when XvB has a fresh figure. |
+| `dashboard.energy.xmr_price`    | The **Revenue (est.)** and **Net** columns: P2Pool XMR earnings × your XMR price, gross and then minus power cost. Needs `cost_per_kwh` set too — without a power cost there is no net for revenue to lead into. Also values the current-tier XvB expected reward (an estimate, tempered by measured delivery — never XvB's face value) into both when XvB has a fresh figure. |
 | `dashboard.energy.tari_price`   | Folds Tari merge-mining earnings into that same revenue and net, at your Tari price. Requires `xmr_price` to be set too. |
 
 All three are in your `dashboard.energy.currency` label (e.g. `USD`, `EUR`) — a label only, no
@@ -507,13 +541,17 @@ when power costs more than it earns.
 Net profit counts **P2Pool XMR**, plus **Tari** merge-mining earnings once a Tari price is also
 known (Tari's contribution uses the same what-if Tari/day estimate the Tari tab already shows), plus
 the **XvB** raffle's expected reward for the tier you currently hold, valued at your XMR price. The
-whole net is already probabilistic, so it stays one figure — but the XvB slice is an **estimate**:
-it is XvB's published expected reward for your current tier (the lower of your credited 1h and 24h
-averages), and the raffle draw is random among qualifiers, so it is not a payout you are owed. The
-card's heading and the Net column's tooltip label it `XvB (est.)` and say exactly what the figure counts,
-so it is never silently partial. XvB folds in only while its published estimate is fresh (the same
-staleness rule as the *XvB Donation Stats* card) and you clear a donor tier; otherwise it is left
-out rather than guessed, and the label reverts to P2Pool (and Tari, if priced) alone.
+whole net is already probabilistic, so it stays one figure — but the XvB slice is an **estimate**,
+and never XvB's face value: the published expected reward for your current tier (the lower of your
+credited 1h and 24h averages) is **tempered by measured delivery** — scaled to what your own wins
+measurably paid once enough wins have confirmed payouts, else by the midpoint of the measured
+delivery band (28–39% of face value — the
+[XvB delivery study](research/xvb-delivery-study/PAPER.md)). The raffle draw is random among
+qualifiers, so it is not a payout you are owed either way. The card's heading and the Net column's
+tooltip label it `XvB (est.)` and say exactly what the figure counts, so it is never silently
+partial. XvB folds in only while its published estimate is fresh (the same staleness rule as the
+*XvB Donation Stats* card) and you clear a donor tier; otherwise it is left out rather than
+guessed, and the label reverts to P2Pool (and Tari, if priced) alone.
 
 Prices come from one of two places, and the card always says which:
 
@@ -625,9 +663,13 @@ Set the keys in `config.json` and run `./pithead apply`. Key reference: the `mon
 ### XvB Tier (raffle)
 
 A block inside the earnings card, driven by the same what-if hashrate input, that answers "which
-XMRvsBeast tier could this hashrate hold, and what would it cost?". Hidden entirely while XvB is
-disabled (`xvb.enabled: false`). The raffle winner is drawn at random among everyone above the
-threshold, so donating more than the threshold buys zero extra win chance — but the odds
+XMRvsBeast tier could this hashrate hold, and what would it cost?". It renders with XvB disabled
+too (`xvb.enabled: false`) — the decision table below is exactly the enable/don't-enable aid, so
+it must be readable *before* you enable anything. While disabled, the two live-credit rows
+(Current Tier, Target Tier) disappear, and — because disabling XvB stops every fetch from
+xmrvsbeast.com — the odds and reward columns run from the last cached read: on a box that never
+enabled XvB they show tier costs only. The raffle winner is drawn at random among everyone above
+the threshold, so donating more than the threshold buys zero extra win chance — but the odds
 themselves are knowable: XvB's winners file publishes the qualifier count for every round, and
 the comparison below shows them.
 
@@ -635,8 +677,8 @@ the comparison below shows them.
 |---|---|
 | **Sustainable Tier** | The highest XvB donor tier the entered hashrate sustains while leaving P2Pool its share of the split — the same auto rule the donation controller uses (`hashrate × max donation fraction ≥ tier threshold`, default fraction 0.85). `None` when even the lowest tier is out of reach. |
 | **Hashrate Cost** | What holding that tier costs: about its threshold in **continuous** donation, because XvB qualifies a tier on both the 1h and 24h credited averages. This hashrate earns no P2Pool shares while donated. |
-| **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). |
-| **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. |
+| **Current Tier** | The tier your credited XvB donation clears right now (the lower of XvB's 1h and 24h averages). Only while XvB is enabled. |
+| **Target Tier** | The tier the donation controller is configured to aim for (`xvb.donation_level`), flagged when your hashrate can't sustain it. Only while XvB is enabled. |
 
 Below the tier figures sits the **per-tier decision table** — every donor tier on one row, so
 the whole choice is visible at once:
@@ -663,10 +705,13 @@ resets your PPLNS shares — and with them XvB win collectability until a new sh
 
 **Raffle Wins log.** The *XvB Donation Stats* card (Advanced view) lists the rounds your wallet
 actually won — time, round type, and the hashrate XvB credited the win at — newest first, capped at
-the 20 most recent. The dashboard reads XvB's public winners log about every half hour over Tor,
-matches your wallet by the masked form the file uses, and stores each win permanently, so the list
-(and the chart's gold stars) survives restarts and covers wins far older than the ~4 days the file
-itself keeps. Each new win is also announced once in the dashboard's container log. The file
+the 20 most recent. The dashboard reads XvB's public winners log over Tor, matches your wallet by
+the masked form the file uses, and stores each win permanently, so the list (and the chart's gold
+stars) survives restarts and covers wins far older than the ~4 days the file itself keeps. The
+read runs about every half hour, tightening to every few minutes while your credited 1h average
+sits within 25% above its tier threshold or a recorded win is under 90 minutes old — the windows
+where a fresh win needs the donation controller's in-round hold engaged within minutes, not up to
+half an hour later. Each new win is also announced once in the dashboard's container log. The file
 carries only masked wallets and the fetch sends nothing about you.
 
 ### Pool Cadence & Luck
@@ -692,7 +737,8 @@ there is nothing to configure.
 Edit `config.json` from the dashboard. Off by default: set `dashboard.control.enabled: true` in
 `config.json`, set a `dashboard.auth.password` (required — this channel can change the payout
 wallet, so it refuses to run without a login), and run `./pithead apply`. A **Configuration**
-button then appears next to the Simple/Advanced toggle.
+button sits next to the Simple/Advanced toggle whether or not the channel is on; with it off, the
+view explains how to turn it on and nothing else.
 
 Two edit modes build the same candidate config and submit it through the same pipeline below
 ([#529](https://github.com/p2pool-starter-stack/pithead/issues/529)):
@@ -716,8 +762,11 @@ Two edit modes build the same candidate config and submit it through the same pi
   A config path no logical section claims still renders, in a catch-all
   **Other** group — a new schema key can't silently vanish from the editor, and a frontend test
   fails loudly if one ever would. `workers.list[]` (the per-rig descriptors) isn't a form field
-  here — a variable-length list has no single form control for it — edit it via
-  [Worker Inspect](#worker-inspect) or `config.json` directly.
+  here — a variable-length list has no single form control for it, and the host gate refuses a
+  change to it in either edit mode, since it carries each rig's host and token. Edit it in
+  `config.json` and run `./pithead apply`. [Worker Inspect](#worker-inspect) is a different thing:
+  it retunes the *rig's own* settings (pools, donation, autotune, watchdog, temperature cap)
+  through that rig's control API, never the stack's descriptor list.
 
   A field the control gate wouldn't actually commit renders **greyed out**
   ([#613](https://github.com/p2pool-starter-stack/pithead/issues/613)): disabled, its value shown
@@ -862,9 +911,9 @@ Either kind is worth treating like a rotate-now signal in the same spirit as
 the change, someone or something with host or rig access did.
 
 The audit trail is no longer only a log tail: entries — both mirrored from `control.log` and the
-two out-of-band kinds above — persist to the dashboard's own database, so the card's grouping
-selector (hour/day/month) can drill back further than the log's own trimmed window. Pick "All" for
-the flat newest-first view, or a coarser grouping to scan a longer history at a glance.
+two out-of-band kinds above — persist to the dashboard's own database, so the range presets, date
+fields and search reach further back than the log's own trimmed tail. Walk the result with the
+page-size control (5, 10, 20, 50 or 100 rows a page), newest first.
 
 ## Upgrading from the dashboard
 
@@ -901,12 +950,17 @@ is also cryptographically verified
 ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): with the release public key
 on disk (`cosign.pub`, shipped in every signed bundle), the runner fetches the release's
 `pithead.tar.gz.sig` and checks the download against the key it **already holds** before
-extracting a byte — a bad or missing signature, or a missing cosign binary, fails the upgrade
-with nothing changed, and a swapped key inside a malicious bundle cannot vouch for itself. The
-`pithead upgrade` that follows verifies each image's signature the same way before pulling. An
-install without `cosign.pub` (older than the first signed release) still rests on TLS to GitHub
-(over Tor) plus that tag pinning, and says so in the journal — upgrading once to a signed release
-picks up the key. See [Releasing › Signed releases](dev/releasing.md#signed-releases).
+extracting a byte — a bad or missing signature fails the upgrade with nothing changed, and a
+swapped key inside a malicious bundle cannot vouch for itself. The `pithead upgrade` that follows
+verifies each image's signature the same way before pulling. An install without `cosign.pub`
+(older than the first signed release) still rests on TLS to GitHub (over Tor) plus that tag
+pinning, and says so in the journal — upgrading once to a signed release picks up the key. See
+[Releasing › Signed releases](dev/releasing.md#signed-releases).
+
+The `cosign` binary itself is checked first, before the release API is dialled: every bundle ships
+the key, so the upgrade the runner ends up performing will need the verifier no matter what this
+install currently holds. Without it the request is refused outright, with nothing downloaded and
+the throttle unclaimed — install cosign on the host and retry immediately.
 
 **Upgrading from v1.7.x or older shows one last false failure.** Dashboard versions before
 v1.8.1 treat the reverse proxy's brief 502 — normal while the dashboard container recreates

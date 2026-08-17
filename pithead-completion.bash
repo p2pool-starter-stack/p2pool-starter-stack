@@ -52,10 +52,11 @@ _pithead() {
         COMPREPLY=($(compgen -W "$(_pithead_services "$compose")" -- "$cur"))
         return
     fi
-    # `restart` takes exactly one optional argument: tor (fresh guard selection, #424).
+    # `restart` takes exactly one optional argument: tor (fresh guard selection, #424) or
+    # monerod (re-dial peers after a tor restart left the node out of sync, #972).
     if [ "$prev" = "restart" ]; then
         # shellcheck disable=SC2207
-        COMPREPLY=($(compgen -W "tor" -- "$cur"))
+        COMPREPLY=($(compgen -W "tor monerod" -- "$cur"))
         return
     fi
     # shellcheck disable=SC2207  # command names never contain whitespace

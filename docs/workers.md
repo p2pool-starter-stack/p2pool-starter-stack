@@ -38,7 +38,9 @@ stack's address filled in.
   LAN, set a DHCP reservation (or a static IP) for the stack host.
 - Add a backup pool for failover. List a second entry in `pools` (a public pool, or another stack).
   If the Monero node goes down or is still syncing, the stack stops accepting work so rigs fail over
-  to the backup, then switch back when it recovers.
+  to the backup, then switch back when it recovers. A Tari outage or resync does the same while
+  `dashboard.tari_required` is `true` (the default); set it to `false` and only Monero gates the
+  work.
 
 ### Miner version & compatibility
 
@@ -189,8 +191,10 @@ pins it explicitly. On a rig, set:
 
 A pinned rig refuses to talk to anything that doesn't hold the stack's exact certificate — a
 man-in-the-middle on the LAN gets a handshake failure, not shares. Rotation is regenerate +
-re-pin: delete the two files in the stack's `proxy-tls` data directory, run `./pithead apply`,
-and update the fingerprint on each TLS rig (cleartext rigs are unaffected).
+re-pin: delete the two files in the stack's `proxy-tls` data directory, run `./pithead apply` (it
+prints the new fingerprint), then `./pithead restart` — the proxy reads the certificate at process
+start, so a running one keeps serving the old cert until it restarts — and update the fingerprint on
+each TLS rig (cleartext rigs are unaffected).
 
 TLS adds confidentiality (nobody on the network reads your worker names or the access password);
 the [password](#authentication) stays the access control. Use both. The protection is per-rig:
@@ -298,8 +302,8 @@ the rig's RigForge version, tuning state, power draw and efficiency, CPU/firmwar
 watchdog temperatures. Point that rig's descriptor `port` at it to pick the block up:
 
 ```jsonc
-"dashboard": {
-    "workers": [
+"workers": {
+    "list": [
         { "name": "rig-01", "port": 8081 }
     ]
 }
@@ -314,13 +318,17 @@ unchanged: send the rig's `token` only if it sets an `ACCESS_TOKEN` (the read AP
 If the block also carries a `control` object — `{change_id, status, reason}`, mirroring the rig's
 own control-API `/status` response read-only — the dashboard reconciles it against the [Worker
 Inspect](dashboard.md#worker-inspect) change history (#579): a still-`accepted` row whose
-`change_id` matches is updated to the reported terminal `status`
-(`applied`/`rejected`/`rolled_back`). This is how a rollback slower than the host runner's 20s
-status-poll deadline still reaches a terminal state without a second authenticated dial to the
+`change_id` matches is updated to the reported terminal `status` — `applied` / `rejected` /
+`rolled_back` / `failed` (a control-apply outcome) or `noop` (already on the target) / `throttled`
+(the rig's own anti-beacon window, retry-later not a fault — both control-upgrade outcomes). This
+is how a rollback, or any other terminal outcome the rig reports past the host runner's own
+status-poll deadline, still reaches a terminal state without a second authenticated dial to the
 control port.
 
-[TODO: verify upstream — confirm the `rigforge.control` mirror ships in RigForge; until then this
-parses to nothing and the row stays `accepted`.]
+RigForge ships this mirror from **v1.15.0** (rigforge#346). A rig on an older release, or one with
+no `control` block at all (plain xmrig, or a rig that has never taken a control-apply/-upgrade),
+parses to nothing — a slow-terminal outcome on those rigs stays `accepted` until the rig reports a
+status the dashboard recognizes.
 
 #### RigForge new-release badge
 

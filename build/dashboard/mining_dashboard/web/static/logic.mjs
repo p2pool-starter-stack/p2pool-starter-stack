@@ -240,6 +240,11 @@ export function fmtHashrate(hs) {
 // expected seconds to find one P2Pool share (share difficulty / hashrate). Returns nulls when the
 // estimate can't be computed (rate unavailable, or a non-positive hashrate) so the card shows "—".
 export function computeEarnings(hashrateHs, earnings) {
+  // The per-block Tari reward is a fact about the chain, not about this box: it shows whenever
+  // p2pool has reported it, independent of the what-if hashrate and of the merge-mine channel —
+  // the Tari Merge-Mining card on the same page prints the same figure. Only the time-to-block
+  // estimate (and the per-day averages) need a live channel and a hashrate.
+  const tariReward = earnings && earnings.tari_reward > 0 ? earnings.tari_reward : null;
   if (!earnings || !earnings.available || !(hashrateHs > 0)) {
     return {
       day: null,
@@ -250,7 +255,7 @@ export function computeEarnings(hashrateHs, earnings) {
       tariMonth: null,
       tariYear: null,
       tariTimeToBlockSec: null,
-      tariRewardPerBlock: null,
+      tariRewardPerBlock: tariReward,
       xvbDay: null,
       xvbMonth: null,
       xvbYear: null,
@@ -278,8 +283,9 @@ export function computeEarnings(hashrateHs, earnings) {
     tariMonth: tariDay === null ? null : tariDay * DAYS_PER_MONTH,
     tariYear: tariDay === null ? null : tariDay * DAYS_PER_YEAR,
     tariTimeToBlockSec,
-    tariRewardPerBlock: earnings.tari_available ? earnings.tari_reward : null,
-    // Current-tier XvB expected reward, XMR/day (#712). A fixed published figure, NOT scaled by the
+    tariRewardPerBlock: tariReward,
+    // Current-tier XvB expected reward, XMR/day (#712) — the published figure tempered by
+    // measured delivery server-side (#902), never face value. A fixed figure, NOT scaled by the
     // what-if hashrate (unlike day/tariDay); null unless the server sent a fresh estimate. Month/
     // year are the same day/month/year spans every other estimate gets, so the XvB tab can show
     // the standardized table.
@@ -294,9 +300,11 @@ export function computeEarnings(hashrateHs, earnings) {
 // helper/utils.resolve_target_threshold (get_tier_info over stable_hr × max_fraction) — a pinned
 // test shares its inputs with the Python unit test so the two can't drift silently. Cost = the
 // threshold itself: XvB qualifies a tier on BOTH the 1h and 24h credited averages, so holding it
-// costs ~threshold H/s of continuous donation. Null when no tier is sustainable or XvB is off.
+// costs ~threshold H/s of continuous donation. Null when no tier is sustainable. Not gated on
+// calc.enabled: the what-if runs from local hashrate and the published thresholds, so it answers
+// "which tier could I hold?" before XvB is ever turned on (#938).
 export function computeXvbTier(hashrateHs, calc) {
-  if (!calc || !calc.enabled || !(hashrateHs > 0)) return null;
+  if (!calc || !(hashrateHs > 0)) return null;
   let best = null;
   for (const t of calc.tiers || []) {
     if (t.threshold > 0 && hashrateHs * calc.max_fraction >= t.threshold) {
@@ -317,8 +325,10 @@ export function computeXvbTier(hashrateHs, calc) {
 //   net        — the actionable verdict: (yours ?? study ?? face) minus cost; [lo,hi] when a band
 // A tier the what-if hashrate cannot sustain is flagged, its net withheld (an unreachable payout
 // must not render as reachable). Pure + unit-tested; the component only renders these rows.
+// Not gated on calc.enabled: the table is the enable/don't-enable decision aid (#938) — the
+// server publishes the tiers either way, and a disabled box just has no live-credit context.
 export function xvbDecisionRows(calc, coeffDay, hr) {
-  if (!calc || !calc.enabled) return [];
+  if (!calc) return [];
   const rows = [];
   for (const t of calc.tiers || []) {
     const cost = t.threshold > 0 && coeffDay > 0 ? t.threshold * coeffDay * DAYS_PER_YEAR : null;
@@ -417,11 +427,12 @@ export function formatXtm(xtm) {
 //           + (current-tier XvB/day × xmr_price, when the server sent a fresh estimate).
 // `est` is the already-computed earnings for this what-if hashrate (computeEarnings; `est.tariDay`
 // is the same Tari/day estimate the Tari tab already shows — no separate estimate invented here).
-// XvB (#712): `est.xvbDay` is the current tier's published expected reward (XMR/day), folded into
-// the single net — the whole net is already probabilistic, so one number stays coherent, and the
-// UI labels the XvB slice as an estimate (the raffle draw is random among qualifiers). It's a
-// fixed published figure, so it does NOT scale with the what-if hashrate; null (server-gated on a
-// fresh, non-stale estimate for a held donor tier) means it's simply left out — never fabricated.
+// XvB (#712): `est.xvbDay` is the current tier's expected reward (XMR/day; the published figure
+// tempered by measured delivery server-side, #902 — never face value), folded into the single
+// net — the whole net is already probabilistic, so one number stays coherent, and the UI labels
+// the XvB slice as a tempered estimate (the raffle draw is random among qualifiers). It's a
+// fixed figure, so it does NOT scale with the what-if hashrate; null (server-gated on a fresh,
+// non-stale estimate for a held donor tier) means it's simply left out — never fabricated.
 // Any figure whose inputs are missing comes back null so the card shows "—" rather than a bogus
 // number: cost needs cost_per_kwh > 0; net additionally needs xmr_price > 0 and a valid XMR
 // estimate — Tari and XvB only ever ADD to that base (mirrors the existing xmr_price-gates-net
@@ -454,8 +465,9 @@ export function computeEnergy(energy, est) {
   const haveXmr = Number.isFinite(xmrPrice) && xmrPrice > 0 && est && Number.isFinite(est.day);
   const includesTari =
     haveXmr && Number.isFinite(tariPrice) && tariPrice > 0 && Number.isFinite(est.tariDay);
-  // XvB (#712): the current tier's published expected reward (XMR/day), valued at the XMR price —
-  // an estimate blended into the single net, gated on a real XMR price like every other addend.
+  // XvB (#712): the current tier's expected reward (XMR/day, delivery-tempered server-side,
+  // #902), valued at the XMR price — an estimate blended into the single net, gated on a real
+  // XMR price like every other addend.
   const includesXvb = haveXmr && Number.isFinite(est.xvbDay) && est.xvbDay > 0;
   const grossDay = haveXmr
     ? est.day * xmrPrice +

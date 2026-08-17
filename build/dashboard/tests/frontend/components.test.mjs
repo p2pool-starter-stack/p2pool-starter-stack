@@ -261,17 +261,21 @@ test('EarningsCard leads with solo time-to-block + per-block reward, day as avg 
     assert.match(up, /16\.1000 XTM/);       // the long-run daily average figure still shown
     assert.match(up, /483\.0000 XTM/);      // ... spanned to month
     assert.match(up, /5876\.5000 XTM/);     // ... and year, same shared precision
-    // Merge-mining inactive/syncing: the rows stay, the figures degrade to "—".
+    // Merge-mining inactive/syncing: the estimates degrade to "—", but a KNOWN per-block
+    // reward keeps showing — it is a fact about the chain (the Tari Merge-Mining card prints
+    // the same figure), not a function of this box's hashrate or channel state.
     const off = clone();
     off.earnings.available = true;
     off.earnings.tari_available = false;
+    off.earnings.tari_reward = 10_709;
     const down = renderApp({ state: off });
     assert.match(down, /Est\. Time to Tari Block/);
     assert.match(down, /—/);
+    assert.match(down, /10709\.0000 XTM/);
     assert.doesNotMatch(down, /NaN/);
 });
 
-test('EarningsCard renders the XvB tier (raffle) block when XvB is on, hides it when off (#118)', () => {
+test('EarningsCard renders the XvB tier (raffle) block on and off — off drops the live-credit cards (#938)', () => {
     const s = clone();
     s.earnings.available = true;
     s.xvb_calc = {
@@ -297,10 +301,18 @@ test('EarningsCard renders the XvB tier (raffle) block when XvB is on, hides it 
     assert.match(up, /Hashrate Cost/);
     assert.match(up, /1\.00 kH\/s/);
     assert.match(up, /not an XMR payout/);   // the required labelling rides on the card
-    // XvB disabled → the whole block disappears; the XMR calculator stays.
-    s.xvb_calc = { enabled: false };
+    assert.doesNotMatch(up, /id="xvb-disabled-note"/); // the off-explainer only shows off
+    // XvB disabled (#938): the decision aid stays — what-if cards, table, note — but the
+    // live-credit cards (Current/Target tier) stand down and the off-explainer appears.
+    s.xvb_calc = { ...s.xvb_calc, enabled: false, current_tier: 'Disabled', target_tier: 'Disabled' };
     const off = renderApp({ state: s });
-    assert.doesNotMatch(off, /XvB Tier \(raffle\)/);
+    assert.match(off, /XvB Tier \(raffle\)/);
+    assert.match(off, /Sustainable Tier/);
+    assert.match(off, /Hashrate Cost/);
+    assert.match(off, /id="xvb-disabled-note"/);
+    assert.match(off, /not an XMR payout/);
+    assert.doesNotMatch(off, /Current Tier/);
+    assert.doesNotMatch(off, /Target Tier/);
     assert.match(off, /Your P2Pool Hashrate/);
 });
 
@@ -331,14 +343,27 @@ test('EarningsCard splits into Monero / Tari / XvB tabs, Monero active by defaul
     assert.match(html, /XvB Tier \(raffle\)/);
 });
 
-test('EarningsCard drops the XvB tab entirely when XvB is disabled (#118)', () => {
+test('EarningsCard keeps the XvB tab when disabled; only a tier-less payload drops it (#938)', () => {
     const s = clone();
     s.earnings.available = true;
+    // Disabled with a tier table (what the server now always sends): the tab stays — it holds
+    // the enable/don't-enable decision aid.
+    s.xvb_calc = {
+        enabled: false, max_fraction: 0.85,
+        tiers: [{ name: 'Donor (1.00 kH/s+)', threshold: 1000 }],
+        current_tier: 'Disabled', target_tier: 'Disabled',
+        note: 'raffle status', mode_note: null,
+    };
+    let html = renderApp({ state: s });
+    assert.match(html, /id="etab-xvb"/);
+    assert.match(html, /id="epanel-xvb"/);
+    assert.match(html, /XvB Tier \(raffle\)/);
+    // A pre-#938 disabled payload carries no tiers — nothing to price, so no tab either.
     s.xvb_calc = { enabled: false };
-    const html = renderApp({ state: s });
+    html = renderApp({ state: s });
     assert.match(html, /id="etab-monero"/);
     assert.match(html, /id="etab-tari"/);
-    assert.doesNotMatch(html, /id="etab-xvb"/); // no XvB tab
+    assert.doesNotMatch(html, /id="etab-xvb"/);
     assert.doesNotMatch(html, /id="epanel-xvb"/);
     assert.doesNotMatch(html, /XvB Tier \(raffle\)/);
 });
@@ -424,8 +449,10 @@ test('EarningsCard Energy tab folds the current-tier XvB estimate into net, labe
     const html = renderApp({ state: s });
     assert.match(html, /scope="col"[^>]*>Net</);
     assert.match(html, /P2Pool \+ XvB \(est\.\), after power/);
-    // Tooltip drops the "Excludes XvB" clause and states it's an estimate.
-    assert.match(html, /XvB is an estimate/);
+    // Tooltip drops the "Excludes XvB" clause and states it's an estimate — tempered by
+    // measured delivery, never face value (#902).
+    assert.match(html, /XvB is an estimate, tempered by measured delivery/);
+    assert.match(html, /never XvB(?:'|&#39;)s face value/);
     assert.doesNotMatch(html, /Excludes XvB/);
     assert.doesNotMatch(html, /P2Pool XMR only, after power/);
 });
@@ -550,12 +577,14 @@ test('EarningsCard marks running windows the payout history does not fully cover
     assert.match(html, /no payouts on record yet/);
 });
 
-test('EarningsCard XvB tab shows the published current-tier reward as a day/month/year table', () => {
+test('EarningsCard XvB tab shows the tempered current-tier reward as a day/month/year table', () => {
     const s = clone();
     s.earnings.available = true;
-    s.earnings.xvb_day = 0.002; // fresh published estimate → the standardized table appears
+    s.earnings.xvb_day = 0.002; // fresh (server-tempered, #902) estimate → the standardized table
     let html = renderApp({ state: s });
-    assert.match(html, /Current Tier Expected Reward — published by XvB/);
+    // The heading says the figure is tempered by measured delivery, not XvB's face value (#902).
+    assert.match(html, /Current Tier Expected Reward — tempered by measured delivery/);
+    assert.match(html, /tempered by measured delivery: scaled to what this wallet/);
     assert.match(html, /0\.002000 XMR/);  // day
     assert.match(html, /0\.060000 XMR/);  // month, same shared precision
     assert.match(html, /0\.730000 XMR/);  // year
@@ -1060,6 +1089,26 @@ test('ExpectedVsActualCard compares combined Monero+XvB with a percent and parti
     // Without a fresh published estimate the label honestly drops the "+ XvB".
     s.earnings_summary.xmr.includes_xvb = false;
     assert.match(renderApp({ state: s }), /Monero \(30d\)/);
+});
+
+test('ExpectedVsActualCard drops the percent when the server withholds it, tooltip explains (#992)', () => {
+    // A near-zero expectation makes the server withhold pct (views.py caps at 999%) — the
+    // actual figure stands alone and the row tooltip owns the missing percent.
+    const s = clone();
+    s.earnings_summary.xmr = {
+        available: true, expected_30d: 1e-6, includes_xvb: false, enabled: true,
+        actual_30d: 0.28, partial: false, pct: null,
+        xvb_realization_pct: null, xvb_wins_measured: null,
+    };
+    const out = renderApp({ state: s });
+    assert.match(out, /0\.280000 XMR/);
+    assert.doesNotMatch(out, /0\.280000 XMR \(/); // no percent appended
+    assert.match(out, /No percentage shown: the expected figure is near zero/);
+    // A present percent keeps the old rendering and drops the explanation.
+    s.earnings_summary.xmr.pct = 82;
+    const withPct = renderApp({ state: s });
+    assert.match(withPct, /\(82%\)/);
+    assert.doesNotMatch(withPct, /No percentage shown/);
 });
 
 test('ExpectedVsActualCard shows the config key when confirmation is off, never a zero (#808)', () => {

@@ -111,6 +111,13 @@ echo "== unit: lint-operator-strings self-test (#755) =="
 bash "$ROOT/scripts/lint-operator-strings.sh" --self-test >/dev/null 2>&1
 assert_rc "operator-strings guard self-test passes" "$?" "0"
 
+echo "== unit: patch-coverage overlap self-test (#1000) =="
+# diff-cover exits 0 on "No lines with coverage information" — a vacuous pass. The wrapper's
+# overlap check is what turns that into a loud not-applicable pass or a real failure; its
+# --self-test drives fixtures through both branches plus the file-present quiet pass.
+bash "$ROOT/scripts/patch-coverage.sh" --self-test >/dev/null 2>&1
+assert_rc "patch-coverage wrapper self-test passes" "$?" "0"
+
 echo "== unit: is_public_ip classifier (#113) =="
 # Globally-routable -> rc 0 (public). Includes boundaries just OUTSIDE each excluded range.
 for ip in 8.8.8.8 1.1.1.1 172.15.0.1 172.32.0.1 100.128.0.1 169.1.1.1 2606:4700:4700::1111 2001:db8::1; do
@@ -196,6 +203,7 @@ printf '%s\n' "${SS_OUT:-}"
 EOF
 cat >"$DRBIN/curl" <<'EOF'
 #!/usr/bin/env bash
+[ -n "${CURL_BODY:-}" ] && printf '%s' "$CURL_BODY"
 exit "${CURL_RC:-0}"
 EOF
 chmod +x "$DRBIN"/*
@@ -279,6 +287,27 @@ assert_contains "tor egress probe: WARN never fails doctor (rc 0)" "$out" "rc=0"
 out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_tor_clearnet_egress 2>&1)"
 assert_contains "tor egress probe: tor down -> info skip" "$out" "isn't running"
 
+echo "== unit: doctor Monero sync check — peer-loss strand (#972) =="
+# A monerod stranded by a tor restart keeps a green healthcheck while get_info reports
+# synchronized:false — the check trusts the RAW flag (a stranded node can report a stale
+# target_height of 0, so height math lies) and WARNs, never FAILs (initial sync reads the same).
+out="$(RUNNING_CONTAINERS="monerod" CURL_BODY='{"status":"OK","synchronized":true,"target_height":0}' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1)"
+assert_contains "monerod sync: synchronized -> OK" "$out" "reports synchronized"
+out="$(RUNNING_CONTAINERS="monerod" CURL_BODY='{"status":"OK","synchronized":false,"target_height":0,"height":3000000}' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1)"
+assert_contains "monerod sync: stranded (raw flag false, stale target 0) -> WARN" "$out" "NOT synchronized"
+assert_contains "monerod sync: WARN names the fix" "$out" "restart monerod"
+out="$(
+    RUNNING_CONTAINERS="monerod" CURL_BODY='{"status":"OK","synchronized":false,"target_height":10}' PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1
+    echo "rc=$?"
+)"
+assert_contains "monerod sync: WARN never fails doctor (rc 0)" "$out" "rc=0"
+# RPC not answering (container mid-start) -> info skip; no monerod container (remote mode /
+# stack down) -> silent skip, no verdict either way.
+out="$(RUNNING_CONTAINERS="monerod" CURL_RC=7 PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1)"
+assert_contains "monerod sync: RPC silent -> info skip" "$out" "did not answer"
+out="$(RUNNING_CONTAINERS="" PATH="$DRBIN:$PATH" run_sourced "$SANDBOX" check_monerod_synchronized 2>&1)"
+assert_eq "monerod sync: no container -> silent skip" "$out" ""
+
 echo "== unit: stack_restart — scoped tor restart (#424) =="
 # `restart` bare restarts the whole stack; `restart tor` restarts ONLY tor (fresh guard
 # selection when clearnet egress is stuck); anything else is rejected — other containers must
@@ -296,10 +325,15 @@ assert_contains "restart tor restarts only the tor container" "$(cat "$RSTLOG")"
 assert_contains "restart tor warns that circuits drop" "$out" "circuits drop"
 assert_contains "restart tor points at the doctor verify" "$out" "doctor"
 : >"$RSTLOG"
+# `restart monerod` (#972): the manual re-peer leg after a tor restart left the node out of sync.
+out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart monerod 2>&1)"
+assert_contains "restart monerod restarts only the monerod container" "$(cat "$RSTLOG")" "compose restart monerod"
+assert_contains "restart monerod says why (re-dial peers)" "$out" "re-dials"
+: >"$RSTLOG"
 out="$(DOCKER_LOG="$RSTLOG" PATH="$RSTBIN:$PATH" run_sourced "$SANDBOX" stack_restart p2pool 2>&1)"
 rc=$?
-assert_rc "restart rejects any service but tor" "$rc" "1"
-assert_contains "restart rejection names the contract" "$out" "takes no argument, or 'tor'"
+assert_rc "restart rejects any service but tor/monerod" "$rc" "1"
+assert_contains "restart rejection names the contract" "$out" "takes no argument, 'tor'"
 assert_eq "rejected restart touches no container" "$(cat "$RSTLOG")" ""
 
 echo "== unit: is_ipv4 =="
@@ -2437,7 +2471,7 @@ assert_contains "the ownership scan keys off foreign uid" "$(cat "$EO/find.log")
 echo "== unit: disk_component_gib =="
 assert_eq "monero pruned -> 120" "$(run_sourced "$SANDBOX" disk_component_gib monero 1)" "120"
 assert_eq "monero full -> 320" "$(run_sourced "$SANDBOX" disk_component_gib monero 0)" "320"
-assert_eq "tari -> 170" "$(run_sourced "$SANDBOX" disk_component_gib tari)" "170"
+assert_eq "tari -> 200" "$(run_sourced "$SANDBOX" disk_component_gib tari)" "200"
 assert_eq "tor -> 1" "$(run_sourced "$SANDBOX" disk_component_gib tor)" "1"
 
 echo "== unit: check_disk_grouped (mocked df) =="
@@ -2464,36 +2498,36 @@ mkdir -p "$DM/monero" "$DM/tari" "$DM/p2pool" "$DM/dashboard" "$DM/tor"
 md="$DM/monero" td="$DM/tari" pd="$DM/p2pool" dd="$DM/dashboard" rd="$DM/tor"
 
 # All five dirs on ONE filesystem with plenty of space -> a SINGLE grouped OK line naming every
-# component, with the combined pruned requirement (120+170+5+2+1 = 298 GB).
+# component, with the combined pruned requirement (120+200+5+2+1 = 328 GB).
 one_map="$md=/data $td=/data $pd=/data $dd=/data $rd=/data /data=/data"
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
     run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
 assert_eq "one fs -> single line" "$(printf '%s\n' "$out" | grep -c 'Data on')" "1"
 assert_contains "single line names all components" "$out" "(monero, tari, p2pool, dashboard, tor)"
-assert_contains "single line shows combined ~298 GB" "$out" "needs ~298 GB"
+assert_contains "single line shows combined ~328 GB" "$out" "needs ~328 GB"
 assert_contains "ample space -> OK" "$out" "OK"
 
-# Same single filesystem but too small (100 GiB < 298 GiB) -> ONE WARN line.
+# Same single filesystem but too small (100 GiB < 328 GiB) -> ONE WARN line.
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=104857600 DF_AVAIL_H=100G \
     run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
 assert_eq "one small fs -> single line" "$(printf '%s\n' "$out" | grep -c 'Data on')" "1"
-assert_contains "small fs warns below need" "$out" "below the ~298 GB"
+assert_contains "small fs warns below need" "$out" "below the ~328 GB"
 
 # Two filesystems: monero+tari on /big, the rest on /small -> ONE line per filesystem.
 two_map="$md=/big $td=/big $pd=/small $dd=/small $rd=/small /big=/big /small=/small"
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$two_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
     run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "$td" "$pd" "$dd" "$rd" 2>&1)"
 assert_eq "two fs -> two lines" "$(printf '%s\n' "$out" | grep -c 'Data on')" "2"
-assert_contains "/big groups monero+tari (~290 GB)" "$out" "/big (monero, tari): 600G free — needs ~290 GB"
+assert_contains "/big groups monero+tari (~320 GB)" "$out" "/big (monero, tari): 600G free — needs ~320 GB"
 assert_contains "/small groups the small three (~8 GB)" "$out" "/small (p2pool, dashboard, tor): 600G free — needs ~8 GB"
 
 # Remote node modes (#103): doctor/preflight blank the remote component's dir (its chain lives on
 # the OTHER host), and an empty dir arg must drop that component from the budget entirely — here
-# tari remote drops the ~170 GB Tari share, leaving monero+the small three (120+5+2+1 = 128 GB).
+# tari remote drops the ~200 GB Tari share, leaving monero+the small three (120+5+2+1 = 128 GB).
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
     run_sourced "$SANDBOX" check_disk_grouped doctor 1 "$md" "" "$pd" "$dd" "$rd" 2>&1)"
 assert_contains "remote tari drops tari from the budget" "$out" "(monero, p2pool, dashboard, tor)"
-assert_contains "remote tari budget excludes the 170 GB" "$out" "needs ~128 GB"
+assert_contains "remote tari budget excludes the 200 GB" "$out" "needs ~128 GB"
 
 # Preflight mode is WARN-only and silent when there's enough room.
 out="$(PATH="$DISK/bin:$PATH" DF_MAP="$one_map" DF_AVAIL_KB=629145600 DF_AVAIL_H=600G \
@@ -5900,6 +5934,12 @@ make_stubs "$UPG/bin"
 # tolerates non-empty dirs and would mask the regression. CI (Linux) and real installs run GNU
 # tar; on a Mac with gnu-tar installed, route this block's tar there too so the bug reproduces.
 command -v gtar >/dev/null 2>&1 && ln -sf "$(command -v gtar)" "$UPG/bin/tar"
+# Every release bundle ships cosign.pub, so the runner requires the verifier before it downloads
+# anything (#1023) — the fixture carries one so the paths that are supposed to proceed do not
+# depend on whether the host happens to have cosign installed. It stays inert: this install has no
+# cosign.pub, so no signature is ever fetched and nothing here invokes it.
+printf '#!/usr/bin/env bash\nexit 0\n' >"$UPG/bin/cosign"
+chmod +x "$UPG/bin/cosign"
 printf '1.3.1' >"$UPG/VERSION"
 printf '{}' >"$UPG/config.json" # #637: the in-place path snapshots config.json before extracting
 # #544/#555: a real release install carries non-empty build/* config-template mounts (see the
@@ -5998,6 +6038,25 @@ assert_contains "channel-off refusal names the flag" "$out" "not enabled"
 [ ! -f "$UPGRESULTS/$UUPG.json" ] && ok "channel-off intent gets no result" || bad "channel-off intent gets no result" "result written"
 rm -f "$UPGREQS/$UUPG.json"
 seed_upgrade_env true
+
+# #1023: no cosign on the host -> refused before a single dial, whether or not this install already
+# holds a key. This fixture has NO cosign.pub (it models an install cut before signing engaged),
+# which is exactly the shape that used to sail past the old `[ -f cosign.pub ] &&` guard, download
+# the bundle, extract it over the install, and only then abort inside the new CLI's image gate.
+# Same pinned PATH as its key-holding twin below, so a host cosign can't decide the test.
+reset_upgrade_state
+ln -sf "$(command -v jq)" "$UPG/bin/jq" # PATH is pinned below, which may not carry jq
+mv "$UPG/bin/cosign" "$UPG/cosign.hidden"
+upgrade_intent "$UUPG" "v9.9.9"
+(cd "$UPG" && PATH="$UPG/bin:/usr/bin:/bin" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+    CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
+mv "$UPG/cosign.hidden" "$UPG/bin/cosign"
+rm -f "$UPG/bin/jq"
+assert_eq "upgrade without cosign is rejected on a key-less install" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "cosign-missing refusal names the verifier" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "cosign is not installed"
+assert_eq "cosign-missing refusal dials nothing" "$(cat "$UPG/curl.log" 2>/dev/null)" ""
+assert_eq "cosign-missing refusal extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+assert_eq "cosign-missing refusal claims no throttle" "$(ls "$UPG/data/control/staged/.upgrade-stamp" 2>/dev/null)" ""
 
 # Malformed / missing version: refused BEFORE any network dial (curl must never run).
 reset_upgrade_state
@@ -6392,9 +6451,10 @@ assert_eq "missing signature asset reports failed" "$(jq -r '.status' "$UPGRESUL
 assert_contains "missing-signature failure names the asset" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "no bundle signature"
 assert_eq "missing signature extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
 
-# cosign.pub present but no cosign binary: refused BEFORE the download, with an install pointer.
-# PATH is pinned to the stub bin + /usr/bin:/bin so a real host cosign can't leak in; jq rides
-# along as a symlink since the pinned PATH may not carry it.
+# The other half of the same precondition (#1023): an install that already HOLDS the key is
+# refused for the same reason a key-less one is — no cosign, no upgrade — BEFORE the download, with
+# an install pointer. PATH is pinned to the stub bin + /usr/bin:/bin so a real host cosign can't
+# leak in; jq rides along as a symlink since the pinned PATH may not carry it.
 reset_upgrade_state
 ln -sf "$(command -v jq)" "$UPG/bin/jq"
 rm -f "$UPG/bin/cosign"
@@ -6773,6 +6833,43 @@ assert_eq "worker-apply accept path records the rig's changed_keys" \
     "$(jq -rc '.changed_keys' "$WA3/results/$u9.json" 2>/dev/null)" '["pools"]'
 assert_contains "worker-apply accept is audited as applied" \
     "$(cat "$WA3/audit/control.log")" '"action":"worker-apply","status":"applied"'
+# The rig can also end an apply terminal "failed" — it could not restore its own rollback backup
+# (present since the v1.11.2 fleet floor). The poll must land it as failed-with-reason, never burn
+# the 20s deadline into a vague "accepted".
+WA4="$SANDBOX/ctrl185-failed"
+mkdir -p "$WA4/staged" "$WA4/results" "$WA4/audit" "$WA4/bin"
+cp "$WA3/config.json" "$WA4/config.json"
+cat >"$WA4/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+out="" url=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) url="$1"; shift ;;
+    esac
+done
+case "$url" in
+*/apply)
+    printf '{"change_id":"chg-2"}' >"$out"
+    printf '202' ;;
+*/status)
+    printf '{"change_id":"chg-2","status":"failed","reason":"rollback backup unreadable: /var/lib/rigforge/backup"}' >"$out"
+    printf '200' ;;
+*) printf '000' ;;
+esac
+exit 0
+EOF
+chmod +x "$WA4/bin/curl"
+u10="fafafafa-fafa-4afa-8afa-fafafafafafa"
+printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","changes":{"pools":["pool.example:3333"]}}\n' "$u10" >"$WA4/req.json"
+PATH="$WA4/bin:$PATH" CONTROL_WA_BUDGET=1 PITHEAD_CONFIG_FILE="$WA4/config.json" \
+    run_sourced "$SANDBOX" control_process_request "$WA4/req.json" "$WA4" >/dev/null 2>&1
+assert_eq "a failed apply reaches terminal 'failed', not the poll-deadline 'accepted'" \
+    "$(jq -r '.status' "$WA4/results/$u10.json" 2>/dev/null)" "failed"
+assert_contains "the failed apply carries the rig's reason" \
+    "$(jq -r '.reason' "$WA4/results/$u10.json" 2>/dev/null)" "rollback backup unreadable"
+assert_contains "the failed apply is audited as failed" \
+    "$(cat "$WA4/audit/control.log")" '"action":"worker-apply","status":"failed"'
 
 # ---------------------------------------------------------------------------
 echo "== control channel: worker upgrade fails closed (#597) =="
@@ -6893,7 +6990,22 @@ assert_eq "rolled_back result carries the rig's reason" \
     "$(jq -r '.reason' "$WU_LAST_DIR/results/$w8.json" 2>/dev/null)" "miner did not return live"
 w9="34343434-3434-4234-9234-343434343434"
 wu_accept_case "$w9" '{"change_id":"chg-9","status":"failed","reason":"throttled: retry after the window"}' \
-    "rig-side throttle refusal is mapped to retry-later, not a fault" "throttled"
+    "legacy rig (pre-v1.12.0) throttle refusal (failed+text) still maps to retry-later" "throttled"
+# First-class terminals since rigforge#320 (v1.12.0): noop (already on the target) and throttled
+# land their real status on the first poll — neither burns the poll cap into a vague "accepted".
+w17="bcbcbcbc-bcbc-42bc-92bc-bcbcbcbcbcbc"
+wu_accept_case "$w17" '{"change_id":"chg-9","status":"noop","reason":"already on v9.9.9 — nothing to upgrade"}' \
+    "a rig already on the target lands first-class 'noop', not the poll-cap fallback" "noop"
+assert_contains "the noop result carries the rig's already-on-target reason" \
+    "$(jq -r '.reason' "$WU_LAST_DIR/results/$w17.json" 2>/dev/null)" "already on v9.9.9"
+w18="cdcdcdcd-cdcd-42cd-92cd-cdcdcdcdcdcd"
+wu_accept_case "$w18" '{"change_id":"chg-9","status":"throttled","reason":"throttled — too soon since the last upgrade attempt"}' \
+    "a first-class 'throttled' terminal lands as retry-later on the first poll" "throttled"
+# A genuine failure that merely MENTIONS the throttle must stay a fault (rigforge#321's
+# fail-closed refusal): only the legacy leading-"throttled" free text remaps to retry-later.
+w19="dededede-dede-42de-92de-dededededede"
+wu_accept_case "$w19" '{"change_id":"chg-9","status":"failed","reason":"throttle state unavailable under /var/lib/rigforge — refused (fail-closed)"}' \
+    "a broken-rig failure mentioning the throttle stays 'failed', never calmed" "failed"
 # An unreachable rig fails cleanly (nothing changed, rig keeps its version).
 unreach_dir="$SANDBOX/ctrl597-unreach"
 mkdir -p "$unreach_dir/staged" "$unreach_dir/results" "$unreach_dir/audit" "$unreach_dir/bin"

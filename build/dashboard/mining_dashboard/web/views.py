@@ -707,6 +707,10 @@ def build_pool_network(data, metrics):
     p2p = data.get("pool", {}).get("p2p", {})
     network = data.get("network", {})
     s_addr = stratum.get("wallet", "Unknown")
+    # Relative, matching the cadence card's "Since Pool's Last Block": a bare HH:MM:SS with no
+    # date or timezone cue two cards away from a real duration reads as a duration.
+    last_block_ts = local_pool.get("last_block_ts", 0)
+    last_blk = f"{format_duration(time.time() - last_block_ts)} ago" if last_block_ts else "Never"
 
     return {
         "stratum": {
@@ -733,7 +737,7 @@ def build_pool_network(data, metrics):
             "pplns_win": f"{metrics.pplns_window} ({format_duration(metrics.pplns_window * metrics.block_time)})",
             "pplns_wgt": local_pool.get("pplns_weight", 0),
             "blocks": local_pool.get("blocks_found", 0),
-            "last_blk": format_time_abs(local_pool.get("last_block_ts", 0)),
+            "last_blk": last_blk,
             "peers": f"{p2p.get('out_peers', 0)} / {p2p.get('in_peers', 0)}",
             "uptime": format_duration(p2p.get("uptime", 0)),
         },
@@ -1471,7 +1475,8 @@ def xvb_current_tier_reward_day(metrics, state_mgr):
 
     Feeds the net-profit calculator (``est.xvbDay``): the whole net is already probabilistic, so
     blending the raffle's expected reward into the single figure is coherent — but it's an
-    *estimate* (the draw is random among qualifiers), so the UI labels it as one.
+    *estimate* (the draw is random among qualifiers), so the UI labels it as one. This is the
+    FACE value; ``build_state`` tempers it (``xvb_tempered_day``, #902) before the payload ships.
 
     Uses the **current** tier (``min(xvb_1h, xvb_24h)`` — the same lower-of-two rule as
     ``metrics.current_tier``), not the target: what the fleet is actually credited now. Returns
@@ -1611,6 +1616,19 @@ def xvb_realization(payouts, raffle_wins, xvb_day, expected_wins_day, now=None, 
     return (max(0.0, min(1.0, frac)), len(stamps))
 
 
+def xvb_tempered_day(xvb_day, realization):
+    """The per-day XvB figure the calculator and energy net fold in (#902) — never face value.
+
+    Same precedence as the decision table: this wallet's measured realization when enough wins
+    exist to measure it (``xvb_realization``), else the midpoint of the measured delivery prior
+    (``XVB_REALIZATION_PRIOR``). ``None``/0 passes through — nothing published means nothing to
+    temper, never a fabricated figure."""
+    if not xvb_day:
+        return xvb_day
+    frac = realization[0] if realization else sum(XVB_REALIZATION_PRIOR) / 2
+    return xvb_day * frac
+
+
 def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None):
     """Expected-XMR-from-P2Pool calculator inputs for the Advanced view (Issue #12).
 
@@ -1665,6 +1683,8 @@ def build_earnings(data, metrics, payouts=None, tari_payouts=None, xvb_day=None)
         "tari_reward": metrics.tari_reward,  # full XTM paid per Tari block (solo, lumpy)
         # Current-tier XvB expected reward, XMR/day, folded into the net-profit estimate (#712).
         # None unless XvB is on with a fresh published estimate for the tier the fleet holds now.
+        # build_state tempers this by measured delivery (xvb_tempered_day, #902) before the
+        # payload ships — clients never see the raw published figure.
         "xvb_day": xvb_day,
         "pool_difficulty": metrics.pool_difficulty,  # for expected time-to-share (diff/hr)
         "block_reward": f"{reward_atomic / 1e12:.4f} XMR",  # context, server-formatted like NetworkCard
@@ -1745,7 +1765,12 @@ def build_earnings_vs_actual(
         "pct": None,
     }
     if xmr["available"] and xmr["enabled"]:
-        xmr["pct"] = round((xmr["actual_30d"] or 0.0) / xmr["expected_30d"] * 100)
+        pct = round((xmr["actual_30d"] or 0.0) / xmr["expected_30d"] * 100)
+        # Withheld past 999%: a near-zero expectation (a box idle for most of the window that
+        # still confirmed normal payouts) turns the ratio into a five-digit figure that reads
+        # as a bug, not a comparison. pct is None only here once available+enabled hold, so
+        # the client's tooltip can own the explanation without an extra flag.
+        xmr["pct"] = pct if pct <= 999 else None
     # Expected Tari blocks over the window: hashrate × seconds ÷ difficulty (hashes-per-block).
     # Gated on tari_mining like the calculator, so a dead merge-mine channel shows "—", not 0.
     expected_blocks = (
@@ -1806,10 +1831,16 @@ def build_xvb_calc(metrics, state_mgr, realization=None):
     cumulative forecast) and ``players_avg`` (which also makes a single-qualifier artifact like
     Mega's self-evident). ``realized_reward_year`` scales the published figure by this wallet's
     measured win realization (``realization``, from ``xvb_realization``) — None when unmeasured,
-    so the client falls back to the study band; face value shows only in its own column. Returns ``{"enabled": False}`` alone when
-    XvB is off — there is no tier to calculate."""
-    if not metrics.xvb_enabled:
-        return {"enabled": False}
+    so the client falls back to the study band; face value shows only in its own column.
+
+    Published with XvB DISABLED too (#938): the table is the enable/don't-enable decision aid, so
+    hiding it behind the flag defeated its purpose. Everything here is computable from local
+    config plus the cached public feeds; disabling XvB stops the fetches (the egress rule, #726),
+    so on a box that never enabled XvB the odds and reward columns are honestly empty and on a
+    just-disabled box they age out through the same staleness rule as always. The live-credit
+    context goes quiet on its own: ``build_state`` computes ``realization`` only while enabled,
+    and ``Metrics`` reports current/target tier as "Disabled" — the client keys every
+    live-donation surface (and the current/target cards here) off ``enabled``."""
     tiers = state_mgr.get_tiers()
     round_state = state_mgr.get_xvb_round_stats()
     round_types = (
@@ -1835,7 +1866,7 @@ def build_xvb_calc(metrics, state_mgr, realization=None):
     estimates_stale = xvb_stats_are_stale(est_state)
     estimates_available = bool(estimates) and not estimates_stale
     return {
-        "enabled": True,
+        "enabled": metrics.xvb_enabled,
         # Ascending tier table for the client's what-if; names via get_tier_info so they read
         # exactly like the tier strings everywhere else (threshold already embedded in the name).
         # expected_reward_year is XvB's own figure for the tier, or None when unavailable/stale.
@@ -1924,14 +1955,43 @@ def _egress_badge(summary):
     }
 
 
-def build_worker_detail(name, data, state_mgr):
+def build_worker_hashrate_history(state_mgr, worker, range_arg, window=None):
+    """Per-worker hashrate-over-time chart (#1013): ``worker_history.h15`` for one rig, same
+    range/window/downsampling idiom as the telemetry backbone's other gauge series (``_gauge_series``
+    — reused as-is, not reimplemented). Markers (#1015) are the SAME range/window slice of this rig's
+    change history — config applies and rig upgrades (#1014) — so a step in the line has a visible
+    cause; kept as raw tokens (status/type/changes/reason), not display strings, so the client builds
+    the tooltip label the same way it already builds the history table's Outcome column."""
+    hashrate = [
+        {"x": p["x"], "y": p["h15"]}
+        for p in _gauge_series(
+            state_mgr.get_worker_history(name=worker), range_arg, window, ("h15",)
+        )
+    ]
+    markers = [
+        {
+            "x": int(row["ts"] * 1000),
+            "status": row.get("status"),
+            "type": row.get("type", "apply"),
+            "changes": row.get("changes") or {},
+            "reason": row.get("reason"),
+        }
+        for row in _filter_events(
+            state_mgr.get_worker_config_history(worker, limit=200), range_arg, window
+        )
+    ]
+    return {"hashrate": hashrate, "markers": markers}
+
+
+def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     """Per-worker Inspect payload (#185): the rig's current enriched telemetry, the writable config
     the dashboard last applied (the editor prefill — the rig's feed does not expose the writable
     config values, so Pithead's own last-applied record is the honest source), and the change history
     (each row's ``changes`` is a diff by construction, since we only ever record deltas we authored).
     ``hashrate_by_config`` (#492) is that same version timeline with each version's measured
     hashrate (worker_history) aggregated over its active window, so an operator can compare config
-    versions empirically.
+    versions empirically. ``hashrate_history`` (#1013) is the same rig's hashrate as a chartable
+    time series, honoring the same ``range_arg``/``window`` ``/api/state`` already uses.
 
     ``editable`` is whether the worker has an operator-set ``host`` in ``dashboard.workers[]`` — the
     precondition for the host-side write path. The rig's token is masked out of this container (#440),
@@ -1966,6 +2026,7 @@ def build_worker_detail(name, data, state_mgr):
         "last_applied": state_mgr.get_last_applied_worker_config(name),
         "history": history,
         "hashrate_by_config": hashrate_by_config,
+        "hashrate_history": build_worker_hashrate_history(state_mgr, name, range_arg, window),
     }
 
 
@@ -2039,6 +2100,21 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
             p2pool_day=earnings["coeff_day"] * metrics.p2pool_30d,
         )
 
+    # Expected vs actual (#808) reads the published FACE value — it tempers its own XvB leg by
+    # the measured factor and labels the untempered fallback face value in the tooltip — so it
+    # is built before the calculator's copy is tempered below.
+    earnings_summary = build_earnings_vs_actual(
+        metrics,
+        earnings,
+        raffle_wins,
+        expected_wins_day=xvb_wins_day,
+        realization=xvb_realized,
+    )
+    # The calculator/energy copy (est.xvbDay) ships TEMPERED (#902): measured realization when
+    # this wallet has one, else the delivery prior's midpoint — the raw published figure was the
+    # last untempered money surface (a donating box's fiat net read ~3x high on the XvB addend).
+    earnings["xvb_day"] = xvb_tempered_day(earnings["xvb_day"], xvb_realized)
+
     egress = egress_posture_from_config()  # per-component egress route + privacy roll-up (#170)
     topology = (
         topology_from_config()
@@ -2090,13 +2166,8 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         # (feature off → earnings shows only the estimate). Built above, before the payload.
         "earnings": earnings,
         # Expected vs actual, one row per stream (#808) — the Simple view's earnings figure.
-        "earnings_summary": build_earnings_vs_actual(
-            metrics,
-            earnings,
-            raffle_wins,
-            expected_wins_day=xvb_wins_day,
-            realization=xvb_realized,
-        ),
+        # Built above, from the face-value earnings dict, before the #902 tempering.
+        "earnings_summary": earnings_summary,
         "xvb_calc": build_xvb_calc(metrics, state_mgr, realization=xvb_realized),
         # On a backup stack, the XvB controller state last pulled from the primary (#249) — held as
         # standby, adopted only at failover. None on a single stack (nothing pulls). Inspectable so

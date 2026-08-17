@@ -51,6 +51,12 @@ RAFFLE_WINS_MAX_ROWS = 5000
 # Table names carrying a per-table write-health signal (see __init__ / _table_write_ok below).
 _TELEMETRY_TABLES = ("blocks", "xvb_history", "network_history", "disk_growth", "worker_history")
 
+# The full terminal vocabulary the rig's control mirror can report (#1009) — applied/rejected/
+# rolled_back/failed from a control-apply, plus noop (already on target)/throttled (retry-later)
+# from a control-upgrade (rigforge#320). Mirrors xmrig_client._CONTROL_TERMINAL and pithead's own
+# control_worker_apply/control_worker_upgrade poll cases (#1001) — one vocabulary, three places.
+_RECONCILE_TERMINAL = ("applied", "rejected", "rolled_back", "failed", "noop", "throttled")
+
 
 class StateManager:
     """
@@ -323,14 +329,16 @@ class StateManager:
         # config history on the rig, so Pithead owns it: one row per change the dashboard applied,
         # with the writable-key `changes` we sent (each row IS a diff from the prior state, by
         # construction — we only ever record deltas we authored) and the rig's terminal outcome.
-        # Additive, forward-only (mirrors events / payouts) — no _migrate_db change needed. `changes`
-        # holds only the writable allowlist keys; NO secret ever lands here (the rig token stays
-        # host-side, #440). change_id is the rig's 16-hex id, or NULL for a request that never reached
-        # a rig (rejected host-side).
+        # `changes` holds only the writable allowlist keys; NO secret ever lands here (the rig token
+        # stays host-side, #440). change_id is the rig's 16-hex id, or NULL for a request that never
+        # reached a rig (rejected host-side). `type` distinguishes a config apply from a one-click
+        # rig upgrade (#1014) — an upgrade's `changes` carries `{"version": ...}` instead of a
+        # writable-key diff, and get_last_applied_worker_config must never merge that into the
+        # config-editor prefill. New column, existing installs migrated in _migrate_db (below).
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS worker_config "
             "(id INTEGER PRIMARY KEY AUTOINCREMENT, worker TEXT, change_id TEXT, ts REAL, "
-            "status TEXT, changes TEXT, reason TEXT)"
+            "status TEXT, changes TEXT, reason TEXT, type TEXT DEFAULT 'apply')"
         )
         # v1.7 telemetry backbone (#196 Wave-0 proposal): five independent, additive time-series
         # tables. Each has its own retention (see the RETENTION_SEC constants above) and is
@@ -448,6 +456,14 @@ class StateManager:
         # which was dead code — the worker list is sourced live from the xmrig-proxy. Tidies old
         # DBs; harmless no-op on fresh ones.
         self._conn.execute("DROP TABLE IF EXISTS workers")
+
+        # worker_config.type (#1014): every pre-existing row was written before rig upgrades were
+        # recorded at all, so it was necessarily a config apply — backfill 'apply', matching the
+        # column's own DEFAULT for any row a future ALTER-less write path might still hit.
+        cursor.execute("PRAGMA table_info(worker_config)")
+        if "type" not in {info[1] for info in cursor.fetchall()}:
+            self.logger.info("Migrating DB: Adding type column to worker_config")
+            self._conn.execute("ALTER TABLE worker_config ADD COLUMN type TEXT DEFAULT 'apply'")
 
     def load(self):
         """
@@ -831,16 +847,19 @@ class StateManager:
         changes: dict[str, Any],
         reason: str | None,
         ts: float | None = None,
+        change_type: str = "apply",
     ) -> None:
-        """Record one applied/attempted worker config change (#185). ``changes`` is the writable-key
-        delta the dashboard sent (stored as JSON — no secret ever lands here). Forward-only."""
+        """Record one applied/attempted worker change (#185): a config apply, or (``change_type=
+        "upgrade"``, #1014) a one-click RigForge upgrade attempt — ``changes`` then carries
+        ``{"version": ...}`` instead of a writable-key diff. Stored as JSON — no secret ever lands
+        here. Forward-only."""
         try:
             with self._db_lock:
                 if not self._conn:
                     return
                 self._conn.execute(
-                    "INSERT INTO worker_config (worker, change_id, ts, status, changes, reason) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO worker_config (worker, change_id, ts, status, changes, reason, type) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         worker,
                         change_id,
@@ -848,6 +867,7 @@ class StateManager:
                         status,
                         json.dumps(changes),
                         reason,
+                        change_type,
                     ),
                 )
                 self._conn.commit()
@@ -855,14 +875,16 @@ class StateManager:
             self._db_error("Worker Config Write Error", e)
 
     def get_worker_config_history(self, worker: str, limit: int = 50) -> list[dict[str, Any]]:
-        """The change history for ``worker``, newest first, with ``changes`` parsed back to a dict."""
+        """The change history for ``worker``, newest first, with ``changes`` parsed back to a dict.
+        ``type`` is ``"apply"`` or ``"upgrade"`` (#1014); a row from before that column existed
+        reads back ``"apply"`` too (the migration backfills it, same as a fresh insert's default)."""
         try:
             with self._db_lock:
                 if not self._conn:
                     return []
                 cursor = self._conn.cursor()
                 cursor.execute(
-                    "SELECT change_id, ts, status, changes, reason FROM worker_config "
+                    "SELECT change_id, ts, status, changes, reason, type FROM worker_config "
                     "WHERE worker = ? ORDER BY ts DESC, id DESC LIMIT ?",
                     (worker, limit),
                 )
@@ -873,6 +895,7 @@ class StateManager:
                         d["changes"] = json.loads(d["changes"]) if d["changes"] else {}
                     except (TypeError, ValueError):
                         d["changes"] = {}
+                    d["type"] = d.get("type") or "apply"
                     out.append(d)
                 return out
         except sqlite3.Error as e:
@@ -888,10 +911,12 @@ class StateManager:
         row ``accepted`` forever otherwise — nothing re-polls it. This is the reconciler: called
         from the dashboard's regular per-rig read poll (data_service.py), never a new dial. The
         ``WHERE status = 'accepted'`` is the whole safety property — a row already terminal
-        (``applied``/``rejected``/``rolled_back``) is never touched, even by a stale or duplicate
-        report for the same ``change_id``.
+        (applied/rejected/rolled_back/failed/noop/throttled) is never touched, even by a stale or
+        duplicate report for the same ``change_id``. ``status`` is recorded as-is: it becomes the
+        row's outcome verbatim, and the frontend's ``STATUS_META`` already renders every member of
+        this vocabulary (``workerview.mjs``).
         """
-        if status not in ("applied", "rejected", "rolled_back") or not change_id:
+        if status not in _RECONCILE_TERMINAL or not change_id:
             return
         try:
             with self._db_lock:
@@ -968,10 +993,16 @@ class StateManager:
     def get_last_applied_worker_config(self, worker: str) -> dict[str, Any]:
         """The merged writable config the dashboard last successfully applied to ``worker`` — the
         best prefill for the editor, since the rig's enriched feed does not expose the writable config
-        values (#185). Later applied changes lay over earlier ones (last write wins per key)."""
+        values (#185). Later applied changes lay over earlier ones (last write wins per key).
+        Upgrade rows (#1014) are excluded — their ``changes`` is a ``{"version": ...}`` marker, not
+        writable-key config, and must never leak into the editor prefill."""
         merged: dict[str, Any] = {}
         for row in reversed(self.get_worker_config_history(worker, limit=200)):
-            if row.get("status") == "applied" and isinstance(row.get("changes"), dict):
+            if (
+                row.get("status") == "applied"
+                and row.get("type", "apply") == "apply"
+                and isinstance(row.get("changes"), dict)
+            ):
                 merged.update(row["changes"])
         return merged
 
