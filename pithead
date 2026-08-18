@@ -64,6 +64,13 @@ readonly FIRST_RUN_MARKER=".pithead-first-run-done"
 # ${USER:-$(id -un)}: USER is a login-session convention, not a guarantee — systemd services and
 # containers may run without it, and set -u turns the reference into a fatal error at source time.
 readonly REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
+# Where operator messages send a reader for the long version (#1024). A release bundle carries the
+# CLI, the compose file, the config files and cosign.pub — deliberately no docs/, so a message that
+# names a repo path resolves to nothing on the installs that make up most of the fleet. Point at the
+# published copy instead: `main` is the released-only branch, so it is the documentation for the
+# version an operator is actually running. Bare paths are still fine in COMMENTS, which only ever
+# get read inside a checkout that has them.
+readonly DOCS_URL="https://github.com/p2pool-starter-stack/pithead/blob/main"
 
 # Non-root uid:gid the BUILT images run their main process as (#255). pithead owns the data dirs,
 # so it chowns each service's bind-mount to this id to match the in-image USER. Tor is the
@@ -161,7 +168,7 @@ explain_subnet_collision() {
         sub="$(env_get NETWORK_SUBNET 2>/dev/null || true)"
         [ -n "$sub" ] || sub="172.28.0.0/24"
         warn "Docker refused the stack's bridge subnet ($sub): it overlaps a network already on this host."
-        warn "Pick a free /24 and set it in ${CONFIG_FILE:-config.json} — e.g.  \"network\": { \"subnet\": \"172.30.0.0/24\" }  — then re-run '$0 apply' && '$0 up' (see docs/configuration.md, network.subnet)."
+        warn "Pick a free /24 and set it in ${CONFIG_FILE:-config.json} — e.g.  \"network\": { \"subnet\": \"172.30.0.0/24\" }  — then re-run '$0 apply' && '$0 up' (see $DOCS_URL/docs/configuration.md, network.subnet)."
         ;;
     esac
 }
@@ -600,7 +607,7 @@ verify_release_images() {
         return 0
     fi
     cosign_available ||
-        error "cosign.pub is present but docker is not available to run the verifier — refusing an unverified pull. Install Docker (see the Prerequisites in the docs) and re-run '$0'."
+        error "cosign.pub is present but docker is not available to run the verifier — refusing an unverified pull. Install Docker ($DOCS_URL/docs/getting-started.md#1-prerequisites) and re-run '$0'."
     # The 5 first-party images, verified by the exact digest compose pins them to (#451/#461).
     local suffix repo sha image out
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
@@ -2669,7 +2676,7 @@ announce_local_miner() {
     else
         log "  • Stratum password: none set (any password is accepted)"
     fi
-    log "  RigForge compiles/tunes XMRig and owns all host tuning (HugePages/GRUB/MSR) — Pithead does not. See docs/workers.md#mine-on-the-stack-host-itself."
+    log "  RigForge compiles/tunes XMRig and owns all host tuning (HugePages/GRUB/MSR) — Pithead does not. See $DOCS_URL/docs/workers.md#mine-on-the-stack-host-itself."
 }
 
 # Surface the stratum access-password (#152) so the operator can configure each rig's 'pass'.
@@ -2679,7 +2686,7 @@ announce_stratum_auth() {
     local sp
     sp=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
     [ -n "$sp" ] || return 0
-    log "Stratum authentication is ON: every rig must connect with pass \"$sp\" (set it as the xmrig/RigForge stratum password). See docs/workers.md#authentication."
+    log "Stratum authentication is ON: every rig must connect with pass \"$sp\" (set it as the xmrig/RigForge stratum password). See $DOCS_URL/docs/workers.md#authentication."
 }
 
 # --- local miner on the appliance (#796) ----------------------------------------------------
@@ -3655,7 +3662,7 @@ Maintenance:
                             wizard mode), validates the answers host-side, then runs setup.
                             A pre-seeded config.json skips the form; --cli runs the terminal
                             wizard instead. The one-time token prints here; five wrong tries
-                            mint a fresh one. See docs/dev/dual-distribution-plan.md § phase 3.
+                            mint a fresh one. See $DOCS_URL/docs/appliance.md.
 
   load-images               Load the baked container-image archives (/opt/pithead/images)
                             into the engine when their content changed since the last load.
@@ -3697,7 +3704,7 @@ Maintenance:
                             systemd path unit when dashboard.control.enabled is true.
 
   render-quadlet [--env FILE] [--out DIR]
-                            Render Podman Quadlet units (the appliance runtime, #77) from a
+                            Render Podman Quadlet units (the appliance runtime) from a
                             rendered .env — the second render target beside docker-compose.
                             Defaults: --env .env, --out ./quadlet. Refuses local-node profiles
                             until their units are bench-proven (phase 2). The os/quadlet/
@@ -3719,7 +3726,7 @@ Contradictory chains (e.g. 'up down', duplicates, anything after 'down') are
 rejected before anything runs.
 
 Tab-completion: 'source pithead-completion.bash' (bash; zsh via bashcompinit) —
-see docs/operations.md.
+see $DOCS_URL/docs/operations.md.
 
 Workflow: edit config.json, then run '$0 apply'.
 EOF
@@ -3982,7 +3989,7 @@ check_stratum_exposure() {
     pub="$(host_public_ips)"
     pub="${pub//$'\n'/, }"
     if [ -n "$pub" ]; then
-        msg="This host appears to have a public IP ($pub). The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See docs/workers.md#firewall."
+        msg="This host appears to have a public IP ($pub). The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See $DOCS_URL/docs/workers.md#firewall."
         if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
     else
         [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :$port isn't directly internet-exposed."
@@ -4157,7 +4164,7 @@ check_stratum_listening() {
     if ss -Hltn 2>/dev/null | grep -q ":$port "; then
         dr_ok "Stratum :$port is listening — workers can connect."
     else
-        dr_fail "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and docs/workers.md."
+        dr_fail "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and $DOCS_URL/docs/workers.md."
     fi
     return 0
 }
@@ -4840,7 +4847,7 @@ wizard_print_pointer() {
     echo "That's the core config — everything else (ports, XvB, alerts, energy pricing, per-worker"
     echo "overrides, ...) keeps its default. Want on-chain payout confirmation, a per-kWh cost, or"
     echo "per-worker overrides? Set monero.view_key / dashboard.energy.cost_per_kwh / workers.list in"
-    echo "$CONFIG_FILE and run '$0 apply' — see docs/configuration.md, or use the dashboard's config editor."
+    echo "$CONFIG_FILE and run '$0 apply' — see $DOCS_URL/docs/configuration.md, or use the dashboard's config editor."
 }
 
 # Classify a Monero MAINNET address:
@@ -8637,17 +8644,13 @@ apply() {
     local apply_marker="${ENV_FILE}.apply-incomplete" incomplete=0
     [ -f "$apply_marker" ] && incomplete=1
 
-    local destructive=0 caddy_changed=0 wallet_keys=() line flag msg old new
+    local destructive=0 caddy_changed=0 caddy_before="" caddy_had=0 wallet_keys=() line flag msg old new
     if [ "${#changed[@]}" -gt 0 ]; then
         echo ""
         log "The following changes will be applied:"
         for key in "${changed[@]}"; do
             old=$(env_get_file "$ENV_FILE" "$key")
             new=$(env_get_file "$newenv" "$key")
-            # DASHBOARD_CONTROL_ENABLED rides along (#33): the Caddyfile always renders the
-            # X-Auth-User header_up now, but a pre-upgrade caddy may still run without it —
-            # restart caddy at the moment the audit actor starts to matter.
-            case "$key" in HOST_IP | HOST_PORT | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64 | DASHBOARD_ONION_ENABLED | DASHBOARD_CONTROL_ENABLED) caddy_changed=1 ;; esac
             # Payout-wallet change (#375): remember WHICH wallet keys change for the typed
             # confirmation below — one prompt per key, so a Monero+Tari double change can't
             # ride through on a single typed prefix.
@@ -8701,7 +8704,24 @@ apply() {
         mv "$newenv" "$ENV_FILE"
         provision_node_onions # #103: a node that just went local needs its onion before it starts
         inject_service_configs
+        # Whether caddy needs a restart is decided by COMPARING the rendered file, never by a list
+        # of keys someone has to remember to extend (#1052). The list had drifted:
+        # dashboard.expose_public_ip was missing from it, so turning OFF the opt-in that serves the
+        # dashboard on a globally-routable address re-rendered the Caddyfile without its bind lines
+        # and left caddy holding the wildcard listener — the operator sees the setting saved, sees
+        # the file change, and the box stays exposed.
+        #
+        # An absent previous file is a fresh install: compose starts caddy on the new one below, so
+        # there is no old configuration to displace. Emptiness is not absence — a zero-byte file
+        # left by a crashed render is a box whose caddy serves nothing, and that wants the restart.
+        if [ -f "Caddyfile" ]; then
+            caddy_had=1
+            caddy_before=$(cat "Caddyfile")
+        fi
         generate_caddyfile
+        if [ "$caddy_had" -eq 1 ] && [ "$caddy_before" != "$(cat "Caddyfile" 2>/dev/null)" ]; then
+            caddy_changed=1
+        fi
     else
         rm -f "$newenv"
         if [ "$incomplete" -eq 0 ]; then
