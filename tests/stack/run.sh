@@ -1666,7 +1666,8 @@ echo "== unit: generate_caddyfile never publishes or binds a globally-routable a
 # on the bench), and it matches on Host content, never on which interface a connection arrived on
 # — so a client reaching the box on the global address only has to send a Host header naming an
 # address that IS listed. `bind` is the actual boundary. Addresses below are the real set from the
-# physical appliance: LAN v4, two podman bridge gateways, a GLOBAL v6 (2605:) and a ULA (fd1c:).
+# physical appliance, written with reserved stand-ins: LAN v4, two podman bridge gateways, a
+# globally-scoped v6 (2001:db8::/32, RFC 3849) and a ULA (fd00::/8).
 _caddy_appliance() { # $1 = value for DASHBOARD_EXPOSE_PUBLIC_IP
     # shellcheck disable=SC1090  # STACK path is dynamic by design
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
@@ -1682,7 +1683,7 @@ _caddy_appliance() { # $1 = value for DASHBOARD_EXPOSE_PUBLIC_IP
 # shellcheck disable=SC1090  # STACK path is dynamic by design
 caddy_default="$(_caddy_appliance false)"
 case "$caddy_default" in
-*2605:*) bad "the global v6 is not published as a site" "2605: appears in the Caddyfile" ;;
+*2001:db8:*) bad "the global v6 is not published as a site" "the global address appears in the Caddyfile" ;;
 *) ok "the global v6 is not published as a site" ;;
 esac
 assert_contains "the LAN address is still published" "$caddy_default" "192.168.1.10"
@@ -1692,7 +1693,7 @@ assert_contains "bind keeps loopback for the host-networked dashboard" "$caddy_d
 # The bind line is the boundary — it specifically must not carry the global address.
 bindline=$(printf '%s' "$caddy_default" | grep '^    bind ')
 case "$bindline" in
-*2605:*) bad "the bind line excludes the global v6" "global address present in: $bindline" ;;
+*2001:db8:*) bad "the bind line excludes the global v6" "global address present in: $bindline" ;;
 *) ok "the bind line excludes the global v6" ;;
 esac
 # The bind directive must stand ALONE on its line. `$(...)` strips trailing newlines, so emitting
@@ -1732,7 +1733,7 @@ caddy_pinned="$(
 )"
 assert_contains "a pinned dashboard.host still gets a bind" "$caddy_pinned" "    bind "
 case "$(printf '%s' "$caddy_pinned" | grep '^    bind ')" in
-*2605:*) bad "a pinned host does not reopen the global v6" "global address is bound" ;;
+*2001:db8:*) bad "a pinned host does not reopen the global v6" "global address is bound" ;;
 *) ok "a pinned host does not reopen the global v6" ;;
 esac
 
@@ -1791,7 +1792,7 @@ caddy_onion_https="$(
     is_appliance() { return 0; }
     appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
     appliance_mint_cert() { return 1; }
-    hostname() { printf '192.168.1.202 2605:59c8:cd7:ba08::1\n'; }
+    hostname() { printf '192.168.1.10 2001:db8::1\n'; }
     DASHBOARD_SECURE=true HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 \
         DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION=abcdefghij234567.onion \
         DASHBOARD_AUTH_USER=admin \
@@ -1803,6 +1804,15 @@ assert_eq "secure+onion+provisioned: the HTTPS onion vhost renders (3 site block
     "$(_site_count "$caddy_onion_https")" "3"
 assert_eq "secure+onion+provisioned: every site block binds — no unbound wildcard on :443" \
     "$(_bind_count "$caddy_onion_https")" "$(_site_count "$caddy_onion_https")"
+
+# Counting binds proves every block HAS one; it says nothing about the VALUE, and a widened bind
+# is the same exposure as a missing one. `bind 0.0.0.0 ::` on the onion blocks satisfies the count
+# assertion above exactly, and reopens every address #1021 closed. So pin what the onion vhosts
+# bind: the container-bridge gateway the Tor daemon dials them on, and nothing else. Both onion
+# blocks (plain HTTP and the HTTPS one on the .onion name) render from _onion_bind_line, so the
+# expected count is 2 — widening either one takes this to 0.
+assert_eq "secure+onion+provisioned: the onion vhosts bind the bridge gateway, not a wildcard" \
+    "$(printf '%s' "$caddy_onion_https" | grep -c '^    bind 172\.28\.0\.1$')" "2"
 # The same invariant on the binding-off side: a DIY host renders the same three blocks and binds
 # none of them, so there is still no mixed wildcard/specific pair.
 # shellcheck disable=SC1090  # STACK path is dynamic by design
@@ -1811,7 +1821,7 @@ caddy_onion_https_diy="$(
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
     set +e
     is_appliance() { return 1; }
-    hostname() { printf '192.168.1.202\n'; }
+    hostname() { printf '192.168.1.10\n'; }
     DASHBOARD_SECURE=true HOST_IP=box.lan NETWORK_PREFIX=172.28.0 \
         DASHBOARD_ONION_ENABLED=true DASHBOARD_ONION=abcdefghij234567.onion \
         DASHBOARD_AUTH_USER=admin \
@@ -1842,7 +1852,7 @@ caddy_insecure_onion_gw="$(
     set +e
     is_appliance() { return 0; }
     # The physical appliance set: LAN address plus BOTH podman bridge gateways, as documented above.
-    hostname() { printf '192.168.1.202 10.89.0.1 172.28.0.1\n'; }
+    hostname() { printf '192.168.1.10 10.89.0.1 172.28.0.1\n'; }
     DASHBOARD_SECURE=false HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 \
         DASHBOARD_ONION_ENABLED=true DASHBOARD_AUTH_USER=admin \
         DASHBOARD_AUTH_HASH_B64="$(printf 'x' | openssl base64 -A)" \
