@@ -9305,6 +9305,41 @@ assert_eq "explicit false is respected" "$(jq -r '.tor.auto_heal' "$ADSB/config.
 printf '{"tor":{"data_dir":"/x"}}' >"$ADSB/config.json"
 PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
 assert_eq "other tor keys survive" "$(jq -r '.tor.data_dir' "$ADSB/config.json")" "/x"
+
+# dashboard.control.enabled had NO coverage, which is how #1066 shipped. The appliance turns the
+# control channel on because it has no other way in — but only behind a login, because an
+# unauthenticated config editor can change the payout wallet and run `apply`, which is exactly
+# what parse_and_validate_config refuses. The wizard's strip_defaults drops any answer equal to
+# the reference default, and the reference has control.enabled false, so the key is absent from
+# EVERY submission: injecting unconditionally built the forbidden pair on the "No login" answer
+# and dead-ended first boot after the operator was told provisioning had started.
+printf '{"dashboard":{"auth":{"password":"a-real-password"}}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "a password present -> the control channel is turned on" "$(jq -r '.dashboard.control.enabled' "$ADSB/config.json")" "true"
+printf '{"dashboard":{"auth":{"password":""}}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "no password -> the control channel is NOT turned on (#1066)" "$(jq -r '.dashboard.control.enabled // "absent"' "$ADSB/config.json")" "absent"
+printf '{"dashboard":{"control":{"enabled":false},"auth":{"password":"a-real-password"}}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "an explicit control.enabled false is respected" "$(jq -r '.dashboard.control.enabled' "$ADSB/config.json")" "false"
+# The whole first-boot sequence for the documented "No login" answer, in the order the appliance
+# runs it. The invariant is the one the validator enforces: this machine must never hand itself a
+# config carrying an enabled control channel and no password.
+mkdir -p "$ADSB/spool"
+printf 'none' >"$ADSB/spool/auth-mode"
+printf '{"monero":{"wallet_address":"x"},"dashboard":{"auth":{"username":"admin"}}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" ensure_appliance_dashboard_password "$ADSB/spool" >/dev/null 2>&1
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "\"No login\" leaves the password empty, as asked" "$(jq -r '.dashboard.auth.password // ""' "$ADSB/config.json")" ""
+assert_eq "\"No login\" never produces the pair the validator refuses (#1066)" \
+    "$(jq -r 'if (.dashboard.control.enabled == true) and ((.dashboard.auth.password // "") == "") then "forbidden-pair" else "ok" end' "$ADSB/config.json")" "ok"
+# ...and the same sequence WITH a login still ends up configurable, which is the whole reason the
+# appliance turns the channel on: no shell, no ssh, no other way to change a payout address.
+rm -f "$ADSB/spool/auth-mode"
+printf '{"monero":{"wallet_address":"x"},"dashboard":{"auth":{"username":"admin"}}}' >"$ADSB/config.json"
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" ensure_appliance_dashboard_password "$ADSB/spool" >/dev/null 2>&1
+PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
+assert_eq "a generated login leaves the machine configurable" "$(jq -r '.dashboard.control.enabled' "$ADSB/config.json")" "true"
 rm -rf "$ADSB"
 unset ADSB
 
