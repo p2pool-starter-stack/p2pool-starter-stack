@@ -10565,6 +10565,7 @@ assert_eq "identical configs -> media_config_identical true" "$rc" "0"
 rc=$(
     export PITHEAD_MEDIA_BIN="$MC/pithead"
     source "$ROOT/os/overlay/pithead-media-config"
+    # shellcheck disable=SC2034 # read by the sourced media_config_* functions, not directly here
     SECRET_PATHS_JSON=$(_secret_paths_json)
     media_config_identical "$MC/good.json" "$MC/changed.json"
     echo $?
@@ -10768,6 +10769,124 @@ run_hint() {
 assert_contains "404 signature triggers the --fresh-index remedy" "$(run_hint 'E: Failed to fetch ... 404  Not Found')" "--fresh-index"
 assert_contains "'Unable to fetch' signature triggers the remedy" "$(run_hint 'E: Unable to fetch some archives, maybe run apt-get update')" "--fresh-index"
 assert_eq "an unrelated failure prints no hint" "$(run_hint 'E: some other build error')" ""
+
+echo "== unit: pithead-ssh-host-keys — per-machine host key on /data, generated once (#894/#980) =="
+# Real ssh-keygen against a sandboxed key dir (PITHEAD_SSH_HOST_KEYS_DIR — the same env-seam
+# shape pithead-machine-id carries). chown is PATH-stubbed: the suite is not root, and ownership
+# on the box is systemd's root context, not logic this tier can prove. stdin is /dev/null on
+# every run — the systemd condition the wedge-recovery case below depends on.
+SHK="$SANDBOX/ssh-host-keys"
+mkdir -p "$SHK/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$SHK/bin/chown"
+chmod +x "$SHK/bin/chown"
+shk_key="$SHK/data-ssh/ssh_host_ed25519_key"
+shk_run() {
+    (
+        export PATH="$SHK/bin:$PATH" PITHEAD_SSH_HOST_KEYS_DIR="$SHK/data-ssh"
+        sh "$ROOT/os/overlay/pithead-ssh-host-keys" </dev/null 2>&1
+    )
+}
+out=$(shk_run)
+assert_rc "first run on an empty /data generates the key" "$?" "0"
+assert_contains "generation is announced (a silent identity change is the bug class)" "$out" "generated a new host key"
+shk_fp1=$(ssh-keygen -lf "$shk_key" 2>/dev/null | awk '{print $2}')
+[ -n "$shk_fp1" ] && ok "the generated key is a loadable ed25519 key ($shk_fp1)" ||
+    bad "the generated key is a loadable ed25519 key" "ssh-keygen -lf failed on $shk_key"
+assert_eq "key dir is owner-only (700)" "$(stat -c '%a' "$SHK/data-ssh" 2>/dev/null || stat -f '%Lp' "$SHK/data-ssh")" "700"
+assert_eq "private key is owner-only (600)" "$(stat -c '%a' "$shk_key" 2>/dev/null || stat -f '%Lp' "$shk_key")" "600"
+assert_eq "public key is world-readable (644)" "$(stat -c '%a' "$shk_key.pub" 2>/dev/null || stat -f '%Lp' "$shk_key.pub")" "644"
+# Idempotence IS the identity contract (#894): a second start must find the key and change
+# NOTHING — a regeneration here is exactly the host-key churn an A/B update must never cause.
+out=$(shk_run)
+assert_rc "second run exits 0" "$?" "0"
+assert_not_contains "second run regenerates nothing" "$out" "generated"
+assert_eq "second run leaves the key byte-identical" "$(ssh-keygen -lf "$shk_key" | awk '{print $2}')" "$shk_fp1"
+# Wedge recovery: an interrupted prior run leaves an empty key file (+ stale .pub). ssh-keygen
+# prompts before overwriting an existing path, and with stdin on /dev/null that prompt reads EOF
+# and refuses — the script must clear the partial file first or sshd wedges forever.
+: >"$shk_key"
+out=$(shk_run)
+assert_rc "a stale empty key file is regenerated, not wedged on the overwrite prompt" "$?" "0"
+shk_fp2=$(ssh-keygen -lf "$shk_key" 2>/dev/null | awk '{print $2}')
+[ -n "$shk_fp2" ] && ok "recovery produced a loadable key again" ||
+    bad "recovery produced a loadable key again" "ssh-keygen -lf failed on $shk_key"
+
+echo "== unit: pithead-mount-generator — /data + ESP follow the BOOTED disk, never a label (#926/#980) =="
+# The generator against staged mountinfo files (PITHEAD_MOUNTINFO seam; GENDIR is already an
+# argument). The staged lines keep the real shape — surrounding mounts, optional fields before
+# the "-" separator — so the awk root-line/source extraction runs against what a kernel writes.
+MG="$SANDBOX/mount-generator"
+mkdir -p "$MG"
+mg_run() { # $1 mountinfo file, $2 gendir
+    (
+        export PITHEAD_MOUNTINFO="$1"
+        sh "$ROOT/os/overlay/pithead-mount-generator" "$2"
+    )
+}
+cat >"$MG/mi-sda" <<'EOF'
+24 30 0:22 / /proc rw,nosuid,nodev,noexec,relatime shared:5 - proc proc rw
+29 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw,stripe=32
+32 29 8:4 / /data rw,noatime shared:2 - ext4 /dev/sda4 rw
+EOF
+mg_run "$MG/mi-sda" "$MG/gen-sda"
+assert_rc "generator succeeds on a /dev/sda2 root" "$?" "0"
+mg_data=$(cat "$MG/gen-sda/data.mount" 2>/dev/null)
+mg_esp=$(cat "$MG/gen-sda/boot-efi.mount" 2>/dev/null)
+assert_contains "data.mount is partition 4 OF THE BOOT DISK" "$mg_data" "What=/dev/sda4"
+assert_contains "data.mount mounts /data" "$mg_data" "Where=/data"
+assert_contains "data.mount is ext4" "$mg_data" "Type=ext4"
+assert_not_contains "data.mount never mounts by label" "$mg_data" "LABEL"
+assert_contains "boot-efi.mount is partition 1 of the boot disk" "$mg_esp" "What=/dev/sda1"
+assert_contains "boot-efi.mount mounts /boot/efi" "$mg_esp" "Where=/boot/efi"
+assert_contains "the ESP mount is root-only (RAUC boot state lives there)" "$mg_esp" "Options=umask=0077"
+assert_contains "the data mount orders before local-fs.target" "$mg_data" "Before=local-fs.target"
+for u in data.mount boot-efi.mount; do
+    if [ "$(readlink "$MG/gen-sda/local-fs.target.requires/$u")" = "../$u" ]; then
+        ok "$u is required by local-fs.target (the boot waits for it)"
+    else
+        bad "$u is required by local-fs.target" "missing or wrong symlink"
+    fi
+done
+# nvme/mmc naming: the partition number strips AND the 'p' separator comes back on the
+# partition paths (nvme0n1p2 -> disk nvme0n1 -> partitions nvme0n1p4 / nvme0n1p1).
+printf '29 1 259:2 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw\n' >"$MG/mi-nvme"
+mg_run "$MG/mi-nvme" "$MG/gen-nvme"
+assert_contains "an nvme root keeps the p separator: data" "$(cat "$MG/gen-nvme/data.mount")" "What=/dev/nvme0n1p4"
+assert_contains "an nvme root keeps the p separator: ESP" "$(cat "$MG/gen-nvme/boot-efi.mount")" "What=/dev/nvme0n1p1"
+# A root line with NO optional fields (the "-" comes right after the options) still parses —
+# and vda-style names get no separator (vda2 -> vda4).
+printf '29 1 254:2 / / rw,relatime - ext4 /dev/vda2 rw\n' >"$MG/mi-vda"
+mg_run "$MG/mi-vda" "$MG/gen-vda"
+assert_contains "a no-optional-fields root line parses (vda2 -> vda4)" "$(cat "$MG/gen-vda/data.mount")" "What=/dev/vda4"
+# A container/unexpected root (source is not /dev/*) generates NOTHING rather than guessing.
+printf '29 1 0:35 / / rw,relatime - overlay overlay rw\n' >"$MG/mi-ovl"
+mg_run "$MG/mi-ovl" "$MG/gen-ovl"
+assert_rc "a non-/dev root exits 0 (a generator must not fail the boot)" "$?" "0"
+assert_eq "a non-/dev root generates no units" "$([ -e "$MG/gen-ovl" ] || echo none)" "none"
+
+echo "== unit: os/rauc/loop-wait.sh — the partition wait demands block devices and polls its budget =="
+# The negative half of the contract — all a non-root tier can prove: absent nodes and
+# regular-file impostors both exhaust the poll and return 1. sleep/udevadm are function-stubbed
+# so the 25-poll budget runs instantly. The positive half (real nodes appearing) runs for real
+# on every image build — mkimage.sh and verify-image.sh both call this.
+LW="$SANDBOX/loop-wait"
+mkdir -p "$LW"
+lw_run() { # $1 device path
+    (
+        # shellcheck disable=SC1091  # path is dynamic by design
+        source "$ROOT/os/rauc/loop-wait.sh"
+        udevadm() { :; }
+        sleep() { echo x >>"$LW/sleeps"; }
+        wait_loop_partitions "$1"
+    )
+}
+: >"$LW/sleeps"
+lw_run "$LW/loop0"
+assert_rc "nodes that never appear -> rc 1" "$?" "1"
+assert_eq "the wait polls its full 25-try budget, not a single-shot check" "$(wc -l <"$LW/sleeps" | tr -d ' ')" "25"
+touch "$LW/loop0p1" "$LW/loop0p2"
+lw_run "$LW/loop0"
+assert_rc "regular files at p1/p2 do not satisfy the wait — block devices required" "$?" "1"
 
 # ---------------------------------------------------------------------------
 echo ""
