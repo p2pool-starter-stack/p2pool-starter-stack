@@ -113,7 +113,7 @@ test('chart range buttons include All, active on the default full-history view (
 test('chart legend renders a toggle for every layer, including the marker datasets (#652)', () => {
     const html = renderApp();
     for (const label of ['P2Pool (routed)', 'XvB (routed)', 'Shares', 'Events', 'Raffle wins']) {
-        assert.match(html, new RegExp(`legend-item[^>]*>.*?${label.replace(/[()]/g, '\\$&')}</button>`),
+        assert.match(html, new RegExp(`legend-item[^>]*>.*?${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}</button>`),
             `missing legend toggle: ${label}`);
     }
     // A hidden marker layer renders its button in the off state, like the line series do.

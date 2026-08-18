@@ -333,6 +333,12 @@ does not pin by digest each abort the upgrade before anything is pulled, and the
 the version it was on. The one and only way to end up unverified is an install older than the first
 signed release, which carries no `cosign.pub` at all — that case warns loudly and proceeds.
 
+If your install is still on **v1.18.1 or v1.19.0**, the upgrade refuses with *"cosign is not
+installed on the host"*. Those versions verify with a host binary rather than the container, and an
+upgrade is driven by the code the box is already running — so the fix has to happen on the box once,
+before it can move forward. See
+[Releasing › Upgrading an install older than v1.19.1](dev/releasing.md#upgrading-an-install-older-than-v1191).
+
 Run `./pithead version` to see what is currently installed before and after an upgrade.
 
 ### Switching a source checkout to release images
