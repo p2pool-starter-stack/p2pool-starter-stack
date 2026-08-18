@@ -1911,6 +1911,36 @@ host_public_ips() {
 # warn only when the host has a public IP AND stratum listens on all interfaces (the default bind).
 # Home/NAT hosts (no public IP on an interface) and hosts that narrowed p2pool.stratum_bind stay
 # quiet in setup. $1 = "setup" (emit via warn, only on exposure) or "doctor" (emit OK/WARN/skip).
+check_stratum_exposure() {
+    local mode="$1" bind pub msg port
+    bind="${STRATUM_BIND:-}"
+    if [ -z "$bind" ] && [ -f "${ENV_FILE:-.env}" ]; then bind="$(env_get STRATUM_BIND 2>/dev/null || true)"; fi
+    [ -n "$bind" ] || bind="0.0.0.0"
+    port=$(stratum_port_effective)
+
+    if ! command -v ip >/dev/null 2>&1; then
+        [ "$mode" = doctor ] && dr_info "Skipped public-IP exposure check (no 'ip' command; Linux-only)."
+        return 0
+    fi
+    case "$bind" in
+    0.0.0.0 | "") ;; # all interfaces — the exposed case
+    *)
+        [ "$mode" = doctor ] && dr_ok "Stratum :$port bound to $bind (not all interfaces) — not publicly exposed."
+        return 0
+        ;;
+    esac
+
+    pub="$(host_public_ips)"
+    pub="${pub//$'\n'/, }"
+    if [ -n "$pub" ]; then
+        msg="This host appears to have a public IP ($pub). The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See docs/workers.md#firewall."
+        if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
+    else
+        [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :$port isn't directly internet-exposed."
+    fi
+    return 0
+}
+
 # Doctor check (#33): do the installed control units point at THIS install?
 # The dashboard writes control requests into its own install's spool and a systemd path unit
 # watches that spool. The unit names an absolute path and is box-global, so it can end up naming a
@@ -1943,36 +1973,6 @@ check_control_units() {
     else
         dr_ok "Control runner units target this install."
     fi
-}
-
-check_stratum_exposure() {
-    local mode="$1" bind pub msg port
-    bind="${STRATUM_BIND:-}"
-    if [ -z "$bind" ] && [ -f "${ENV_FILE:-.env}" ]; then bind="$(env_get STRATUM_BIND 2>/dev/null || true)"; fi
-    [ -n "$bind" ] || bind="0.0.0.0"
-    port=$(stratum_port_effective)
-
-    if ! command -v ip >/dev/null 2>&1; then
-        [ "$mode" = doctor ] && dr_info "Skipped public-IP exposure check (no 'ip' command; Linux-only)."
-        return 0
-    fi
-    case "$bind" in
-    0.0.0.0 | "") ;; # all interfaces — the exposed case
-    *)
-        [ "$mode" = doctor ] && dr_ok "Stratum :$port bound to $bind (not all interfaces) — not publicly exposed."
-        return 0
-        ;;
-    esac
-
-    pub="$(host_public_ips)"
-    pub="${pub//$'\n'/, }"
-    if [ -n "$pub" ]; then
-        msg="This host appears to have a public IP ($pub). The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See docs/workers.md#firewall."
-        if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
-    else
-        [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :$port isn't directly internet-exposed."
-    fi
-    return 0
 }
 
 # True if the named container is currently running. State only, no sudo — safe for doctor.
