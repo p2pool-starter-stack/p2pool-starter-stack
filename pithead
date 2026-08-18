@@ -3662,7 +3662,7 @@ Maintenance:
                             wizard mode), validates the answers host-side, then runs setup.
                             A pre-seeded config.json skips the form; --cli runs the terminal
                             wizard instead. The one-time token prints here; five wrong tries
-                            mint a fresh one. See docs/dev/dual-distribution-plan.md § phase 3.
+                            mint a fresh one. See $DOCS_URL/docs/appliance.md.
 
   load-images               Load the baked container-image archives (/opt/pithead/images)
                             into the engine when their content changed since the last load.
@@ -3704,7 +3704,7 @@ Maintenance:
                             systemd path unit when dashboard.control.enabled is true.
 
   render-quadlet [--env FILE] [--out DIR]
-                            Render Podman Quadlet units (the appliance runtime, #77) from a
+                            Render Podman Quadlet units (the appliance runtime) from a
                             rendered .env — the second render target beside docker-compose.
                             Defaults: --env .env, --out ./quadlet. Refuses local-node profiles
                             until their units are bench-proven (phase 2). The os/quadlet/
