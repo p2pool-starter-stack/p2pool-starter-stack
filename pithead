@@ -907,6 +907,8 @@ doctor() {
         fi
     fi
 
+    check_control_units
+
     # --- CPU: AVX2 (performance only) ---
     echo ""
     echo "CPU:"
@@ -1937,6 +1939,54 @@ check_stratum_exposure() {
         [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :$port isn't directly internet-exposed."
     fi
     return 0
+}
+
+# Doctor check (#33): do the installed control units point at THIS install?
+# The dashboard writes control requests into its own install's spool and a systemd path unit
+# watches that spool. The unit names an absolute path and is box-global, so it can end up naming a
+# different directory than the dashboard writes to — and when it does, nothing anywhere reports it:
+# requests pile up unread, and the config editor and one-click upgrade simply never complete. A
+# failed upgrade was enough to cause it in the field (#1070 fixed the ordering that did it; this
+# finds a box already stranded, which that fix by definition cannot reach — the channel it would
+# arrive through is the broken one).
+check_control_units() {
+    [ "$OS_TYPE" == "Linux" ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    echo ""
+    echo "Dashboard control channel:"
+    local unit_dir owner here spool
+    unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"
+    if [ "$(normalize_bool "$(env_get DASHBOARD_CONTROL_ENABLED)")" != "true" ]; then
+        dr_info "Disabled for this install — the dashboard cannot apply config changes or upgrade."
+        return 0
+    fi
+    owner=$(control_units_owner_dir)
+    here=$(pwd -P)
+    spool=$(env_get CONTROL_DIR)
+    # A versioned dir that `current` no longer names is a superseded rollback copy, not a
+    # stranded install: the units SHOULD name the live dir, and the dashboard writes there, not
+    # here. Verdicts about the control channel belong to the live install, so say what this dir
+    # is and stop. Same pattern update_current_symlink uses to recognise the layout (#455).
+    local _name _parent _live
+    _name=$(basename "$here")
+    _parent=$(dirname "$here")
+    if [[ "$_name" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -L "$_parent/current" ]; then
+        _live=$(cd "$_parent/current" 2>/dev/null && pwd -P)
+        if [ -n "$_live" ] && [ "$_live" != "$here" ]; then
+            dr_info "This is not the live install — '$_parent/current' points at $_live. Run doctor there to check its control channel."
+            return 0
+        fi
+    fi
+    if [ -z "$owner" ]; then
+        dr_fail "The control channel is enabled but no runner units are installed — the dashboard's config changes and one-click upgrades will never run, with no error shown. Fix: run './pithead apply' from this directory."
+    elif [ "$owner" != "$here" ]; then
+        dr_fail "The control runner units point at $owner, but this install is $here — the dashboard writes its requests here and nothing reads them, so config changes and one-click upgrades silently never run. Fix: run './pithead apply' from this directory."
+    elif [ -n "$spool" ] &&
+        ! grep -qsF "PathExistsGlob=$spool/requests/*.json" "$unit_dir/pithead-control.path"; then
+        dr_fail "The control runner watches a different spool than this install writes to ($spool) — requests are never picked up, with no error shown. Fix: run './pithead apply' from this directory."
+    else
+        dr_ok "Control runner units target this install."
+    fi
 }
 
 # True if the named container is currently running. State only, no sudo — safe for doctor.
@@ -5338,6 +5388,12 @@ apply() {
     else
         rm -f "$newenv"
         if [ "$incomplete" -eq 0 ]; then
+            # #33: converge the control-runner units BEFORE returning. A box whose units point at
+            # a dead install has an unchanged config by definition — the fault is in the unit
+            # files, not config.json — so returning here first made `apply` the one thing that
+            # could not repair it, while doctor was telling the operator to run exactly that.
+            # Idempotent and sudo-free when the units already match.
+            provision_control_runner
             log "No configuration changes detected. Nothing to apply."
             return 0
         fi
@@ -6671,6 +6727,25 @@ control_run_pending() {
     log "Processed $n control request(s)."
 }
 
+# Physical directory the installed control units name, or "" when there is no service unit or its
+# ExecStart is unparseable. One checkout has two spellings — the `current` symlink and the versioned
+# dir it points at (production units carry the versioned spelling) — so this resolves to a PHYSICAL
+# path; comparing the literal string would call our own unit foreign. A stranded unit usually names
+# a directory that no longer exists, so resolve the deepest existing ancestor and keep the rest
+# verbatim: the caller still gets a comparable, printable path instead of an empty answer.
+control_units_owner_dir() {
+    local unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}" owner_dir dir tail
+    owner_dir=$(sed -n 's|^ExecStart=\(/.*\)/pithead control-run-pending$|\1|p' \
+        "$unit_dir/pithead-control.service" 2>/dev/null | head -n 1)
+    [ -n "$owner_dir" ] || return 0
+    dir="$owner_dir" tail=""
+    while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
+        tail="/$(basename "$dir")$tail"
+        dir=$(dirname "$dir")
+    done
+    printf '%s' "$(cd "$dir" 2>/dev/null && pwd -P)$tail"
+}
+
 # Install (or remove) the systemd trigger for the runner (#33): a path unit that fires
 # `pithead control-run-pending` whenever a request file lands in the spool. Root, because `apply`
 # needs iptables/chown; the service is a FIXED ExecStart with no parameter from the container, so
@@ -6693,16 +6768,9 @@ provision_control_runner() {
             # it. If the unit's dir is gone, resolve the deepest existing ancestor and keep the
             # rest verbatim; an unparseable ExecStart is foreign (fail safe, leave it alone).
             if [ -e "$unit_dir/pithead-control.service" ]; then
-                local owner_dir dir tail
-                owner_dir=$(sed -n 's|^ExecStart=\(/.*\)/pithead control-run-pending$|\1|p' \
-                    "$unit_dir/pithead-control.service" | head -n 1)
-                dir="$owner_dir" tail=""
-                while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
-                    tail="/$(basename "$dir")$tail"
-                    dir=$(dirname "$dir")
-                done
-                if [ -z "$owner_dir" ] ||
-                    [ "$(cd "$dir" 2>/dev/null && pwd -P)$tail" != "$(pwd -P)" ]; then
+                local owner_dir
+                owner_dir=$(control_units_owner_dir)
+                if [ -z "$owner_dir" ] || [ "$owner_dir" != "$(pwd -P)" ]; then
                     log "Leaving the dashboard control runner units alone — they belong to another checkout."
                     return 0
                 fi
