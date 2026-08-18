@@ -572,12 +572,65 @@ def test_a_missing_key_falls_back_rather_than_crashing(monkeypatch, tmp_path):
     assert started["port"] == 8000
 
 
+class _Transport:
+    """Just enough transport to answer "what address did this arrive on"."""
+
+    def __init__(self, sockname):
+        self._sockname = sockname
+
+    def get_extra_info(self, name, default=None):
+        return self._sockname if name == "sockname" and self._sockname else default
+
+
+def _plain_request(host, sockname=("192.168.1.10", 80)):
+    """A :80 request claiming `host`, arriving on `sockname` — the two the redirect weighs."""
+    return make_mocked_request(
+        "GET", "/setup", headers={"Host": host}, transport=_Transport(sockname)
+    )
+
+
 async def test_plain_port_redirects_to_tls_keeping_the_host_used():
     # Someone typing a bare address lands on :80; a dead port there reads as a broken machine.
-    req = make_mocked_request("GET", "/setup", headers={"Host": "pithead.local"})
+    req = _plain_request("pithead.local")
     with pytest.raises(web.HTTPMovedPermanently) as exc:
         await wizard._redirect_to_tls(req)
     assert exc.value.location == "https://pithead.local/setup"
+
+
+async def test_plain_port_keeps_the_address_the_request_arrived_on():
+    # A bare LAN address is the other documented way in, and the socket proves the box owns it.
+    req = _plain_request("192.168.1.10")
+    with pytest.raises(web.HTTPMovedPermanently) as exc:
+        await wizard._redirect_to_tls(req)
+    assert exc.value.location == "https://192.168.1.10/setup"
+
+
+async def test_plain_port_refuses_to_bounce_setup_to_a_forged_host():
+    # The Host header belongs to whoever made the request. Honouring it turns :80 into an open
+    # redirector on the one screen where the operator types the dashboard password — reachable
+    # through a name that resolves here (rebinding, or a LAN whose DNS is not trustworthy), with
+    # the address bar still showing what they typed. It must land back on this machine.
+    req = _plain_request("evil.example")
+    with pytest.raises(web.HTTPMovedPermanently) as exc:
+        await wizard._redirect_to_tls(req)
+    assert exc.value.location == "https://192.168.1.10/setup"
+
+
+async def test_plain_port_redirect_survives_a_transport_that_cannot_say():
+    # Never leave the operator with a broken link: with no socket to fall back to, the documented
+    # mDNS name is the one address every pithead answers to.
+    req = _plain_request("evil.example", sockname=None)
+    with pytest.raises(web.HTTPMovedPermanently) as exc:
+        await wizard._redirect_to_tls(req)
+    assert exc.value.location == "https://pithead.local/setup"
+
+
+async def test_plain_port_redirect_brackets_an_ipv6_address():
+    # https://fd00::1/setup is not a URL; the brackets are what make it one.
+    req = _plain_request("[fd00::1]", sockname=("fd00::1", 80, 0, 0))
+    with pytest.raises(web.HTTPMovedPermanently) as exc:
+        await wizard._redirect_to_tls(req)
+    assert exc.value.location == "https://[fd00::1]/setup"
 
 
 # --- the credentials handoff ----------------------------------------------------------------
