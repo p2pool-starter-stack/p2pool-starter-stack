@@ -132,8 +132,13 @@ RUN chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
 # The built-in miner (#796): a pinned RigForge tree plus everything it needs, baked at image
 # build because nothing can be installed later — apt cannot run on the read-only root, and even
 # a rw-remount install leaves its /etc state (alternatives, ld.so.cache) on the volatile overlay
-# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.14.0 release tag
+# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.15.1 release
 # (by commit, not tag name, so a moved tag cannot change the bake); bump it release by release.
+# v1.15.1 and not v1.15.0: GitHub's releases/latest pointer still names v1.15.0, so RigForge's own
+# `upgrade --check` calls the newer patch a development build (rigforge#371) — but v1.15.1 is the
+# published release, it carries the API-reader fix that stopped a dead worker API aborting tune
+# and autotune sweeps outright, and it is what every rig in the field runs. Baking the older tree
+# would ship an appliance whose built-in miner is behind the workers beside it.
 # pithead-sync copies the tree to /data/rigforge every boot; `pithead local-miner` runs
 # its setup with RIGFORGE_APPLIANCE=1 when local_miner.enabled.
 #
@@ -144,7 +149,7 @@ RUN chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
 RUN apt-get install -y --no-install-recommends \
         git build-essential cmake libuv1-dev libssl-dev libhwloc-dev gettext-base python3 \
         linux-cpupower msr-tools
-ARG RIGFORGE_REF=a8840b3c8108ee6def9d850221a440f2fd355cf6
+ARG RIGFORGE_REF=60aa883901fc74ea39ed2f21962b8ba7f96d73ba
 RUN curl -fsSL -o /tmp/rigforge.tar.gz \
         "https://github.com/p2pool-starter-stack/rigforge/archive/${RIGFORGE_REF}.tar.gz" \
     && mkdir -p /opt/rigforge \
