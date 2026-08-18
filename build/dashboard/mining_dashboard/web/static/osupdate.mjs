@@ -179,13 +179,25 @@ export class OsUpdateControl extends Component {
         return;
       }
       this.setState({ phase: "idle", check: out });
+      return out;
     } catch (e) {
       this.fail(e);
     }
   }
 
   async download() {
-    const version = this.targetVersion();
+    // The host only downloads a target IT resolved: target.json is written in exactly one place,
+    // control_os_check. The idle pane offers Download off the passive update badge alone, so on a
+    // fresh appliance the first click posted a version the host had never checked, was refused,
+    // and the error pane's Retry re-posted the identical call — the first thing the feature ever
+    // does, failing forever. Resolve the target here when this flow has not checked yet; check()
+    // reports its own failure and returns nothing, which is the whole error path.
+    let checked = this.state.check;
+    if (!checked) {
+      checked = await this.check();
+      if (!checked) return;
+    }
+    const version = checked.version || this.targetVersion();
     if (!version) return;
     this.cancelled = false;
     this.setState({ phase: "downloading", progress: null, error: "" });

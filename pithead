@@ -10093,7 +10093,7 @@ control_os_download() { # <claimed-file> <id> <actor> <control-dir>
     fi
     proposed=$(jq -r '.version // ""' "$file")
     if [ "$proposed" != "$tag" ]; then
-        control_os_refuse "$cdir" "$id" "$actor" "os-download" rejected "requested version ${proposed:-none} is not the checked release ($tag) — reload the dashboard and retry."
+        control_os_refuse "$cdir" "$id" "$actor" "os-download" rejected "requested version ${proposed:-none} is not the checked release ($tag) — check for updates first, then retry."
         return 0
     fi
     # An equal version is nothing to update — refused before a byte moves, or a compromised
