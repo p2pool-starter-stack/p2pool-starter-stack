@@ -10826,41 +10826,102 @@ assert_eq "unarmable factory-reset does not reboot" "$([ -f "$rebooted" ] || ech
 
 echo "== unit: pithead-data-reset decides reformat-vs-skip fail-safe (wedged-/data recovery) =="
 # Source the boot script (functions only — its main is guarded) and drive data_reset_decision with
-# a stubbed mount/fsck, in a subshell so its set -u / defs never leak into the suite.
+# stubbed repair tools, in a subshell so its set -u / defs never leak into the suite.
+#
+# The stubs model each tool's REAL contract, because the old ones could not fail (#1086): `fsck` was
+# `exit 0` and the mount stub succeeded on its second call whatever had run in between, so "fsck
+# repairs the mount -> skip" was true of the stub and said nothing about the product. Here a
+# partition carries a damage level, each tool repairs only the damage it can, and mount succeeds only
+# once something actually repaired it — so the assertions below are about the escalation, not the
+# harness. REPAIRABLE_BY names the tool that fixes this partition: preen, e2fsck, backup, or none.
 DR="$SANDBOX/data-reset"
 mkdir -p "$DR/bin"
-# mount: MOUNT_MODE=ok always mounts; fail never; repair fails the first call then mounts (fsck fixed
-# it). A counter file makes 'repair' stateful across the two calls in data_mountable.
 cat >"$DR/bin/mount" <<'EOF'
 #!/usr/bin/env bash
-case "${MOUNT_MODE:-ok}" in
-  ok) exit 0 ;;
-  fail) exit 1 ;;
-  repair)
-    n=$(cat "${MOUNT_COUNTER:-/dev/null}" 2>/dev/null || echo 0)
-    echo $((n + 1)) >"${MOUNT_COUNTER:-/dev/null}" 2>/dev/null || true
-    [ "$n" -ge 1 ] && exit 0 || exit 1 ;;
+# Mounts when the partition was never damaged, or once the repair log says the right tool ran.
+[ "${REPAIRABLE_BY:-none}" = "healthy" ] && exit 0
+grep -qx "repaired" "${REPAIR_STATE:-/dev/null}" 2>/dev/null && exit 0
+exit 1
+EOF
+# fsck -p: preen repairs ONLY what needs no operator decision and refuses the rest by definition —
+# rc 8 with a "try an alternate superblock" hint is exactly what it does to the damage this issue is
+# about (#1062). It must never be able to repair a partition the real one could not.
+cat >"$DR/bin/fsck" <<'EOF'
+#!/usr/bin/env bash
+echo "fsck $*" >>"${REPAIR_LOG:-/dev/null}"
+[ "${REPAIRABLE_BY:-none}" = "preen" ] && { echo repaired >>"${REPAIR_STATE:-/dev/null}"; exit 1; }
+exit 8
+EOF
+# e2fsck -y: repairs what preen refused. With -b it rebuilds the primary superblock from a backup —
+# the only thing that saves a partition whose superblock is gone.
+cat >"$DR/bin/e2fsck" <<'EOF'
+#!/usr/bin/env bash
+echo "e2fsck $*" >>"${REPAIR_LOG:-/dev/null}"
+case " $* " in
+*" -b "*) [ "${REPAIRABLE_BY:-none}" = "backup" ] && { echo repaired >>"${REPAIR_STATE:-/dev/null}"; exit 1; } ;;
+*) [ "${REPAIRABLE_BY:-none}" = "e2fsck" ] && { echo repaired >>"${REPAIR_STATE:-/dev/null}"; exit 1; } ;;
 esac
+exit 8
+EOF
+# mke2fs -n computes the layout and writes nothing; this is the shape its backup list prints in.
+cat >"$DR/bin/mke2fs" <<'EOF'
+#!/usr/bin/env bash
+echo "mke2fs $*" >>"${REPAIR_LOG:-/dev/null}"
+printf 'Creating filesystem with 131072 4k blocks\nSuperblock backups stored on blocks:\n\t32768, 98304, 163840\n'
 EOF
 printf '#!/usr/bin/env bash\nexit 0\n' >"$DR/bin/umount"
-printf '#!/usr/bin/env bash\nexit 0\n' >"$DR/bin/fsck"
-chmod +x "$DR/bin/mount" "$DR/bin/umount" "$DR/bin/fsck"
-decide() { # $1 marker-file, $2 mount-mode
+chmod +x "$DR/bin/mount" "$DR/bin/umount" "$DR/bin/fsck" "$DR/bin/e2fsck" "$DR/bin/mke2fs"
+decide() { # $1 marker-file, $2 which tool can repair this partition (healthy|preen|e2fsck|backup|none)
     (
         export PATH="$DR/bin:$PATH"
-        export MOUNT_MODE="$2" # exported: the stubbed mount runs as a child process
-        export MOUNT_COUNTER="$DR/counter"
-        : >"$MOUNT_COUNTER"
+        export REPAIRABLE_BY="$2" # exported: the stubs run as child processes
+        export REPAIR_STATE="$DR/state" REPAIR_LOG="$DR/log"
+        : >"$REPAIR_STATE"
+        : >"$REPAIR_LOG"
         # shellcheck disable=SC1090
         source "$ROOT/os/overlay/pithead-data-reset"
         data_reset_decision "/dev/fake-data" "$1"
     )
 }
 touch "$DR/marker-present"
-assert_eq "marker present -> reformat-requested (even if /data would mount)" "$(decide "$DR/marker-present" ok)" "reformat-requested"
-assert_eq "no marker + /data mounts clean -> skip (fail-safe: never touch a healthy partition)" "$(decide "$DR/no-marker" ok)" "skip"
-assert_eq "no marker + /data wedged after fsck -> reformat-wedged (recovery)" "$(decide "$DR/no-marker" fail)" "reformat-wedged"
-assert_eq "no marker + fsck repairs the mount -> skip (recoverable /data is never wiped)" "$(decide "$DR/no-marker" repair)" "skip"
+assert_eq "marker present -> reformat-requested (even if /data would mount)" "$(decide "$DR/marker-present" healthy)" "reformat-requested"
+assert_eq "no marker + /data mounts clean -> skip (fail-safe: never touch a healthy partition)" "$(decide "$DR/no-marker" healthy)" "skip"
+assert_eq "no marker + preen repairs the mount -> skip (a dirty filesystem is not a lost one)" "$(decide "$DR/no-marker" preen)" "skip"
+# The defect (#1062): `fsck -p` refuses precisely the damage a full e2fsck recovers, so stopping
+# there sent a salvageable partition — wallets, onion keys, both chains — to mkfs.ext4 -F.
+assert_eq "no marker + only a full e2fsck can repair it -> skip, NOT a wipe" "$(decide "$DR/no-marker" e2fsck)" "skip"
+# The textbook case the issue reproduced: a corrupt primary superblock, recoverable only from a
+# backup, which `fsck -p` reports by printing the very command that would have saved it.
+assert_eq "no marker + only a backup superblock can repair it -> skip, NOT a wipe" "$(decide "$DR/no-marker" backup)" "skip"
+assert_eq "no marker + no repair mounts it -> reformat-wedged (the box would be bricked otherwise)" "$(decide "$DR/no-marker" none)" "reformat-wedged"
+# Escalation order: least destructive first, and every rung tried before the partition is erased.
+decide "$DR/no-marker" none >/dev/null
+dr_log="$(cat "$DR/log")"
+assert_contains "preen runs first" "$dr_log" "fsck -p -t ext4 /dev/fake-data"
+assert_contains "then a full e2fsck" "$dr_log" "e2fsck -y /dev/fake-data"
+assert_contains "then the backup superblocks mke2fs -n reports" "$dr_log" "e2fsck -y -b 32768 /dev/fake-data"
+assert_contains "the backup offsets are computed, never hardcoded" "$dr_log" "mke2fs -n /dev/fake-data"
+assert_eq "the backup retry is bounded, so a destroyed filesystem cannot grind forever" "$(grep -c 'e2fsck -y -b' "$DR/log")" "2"
+# A partition the FIRST tool fixes must not be handed to the later, heavier ones.
+decide "$DR/no-marker" preen >/dev/null
+assert_not_contains "a preen-repaired partition never reaches e2fsck" "$(cat "$DR/log")" "e2fsck"
+
+echo "== unit: pithead-data-reset leaves evidence that /data was wiped (#1062) =="
+# A reformatted box and a factory-fresh one both boot into the wizard, so without this the operator
+# reads a wipe as "it reset itself" and never learns the disk may have been salvageable. The ESP is
+# the only writable thing a /data reformat leaves standing.
+DRW="$SANDBOX/data-reset-wipe"
+mkdir -p "$DRW/esp"
+(
+    # shellcheck disable=SC1090
+    source "$ROOT/os/overlay/pithead-data-reset"
+    record_wipe "$DRW/esp" "unrecoverable /data reinitialized — everything on it was lost"
+    record_wipe "" "an ESP that would not mount must never block the recovery"
+)
+assert_eq "the wipe is recorded on the ESP" "$([ -f "$DRW/esp/pithead-data-wiped" ] && echo present || echo absent)" "present"
+assert_contains "the record says what was lost" "$(cat "$DRW/esp/pithead-data-wiped")" "everything on it was lost"
+assert_contains "the record is timestamped" "$(cat "$DRW/esp/pithead-data-wiped")" "$(date -u +%Y-)"
+assert_eq "one wipe, one line" "$(wc -l <"$DRW/esp/pithead-data-wiped" | tr -d ' ')" "1"
 
 echo "== unit: pithead-data-reset boot_disk_part resolves by PARTLABEL on the boot disk (#926) =="
 # Stubbed findmnt + lsblk (the same PATH-stub shape pithead's own prefill_from_previous_install

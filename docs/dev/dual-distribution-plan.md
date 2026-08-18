@@ -223,7 +223,9 @@ cut, and the installer smoke rides the same checklist.
   run against a mounted `/data`, so it drops a marker on the ESP (which survives the wipe)
   and reboots into `os/overlay/pithead-data-reset`, which reformats the partition one layer
   under the running system. That executor doubles as the recovery path for a `/data` that
-  will not mount — the only way back on a shell-less release image. Reflash keeps data; the
+  will not mount **after every repair** — `fsck -p`, a full `e2fsck`, then the backup
+  superblocks — the only way back on a shell-less release image, and it records the wipe on
+  the ESP so a reinitialized box is not mistaken for a factory-fresh one. Reflash keeps data; the
   wizard offers tier 1 before tier 2.
 - Hugepage reservation baked in at boot — **load-bearing, not perf polish** (spike
   finding): the RandomX dataset (~2.1 GiB) lives in hugetlbfs outside the memory

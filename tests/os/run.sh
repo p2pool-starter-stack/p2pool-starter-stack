@@ -3171,8 +3171,17 @@ phase_reset() {
         bad "SSH host-key fingerprint survived factory-reset (before: $fp_before, after: ${fp_after:-none})"
     fi
 
-    # ---- leg 2: a wedged /data must self-heal, not brick ----------------------------------
-    info "leg 2 — a corrupt data-partition superblock must drive the wedged-/data recovery, not a brick"
+    # ---- leg 2: a wedged /data must be REPAIRED, not erased --------------------------------
+    info "leg 2 — a corrupt data-partition superblock must be repaired, with /data still there afterwards"
+    # A sentinel standing in for what /data actually holds: the wallets, the Tor onion private keys,
+    # the dashboard database and both synced chains. Until #1062 this leg asked only whether the box
+    # came back to the wizard, which a full reformat satisfies — so a green battery certified the
+    # data loss (#1087). The question is not "did it boot", it is "is the irreplaceable thing still
+    # there". A reformat cannot pass this.
+    _ssh "mkdir -p /data/pithead && printf 'IRREPLACEABLE-KEY-MATERIAL\n' > /data/pithead/.battery-sentinel && sync" || {
+        bad "could not plant the /data survival sentinel"
+        return
+    }
     _ssh "systemctl poweroff" 2>/dev/null || true
     tries=0
     while [ "$tries" -lt 60 ]; do
@@ -3223,9 +3232,23 @@ phase_reset() {
         return
     fi
     if _wait_setup_page 120; then
-        ok "wedged /data recovered into the wizard — the box is usable again"
+        ok "the box came back usable after the corrupt superblock"
     else
         bad "no wizard gate after the wedged-/data recovery — the box did not come back usable"
+    fi
+    # The assertion that a reformat cannot satisfy: `fsck -p` refuses a corrupt primary superblock,
+    # so before #1062 this partition was handed to mkfs.ext4 -F and the sentinel died with it.
+    if [ "$(_ssh "cat /data/pithead/.battery-sentinel 2>/dev/null" | tr -d '\r')" = "IRREPLACEABLE-KEY-MATERIAL" ]; then
+        ok "/data SURVIVED the corrupt superblock — it was repaired, not erased (#1062)"
+    else
+        bad "DATA LOSS — /data was reinitialized rather than repaired; a real box loses its wallets and onion keys here (#1062)"
+    fi
+    # And when a reformat genuinely is the only way back, the operator must be able to tell that
+    # from a machine that was never set up. Absent here precisely because nothing was wiped.
+    if _ssh "test -e /boot/efi/pithead-data-wiped" 2>/dev/null; then
+        bad "a repaired /data still recorded a wipe on the ESP — the evidence would cry wolf"
+    else
+        ok "no wipe recorded on the ESP, because nothing was wiped"
     fi
 }
 

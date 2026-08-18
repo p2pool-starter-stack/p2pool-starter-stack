@@ -376,6 +376,13 @@ pithead factory-reset
 Both ask you to type the reset name before they do anything. The machine reboots itself
 into setup when the reset is done.
 
+A machine that comes back to the setup wizard **without** being asked to is a different
+event: the data area would not mount, and the machine repaired it or, failing that,
+reinitialized it to get itself back. Repair is tried first and goes as far as rebuilding
+the filesystem's superblock from a backup copy — a data area is only ever erased when
+nothing could mount it. When that does happen the machine writes a dated note on its boot
+partition, so a wiped machine can be told apart from one that was never set up.
+
 ## Recovering from a backup
 
 Fresh flash, restore, done — if the machine is gone (dead disk, stolen, dropped), a backup

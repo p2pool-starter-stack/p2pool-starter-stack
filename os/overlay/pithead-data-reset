@@ -10,12 +10,18 @@
 #      release image with root locked has no other way back; the alternative is a bricked box.
 #
 # The guard that matters: a data partition that mounts cleanly and carries no marker is NEVER
-# touched. We only ever reformat on an explicit request or a genuinely unmountable partition, and
-# a fsck pass runs first so a transient/dirty filesystem is repaired rather than erased. Fail safe
-# — never wipe a recoverable /data.
+# touched. We only ever reformat on an explicit request or a partition no repair could mount, and
+# the repair escalates all the way to the backup superblocks before anything is erased. Fail safe
+# — never wipe a recoverable /data, where recoverable means what e2fsck can actually recover, not
+# what fsck -p is willing to touch (#1062).
 set -uo pipefail
 
 MARKER_NAME="pithead-reset"
+# Evidence that /data was ERASED rather than never set up (#1062). Without it the two are
+# indistinguishable: both boot into the wizard, so an operator whose partition was wiped sees the
+# same screen as one unboxing the machine, and has no reason to suspect the disk was salvageable.
+# It lives on the ESP because that is the only writable thing a /data reformat leaves standing.
+WIPE_LOG_NAME="pithead-data-wiped"
 # The dirs systemd-repart seeds at format time (os/rootfs/repart.d/40-data.conf). repart only runs
 # MakeDirectories when IT formats a partition, so when we reformat we reseed them ourselves — the
 # /var overlay's upperdir/workdir must exist before /var mounts, or the box boots with no writable
@@ -75,13 +81,55 @@ try_mount_ro() { # $1: partition
     return 1
 }
 
-# Can the data partition be mounted? Tries once, runs a non-interactive fsck repair, tries again.
-# rc 0 = mountable (healthy or repaired), rc 1 = wedged.
+# The backup superblock offsets for THIS filesystem, as `mke2fs -n` computes them — it prints the
+# geometry it WOULD create and writes nothing. Never a hardcoded 32768: that is only the first backup
+# on a 4 KiB-block filesystem, and /data's block size follows its size. We format /data ourselves
+# with mkfs.ext4 defaults, so -n against the same device reproduces the same layout.
+backup_superblocks() { # $1: partition -> block numbers, one per line, best first
+    mke2fs -n "$1" 2>/dev/null |
+        sed -n '/uperblock backups stored on blocks/,$p' |
+        tr -cd '0-9,\n' | tr ',' '\n' | grep -E '^[0-9]+$'
+}
+
+# Can the data partition be mounted? Escalates through the repairs a human would run, in the order
+# that risks least, and stops at the first one that makes it mount.
+#
+# `fsck -p` alone was the bug (#1062). Preen mode repairs only what needs no operator decision and
+# refuses everything else BY DEFINITION — so the exact damage class a full repair fixes is the class
+# that used to reach `mkfs`. A corrupt primary superblock is the textbook case: `fsck -p` exits 8,
+# prints the very command that would have saved the partition, and we reformatted instead, taking
+# the wallets, the Tor onion keys and both chains with it.
+#
+# rc 0 = mountable (healthy or repaired), rc 1 = no repair could mount it.
 data_mountable() { # $1: data partition
     try_mount_ro "$1" && return 0
-    log "$1 did not mount — attempting fsck repair before deciding anything"
+    log "$1 did not mount — escalating repairs before deciding anything"
     fsck -p -t ext4 "$1" >/dev/null 2>&1 || true
-    try_mount_ro "$1"
+    try_mount_ro "$1" && {
+        log "preen repaired $1"
+        return 0
+    }
+    # -y answers yes to every question -p refuses to ask. Still only ever touches this partition.
+    e2fsck -y "$1" >/dev/null 2>&1 || true
+    try_mount_ro "$1" && {
+        log "full e2fsck repaired $1"
+        return 0
+    }
+    local sb tried=0
+    for sb in $(backup_superblocks "$1"); do
+        # Two is enough: if the first two backups cannot rebuild it, the damage is not a lost
+        # superblock. Each pass rewrites the primary from the backup, so an unbounded loop would
+        # keep grinding a genuinely destroyed filesystem while the box sits unbootable.
+        [ "$tried" -lt 2 ] || break
+        tried=$((tried + 1))
+        log "retrying e2fsck against backup superblock $sb"
+        e2fsck -y -b "$sb" "$1" >/dev/null 2>&1 || true
+        try_mount_ro "$1" && {
+            log "backup superblock $sb repaired $1"
+            return 0
+        }
+    done
+    return 1
 }
 
 # The whole decision, isolated so it is testable with stubbed mount/fsck. Echoes exactly one of:
@@ -98,6 +146,15 @@ data_reset_decision() { # $1: data partition, $2: marker file path
         return 0
     fi
     echo reformat-wedged
+}
+
+# Append one line to the ESP's wipe log. Best effort by design: an ESP that would not mount must
+# never stop the recovery that gets a bricked box back, so this records what happened when it can
+# and stays silent when it cannot.
+record_wipe() { # $1: esp mount dir (may be empty), $2: reason
+    [ -n "$1" ] && [ -d "$1" ] || return 0
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown-time)" "$2" \
+        >>"$1/$WIPE_LOG_NAME" 2>/dev/null || true
 }
 
 # Reformat the data partition and reseed the dirs repart would have. DESTRUCTIVE — only ever
@@ -144,13 +201,14 @@ main() {
         ;;
     reformat-requested)
         log "factory-reset requested — wiping $data_part"
-        reformat_data "$data_part"
+        reformat_data "$data_part" && record_wipe "${marker:+$esp_mnt}" "factory-reset requested"
         # Consume the marker so the wipe is one-shot, never a reboot loop.
         [ -n "$marker" ] && rm -f "$marker" 2>/dev/null || true
         ;;
     reformat-wedged)
-        log "$data_part is unmountable even after fsck — reinitializing it so the box can recover"
-        reformat_data "$data_part"
+        log "$data_part could not be mounted after every repair — reinitializing it so the box can recover"
+        reformat_data "$data_part" &&
+            record_wipe "${marker:+$esp_mnt}" "unrecoverable /data reinitialized — everything on it was lost"
         ;;
     esac
 
