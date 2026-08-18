@@ -5320,17 +5320,13 @@ apply() {
     local apply_marker="${ENV_FILE}.apply-incomplete" incomplete=0
     [ -f "$apply_marker" ] && incomplete=1
 
-    local destructive=0 caddy_changed=0 wallet_keys=() line flag msg old new
+    local destructive=0 caddy_changed=0 caddy_before="" caddy_had=0 wallet_keys=() line flag msg old new
     if [ "${#changed[@]}" -gt 0 ]; then
         echo ""
         log "The following changes will be applied:"
         for key in "${changed[@]}"; do
             old=$(env_get_file "$ENV_FILE" "$key")
             new=$(env_get_file "$newenv" "$key")
-            # DASHBOARD_CONTROL_ENABLED rides along (#33): the Caddyfile always renders the
-            # X-Auth-User header_up now, but a pre-upgrade caddy may still run without it —
-            # restart caddy at the moment the audit actor starts to matter.
-            case "$key" in HOST_IP | HOST_PORT | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64 | DASHBOARD_ONION_ENABLED | DASHBOARD_CONTROL_ENABLED) caddy_changed=1 ;; esac
             # Payout-wallet change (#375): remember WHICH wallet keys change for the typed
             # confirmation below — one prompt per key, so a Monero+Tari double change can't
             # ride through on a single typed prefix.
@@ -5384,7 +5380,24 @@ apply() {
         mv "$newenv" "$ENV_FILE"
         provision_node_onions # #103: a node that just went local needs its onion before it starts
         inject_service_configs
+        # Whether caddy needs a restart is decided by COMPARING the rendered file, never by a list
+        # of keys someone has to remember to extend (#1052). The list had drifted:
+        # dashboard.expose_public_ip was missing from it, so turning OFF the opt-in that serves the
+        # dashboard on a globally-routable address re-rendered the Caddyfile without its bind lines
+        # and left caddy holding the wildcard listener — the operator sees the setting saved, sees
+        # the file change, and the box stays exposed.
+        #
+        # An absent previous file is a fresh install: compose starts caddy on the new one below, so
+        # there is no old configuration to displace. Emptiness is not absence — a zero-byte file
+        # left by a crashed render is a box whose caddy serves nothing, and that wants the restart.
+        if [ -f "Caddyfile" ]; then
+            caddy_had=1
+            caddy_before=$(cat "Caddyfile")
+        fi
         generate_caddyfile
+        if [ "$caddy_had" -eq 1 ] && [ "$caddy_before" != "$(cat "Caddyfile" 2>/dev/null)" ]; then
+            caddy_changed=1
+        fi
     else
         rm -f "$newenv"
         if [ "$incomplete" -eq 0 ]; then
