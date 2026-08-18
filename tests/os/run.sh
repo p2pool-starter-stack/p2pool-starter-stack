@@ -3182,6 +3182,11 @@ phase_reset() {
         bad "could not plant the /data survival sentinel"
         return
     }
+    # Leg 1's factory reset was a REAL wipe and correctly recorded one, so the note already exists
+    # here. What leg 2 must not do is add to it: the count is the question, not the presence.
+    local wipes_before
+    wipes_before=$(_ssh "wc -l < /boot/efi/pithead-data-wiped 2>/dev/null" | tr -cd '0-9')
+    [ -n "$wipes_before" ] || wipes_before=0
     _ssh "systemctl poweroff" 2>/dev/null || true
     tries=0
     while [ "$tries" -lt 60 ]; do
@@ -3243,12 +3248,21 @@ phase_reset() {
     else
         bad "DATA LOSS — /data was reinitialized rather than repaired; a real box loses its wallets and onion keys here (#1062)"
     fi
-    # And when a reformat genuinely is the only way back, the operator must be able to tell that
-    # from a machine that was never set up. Absent here precisely because nothing was wiped.
-    if _ssh "test -e /boot/efi/pithead-data-wiped" 2>/dev/null; then
-        bad "a repaired /data still recorded a wipe on the ESP — the evidence would cry wolf"
+    # And the wipe log must not have grown: a repair is not a wipe, and evidence that cries wolf
+    # is worse than none — the operator would restore from backup over a machine that kept its data.
+    local wipes_after
+    wipes_after=$(_ssh "wc -l < /boot/efi/pithead-data-wiped 2>/dev/null" | tr -cd '0-9')
+    [ -n "$wipes_after" ] || wipes_after=0
+    if [ "$wipes_after" = "$wipes_before" ]; then
+        ok "the ESP wipe log did not grow ($wipes_before line(s), from leg 1's real factory reset) — a repair is not recorded as a wipe"
     else
-        ok "no wipe recorded on the ESP, because nothing was wiped"
+        bad "a repaired /data recorded a wipe on the ESP ($wipes_before -> $wipes_after) — the evidence would cry wolf"
+    fi
+    # Leg 1's own wipe SHOULD be in there: the recording path is real, not dead code.
+    if [ "$wipes_before" -gt 0 ] 2>/dev/null; then
+        ok "leg 1's factory reset was recorded on the ESP ($wipes_before line(s))"
+    else
+        bad "leg 1 reformatted /data and left no record on the ESP — a wiped machine is indistinguishable from a fresh one (#1062)"
     fi
 }
 
