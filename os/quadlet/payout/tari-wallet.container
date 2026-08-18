@@ -11,7 +11,7 @@ User=1000:1000
 Entrypoint=/wallet-config/entrypoint.sh
 Environment=TARI_BASE_NODE_GRPC_ADDRESS=172.28.0.27:18142 TARI_WALLET_BIRTHDAY=auto TARI_WALLET_GRPC_BIND=/ip4/0.0.0.0/tcp/18143 WALLET_DIR=/home/ubuntu/wallet
 Volume=pithead-tari-wallet-data:/home/ubuntu/wallet
-Volume=/home/vijit/pithead/build/tari-wallet:/wallet-config:ro
+Volume=/home/pithead/build/tari-wallet:/wallet-config:ro
 Volume=/opt/pithead/data/tari-wallet-secret.env:/run/secrets/tari_wallet_secret:ro
 Tmpfs=/tmp:size=32m,mode=1777
 PublishPort=127.0.0.1:18143:18143

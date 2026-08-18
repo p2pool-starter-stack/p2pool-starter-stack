@@ -1674,7 +1674,7 @@ _caddy_appliance() { # $1 = value for DASHBOARD_EXPOSE_PUBLIC_IP
     is_appliance() { return 0; }
     appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
     appliance_mint_cert() { return 1; }
-    hostname() { printf '192.168.1.202 10.89.0.1 172.28.0.1 2605:59c8:cd7:ba08::1 fd1c:1d5:225c:8::1\n'; }
+    hostname() { printf '192.168.1.10 10.89.0.1 172.28.0.1 2001:db8::1 fd00::1\n'; }
     DASHBOARD_SECURE=true HOST_IP=pithead.local DASHBOARD_AUTH_HASH_B64="" \
         DASHBOARD_EXPOSE_PUBLIC_IP="$1" generate_caddyfile >/dev/null 2>&1
     cat Caddyfile
@@ -1685,8 +1685,8 @@ case "$caddy_default" in
 *2605:*) bad "the global v6 is not published as a site" "2605: appears in the Caddyfile" ;;
 *) ok "the global v6 is not published as a site" ;;
 esac
-assert_contains "the LAN address is still published" "$caddy_default" "192.168.1.202"
-assert_contains "the ULA is still published — private scope, not routable" "$caddy_default" "fd1c:1d5:225c:8::1"
+assert_contains "the LAN address is still published" "$caddy_default" "192.168.1.10"
+assert_contains "the ULA is still published — private scope, not routable" "$caddy_default" "fd00::1"
 assert_contains "a bind line closes the wildcard listener" "$caddy_default" "    bind "
 assert_contains "bind keeps loopback for the host-networked dashboard" "$caddy_default" "127.0.0.1 ::1"
 # The bind line is the boundary — it specifically must not carry the global address.
@@ -1706,7 +1706,7 @@ esac
 # Opt-in restores the old behaviour for a deployment that genuinely wants it.
 # shellcheck disable=SC1090  # STACK path is dynamic by design
 caddy_optin="$(_caddy_appliance true)"
-assert_contains "the opt-in publishes the global v6 again" "$caddy_optin" "2605:59c8:cd7:ba08::1"
+assert_contains "the opt-in publishes the global v6 again" "$caddy_optin" "2001:db8::1"
 case "$caddy_optin" in
 *"    bind "*) bad "the opt-in leaves the listener open" "a bind line was still emitted" ;;
 *) ok "the opt-in leaves the listener open" ;;
@@ -1725,8 +1725,8 @@ caddy_pinned="$(
     is_appliance() { return 0; }
     appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
     appliance_mint_cert() { return 1; }
-    hostname() { printf '192.168.1.202 2605:59c8:cd7:ba08::1 fd1c:1d5:225c:8::1\n'; }
-    DASHBOARD_SECURE=true HOST_IP=192.168.1.202 DASHBOARD_HOST=192.168.1.202 \
+    hostname() { printf '192.168.1.10 2001:db8::1 fd00::1\n'; }
+    DASHBOARD_SECURE=true HOST_IP=192.168.1.10 DASHBOARD_HOST=192.168.1.10 \
         DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
     cat Caddyfile
 )"
@@ -1746,7 +1746,7 @@ caddy_noaddr="$(
     is_appliance() { return 0; }
     appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
     appliance_mint_cert() { return 1; }
-    hostname() { printf '2605:59c8:cd7:ba08::1\n'; } # ONLY a public address
+    hostname() { printf '2001:db8::1\n'; } # ONLY a public address
     DASHBOARD_SECURE=true HOST_IP=pithead.local DASHBOARD_AUTH_HASH_B64="" \
         generate_caddyfile >/dev/null 2>&1
     cat Caddyfile
@@ -1764,7 +1764,7 @@ caddy_onion="$(
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
     set +e
     is_appliance() { return 0; }
-    hostname() { printf '192.168.1.202 2605:59c8:cd7:ba08::1\n'; }
+    hostname() { printf '192.168.1.10 2001:db8::1\n'; }
     DASHBOARD_SECURE=false HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 \
         DASHBOARD_ONION_ENABLED=true DASHBOARD_AUTH_USER=admin \
         DASHBOARD_AUTH_HASH_B64="$(printf 'x' | openssl base64 -A)" \
@@ -1780,7 +1780,7 @@ caddy_onion_off="$(
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
     set +e
     is_appliance() { return 1; } # DIY: no binding at all
-    hostname() { printf '192.168.1.202\n'; }
+    hostname() { printf '192.168.1.10\n'; }
     DASHBOARD_SECURE=false HOST_IP=box.lan NETWORK_PREFIX=172.28.0 \
         DASHBOARD_ONION_ENABLED=true DASHBOARD_AUTH_USER=admin \
         DASHBOARD_AUTH_HASH_B64="$(printf 'x' | openssl base64 -A)" \
