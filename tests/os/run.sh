@@ -10,7 +10,10 @@
 # Phases:
 #   boot    flash the image to a scratch disk, boot it, assert EFI boot + firstboot wizard up
 #   update  build a v2 bundle; install, boot the spare, auto-rollback uncommitted, commit, and
-#           roll back off a committed version. Also asserts /data grew to the disk (#784).
+#           roll back off a committed version. Also asserts /data grew to the disk (#784), then
+#           drives the same A/B cycle through the DASHBOARD OS-update action end-to-end (leg 4):
+#           provision, check/download (resume proven), floor + bad-signature refusals, install,
+#           the explicit reboot intent, the boot-gated commit, and the persisted verdict.
 #   install boot the image as removable media beside a blank disk, run the disk installer, then
 #           boot from the target and prove the copied system is COMPLETE (the /var overlay made
 #           an incomplete copy easy to produce and invisible to every other phase). Then the
@@ -25,7 +28,9 @@
 #           update — install, uncommitted rollback, self-commit — exactly like a coordinator.
 #   media   physical-presence config channel (#786 sub-issue D): a removable stick applied at
 #           boot shows its exact diff on the console, counts down, applies, and consumes itself —
-#           and pulling the stick mid-countdown cancels the change. Opt-in, like fault.
+#           and pulling the stick mid-countdown cancels the change. A minimal stick changes only
+#           what it names (#965): the dashboard login, appliance defaults and node credentials
+#           all survive, and the old login still opens the served dashboard. Opt-in, like fault.
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
 #   reset   factory-reset's ESP marker (the real `pithead factory-reset`) wipes /data and returns
 #           a FRESH machine to the wizard; a corrupt data-partition superblock drives the same
@@ -594,6 +599,329 @@ phase_update() {
     marker=$(_ssh cat /etc/pithead-test-marker)
     [ "$marker" = "v1" ] && ok "ROLLBACK: an operator can return to v1 after committing v2" ||
         bad "expected v1 after the operator rollback, got '$marker'"
+
+    phase_update_dashboard "$bundle"
+}
+
+# Provision the wizard-gated stack over its real HTTP flow — the slim shape of what
+# phase_provision drives with full assertions — and CAPTURE the generated dashboard login for
+# API-driving legs. Sets DASH_USER/DASH_PASS. rc 1 on any failure (the caller reports).
+DASH_USER=""
+DASH_PASS=""
+_wizard_provision_capture() {
+    local token="" tries=0 jar scode handoff=""
+    while [ -z "$token" ] && [ "$tries" -lt 40 ]; do
+        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$token" ] || sleep 3
+        tries=$((tries + 1))
+    done
+    [ -n "$token" ] || return 1
+    _wait_setup_page 180 || return 1
+    jar=$(mktemp)
+    curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null || {
+        rm -f "$jar"
+        return 1
+    }
+    grep -q "wizard_session" "$jar" || {
+        rm -f "$jar"
+        return 1
+    }
+    scode=$(curl -sSk -b "$jar" --data "monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini" \
+        "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    [ "$scode" = "200" ] || {
+        rm -f "$jar"
+        return 1
+    }
+    tries=0
+    while [ "$tries" -lt 24 ]; do
+        handoff=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null)
+        printf '%s' "$handoff" | grep -q '"password"' && break
+        sleep 5
+        tries=$((tries + 1))
+    done
+    printf '%s' "$handoff" | grep -q '"password"' || {
+        rm -f "$jar"
+        return 1
+    }
+    DASH_USER=$(printf '%s' "$handoff" | jq -r '.username // "admin"')
+    DASH_PASS=$(printf '%s' "$handoff" | jq -r '.password // ""')
+    curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null
+    rm -f "$jar"
+    [ -n "$DASH_PASS" ]
+}
+
+# POST one dashboard OS-update step and wait out its terminal result (progress statuses are
+# in-flight, not terminal). Echoes the final result JSON; rc 1 on transport failure/deadline.
+_os_step() { # <json-body> [<deadline-s>]
+    local body="$1" deadline=$(($(date +%s) + ${2:-180})) rid out st
+    rid=$(curl -sSk -u "$DASH_USER:$DASH_PASS" -H 'Content-Type: application/json' \
+        -H 'X-Pithead-Control: 1' --data "$body" "https://$ip/api/control/os-update" 2>/dev/null |
+        jq -r '.id // ""')
+    [ -n "$rid" ] || return 1
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        out=$(curl -sSk -u "$DASH_USER:$DASH_PASS" "https://$ip/api/control/result?id=$rid" 2>/dev/null)
+        st=$(printf '%s' "$out" | jq -r '.status // "pending"' 2>/dev/null) || st="pending"
+        case "$st" in
+        pending | running | downloading | installing | "") sleep 3 ;;
+        *)
+            printf '%s' "$out"
+            return 0
+            ;;
+        esac
+    done
+    return 1
+}
+
+# Serve a directory over HTTP with byte-range support (curl -C - needs 206; python's stock
+# SimpleHTTPRequestHandler answers 200-only, which would silently break the resume leg).
+# Echoes the server PID; caller kills it.
+_serve_update_dir() { # <dir> <port>
+    python3 - "$1" "$2" <<'PYEOF' >/dev/null 2>&1 &
+import http.server, os, re, sys
+os.chdir(sys.argv[1])
+class H(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+    def do_GET(self):
+        path = self.translate_path(self.path)
+        if not os.path.isfile(path):
+            self.send_error(404)
+            return
+        size = os.path.getsize(path)
+        start = 0
+        m = re.match(r"bytes=(\d+)-$", self.headers.get("Range") or "")
+        if m:
+            start = int(m.group(1))
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{size - 1}/{size}")
+        else:
+            self.send_response(200)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(size - start))
+        self.end_headers()
+        with open(path, "rb") as f:
+            f.seek(start)
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except BrokenPipeError:
+                    break
+http.server.ThreadingHTTPServer(("0.0.0.0", int(sys.argv[2])), H).serve_forever()
+PYEOF
+    printf '%s' "$!"
+}
+
+# Leg 4 — the dashboard OS-update action end-to-end: the user-reachable path over the SAME A/B
+# machinery legs 1-3 proved raw. Provisions the stack (the control channel and dashboard exist
+# only on a provisioned machine), then drives check → download (with a proven RESUME) → verify
+# (with the floor and bad-signature refusals) → install → the explicit reboot intent → the
+# boot-gated commit → the persisted verdict the dashboard renders. The release lookup and the
+# bundle download are pointed at a bench-local server through the root-owned test seam
+# (os-update-test-base); RAUC signature verification still runs for real against the slot
+# keyring, so the bad-signature refusal is genuine, not simulated.
+phase_update_dashboard() { # <good-bundle-path>
+    local good_bundle="$1" marker
+    info "leg 4 — dashboard OS-update action end-to-end (provision, then check/download/verify/install/reboot)"
+    if ! _wizard_provision_capture; then
+        bad "leg 4: could not provision the stack through the wizard (no dashboard, no control channel)"
+        return
+    fi
+    ok "leg 4: stack provisioned; dashboard login captured"
+    # The stack must come up far enough that caddy answers and the control runner exists.
+    local deadline=$(($(date +%s) + 1500)) names=""
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        case "$names" in *dashboard*caddy* | *caddy*dashboard*) break ;; esac
+        sleep 15
+    done
+    case "$names" in
+    *dashboard*caddy* | *caddy*dashboard*) ok "leg 4: stack containers are running" ;;
+    *)
+        bad "leg 4: stack never came up — running: '${names:-none}'"
+        return
+        ;;
+    esac
+    local tries=0 code=000
+    while [ "$tries" -lt 60 ]; do
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
+        case "$code" in 2?? | 3?? | 401 | 403) break ;; esac
+        sleep 5
+        tries=$((tries + 1))
+    done
+    # The UI-presence contract: an appliance state carries os_update, so the header renders the
+    # OS control instead of the tarball Upgrade button.
+    if curl -sSk -u "$DASH_USER:$DASH_PASS" "https://$ip/api/state" 2>/dev/null |
+        jq -e '.os_update.step' >/dev/null 2>&1; then
+        ok "leg 4: /api/state carries the appliance os_update state (the header control renders)"
+    else
+        bad "leg 4: /api/state has no os_update — the dashboard would never show the OS control"
+        return
+    fi
+
+    # Bench-local release server: the good v2 bundle plus a corrupted twin, behind the seam.
+    local tag srv host_addr port=8931 size srv_pid
+    tag="v$(tr -d ' \t\r\n' <VERSION)"
+    srv=$(mktemp -d)
+    cp "$good_bundle" "$srv/pithead-os-$tag.raucb"
+    size=$(wc -c <"$srv/pithead-os-$tag.raucb" | tr -d ' ')
+    cp "$srv/pithead-os-$tag.raucb" "$srv/good.raucb"
+    cp "$srv/good.raucb" "$srv/bad.raucb"
+    # One clobbered byte mid-file: the signature no longer matches, nothing else changes.
+    dd if=/dev/zero of="$srv/bad.raucb" bs=1 seek=$((size / 2)) count=64 conv=notrunc 2>/dev/null
+    printf '{"tag_name":"%s","html_url":"http://bench.invalid/rel","assets":[{"name":"pithead-os-%s.raucb","size":%s}]}' \
+        "$tag" "$tag" "$size" >"$srv/releases-latest.json"
+    host_addr=$(ip -4 -o addr show virbr0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+    [ -n "$host_addr" ] || host_addr="192.168.122.1"
+    srv_pid=$(_serve_update_dir "$srv" "$port")
+    _ssh "printf 'http://$host_addr:$port' > /data/pithead/os-update-test-base" || {
+        bad "leg 4: could not plant the update-server seam on the guest"
+        kill "$srv_pid" 2>/dev/null
+        rm -rf "$srv"
+        return
+    }
+
+    local out st
+    # Check: the host derives tag + size from the (redirected) release lookup.
+    out=$(_os_step '{"action":"check"}' 120)
+    if [ "$(printf '%s' "$out" | jq -r '.status')" = "checked" ] &&
+        [ "$(printf '%s' "$out" | jq -r '.version')" = "$tag" ]; then
+        ok "leg 4: check derived the published release ($tag, $(printf '%s' "$out" | jq -r '.size') bytes)"
+    else
+        bad "leg 4: check did not derive the release (got: $(printf '%s' "$out" | cut -c1-200))"
+        kill "$srv_pid" 2>/dev/null
+        rm -rf "$srv"
+        return
+    fi
+
+    # Refusal 1 — the /data migration floor: a valid signature is not permission to install below
+    # it. This drives the SAME shared guard the CLI enforces (downgrade family), via the dashboard
+    # door, with a floor planted above the bundle's version.
+    _ssh "printf '99.0.0\n' > /data/pithead/.os-data-floor"
+    out=$(_os_step "{\"action\":\"download\",\"version\":\"$tag\"}" 900)
+    if [ "$(printf '%s' "$out" | jq -r '.status')" = "downloaded" ]; then
+        ok "leg 4: bundle downloaded to /data for the floor leg"
+    else
+        bad "leg 4: download for the floor leg did not complete (got: $(printf '%s' "$out" | cut -c1-200))"
+    fi
+    out=$(_os_step '{"action":"verify"}' 120)
+    st=$(printf '%s' "$out" | jq -r '.status')
+    if [ "$st" = "rejected" ] && printf '%s' "$out" | jq -r '.error' | grep -q "strand the chain data"; then
+        ok "leg 4: DOWNGRADE/FLOOR REFUSED — verify rejects below the /data floor with the honest error"
+    else
+        bad "leg 4: verify below the floor did not refuse honestly (got: $(printf '%s' "$out" | cut -c1-200))"
+    fi
+    if ! _ssh "test -f /data/pithead/data/os-update/pithead-os-$tag.raucb"; then
+        ok "leg 4: the floor-refused bundle was deleted"
+    else
+        bad "leg 4: the floor-refused bundle is still staged"
+    fi
+    _ssh "rm -f /data/pithead/.os-data-floor"
+
+    # Refusal 2 — a corrupted (mis-signed) bundle: RAUC's real signature check against the slot
+    # keyring refuses it, the error says so, and the file is deleted. No override exists.
+    cp "$srv/bad.raucb" "$srv/pithead-os-$tag.raucb"
+    out=$(_os_step "{\"action\":\"download\",\"version\":\"$tag\"}" 900)
+    [ "$(printf '%s' "$out" | jq -r '.status')" = "downloaded" ] ||
+        bad "leg 4: download of the corrupted bundle did not complete (got: $(printf '%s' "$out" | cut -c1-200))"
+    out=$(_os_step '{"action":"verify"}' 120)
+    st=$(printf '%s' "$out" | jq -r '.status')
+    if [ "$st" = "rejected" ] && printf '%s' "$out" | jq -r '.error' | grep -q "signature"; then
+        ok "leg 4: BAD SIGNATURE REFUSED — verify rejects the corrupted bundle with the honest error"
+    else
+        bad "leg 4: verify of the corrupted bundle did not refuse on signature (got: $(printf '%s' "$out" | cut -c1-200))"
+    fi
+    if ! _ssh "test -f /data/pithead/data/os-update/pithead-os-$tag.raucb"; then
+        ok "leg 4: the mis-signed bundle was deleted"
+    else
+        bad "leg 4: the mis-signed bundle is still staged"
+    fi
+
+    # Resume: restore the good bundle, pre-stage a genuine prefix as the interrupted transfer,
+    # and require the download to CONTINUE from it rather than start over.
+    cp "$srv/good.raucb" "$srv/pithead-os-$tag.raucb"
+    head -c 4194304 "$srv/good.raucb" |
+        _ssh "mkdir -p /data/pithead/data/os-update && cat > /data/pithead/data/os-update/pithead-os-$tag.raucb.partial" || {
+        bad "leg 4: could not pre-stage the interrupted download"
+    }
+    out=$(_os_step "{\"action\":\"download\",\"version\":\"$tag\"}" 900)
+    if [ "$(printf '%s' "$out" | jq -r '.status')" = "downloaded" ] &&
+        [ "$(printf '%s' "$out" | jq -r '.resumed_from // 0')" = "4194304" ]; then
+        ok "leg 4: RESUME PROVEN — the download continued from the interrupted 4 MiB, not from zero"
+    else
+        bad "leg 4: the download did not resume from the staged prefix (got: $(printf '%s' "$out" | cut -c1-200))"
+    fi
+
+    # Verify + install: the good bundle passes for real, the install writes the spare slot while
+    # the stack keeps running, and the in-flight flag arms the post-reboot verdict.
+    out=$(_os_step '{"action":"verify"}' 180)
+    if [ "$(printf '%s' "$out" | jq -r '.status')" = "verified" ]; then
+        ok "leg 4: the good bundle verifies (signature + compatible + version)"
+    else
+        bad "leg 4: the good bundle failed verify (got: $(printf '%s' "$out" | cut -c1-200))"
+        kill "$srv_pid" 2>/dev/null
+        rm -rf "$srv"
+        return
+    fi
+    out=$(_os_step '{"action":"install"}' 900)
+    if [ "$(printf '%s' "$out" | jq -r '.status')" = "installed" ]; then
+        ok "leg 4: install wrote the spare slot through the dashboard action"
+    else
+        bad "leg 4: install did not complete (got: $(printf '%s' "$out" | cut -c1-200))"
+        kill "$srv_pid" 2>/dev/null
+        rm -rf "$srv"
+        return
+    fi
+    if [ "$(_ssh "jq -r '.to' /data/pithead/data/os-update/in-flight.json" 2>/dev/null)" = "${tag#v}" ]; then
+        ok "leg 4: the in-flight flag names the target version"
+    else
+        bad "leg 4: no in-flight flag after the install — the post-reboot verdict is unarmed"
+    fi
+    if [ "$(_ssh "jq -r '.step' /data/pithead/data/control/results/os-update-state.json" 2>/dev/null)" = "reboot-pending" ]; then
+        ok "leg 4: the persisted state says reboot-pending (survives reloads)"
+    else
+        bad "leg 4: the persisted state does not say reboot-pending"
+    fi
+
+    # The explicit reboot intent — nothing rebooted on its own up to here.
+    marker=$(_ssh cat /etc/pithead-test-marker)
+    [ "$marker" = "v1" ] && ok "leg 4: nothing auto-rebooted — still on v1 until the operator says so" ||
+        bad "leg 4: expected to still be on v1 before the reboot intent, got '$marker'"
+    _os_step '{"action":"reboot"}' 30 >/dev/null 2>&1 || true # the machine goes away mid-poll
+    sleep 15
+    _wait_ssh 420 || {
+        bad "leg 4: guest never returned after the dashboard reboot intent"
+        kill "$srv_pid" 2>/dev/null
+        rm -rf "$srv"
+        return
+    }
+    marker=$(_ssh cat /etc/pithead-test-marker)
+    [ "$marker" = "v2" ] && ok "leg 4: the dashboard-driven update booted v2" ||
+        bad "leg 4: expected v2 after the dashboard reboot, got '$marker'"
+    # The verdict is written only when pithead-boot's health gate commits the slot — waiting for
+    # it proves install + reboot + commit landed, and that the banner's data exists.
+    local vdeadline=$(($(date +%s) + 900)) verdict=""
+    while [ "$(date +%s)" -lt "$vdeadline" ]; do
+        verdict=$(_ssh "jq -r '.verdict.outcome // \"\"' /data/pithead/data/control/results/os-update-state.json" 2>/dev/null)
+        [ -n "$verdict" ] && break
+        sleep 15
+    done
+    if [ "$verdict" = "updated" ]; then
+        ok "leg 4: COMMIT + VERDICT — the slot committed and the verdict says updated"
+    else
+        bad "leg 4: no 'updated' verdict after the reboot (got '${verdict:-none}') — commit or verdict is broken"
+    fi
+    if curl -sSk -u "$DASH_USER:$DASH_PASS" "https://$ip/api/state" 2>/dev/null |
+        jq -e '.os_update.verdict.outcome == "updated"' >/dev/null 2>&1; then
+        ok "leg 4: the success banner's verdict reaches /api/state"
+    else
+        bad "leg 4: /api/state does not carry the updated verdict — the banner would never show"
+    fi
+    kill "$srv_pid" 2>/dev/null
+    rm -rf "$srv"
 }
 
 phase_install() {
@@ -1391,9 +1719,12 @@ phase_provision() {
     ok "config submitted through the wizard"
     # The credentials handoff: the host publishes the generated login and HOLDS provisioning
     # until it is acknowledged — the page goes dark afterwards, so the card must come first.
+    # The login is kept: the OS-update presence check below drives the authenticated state API.
+    local handoff_body=""
     tries=0
     while [ "$tries" -lt 24 ]; do
-        if curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"'; then
+        handoff_body=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null)
+        if printf '%s' "$handoff_body" | grep -q '"password"'; then
             ok "generated credentials published to the page"
             break
         fi
@@ -1470,6 +1801,20 @@ phase_provision() {
     if [ "$served" -ne 1 ]; then
         bad "no HTTP answer behind caddy on :443 within 5m (last: $code)"
         return
+    fi
+
+    # ---- OS-update presence: the appliance state must carry os_update ------------------------
+    # The header renders the OS update control (and suppresses the DIY tarball Upgrade button)
+    # exactly when /api/state.os_update exists — seeded host-side for appliances only. Absent, an
+    # operator has no reachable update path and the first update after GA means a reflash.
+    local pv_user pv_pass
+    pv_user=$(printf '%s' "$handoff_body" | jq -r '.username // "admin"' 2>/dev/null)
+    pv_pass=$(printf '%s' "$handoff_body" | jq -r '.password // ""' 2>/dev/null)
+    if [ -n "$pv_pass" ] && curl -sSk -u "$pv_user:$pv_pass" "https://$ip/api/state" 2>/dev/null |
+        jq -e '.os_update.step' >/dev/null 2>&1; then
+        ok "appliance state carries os_update — the dashboard OS-update control renders"
+    else
+        bad "no os_update in /api/state — the appliance has no reachable OS-update control"
     fi
 
     # ---- Tor-only egress backstop (#855): the fail-closed firewall must actually DROP -------
@@ -1954,13 +2299,25 @@ phase_media() {
     esac
 
     # ---- apply leg: a real change, shown, counted down, applied, consumed --------------------
+    # A MINIMAL stick on purpose — wallet + pool, nothing else. Settings it does not name must
+    # keep their running values: the full-replace bug unset the generated dashboard password
+    # (serving the dashboard to the LAN with no login), dropped the appliance defaults, and
+    # regenerated the node credentials on every apply. Capture the pre-apply values now so the
+    # post-apply asserts compare against what the machine actually had.
+    local old_pw old_user old_npw
+    old_pw=$(_ssh "jq -r '.dashboard.auth.password // \"\"' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
+    old_user=$(_ssh "jq -r '.dashboard.auth.username // \"admin\"' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
+    old_npw=$(_ssh "jq -r '.monero.node_password // \"\"' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
+    [ -n "$old_pw" ] && ok "a generated dashboard password exists before the media apply" ||
+        bad "no generated dashboard password before the media apply — nothing to preserve"
+
     local stick1="${DISK%.img}-media-apply.img"
     # A DIFFERENT valid primary address than HARNESS_WALLET (an earlier copy-paste made them
     # identical, so the "changed wallet" leg changed nothing and the wallet assert could never
     # match). The Monero project's donation address: public, checksum-valid, safe as a fixture.
     local new_wallet="44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"
     _make_media_stick "$stick1" \
-        "{\"monero\":{\"wallet_address\":\"$new_wallet\"},\"tari\":{\"wallet_address\":\"$HARNESS_TARI\"},\"p2pool\":{\"pool\":\"nano\",\"stratum_password\":\"auto\"}}"
+        "{\"monero\":{\"wallet_address\":\"$new_wallet\"},\"p2pool\":{\"pool\":\"nano\"}}"
     _attach_media_stick "$stick1"
     : >"$SERIAL"
     _ssh reboot >/dev/null 2>&1 || true
@@ -1984,6 +2341,51 @@ phase_media() {
     pool_now=$(_ssh "jq -r '.p2pool.pool' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
     [ "$pool_now" = "nano" ] && ok "the changed setting took effect (p2pool.pool: mini -> nano)" ||
         bad "the changed setting did not take effect (p2pool.pool is '${pool_now:-unknown}')"
+
+    # ---- preservation asserts: everything the minimal stick did not name is still there ------
+    local pw_now ctl_now heal_now npw_now
+    pw_now=$(_ssh "jq -r '.dashboard.auth.password // \"\"' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
+    if [ -n "$old_pw" ] && [ "$pw_now" = "$old_pw" ]; then
+        ok "the dashboard password the stick never named is unchanged — the old login still holds"
+    else
+        bad "the dashboard password was dropped or regenerated by a stick that never named it"
+    fi
+    ctl_now=$(_ssh "jq -r '.dashboard.control.enabled' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
+    heal_now=$(_ssh "jq -r '.tor.auto_heal' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
+    [ "$ctl_now" = "true" ] && [ "$heal_now" = "true" ] &&
+        ok "the appliance defaults survive a minimal stick (control channel on, tor auto-heal on)" ||
+        bad "appliance defaults dropped (control.enabled=$ctl_now tor.auto_heal=$heal_now)"
+    npw_now=$(_ssh "jq -r '.monero.node_password // \"\"' /data/pithead/config.json" 2>/dev/null | tr -d '\r')
+    [ -n "$npw_now" ] && [ "$npw_now" = "$old_npw" ] &&
+        ok "the node credentials do not churn on a media apply" ||
+        bad "monero node credentials were regenerated by a stick that never named them"
+
+    # The end-to-end proof the issue asks for: after the minimal-stick apply, the served
+    # dashboard still DEMANDS a login, and the pre-apply credentials still open it. Poll until
+    # caddy answers — the pool change restarts the stack, so the front door lags the reboot.
+    # One readiness deadline covers BOTH probes: a post-apply boot re-loads every baked image
+    # before compose up, and under bench load that runs past 10 minutes with caddy up (401)
+    # while the dashboard behind it still answers 502. The bench proved every intermediate
+    # (000/000, 401/502, late-2xx) is the same slow settle — so poll each probe to its OWN
+    # success within a shared 900 s window instead of judging a settling stack once.
+    local http_deadline=$(($(date +%s) + 900)) code=000 authed=000
+    while [ "$(date +%s)" -lt "$http_deadline" ]; do
+        code=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 "https://$ip/" 2>/dev/null || true)
+        case "$code" in 000 | 5??) sleep 10 ;; *) break ;; esac
+    done
+    if [ "$code" = "401" ]; then
+        ok "the dashboard still demands a login after the minimal-stick apply (HTTP 401)"
+    else
+        bad "the dashboard answered HTTP $code without credentials after the minimal-stick apply"
+    fi
+    while [ "$(date +%s)" -lt "$http_deadline" ]; do
+        authed=$(curl -ksS -o /dev/null -w '%{http_code}' -m 8 -u "$old_user:$old_pw" "https://$ip/" 2>/dev/null || true)
+        case "$authed" in 000 | 5??) sleep 10 ;; *) break ;; esac
+    done
+    case "$authed" in
+    2?? | 3??) ok "the pre-apply dashboard login still works (HTTP $authed)" ;;
+    *) bad "the pre-apply dashboard login no longer works (HTTP $authed)" ;;
+    esac
 
     _detach_media_stick
     sleep 2

@@ -10,9 +10,11 @@
 # like Synology's reset button): no browser, no dashboard password, no keyboard required.
 #
 # Runs as one stage inside pithead-boot, BEFORE render, so an applied change drives the rest of
-# that boot. Reuses the pre-seed validation engine (pithead's parse_and_validate_config, run in a
-# fresh process against a scratch copy — the same idiom consume_preseed_config uses for the
-# installer's own pre-seed) rather than re-implementing config validation here.
+# that boot. The staged file changes only the settings it names — everything else keeps its
+# running value (see media_merge_config). Reuses the pre-seed validation engine (pithead's
+# parse_and_validate_config, run in a fresh process against a scratch copy — the same idiom
+# consume_preseed_config uses for the installer's own pre-seed) rather than re-implementing
+# config validation here.
 set -uo pipefail
 
 # Env-overridable so the stack tests can run this against a sandbox, matching pithead-sync and
@@ -79,6 +81,28 @@ media_find_config() {
         rmdir "$mnt" 2>/dev/null || true
     done < <(_removable_fat_partitions)
     return 1
+}
+
+# Settings the stick does not name keep their running values: the staged file is deep-merged
+# OVER the running config before validation — the stick's value wins wherever it names one
+# (objects merge; arrays and scalars replace whole; an explicit null clears the setting).
+# Full-replace semantics silently dropped every unnamed key: a wallets-plus-pool stick unset
+# dashboard.auth.password, serving the dashboard to the LAN with no login — a state nobody
+# chose — and unset the appliance defaults (dashboard.control.enabled, tor.auto_heal) while
+# regenerating node credentials on every apply. Naming a key still changes it, so the channel's
+# can-change-ANY-setting contract holds. When either side does not parse as an object the
+# stick's file goes to validation as-is: a malformed stick gets the validator's real error, and
+# a corrupt running config cannot block the recovery path. Prints the merged scratch path.
+media_merge_config() { # <running-json> <candidate-json>
+    local out
+    out=$(mktemp) || return 1
+    if ! jq -s '.[0] * .[1]' "$1" "$2" >"$out" 2>/dev/null; then
+        cp "$2" "$out" 2>/dev/null || {
+            rm -f "$out"
+            return 1
+        }
+    fi
+    printf '%s' "$out"
 }
 
 # Validate a candidate config through a COPY, exactly like consume_preseed_config: parse_and_
@@ -224,7 +248,7 @@ media_consume() { # <partition>
 }
 
 main() {
-    local found part cand validated decision errf media_uuid
+    local found part cand merged validated decision errf media_uuid
     found=$(media_find_config) || return 0
     part=${found%%$'\t'*}
     cand=${found#*$'\t'}
@@ -232,16 +256,26 @@ main() {
     # device reusing the same kernel name mid-countdown reads as removal, not presence. An
     # unreadable UUID degrades to presence-only (documented in media_device_present).
     media_uuid=$(blkid -s UUID -o value "$part" 2>/dev/null) || media_uuid=""
+
+    # Merge before validating, so validation runs against the config that would actually apply
+    # and fills generated fields only where the merged result still lacks them.
+    merged=$(media_merge_config "$RUNNING_CONFIG" "$cand") || {
+        _console "" "Media configuration channel: could not stage the file from removable media —" \
+            "continuing boot unchanged. Reboot to retry."
+        rm -f "$cand"
+        return 0
+    }
+    rm -f "$cand"
     errf=$(mktemp)
 
-    if ! validated=$(media_validate_config "$cand" 2>"$errf"); then
+    if ! validated=$(media_validate_config "$merged" 2>"$errf"); then
         _console "" "A configuration file was found on removable media but it was rejected:" \
             "  $(cat "$errf" 2>/dev/null)" "" \
             "Continuing boot with the running configuration. Fix the file and reboot to retry."
-        rm -f "$errf" "$cand"
+        rm -f "$errf" "$merged"
         return 0
     fi
-    rm -f "$errf" "$cand"
+    rm -f "$errf" "$merged"
 
     # Fail closed on the masking list: with no authoritative secret-path set, the diff below
     # could print raw secret values to every console and the journal. Refuse the whole stage.
@@ -254,13 +288,18 @@ main() {
         }
     fi
 
+    # $validated is the stick MERGED OVER the running config, never the stick's own file — so this
+    # compares the outcome, not the two documents. A stick whose every setting the merge absorbs is
+    # a no-op, and that is what the message says: it would change nothing. Saying the files "match"
+    # would be a claim about the stick that was never tested.
     if [ ! -f "$RUNNING_CONFIG" ] || media_config_identical "$RUNNING_CONFIG" "$validated"; then
-        _console "" "Media configuration channel: the staged configuration matches the running one — continuing boot."
+        _console "" "Media configuration channel: the staged configuration would change nothing — continuing boot."
         rm -f "$validated"
         return 0
     fi
 
-    _console "" "Media configuration channel: a staged configuration differs from the running one." "" \
+    _console "" "Media configuration channel: a staged configuration differs from the running one." \
+        "Settings the file does not name keep their current values." "" \
         "$(media_config_diff "$RUNNING_CONFIG" "$validated")" "" \
         "Applying automatically in ${COUNTDOWN}s. Remove the media now to cancel." \
         "On a keyboard: 'a' applies immediately, 'n' cancels." ""

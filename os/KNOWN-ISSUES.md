@@ -218,12 +218,16 @@ hands RigForge the recorded reservation, never the baked 6 GiB, as its headroom.
   dashboard never exposes, so "changing these later means reinstalling" no longer holds.
   What remains rides the post-GA fast-follows: out-of-band approval at the commit gate
   (#911), fleet descriptor editing (#912), and the CLI remainder on the dashboard (#913).
-- **No user-facing OS update path exists yet (#976).** RAUC and rollback are proven at the
-  OS layer, but nothing a user can reach applies an update: the dashboard action for
-  install/commit/rollback of OS bundles is the pre-GA blocker, and the DIY one-click
-  upgrade deliberately refuses on the appliance (a tarball upgrade would silently revert
-  at the next boot). #976 holds the decision: build it before GA, or record that GA ships
-  without it — the roadmap's gate list (#394) currently omits it.
+- **The dashboard OS-update action is built but not yet battery-proven (#976).** The
+  user-reachable path exists: an OS-update control in the dashboard header drives
+  check → resumable Tor download to `/data` → local verification (signature,
+  `compatible`, downgrade/floor) → slot install → an explicit confirmed reboot, with
+  the boot health gate committing and a persisted verdict banner after. Every verb is
+  host-side through the control channel and refuses off the appliance; the DIY
+  one-click upgrade still refuses on the appliance (a tarball upgrade would silently
+  revert at the next boot). What remains before this line moves to Resolved: the
+  battery's `phase_update` leg 4 (the dashboard-driven A/B cycle, resume, and the
+  refusals) and the `provision` presence check must pass on the KVM bench.
 - **The manual hardware battery has not been run.** Everything above is KVM. Secure Boot,
   real disks, headless discovery and a genuine power cut are exactly what a VM cannot
   show — M1-M10 in the release doc must pass on a physical box before an image ships.
