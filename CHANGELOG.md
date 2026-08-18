@@ -9,6 +9,63 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.19.2] - 2026-08-18
+
+### Fixed
+
+- **A release can no longer ship unsigned when no install would accept it
+  ([#1108](https://github.com/p2pool-starter-stack/pithead/issues/1108),
+  [#960](https://github.com/p2pool-starter-stack/pithead/issues/960)).** The release pipeline
+  treated signing as optional while every install treats it as mandatory: once `cosign.pub` is
+  committed it ships in every bundle, and the one-click upgrade refuses any release with no
+  `pithead.tar.gz.sig`. A cut made on a box without the signing key therefore published a bundle
+  the whole fleet rejects — and release assets are immutable, so the signature could never be
+  attached afterwards. That is why v1.18.0 had to be withdrawn. The cut now aborts instead, naming
+  what is missing; `--unsigned` publishes one deliberately. `COSIGN_PASSWORD` is checked too, which
+  it never was — cosign would otherwise have prompted for it after the images were promoted.
+- **A release rehearsal now reports the decision the real cut will make.** The signing check sat
+  inside the dry-run guard, so `--dry-run` always printed "Release signing OFF" whatever the box was
+  configured to do. The one check that exists to protect a cut could only ever report failure.
+- **The pinned signature verifier is proven before a release is published
+  ([#1084](https://github.com/p2pool-starter-stack/pithead/issues/1084)).** Every install verifies
+  its images and its upgrade bundle by running one digest-pinned cosign container, and nothing
+  validated that pin. A bad digest would have shipped a stack that cannot start, reported to
+  operators as *signature verification failed* — tampering, rather than an image we could not fetch.
+  The cut now signs a probe blob, verifies it through that container, and requires a tampered blob
+  to be refused. The same round trip catches a `cosign.pub` that no longer matches the release key.
+- **`pithead doctor` answers whether this box can take an upgrade, before one is attempted.** It
+  reports whether the pinned verifier image is present and how to pre-fetch it, and says plainly
+  that a source checkout cannot take the dashboard's one-click upgrade at all.
+- **Caddy restarts whenever its rendered configuration changes
+  ([#1052](https://github.com/p2pool-starter-stack/pithead/issues/1052)).** The restart was decided
+  from a list of config keys, so any setting missing from that list re-rendered the Caddyfile and
+  left the running Caddy on the old one. The decision is now a comparison of the rendered file.
+- **`doctor` reports a control channel pointing at another install
+  ([#1097](https://github.com/p2pool-starter-stack/pithead/issues/1097)).** A failed upgrade could
+  leave the systemd control units aimed at a directory the stack no longer runs from, which silently
+  disabled every dashboard action, and nothing reported it.
+- **Operator messages point at published documentation rather than repository paths
+  ([#1024](https://github.com/p2pool-starter-stack/pithead/issues/1024)).** Release bundles ship
+  lean, so the `docs/dev/...` paths several refusals named did not exist on an operator's machine.
+
+### Changed
+
+- The self-hosted release gate no longer claims to gate `main`
+  ([#1048](https://github.com/p2pool-starter-stack/pithead/issues/1048)). It recorded a skipped —
+  and therefore green — run on every merge of a job that had never once executed, because no runner
+  is registered. It is manual-dispatch only now, and `docs/dev/releasing.md` names in one table
+  which gates are automated and which are run by hand.
+- Release signing is documented as what it is: mandatory to publish, because it is mandatory to
+  consume. The docs had described it as opt-in since before installs began failing closed.
+
+### Upgrade note
+
+Installs still on **v1.18.1 or v1.19.0** verify releases with a host `cosign` binary rather than the
+container introduced in v1.19.1, and an upgrade runs the code the box is already on — so those
+installs refuse the upgrade until cosign is installed once. Use the pinned **v2.6.3**, not the
+newest: cosign v3 satisfies the check and then fails the verification. See
+[Releasing › Upgrading an install older than v1.19.1](docs/dev/releasing.md#upgrading-an-install-older-than-v1191).
+
 ## [1.19.1] - 2026-08-17
 
 ### Fixed

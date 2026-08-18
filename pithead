@@ -62,6 +62,13 @@ readonly CORE_KEYS_CONFIG="config.core-keys.json"
 # so the onboarding note appears on the first `up` after a fresh setup, not on every later restart.
 readonly FIRST_RUN_MARKER=".pithead-first-run-done"
 readonly REAL_USER="${SUDO_USER:-$USER}"
+# Where operator messages send a reader for the long version (#1024). A release bundle carries the
+# CLI, the compose file, the config files and cosign.pub — deliberately no docs/, so a message that
+# names a repo path resolves to nothing on the installs that make up most of the fleet. Point at the
+# published copy instead: `main` is the released-only branch, so it is the documentation for the
+# version an operator is actually running. Bare paths are still fine in COMMENTS, which only ever
+# get read inside a checkout that has them.
+readonly DOCS_URL="https://github.com/p2pool-starter-stack/pithead/blob/main"
 
 # Non-root uid:gid the BUILT images run their main process as (#255). pithead owns the data dirs,
 # so it chowns each service's bind-mount to this id to match the in-image USER. Tor is the
@@ -153,7 +160,7 @@ explain_subnet_collision() {
         sub="$(env_get NETWORK_SUBNET 2>/dev/null || true)"
         [ -n "$sub" ] || sub="172.28.0.0/24"
         warn "Docker refused the stack's bridge subnet ($sub): it overlaps a network already on this host."
-        warn "Pick a free /24 and set it in ${CONFIG_FILE:-config.json} — e.g.  \"network\": { \"subnet\": \"172.30.0.0/24\" }  — then re-run '$0 apply' && '$0 up' (see docs/configuration.md, network.subnet)."
+        warn "Pick a free /24 and set it in ${CONFIG_FILE:-config.json} — e.g.  \"network\": { \"subnet\": \"172.30.0.0/24\" }  — then re-run '$0 apply' && '$0 up' (see $DOCS_URL/docs/configuration.md, network.subnet)."
         ;;
     esac
 }
@@ -225,7 +232,8 @@ stack_up() {
     # #452: a fresh release install's first `up` pulls the 5 first-party images (pull policy
     # `missing`) — gate that pull on the same cosign check `upgrade` uses, so first install is not
     # the one unverified pull. Same guard: source checkouts skip, a missing cosign.pub warns and
-    # proceeds (signing is opt-in, #461), a present key that fails aborts before anything starts.
+    # proceeds (#461 — an install predating the first signed release has no key to verify against),
+    # a present key that fails aborts before anything starts.
     verify_release_images
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
     if ! compose_up_checked -d; then
@@ -449,8 +457,11 @@ cosign_container_path() { # <path>
 #
 # The decision table, fail-closed where a key exists:
 #   source checkout                          -> skip: locally built images are unsigned by design
-#   no cosign.pub (an older/unsigned bundle) -> proceed with one loud warning (signing is opt-in per
-#                                               #461; the digest-pinned bundle is the protection)
+#   no cosign.pub (an older/unsigned bundle) -> proceed with one loud warning (#461 — an install
+#                                               predating the first signed release has no key to
+#                                               verify with; the digest-pinned bundle is what
+#                                               protects it. Every bundle since ships the key, so
+#                                               this is a legacy path, not a way to opt out)
 #   cosign.pub present, docker missing       -> ABORT — an absent verifier must not silently
 #                                               disable verification (docker is a prerequisite and
 #                                               the very next step pulls images with it anyway)
@@ -464,7 +475,7 @@ verify_release_images() {
         return 0
     fi
     cosign_available ||
-        error "cosign.pub is present but docker is not available to run the verifier — refusing an unverified pull. Install Docker (see the Prerequisites in the docs) and re-run '$0'."
+        error "cosign.pub is present but docker is not available to run the verifier — refusing an unverified pull. Install Docker ($DOCS_URL/docs/getting-started.md#1-prerequisites) and re-run '$0'."
     # The 5 first-party images, verified by the exact digest compose pins them to (#451/#461).
     local suffix repo sha image out
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
@@ -837,6 +848,28 @@ cpu_has_avx2() {
     fi
 }
 
+# Release-signature verification (#376): the state the next pull — `up` or `upgrade` — will act on.
+# Extracted from doctor() so each branch is unit-testable, like the other doctor checks. Every branch
+# mirrors a refusal the one-click upgrade runner makes, so this answers "can this box take an
+# upgrade" BEFORE one is attempted rather than during it (#1108). Read-only: nothing is pulled.
+check_release_verification() {
+    if is_source_checkout; then
+        dr_info "Source checkout — images build locally and are not signature-verified (#376), and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'."
+    elif [ ! -f cosign.pub ]; then
+        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
+    elif ! cosign_available; then
+        dr_warn "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon."
+    elif docker image inspect "$COSIGN_IMAGE" >/dev/null 2>&1; then
+        dr_ok "'up' and 'upgrade' verify the release images against cosign.pub; the pinned verifier image is already here, nothing to install."
+    else
+        # The verifier is fetched on demand, so a box that has never run a verified operation simply
+        # does not have it yet. Worth saying plainly: if that one fetch fails, the operation reports a
+        # *signature* failure — which reads as a tampered release rather than as an image this host
+        # could not pull (#1084).
+        dr_warn "The pinned release verifier image is not on this host yet — the next 'up' or 'upgrade' fetches it. If that fetch fails, the operation reports a signature failure even though nothing was tampered with. Pre-fetch it with: docker pull $COSIGN_IMAGE"
+    fi
+}
+
 doctor() {
     DR_OK=0
     DR_WARN=0
@@ -870,16 +903,7 @@ doctor() {
     else
         dr_fail "docker compose (v2 plugin) not found — install 'docker-compose-v2'."
     fi
-    # Release-signature verification (#376): report the state the next pull (up or upgrade) will act on.
-    if is_source_checkout; then
-        dr_info "Source checkout — images build locally and are not signature-verified (#376)."
-    elif [ ! -f cosign.pub ]; then
-        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
-    elif cosign_available; then
-        dr_ok "'up' and 'upgrade' verify the release images against cosign.pub; the verifier runs as a container, nothing to install."
-    else
-        dr_warn "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon."
-    fi
+    check_release_verification
 
     # --- Docker daemon ---
     echo ""
@@ -906,6 +930,8 @@ doctor() {
             dr_warn "Docker is NOT enabled to start at boot — after a power loss/reboot the stack won't restart. Fix: 'sudo systemctl enable --now docker'."
         fi
     fi
+
+    check_control_units
 
     # --- CPU: AVX2 (performance only) ---
     echo ""
@@ -1200,7 +1226,7 @@ announce_local_miner() {
     else
         log "  • Stratum password: none set (any password is accepted)"
     fi
-    log "  RigForge compiles/tunes XMRig and owns all host tuning (HugePages/GRUB/MSR) — Pithead does not. See docs/workers.md#mine-on-the-stack-host-itself."
+    log "  RigForge compiles/tunes XMRig and owns all host tuning (HugePages/GRUB/MSR) — Pithead does not. See $DOCS_URL/docs/workers.md#mine-on-the-stack-host-itself."
 }
 
 # Surface the stratum access-password (#152) so the operator can configure each rig's 'pass'.
@@ -1210,7 +1236,7 @@ announce_stratum_auth() {
     local sp
     sp=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
     [ -n "$sp" ] || return 0
-    log "Stratum authentication is ON: every rig must connect with pass \"$sp\" (set it as the xmrig/RigForge stratum password). See docs/workers.md#authentication."
+    log "Stratum authentication is ON: every rig must connect with pass \"$sp\" (set it as the xmrig/RigForge stratum password). See $DOCS_URL/docs/workers.md#authentication."
 }
 
 reset_dashboard() {
@@ -1668,7 +1694,7 @@ Contradictory chains (e.g. 'up down', duplicates, anything after 'down') are
 rejected before anything runs.
 
 Tab-completion: 'source pithead-completion.bash' (bash; zsh via bashcompinit) —
-see docs/operations.md.
+see $DOCS_URL/docs/operations.md.
 
 Workflow: edit config.json, then run '$0 apply'.
 EOF
@@ -1931,12 +1957,60 @@ check_stratum_exposure() {
     pub="$(host_public_ips)"
     pub="${pub//$'\n'/, }"
     if [ -n "$pub" ]; then
-        msg="This host appears to have a public IP ($pub). The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See docs/workers.md#firewall."
+        msg="This host appears to have a public IP ($pub). The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See $DOCS_URL/docs/workers.md#firewall."
         if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
     else
         [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :$port isn't directly internet-exposed."
     fi
     return 0
+}
+
+# Doctor check (#33): do the installed control units point at THIS install?
+# The dashboard writes control requests into its own install's spool and a systemd path unit
+# watches that spool. The unit names an absolute path and is box-global, so it can end up naming a
+# different directory than the dashboard writes to — and when it does, nothing anywhere reports it:
+# requests pile up unread, and the config editor and one-click upgrade simply never complete. A
+# failed upgrade was enough to cause it in the field (#1070 fixed the ordering that did it; this
+# finds a box already stranded, which that fix by definition cannot reach — the channel it would
+# arrive through is the broken one).
+check_control_units() {
+    [ "$OS_TYPE" == "Linux" ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    echo ""
+    echo "Dashboard control channel:"
+    local unit_dir owner here spool
+    unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"
+    if [ "$(normalize_bool "$(env_get DASHBOARD_CONTROL_ENABLED)")" != "true" ]; then
+        dr_info "Disabled for this install — the dashboard cannot apply config changes or upgrade."
+        return 0
+    fi
+    owner=$(control_units_owner_dir)
+    here=$(pwd -P)
+    spool=$(env_get CONTROL_DIR)
+    # A versioned dir that `current` no longer names is a superseded rollback copy, not a
+    # stranded install: the units SHOULD name the live dir, and the dashboard writes there, not
+    # here. Verdicts about the control channel belong to the live install, so say what this dir
+    # is and stop. Same pattern update_current_symlink uses to recognise the layout (#455).
+    local _name _parent _live
+    _name=$(basename "$here")
+    _parent=$(dirname "$here")
+    if [[ "$_name" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -L "$_parent/current" ]; then
+        _live=$(cd "$_parent/current" 2>/dev/null && pwd -P)
+        if [ -n "$_live" ] && [ "$_live" != "$here" ]; then
+            dr_info "This is not the live install — '$_parent/current' points at $_live. Run doctor there to check its control channel."
+            return 0
+        fi
+    fi
+    if [ -z "$owner" ]; then
+        dr_fail "The control channel is enabled but no runner units are installed — the dashboard's config changes and one-click upgrades will never run, with no error shown. Fix: run './pithead apply' from this directory."
+    elif [ "$owner" != "$here" ]; then
+        dr_fail "The control runner units point at $owner, but this install is $here — the dashboard writes its requests here and nothing reads them, so config changes and one-click upgrades silently never run. Fix: run './pithead apply' from this directory."
+    elif [ -n "$spool" ] &&
+        ! grep -qsF "PathExistsGlob=$spool/requests/*.json" "$unit_dir/pithead-control.path"; then
+        dr_fail "The control runner watches a different spool than this install writes to ($spool) — requests are never picked up, with no error shown. Fix: run './pithead apply' from this directory."
+    else
+        dr_ok "Control runner units target this install."
+    fi
 }
 
 # True if the named container is currently running. State only, no sudo — safe for doctor.
@@ -2023,7 +2097,7 @@ check_stratum_listening() {
     if ss -Hltn 2>/dev/null | grep -q ":$port "; then
         dr_ok "Stratum :$port is listening — workers can connect."
     else
-        dr_fail "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and docs/workers.md."
+        dr_fail "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and $DOCS_URL/docs/workers.md."
     fi
     return 0
 }
@@ -2579,7 +2653,7 @@ wizard_print_pointer() {
     echo "That's the core config — everything else (ports, XvB, alerts, energy pricing, per-worker"
     echo "overrides, ...) keeps its default. Want on-chain payout confirmation, a per-kWh cost, or"
     echo "per-worker overrides? Set monero.view_key / dashboard.energy.cost_per_kwh / workers.list in"
-    echo "$CONFIG_FILE and run '$0 apply' — see docs/configuration.md, or use the dashboard's config editor."
+    echo "$CONFIG_FILE and run '$0 apply' — see $DOCS_URL/docs/configuration.md, or use the dashboard's config editor."
 }
 
 # Classify a Monero MAINNET address by its network byte (the base58 prefix) + length:
@@ -5270,17 +5344,13 @@ apply() {
     local apply_marker="${ENV_FILE}.apply-incomplete" incomplete=0
     [ -f "$apply_marker" ] && incomplete=1
 
-    local destructive=0 caddy_changed=0 wallet_keys=() line flag msg old new
+    local destructive=0 caddy_changed=0 caddy_before="" caddy_had=0 wallet_keys=() line flag msg old new
     if [ "${#changed[@]}" -gt 0 ]; then
         echo ""
         log "The following changes will be applied:"
         for key in "${changed[@]}"; do
             old=$(env_get_file "$ENV_FILE" "$key")
             new=$(env_get_file "$newenv" "$key")
-            # DASHBOARD_CONTROL_ENABLED rides along (#33): the Caddyfile always renders the
-            # X-Auth-User header_up now, but a pre-upgrade caddy may still run without it —
-            # restart caddy at the moment the audit actor starts to matter.
-            case "$key" in HOST_IP | HOST_PORT | DASHBOARD_SECURE | DASHBOARD_AUTH_USER | DASHBOARD_AUTH_HASH_B64 | DASHBOARD_ONION_ENABLED | DASHBOARD_CONTROL_ENABLED) caddy_changed=1 ;; esac
             # Payout-wallet change (#375): remember WHICH wallet keys change for the typed
             # confirmation below — one prompt per key, so a Monero+Tari double change can't
             # ride through on a single typed prefix.
@@ -5334,10 +5404,33 @@ apply() {
         mv "$newenv" "$ENV_FILE"
         provision_node_onions # #103: a node that just went local needs its onion before it starts
         inject_service_configs
+        # Whether caddy needs a restart is decided by COMPARING the rendered file, never by a list
+        # of keys someone has to remember to extend (#1052). The list had drifted:
+        # dashboard.expose_public_ip was missing from it, so turning OFF the opt-in that serves the
+        # dashboard on a globally-routable address re-rendered the Caddyfile without its bind lines
+        # and left caddy holding the wildcard listener — the operator sees the setting saved, sees
+        # the file change, and the box stays exposed.
+        #
+        # An absent previous file is a fresh install: compose starts caddy on the new one below, so
+        # there is no old configuration to displace. Emptiness is not absence — a zero-byte file
+        # left by a crashed render is a box whose caddy serves nothing, and that wants the restart.
+        if [ -f "Caddyfile" ]; then
+            caddy_had=1
+            caddy_before=$(cat "Caddyfile")
+        fi
         generate_caddyfile
+        if [ "$caddy_had" -eq 1 ] && [ "$caddy_before" != "$(cat "Caddyfile" 2>/dev/null)" ]; then
+            caddy_changed=1
+        fi
     else
         rm -f "$newenv"
         if [ "$incomplete" -eq 0 ]; then
+            # #33: converge the control-runner units BEFORE returning. A box whose units point at
+            # a dead install has an unchanged config by definition — the fault is in the unit
+            # files, not config.json — so returning here first made `apply` the one thing that
+            # could not repair it, while doctor was telling the operator to run exactly that.
+            # Idempotent and sudo-free when the units already match.
+            provision_control_runner
             log "No configuration changes detected. Nothing to apply."
             return 0
         fi
@@ -6671,6 +6764,25 @@ control_run_pending() {
     log "Processed $n control request(s)."
 }
 
+# Physical directory the installed control units name, or "" when there is no service unit or its
+# ExecStart is unparseable. One checkout has two spellings — the `current` symlink and the versioned
+# dir it points at (production units carry the versioned spelling) — so this resolves to a PHYSICAL
+# path; comparing the literal string would call our own unit foreign. A stranded unit usually names
+# a directory that no longer exists, so resolve the deepest existing ancestor and keep the rest
+# verbatim: the caller still gets a comparable, printable path instead of an empty answer.
+control_units_owner_dir() {
+    local unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}" owner_dir dir tail
+    owner_dir=$(sed -n 's|^ExecStart=\(/.*\)/pithead control-run-pending$|\1|p' \
+        "$unit_dir/pithead-control.service" 2>/dev/null | head -n 1)
+    [ -n "$owner_dir" ] || return 0
+    dir="$owner_dir" tail=""
+    while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
+        tail="/$(basename "$dir")$tail"
+        dir=$(dirname "$dir")
+    done
+    printf '%s' "$(cd "$dir" 2>/dev/null && pwd -P)$tail"
+}
+
 # Install (or remove) the systemd trigger for the runner (#33): a path unit that fires
 # `pithead control-run-pending` whenever a request file lands in the spool. Root, because `apply`
 # needs iptables/chown; the service is a FIXED ExecStart with no parameter from the container, so
@@ -6693,16 +6805,9 @@ provision_control_runner() {
             # it. If the unit's dir is gone, resolve the deepest existing ancestor and keep the
             # rest verbatim; an unparseable ExecStart is foreign (fail safe, leave it alone).
             if [ -e "$unit_dir/pithead-control.service" ]; then
-                local owner_dir dir tail
-                owner_dir=$(sed -n 's|^ExecStart=\(/.*\)/pithead control-run-pending$|\1|p' \
-                    "$unit_dir/pithead-control.service" | head -n 1)
-                dir="$owner_dir" tail=""
-                while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
-                    tail="/$(basename "$dir")$tail"
-                    dir=$(dirname "$dir")
-                done
-                if [ -z "$owner_dir" ] ||
-                    [ "$(cd "$dir" 2>/dev/null && pwd -P)$tail" != "$(pwd -P)" ]; then
+                local owner_dir
+                owner_dir=$(control_units_owner_dir)
+                if [ -z "$owner_dir" ] || [ "$owner_dir" != "$(pwd -P)" ]; then
                     log "Leaving the dashboard control runner units alone — they belong to another checkout."
                     return 0
                 fi

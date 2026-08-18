@@ -160,6 +160,31 @@ failure is a regression. Without the flag, `workers online` and `stratum total h
 every miner-less bench and have to be eyeballed as "expected", which is exactly the
 tolerated-known-failure habit the flag exists to end.
 
+### Which gates are automated, and which are not
+
+Every gate below runs at cut time or is run by hand. **Nothing gates a merge to `main`**, and no
+workflow claims to ([#1048](https://github.com/p2pool-starter-stack/pithead/issues/1048)):
+`release-gate.yml` is dispatch-only, because a self-hosted runner on a key-holding box is not
+registered. It previously carried a `push: [main]` trigger behind a repo variable nobody set, so
+every merge recorded a *skipped* run — and a skipped job is green, which made `main` display a
+passing live-node gate that had never once executed.
+
+| Gate | When | Run by | Blocking |
+| --- | --- | --- | --- |
+| `make test` (tiers 1–3) + `make lint` | every PR | CI | yes |
+| `make test` again, on the release box | `release.sh` stage 2 | the cut | yes |
+| #54 live matrix, `--readiness` | `release.sh` stage 2 | the cut | yes |
+| Targeted e2e with a borrowed rig | before `make release` | you | yes — by policy, not by code |
+| Release signing environment + pinned verifier | `release.sh` stage 1 | the cut | yes |
+| Staged-image smoke (pull back, check version) | `release.sh` stage 5 | the cut | yes |
+| `release-smoke` (real cosign, real #59 upgrade) | after publish | you | no — the assets already exist |
+| `release-gate.yml` tier-4 live matrix | on demand | you, via *Run workflow* | no |
+| Live `--check` sweep on the bench | after deploy | you | no |
+
+The two human-run rows are policy, not automation: the release is not finished until they are green.
+To move `release-gate.yml` into the automated column, register the runner first — see
+[Release / Validation Server](release-server.md) and the note at the top of the workflow.
+
 ## Signed releases
 
 Every promoted image digest and the install bundle carry a cosign key signature
@@ -172,6 +197,26 @@ cut from a private box with no CI OIDC identity, and `--tlog-upload=false` keeps
 out of the public transparency log — which is why verification passes `--private-infrastructure`
 (images) / `--insecure-ignore-tlog` (the bundle blob). Signatures pin the promoted manifest-list
 digests — the exact bytes the smoke stage validated — never a mutable tag.
+
+Signing is **mandatory to publish, because it is mandatory to consume**
+([#960](https://github.com/p2pool-starter-stack/pithead/issues/960),
+[#1108](https://github.com/p2pool-starter-stack/pithead/issues/1108)). Once `cosign.pub` is
+committed it ships in every bundle, so every install from that release on refuses a release with no
+`pithead.tar.gz.sig`. A cut made on a box with no key therefore does not produce a degraded release
+— it produces one every one-click upgrade in the field rejects, and GitHub release assets are
+immutable, so the signature can never be attached afterwards. That is how v1.18.0 shipped unsigned
+and had to be withdrawn and re-cut. Preflight now aborts the cut instead, naming what is missing;
+`--unsigned` is the explicit, loud way to publish one anyway. The check runs on `--dry-run` too and
+only the signing itself is skipped, so a rehearsal reports the decision the real cut will make —
+it used to sit inside the dry-run guard and could only ever print "signing OFF".
+
+Preflight also proves the pinned verifier before anything is built
+([#1084](https://github.com/p2pool-starter-stack/pithead/issues/1084)): it pulls `COSIGN_IMAGE`,
+signs a probe blob with this box's key, verifies it through the container, and requires a tampered
+blob to be refused. That round trip catches a digest that no longer pulls, an image that is not the
+cosign it claims to be, and a committed `cosign.pub` that is no longer the public half of
+`COSIGN_KEY` — each of which would otherwise surface as *signature verification failed* on every
+install, which reads as tampering rather than as our own pin having moved.
 
 `pithead` verifies before it changes anything:
 
@@ -220,6 +265,42 @@ cosign verify-blob --key cosign.pub --signature pithead.tar.gz.sig --insecure-ig
 ```
 
 Releases up to v1.3.x are unsigned; verification gates every release from the first signed one.
+If an upgrade sent you here saying cosign is not installed, read the next section — that box needs
+the host binary once, not a manual verify.
+
+### Upgrading an install older than v1.19.1
+
+The verifier became a container in **v1.19.1**
+([#1072](https://github.com/p2pool-starter-stack/pithead/issues/1072)). Before that it was a host
+binary, and an upgrade is driven by the code the box is **already running** — so an install still on
+v1.18.1 or v1.19.0 checks `command -v cosign` on its next one-click upgrade and refuses when the
+binary is absent:
+
+- **v1.19.0** refuses unconditionally: *"cosign is not installed on the host…"*
+- **v1.18.1** refuses when `cosign.pub` is present: *"cosign.pub is present but cosign is not
+  installed on the host…"*
+
+cosign has no apt package, so this is not something an operator can resolve from the message alone —
+and containerising the verifier does not help the boxes that have not taken the upgrade yet. This bit
+a production install on 2026-08-15.
+
+The escape path, once per box:
+
+1. Install the pinned cosign **v2.6.3** binary on the host — the snippet in
+   [Release / Validation Server › The release signing key](release-server.md#the-release-signing-key).
+   Take that version, not the newest: cosign v3 removed the `--tlog-upload` / `--insecure-ignore-tlog`
+   flags these releases pass, so a v3 binary satisfies `command -v cosign` and then fails the verify.
+2. Retry the upgrade from the dashboard. It now passes the old guard, verifies the bundle, and lands
+   on a release whose verifier is the container.
+3. From the next upgrade on the host binary is unused and can be removed.
+
+`pithead doctor` on v1.19.1 and later answers this before an upgrade rather than during one: it
+reports whether the pinned verifier image is present, and names the pre-fetch command if it is not.
+On the older versions `doctor` cannot report it, which is why it is written here.
+
+> **Not yet proven on a live install.** The guards above were read from the released `pithead` at
+> each tag; the escape path has not been driven end to end on a box actually running v1.18.1 or
+> v1.19.0. Do that on the bench before the next release notes repeat this claim.
 
 ## Post-publish smoke test (#459)
 
@@ -241,9 +322,8 @@ It runs two phases:
   `:vX.Y.Z` images and verifies them against the committed `cosign.pub`. A good signature must pass;
   a byte-changed bundle must be refused (this is what proves the check is real, not the pre-merge
   fake); the bundle's own `VERSION` must equal the tag (the #376 rollback guard); and an unrelated
-  key must be refused. If the release is **unsigned** — signing is opt-in (#376), so releases up to
-  v1.3.x and any cut with the key off ship without a signature — that is reported plainly and the
-  phase is skipped. It never reports a signed pass for an unsigned release. This phase needs only
+  key must be refused. If the release is **unsigned** — releases up to v1.3.x predate signing, and a
+  `--unsigned` cut ships without one — that is reported plainly and the phase is skipped. It never reports a signed pass for an unsigned release. This phase needs only
   `gh` auth and network; run it anywhere.
 - **Real #59 upgrade** (`--upgrade DIR`). On a box still running the *previous* release, it enqueues
   the exact upgrade intent the dashboard writes into the #33 control spool, runs the host control

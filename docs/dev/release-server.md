@@ -123,11 +123,22 @@ The pipeline signs every promoted image digest and the install bundle with cosig
 ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376), key-based — see
 [Releasing › Signed releases](releasing.md#signed-releases) for what installs verify and how).
 The private key lives only on this box, like the GHCR token; the public key is committed in the
-repo as `cosign.pub`. The release preflight refuses to run without cosign, `COSIGN_KEY`, and
-`cosign.pub` all in place.
+repo as `cosign.pub`. The release preflight refuses to run without cosign, `COSIGN_KEY`,
+`COSIGN_PASSWORD`, and `cosign.pub` all in place — signing is mandatory to publish because it is
+mandatory to consume ([#960](https://github.com/p2pool-starter-stack/pithead/issues/960)), so a
+missing piece aborts the cut rather than warning past it. `--dry-run` reaches the same decision and
+skips only the signing, so a rehearsal on this box tells you whether the real cut would sign.
+
+Preflight then proves the key end to end: it signs a probe blob and verifies it through the same
+digest-pinned cosign container installs use. A `cosign.pub` that is no longer the public half of
+`COSIGN_KEY` fails here rather than in the field
+([#1084](https://github.com/p2pool-starter-stack/pithead/issues/1084)).
 
 Install cosign (pinned — there is no Ubuntu apt package; the same snippet works on any host that
-wants to verify):
+wants to verify). Take **v2.6.3**, not the newest: cosign v3 removed the `--tlog-upload` flag both
+signing calls pass, and a drifted box would otherwise pass every other check and die at the signing
+stage with the images already promoted. Preflight probes for the flag and aborts early if it is
+gone.
 
 ```bash
 curl -fsSL -o /tmp/cosign https://github.com/sigstore/cosign/releases/download/v2.6.3/cosign-linux-amd64
