@@ -997,7 +997,15 @@ CLI upgrade. The result names the restore point ([#637](https://github.com/p2poo
 on the versioned layout, the previous `pithead-vX.Y.Z` dir; in place, the pre-upgrade
 `config.json`/`.env` copies.
 
-<<<<<<< HEAD
+**If the button does nothing at all — no result, no error, no modal — the control units are
+pointing at a different directory than the dashboard writes to.** The dashboard drops each request
+into its own install's spool and a systemd path unit runs the host-side runner when a file lands
+there. The unit names an absolute path and is shared box-wide, so an upgrade that aborted partway
+can leave it watching a tree that is no longer the install. Nothing reports the mismatch: requests
+queue up unread, and the config editor and the upgrade button both sit there. `./pithead doctor`
+names it under **Dashboard control channel**, printing the directory the units point at next to the
+one you ran it from, and `./pithead apply` from the install directory repoints them.
+
 ## Updating the appliance OS
 
 On a [Pithead OS appliance](appliance.md) the tarball upgrade above is refused — the machine
@@ -1028,16 +1036,6 @@ gate every appliance boot runs. A banner reports the outcome: updated to the new
 rolled back to the previous one automatically because the new version failed its checks. Either
 way the machine ends on a working system; wallets, settings, and chain data live on the data
 partition and are never part of an update.
-=======
-**If the button does nothing at all — no result, no error, no modal — the control units are
-pointing at a different directory than the dashboard writes to.** The dashboard drops each request
-into its own install's spool and a systemd path unit runs the host-side runner when a file lands
-there. The unit names an absolute path and is shared box-wide, so an upgrade that aborted partway
-can leave it watching a tree that is no longer the install. Nothing reports the mismatch: requests
-queue up unread, and the config editor and the upgrade button both sit there. `./pithead doctor`
-names it under **Dashboard control channel**, printing the directory the units point at next to the
-one you ran it from, and `./pithead apply` from the install directory repoints them.
->>>>>>> origin/develop-v2
 
 ## Tips
 
