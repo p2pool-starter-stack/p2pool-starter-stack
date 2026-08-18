@@ -37,7 +37,12 @@ import { Component, html } from "./preact.mjs";
 const CONTROL_HEADERS = { "Content-Type": "application/json", "X-Pithead-Control": "1" };
 const POLL_MS = 2000;
 const POLL_MAX = 90; // 3 minutes — a commit recreates containers, which can take a while
-const UPGRADE_POLL_MAX = 450; // 15 minutes — an upgrade pulls a whole release of images first
+// #1071: 45 minutes. The old 900s ceiling sat BELOW what the host runner is allowed to spend before
+// the image pull even starts — 60s on the release API, 900s on the bundle over Tor, 120s on the
+// signature — so a healthy upgrade on a slow circuit hit the ceiling with the slowest step still
+// ahead of it and was reported as a failure. No constant can be provably enough (the pull is
+// unbounded), which is why the message below no longer claims the upgrade failed.
+const UPGRADE_POLL_MAX = 1350;
 
 // Poll /api/control/result until a terminal result lands; shared by the Configuration view, the
 // Upgrade button (#59), and the Backup card (#908). `skip` ignores an intermediate status under
@@ -67,8 +72,12 @@ export async function pollResult(id, skip, max = POLL_MAX) {
     if (out.status === skip) continue;
     return out;
   }
+  // Stopping the wait is not the same as the work failing: the runner is a host unit that carries on
+  // regardless of this page, and it records its own outcome. Saying "failed" here sent operators to
+  // check a control channel that was healthy, and invited a re-click that only met the 10-minute
+  // throttle. Say what is actually known instead.
   throw new Error(
-    "Timed out waiting for the host runner — is dashboard.control enabled and the pithead-control unit running?",
+    "Stopped waiting — this can take longer than expected on a slow connection. The host keeps going and finishes on its own; reload in a few minutes to see the result. If the version is unchanged after that, check that dashboard.control is enabled and the pithead-control unit is running.",
   );
 }
 
