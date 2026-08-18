@@ -3171,8 +3171,22 @@ phase_reset() {
         bad "SSH host-key fingerprint survived factory-reset (before: $fp_before, after: ${fp_after:-none})"
     fi
 
-    # ---- leg 2: a wedged /data must self-heal, not brick ----------------------------------
-    info "leg 2 — a corrupt data-partition superblock must drive the wedged-/data recovery, not a brick"
+    # ---- leg 2: a wedged /data must be REPAIRED, not erased --------------------------------
+    info "leg 2 — a corrupt data-partition superblock must be repaired, with /data still there afterwards"
+    # A sentinel standing in for what /data actually holds: the wallets, the Tor onion private keys,
+    # the dashboard database and both synced chains. Until #1062 this leg asked only whether the box
+    # came back to the wizard, which a full reformat satisfies — so a green battery certified the
+    # data loss (#1087). The question is not "did it boot", it is "is the irreplaceable thing still
+    # there". A reformat cannot pass this.
+    _ssh "mkdir -p /data/pithead && printf 'IRREPLACEABLE-KEY-MATERIAL\n' > /data/pithead/.battery-sentinel && sync" || {
+        bad "could not plant the /data survival sentinel"
+        return
+    }
+    # Leg 1's factory reset was a REAL wipe and correctly recorded one, so the note already exists
+    # here. What leg 2 must not do is add to it: the count is the question, not the presence.
+    local wipes_before
+    wipes_before=$(_ssh "wc -l < /boot/efi/pithead-data-wiped 2>/dev/null" | tr -cd '0-9')
+    [ -n "$wipes_before" ] || wipes_before=0
     _ssh "systemctl poweroff" 2>/dev/null || true
     tries=0
     while [ "$tries" -lt 60 ]; do
@@ -3223,9 +3237,32 @@ phase_reset() {
         return
     fi
     if _wait_setup_page 120; then
-        ok "wedged /data recovered into the wizard — the box is usable again"
+        ok "the box came back usable after the corrupt superblock"
     else
         bad "no wizard gate after the wedged-/data recovery — the box did not come back usable"
+    fi
+    # The assertion that a reformat cannot satisfy: `fsck -p` refuses a corrupt primary superblock,
+    # so before #1062 this partition was handed to mkfs.ext4 -F and the sentinel died with it.
+    if [ "$(_ssh "cat /data/pithead/.battery-sentinel 2>/dev/null" | tr -d '\r')" = "IRREPLACEABLE-KEY-MATERIAL" ]; then
+        ok "/data SURVIVED the corrupt superblock — it was repaired, not erased (#1062)"
+    else
+        bad "DATA LOSS — /data was reinitialized rather than repaired; a real box loses its wallets and onion keys here (#1062)"
+    fi
+    # And the wipe log must not have grown: a repair is not a wipe, and evidence that cries wolf
+    # is worse than none — the operator would restore from backup over a machine that kept its data.
+    local wipes_after
+    wipes_after=$(_ssh "wc -l < /boot/efi/pithead-data-wiped 2>/dev/null" | tr -cd '0-9')
+    [ -n "$wipes_after" ] || wipes_after=0
+    if [ "$wipes_after" = "$wipes_before" ]; then
+        ok "the ESP wipe log did not grow ($wipes_before line(s), from leg 1's real factory reset) — a repair is not recorded as a wipe"
+    else
+        bad "a repaired /data recorded a wipe on the ESP ($wipes_before -> $wipes_after) — the evidence would cry wolf"
+    fi
+    # Leg 1's own wipe SHOULD be in there: the recording path is real, not dead code.
+    if [ "$wipes_before" -gt 0 ] 2>/dev/null; then
+        ok "leg 1's factory reset was recorded on the ESP ($wipes_before line(s))"
+    else
+        bad "leg 1 reformatted /data and left no record on the ESP — a wiped machine is indistinguishable from a fresh one (#1062)"
     fi
 }
 
