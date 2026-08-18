@@ -10715,7 +10715,7 @@ else
     bad "an identical staged config never touches the running config.json" "it was rewritten"
 fi
 assert_not_contains "an identical config never reaches the confirm gate (no ceremony)" "$(cat "$MC/identical.out")" "must not be called"
-assert_contains "an identical config says so on the console" "$(cat "$MC/identical.out")" "matches the running one"
+assert_contains "an identical config says so on the console" "$(cat "$MC/identical.out")" "would change nothing"
 [ -f "$STICK3/pithead-config.json" ] && ok "an identical config is not consumed — nothing was applied" ||
     bad "an identical config is not consumed" "the stick's file was removed anyway"
 
