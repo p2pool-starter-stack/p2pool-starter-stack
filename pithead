@@ -1963,6 +1963,20 @@ check_control_units() {
     owner=$(control_units_owner_dir)
     here=$(pwd -P)
     spool=$(env_get CONTROL_DIR)
+    # A versioned dir that `current` no longer names is a superseded rollback copy, not a
+    # stranded install: the units SHOULD name the live dir, and the dashboard writes there, not
+    # here. Verdicts about the control channel belong to the live install, so say what this dir
+    # is and stop. Same pattern update_current_symlink uses to recognise the layout (#455).
+    local _name _parent _live
+    _name=$(basename "$here")
+    _parent=$(dirname "$here")
+    if [[ "$_name" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -L "$_parent/current" ]; then
+        _live=$(cd "$_parent/current" 2>/dev/null && pwd -P)
+        if [ -n "$_live" ] && [ "$_live" != "$here" ]; then
+            dr_info "This is not the live install — '$_parent/current' points at $_live. Run doctor there to check its control channel."
+            return 0
+        fi
+    fi
     if [ -z "$owner" ]; then
         dr_fail "The control channel is enabled but no runner units are installed — the dashboard's config changes and one-click upgrades will never run, with no error shown. Fix: run './pithead apply' from this directory."
     elif [ "$owner" != "$here" ]; then
@@ -5374,6 +5388,12 @@ apply() {
     else
         rm -f "$newenv"
         if [ "$incomplete" -eq 0 ]; then
+            # #33: converge the control-runner units BEFORE returning. A box whose units point at
+            # a dead install has an unchanged config by definition — the fault is in the unit
+            # files, not config.json — so returning here first made `apply` the one thing that
+            # could not repair it, while doctor was telling the operator to run exactly that.
+            # Idempotent and sudo-free when the units already match.
+            provision_control_runner
             log "No configuration changes detected. Nothing to apply."
             return 0
         fi

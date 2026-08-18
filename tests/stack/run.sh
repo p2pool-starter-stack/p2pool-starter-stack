@@ -7749,7 +7749,58 @@ assert_not_contains "versioned dir vs current symlink -> same install, no FAIL" 
 out="$(ccu_run "$CCU/deleted-tree" "$CCU/install/data/control" true "$CCU/install")"
 assert_contains "unit names a deleted directory -> still FAILs" "$out" "FAIL"
 assert_contains "unit names a deleted directory -> still names it" "$out" "$CCU/deleted-tree"
+
+# The documented layout keeps the PREVIOUS version dir for rollback, and the one-click upgrade runs
+# in the browser, so the operator's shell is routinely still sitting in it. The units correctly name
+# the live dir there. Calling that box broken would be a cry-wolf FAIL on a healthy install — and
+# worse, the printed fix ('apply' from here) would repoint the units at the rollback dir and break
+# the live install for real. A superseded version dir must report INFO and no verdict.
+# Mutation: delete the `current`-symlink guard in check_control_units -> this goes red (FAIL returns).
+mkdir -p "$CCU/deploy/pithead-v1.19.0" "$CCU/deploy/pithead-v1.19.1/data/control"
+ln -sfn pithead-v1.19.1 "$CCU/deploy/current"
+out="$(ccu_run "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control" true \
+    "$CCU/deploy/pithead-v1.19.0" "$CCU/deploy/pithead-v1.19.1/data/control")"
+assert_not_contains "superseded rollback dir -> no FAIL (units belong to the live install)" "$out" "FAIL"
+assert_contains "superseded rollback dir -> says which dir is live" "$out" "$CCU/deploy/pithead-v1.19.1"
+# ...and the live dir itself still gets a real verdict, so the guard cannot silence everything.
+out="$(ccu_run "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control" true \
+    "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control")"
+assert_contains "the live install still gets a verdict" "$out" "target this install"
 unset CCU ccu_run out
+
+echo "== unit: apply converges the control units even when nothing changed (#33) =="
+# doctor's fix instruction is "run './pithead apply' from this directory". A box whose units point
+# at a dead install has an UNCHANGED config by definition — the fault is in the unit files, not
+# config.json — so apply's "nothing to apply" early return used to make the prescribed fix a no-op
+# on the only box the check fires for.
+# Mutation: remove provision_control_runner from apply's no-change branch -> this goes red.
+apply_noop_steps() {
+    (
+        cd "$SANDBOX" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        require_env() { :; }
+        ensure_onion_password() { :; }
+        parse_and_validate_config() { :; }
+        load_preserved_state() { :; }
+        onion_missing() { return 1; }
+        is_deployed() { return 0; }
+        ensure_directories() { :; }
+        resolve_dashboard_host() { :; }
+        render_env() { [ -n "${1:-}" ] && : >"$1"; }
+        env_changed_keys() { :; } # nothing changed
+        P2POOL_ONION="abc.onion"  # provisioning marker; read under `set -u` before the stub
+        log() { :; }
+        provision_control_runner() { echo provision; }
+        compose_up_checked() { echo compose; }
+        apply
+    ) | grep -xE 'provision|compose' | tr '\n' ','
+}
+: >"$SANDBOX/.env"
+assert_eq "a no-change apply still converges the control units, and recreates nothing" \
+    "$(apply_noop_steps)" "provision,"
+unset apply_noop_steps
 
 # ---------------------------------------------------------------------------
 echo ""
