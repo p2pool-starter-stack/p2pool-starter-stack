@@ -2151,6 +2151,38 @@ load_baked_images() { # $1 (optional): image ref whose absence forces a load des
     return 0
 }
 
+# Everything the wizard container needs in its spool, staged fresh for EVERY wizard start.
+#
+# It used to run once, before the loop — and the accept path removes the whole spool before
+# provisioning. So a provisioning failure re-entered the loop with the certificate, the reference
+# schema and the rig pre-fill all gone, and `wizard.py` gates TLS on the cert FILE existing: the
+# retry served the setup page — payout address, dashboard password, node secrets — in CLEARTEXT,
+# while the console still advertised HTTPS and a fingerprint minted before the loop (#1063).
+#
+# Prints the certificate fingerprint, empty when one could not be minted, so the caller can say
+# so honestly instead of promising a scheme it is not serving.
+stage_wizard_spool() { # <spool-dir> -> fingerprint on stdout
+    local spool="$1"
+    mkdir -p "$spool"
+    # The wizard container runs as uid 1000 and must write the spool; transient dir, addresses
+    # only by design, removed at handoff.
+    chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
+    # The wizard renders the EXACT config that will be written, defaults included, so it needs
+    # the reference. It is a read-only schema, not a secret.
+    cp /opt/pithead/config.reference.json "$spool/config.reference.json" 2>/dev/null ||
+        cp "$PWD/config.reference.json" "$spool/config.reference.json" 2>/dev/null || true
+    chown 1000:1000 "$spool/config.reference.json" 2>/dev/null || true
+    # The rig role's pre-fill rides beside the reference — derived fresh each boot, like the
+    # disk inventory, so machine 2 on a fleet stick never opens on machine 1's discovery.
+    publish_rig_defaults "$spool"
+    # Installer mode reads the disk list from here too; a retry with no list is the same dead end
+    # in a different shape.
+    installer_mode_available && publish_disk_inventory "$spool"
+    # Copies the canonical pair off /data — minting only happens the first time, so the
+    # fingerprint the console prints stays the machine's one certificate across retries.
+    wizard_mint_cert "$spool" 2>/dev/null || true
+}
+
 firstboot_wizard() {
     local arg
     for arg in "$@"; do
@@ -2236,24 +2268,12 @@ firstboot_wizard() {
     export_build_provenance
     image="${PITHEAD_REGISTRY}/pithead-dashboard:${STACK_VERSION}"
     spool="$PWD/data/firstboot"
-    mkdir -p "$spool"
-    # The wizard container runs as uid 1000 and must write the spool; transient dir, addresses
-    # only by design, removed at handoff.
-    chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
-    # The wizard renders the EXACT config that will be written, defaults included, so it needs
-    # the reference. It is a read-only schema, not a secret.
-    cp /opt/pithead/config.reference.json "$spool/config.reference.json" 2>/dev/null ||
-        cp "$PWD/config.reference.json" "$spool/config.reference.json" 2>/dev/null || true
-    chown 1000:1000 "$spool/config.reference.json" 2>/dev/null || true
-    # The rig role's pre-fill rides beside the reference — derived fresh each boot, like the
-    # disk inventory, so machine 2 on a fleet stick never opens on machine 1's discovery.
-    publish_rig_defaults "$spool"
+    stage_wizard_spool "$spool" >/dev/null
 
     local installer=0 operator_preseed=0
     [ -f "$PRESEED_DIR/pithead-config.json" ] && operator_preseed=1
     if installer_mode_available; then
-        installer=1
-        publish_disk_inventory "$spool"
+        installer=1 # the disk list is staged with the rest of the spool, every session
         log "Running from the installation medium — install and configure on one page."
         # The pre-fill is derived fresh every boot, never inherited: the stick's spool
         # survives between machines, and machine 2 must not open on machine 1's answers —
@@ -2280,11 +2300,15 @@ firstboot_wizard() {
     # trap also fires after this function's locals are gone — where set -u would turn the trap
     # itself into the crash that masks whatever actually failed.
     local cert_fp=""
-    cert_fp=$(wizard_mint_cert "$spool") || warn "Could not generate a setup certificate — the setup page will be plain HTTP."
 
     # shellcheck disable=SC2064  # expand-now is the point (see above)
     trap "'$engine' rm -f pithead-wizard >/dev/null 2>&1 || true" EXIT
     while :; do
+        # Re-stage per session, and re-derive the fingerprint with it: the accept path removes the
+        # spool, so a retry that reused a cert_fp computed once would advertise HTTPS and a
+        # fingerprint for a certificate the container can no longer read (#1063).
+        cert_fp=$(stage_wizard_spool "$spool")
+        [ -n "$cert_fp" ] || warn "Could not generate a setup certificate — the setup page will be plain HTTP."
         # Every wizard session starts with CLEAN flow state. The spool lives on this medium's
         # /data, which survives reboots — so a fleet stick that installed machine 1 still
         # carries its handoff.json, ack and installed markers, and machine 2's boot would open
