@@ -7672,6 +7672,85 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: doctor sees control units that do not point at this install (#33) =="
+# The failure this guards is silent by construction: the dashboard writes control requests into
+# its own install's spool, a box-global systemd unit watches some absolute path, and when the two
+# disagree nothing reports it — the config editor and one-click upgrade just never complete.
+# Seen in the field on a production box: a failed upgrade repointed the units at the half-installed
+# tree, and two operator upgrade requests sat unread for a day with no error on either side.
+#
+# Mutation proof (each assertion below fails if the guard regresses):
+#   - drop the `[ "$owner" != "$here" ]` arm      -> "units point elsewhere" goes green->red
+#   - flip that `!=` to `=`                        -> mismatch AND aligned assertions both flip
+#   - drop the spool comparison arm                -> "watches a different spool" goes red
+#   - drop the `-z "$owner"` arm                   -> "no units installed" loses its message
+#   - drop the enabled gate's `return 0`           -> "disabled" assertion sees a FAIL
+CCU="$SANDBOX/ccu"
+mkdir -p "$CCU/units" "$CCU/bin" "$CCU/install" "$CCU/other"
+# uname/systemctl stubs: the check gates on Linux + systemctl, so dev Macs run the branch too.
+printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$CCU/bin/uname"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$CCU/bin/systemctl"
+chmod +x "$CCU/bin/uname" "$CCU/bin/systemctl"
+
+ccu_run() { # <owner-dir|-> <spool-in-path-unit|-> <enabled> <run-dir> [control-dir-in-env] -> output
+    rm -f "$CCU/units/pithead-control.service" "$CCU/units/pithead-control.path"
+    [ "$1" != "-" ] && printf '[Service]\nExecStart=%s/pithead control-run-pending\n' "$1" >"$CCU/units/pithead-control.service"
+    [ "$2" != "-" ] && printf '[Path]\nPathExistsGlob=%s/requests/*.json\n' "$2" >"$CCU/units/pithead-control.path"
+    printf 'DASHBOARD_CONTROL_ENABLED=%s\nCONTROL_DIR=%s\n' "$3" "${5:-$4/data/control}" >"$4/.env"
+    (
+        cd "$4" || exit
+        PATH="$CCU/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        PITHEAD_UNIT_DIR="$CCU/units" check_control_units 2>&1
+    )
+}
+
+# The production shape: units name a tree that is not this install. Must FAIL, and must name both
+# paths — an operator who cannot see which directory is wrong cannot fix it.
+out="$(ccu_run "$CCU/other" "$CCU/install/data/control" true "$CCU/install")"
+assert_contains "units point elsewhere -> FAIL" "$out" "FAIL"
+assert_contains "units point elsewhere -> names the unit's directory" "$out" "$CCU/other"
+assert_contains "units point elsewhere -> names this install" "$out" "$CCU/install"
+
+# Aligned: same install, same spool. Must be OK and must NOT fail.
+out="$(ccu_run "$CCU/install" "$CCU/install/data/control" true "$CCU/install")"
+assert_not_contains "aligned units -> no FAIL" "$out" "FAIL"
+assert_contains "aligned units -> OK" "$out" "target this install"
+
+# Control enabled but the units were never installed at all. Assert the DISTINCT message, not just
+# that something failed: with no units the owner is empty, so the mismatch arm below would fail on
+# its own and an assertion for bare "FAIL" would stay green with this arm deleted — and the operator
+# would get "point at , but this install is ..." instead of being told the units are simply missing.
+out="$(ccu_run - - true "$CCU/install")"
+assert_contains "no units installed -> FAIL naming the real cause" "$out" "no runner units are installed"
+
+# Service unit right, path unit watching someone else's spool: requests are still never read.
+out="$(ccu_run "$CCU/install" "$CCU/other/data/control" true "$CCU/install")"
+assert_contains "path unit watches a different spool -> FAIL" "$out" "FAIL"
+
+# Control disabled: the units are irrelevant, so a mismatch must NOT be reported as a fault.
+out="$(ccu_run "$CCU/other" "$CCU/other/data/control" false "$CCU/install")"
+assert_not_contains "control disabled -> no FAIL" "$out" "FAIL"
+
+# The two spellings of one checkout (versioned dir vs the `current` symlink) are the SAME install.
+# A literal string compare would call this a mismatch and cry wolf on every production box.
+mkdir -p "$CCU/versions/pithead-v1.9.3"
+ln -sfn "$CCU/versions/pithead-v1.9.3" "$CCU/current"
+# .env and the path unit both carry the versioned spelling, as one render always writes them;
+# only the invocation goes through the symlink. The owner compare must resolve both to one install.
+out="$(ccu_run "$CCU/versions/pithead-v1.9.3" "$CCU/versions/pithead-v1.9.3/data/control" true \
+    "$CCU/current" "$CCU/versions/pithead-v1.9.3/data/control")"
+assert_not_contains "versioned dir vs current symlink -> same install, no FAIL" "$out" "FAIL"
+
+# A stranded unit usually names a directory that no longer exists; the check must still resolve a
+# printable path and report the mismatch rather than going quiet on an empty answer.
+out="$(ccu_run "$CCU/deleted-tree" "$CCU/install/data/control" true "$CCU/install")"
+assert_contains "unit names a deleted directory -> still FAILs" "$out" "FAIL"
+assert_contains "unit names a deleted directory -> still names it" "$out" "$CCU/deleted-tree"
+unset CCU ccu_run out
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

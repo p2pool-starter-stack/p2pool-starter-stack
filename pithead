@@ -907,6 +907,8 @@ doctor() {
         fi
     fi
 
+    check_control_units
+
     # --- CPU: AVX2 (performance only) ---
     echo ""
     echo "CPU:"
@@ -1909,6 +1911,40 @@ host_public_ips() {
 # warn only when the host has a public IP AND stratum listens on all interfaces (the default bind).
 # Home/NAT hosts (no public IP on an interface) and hosts that narrowed p2pool.stratum_bind stay
 # quiet in setup. $1 = "setup" (emit via warn, only on exposure) or "doctor" (emit OK/WARN/skip).
+# Doctor check (#33): do the installed control units point at THIS install?
+# The dashboard writes control requests into its own install's spool and a systemd path unit
+# watches that spool. The unit names an absolute path and is box-global, so it can end up naming a
+# different directory than the dashboard writes to — and when it does, nothing anywhere reports it:
+# requests pile up unread, and the config editor and one-click upgrade simply never complete. A
+# failed upgrade was enough to cause it in the field (#1070 fixed the ordering that did it; this
+# finds a box already stranded, which that fix by definition cannot reach — the channel it would
+# arrive through is the broken one).
+check_control_units() {
+    [ "$OS_TYPE" == "Linux" ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    echo ""
+    echo "Dashboard control channel:"
+    local unit_dir owner here spool
+    unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"
+    if [ "$(normalize_bool "$(env_get DASHBOARD_CONTROL_ENABLED)")" != "true" ]; then
+        dr_info "Disabled for this install — the dashboard cannot apply config changes or upgrade."
+        return 0
+    fi
+    owner=$(control_units_owner_dir)
+    here=$(pwd -P)
+    spool=$(env_get CONTROL_DIR)
+    if [ -z "$owner" ]; then
+        dr_fail "The control channel is enabled but no runner units are installed — the dashboard's config changes and one-click upgrades will never run, with no error shown. Fix: run './pithead apply' from this directory."
+    elif [ "$owner" != "$here" ]; then
+        dr_fail "The control runner units point at $owner, but this install is $here — the dashboard writes its requests here and nothing reads them, so config changes and one-click upgrades silently never run. Fix: run './pithead apply' from this directory."
+    elif [ -n "$spool" ] &&
+        ! grep -qsF "PathExistsGlob=$spool/requests/*.json" "$unit_dir/pithead-control.path"; then
+        dr_fail "The control runner watches a different spool than this install writes to ($spool) — requests are never picked up, with no error shown. Fix: run './pithead apply' from this directory."
+    else
+        dr_ok "Control runner units target this install."
+    fi
+}
+
 check_stratum_exposure() {
     local mode="$1" bind pub msg port
     bind="${STRATUM_BIND:-}"
@@ -6671,6 +6707,25 @@ control_run_pending() {
     log "Processed $n control request(s)."
 }
 
+# Physical directory the installed control units name, or "" when there is no service unit or its
+# ExecStart is unparseable. One checkout has two spellings — the `current` symlink and the versioned
+# dir it points at (production units carry the versioned spelling) — so this resolves to a PHYSICAL
+# path; comparing the literal string would call our own unit foreign. A stranded unit usually names
+# a directory that no longer exists, so resolve the deepest existing ancestor and keep the rest
+# verbatim: the caller still gets a comparable, printable path instead of an empty answer.
+control_units_owner_dir() {
+    local unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}" owner_dir dir tail
+    owner_dir=$(sed -n 's|^ExecStart=\(/.*\)/pithead control-run-pending$|\1|p' \
+        "$unit_dir/pithead-control.service" 2>/dev/null | head -n 1)
+    [ -n "$owner_dir" ] || return 0
+    dir="$owner_dir" tail=""
+    while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
+        tail="/$(basename "$dir")$tail"
+        dir=$(dirname "$dir")
+    done
+    printf '%s' "$(cd "$dir" 2>/dev/null && pwd -P)$tail"
+}
+
 # Install (or remove) the systemd trigger for the runner (#33): a path unit that fires
 # `pithead control-run-pending` whenever a request file lands in the spool. Root, because `apply`
 # needs iptables/chown; the service is a FIXED ExecStart with no parameter from the container, so
@@ -6693,16 +6748,9 @@ provision_control_runner() {
             # it. If the unit's dir is gone, resolve the deepest existing ancestor and keep the
             # rest verbatim; an unparseable ExecStart is foreign (fail safe, leave it alone).
             if [ -e "$unit_dir/pithead-control.service" ]; then
-                local owner_dir dir tail
-                owner_dir=$(sed -n 's|^ExecStart=\(/.*\)/pithead control-run-pending$|\1|p' \
-                    "$unit_dir/pithead-control.service" | head -n 1)
-                dir="$owner_dir" tail=""
-                while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
-                    tail="/$(basename "$dir")$tail"
-                    dir=$(dirname "$dir")
-                done
-                if [ -z "$owner_dir" ] ||
-                    [ "$(cd "$dir" 2>/dev/null && pwd -P)$tail" != "$(pwd -P)" ]; then
+                local owner_dir
+                owner_dir=$(control_units_owner_dir)
+                if [ -z "$owner_dir" ] || [ "$owner_dir" != "$(pwd -P)" ]; then
                     log "Leaving the dashboard control runner units alone — they belong to another checkout."
                     return 0
                 fi
