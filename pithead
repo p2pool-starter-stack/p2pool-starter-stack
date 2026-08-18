@@ -1677,7 +1677,7 @@ Contradictory chains (e.g. 'up down', duplicates, anything after 'down') are
 rejected before anything runs.
 
 Tab-completion: 'source pithead-completion.bash' (bash; zsh via bashcompinit) —
-see docs/operations.md.
+see $DOCS_URL/docs/operations.md.
 
 Workflow: edit config.json, then run '$0 apply'.
 EOF

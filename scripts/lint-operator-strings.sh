@@ -13,7 +13,30 @@ msg_lines() { # <file> <keyword-alternation>
     {
         grep -nE "^[[:space:]]*($2)[[:space:]]*(-[a-zA-Z]+[[:space:]]*)?\"" "$1" || true
         grep -n 'msg=' "$1" || true
+        heredoc_body_lines "$1"
     }
+}
+
+# Heredoc bodies that reach the operator. The greps above only see call shapes, so show_help's
+# `cat <<EOF` usage block was invisible — and a bare docs/ path sat in it through the very review
+# that added the docs rule, with the linter reporting the tree clean. An opener with a redirect on
+# it (`cat <<EOF >"$f"`) writes a file — a unit, a config, a template — which is not operator text,
+# so the `$` anchor keeps those out. Prints "line: text" per body line, same shape as the greps.
+heredoc_body_lines() { # <file>
+    awk '
+        /^[ \t]*cat[ \t]+<<-?[^ \t]+[ \t]*$/ {
+            tag = $0
+            sub(/^[ \t]*cat[ \t]+<<-?/, "", tag)
+            sub(/[ \t]*$/, "", tag)
+            # strip a quoted tag without writing a quote into this program
+            gsub(/\042/, "", tag)
+            gsub(/\047/, "", tag)
+            inhd = 1
+            next
+        }
+        inhd && $0 ~ "^[ \t]*" tag "[ \t]*$" { inhd = 0; next }
+        inhd { print FNR ": " $0 }
+    ' "$1"
 }
 
 # Two rules, two widths. The issue-number rule stays on the original call shapes; the doctor's
@@ -23,9 +46,11 @@ msg_lines() { # <file> <keyword-alternation>
 NARROW='log|warn|error|info|echo'
 WIDE="$NARROW|dr_ok|dr_warn|dr_fail|dr_info|_upg_reject|_upg_fail"
 
-# Rule 1: no #NNN in operator text.
+# Rule 1: no #NNN in operator text. A $DOCS_URL pointer is stripped first: its trailing #anchor is
+# a heading link, and GitHub numbers those from numbered headings ("## 1. Prerequisites" ->
+# "#1-prerequisites"), which reads as an issue reference to the pattern below and is not one.
 scan_pithead() {
-    msg_lines "$1" "$NARROW" | grep -E '#[0-9]+' || true
+    msg_lines "$1" "$NARROW" | sed 's|\$DOCS_URL/[^ "]*||g' | grep -E '#[0-9]+' || true
 }
 
 # Rule 2: no bare repo doc path in operator text (issue #1024). Release bundles ship the CLI, the
@@ -99,6 +124,8 @@ if [ "${1:-}" = "--self-test" ]; then
     expect "pithead describe_change msg= carrying #NNN is flagged" hit "$(scan_pithead "$tmp/msg.sh")"
     printf '%s\n' '    log "held until sync finishes, then starts."' '# see the spool (#42) design note' >"$tmp/clean.sh"
     expect "clean pithead + a #NNN comment is not flagged" clean "$(scan_pithead "$tmp/clean.sh")"
+    printf '%s\n' '    error "install it ($DOCS_URL/docs/getting-started.md#1-prerequisites)."' >"$tmp/anchor.sh"
+    expect "a numbered heading anchor in a \$DOCS_URL pointer is not an issue reference" clean "$(scan_pithead "$tmp/anchor.sh")"
 
     printf '%s\n' '    error "set it — see docs/configuration.md."' >"$tmp/docs.sh"
     expect "operator text naming a bare repo doc path is flagged" hit "$(scan_pithead_docs "$tmp/docs.sh")"
@@ -106,6 +133,13 @@ if [ "${1:-}" = "--self-test" ]; then
     expect "the doctor/runner call shapes are covered by the docs rule" hit "$(scan_pithead_docs "$tmp/docs-wide.sh")"
     printf '%s\n' '    log "see $DOCS_URL/docs/workers.md#authentication."' '# docs/configuration.md in a comment' >"$tmp/docs-ok.sh"
     expect "a \$DOCS_URL pointer and a docs/ comment are not flagged" clean "$(scan_pithead_docs "$tmp/docs-ok.sh")"
+
+    printf '%s\n' 'show_help() {' '    cat <<EOF' 'Tab-completion: see docs/operations.md.' 'EOF' '}' >"$tmp/heredoc.sh"
+    expect "a bare doc path in a printed heredoc is flagged" hit "$(scan_pithead_docs "$tmp/heredoc.sh")"
+    printf '%s\n' '    cat <<EOF >"$unit"' 'ExecStart=/usr/bin/thing --doc docs/operations.md' 'EOF' >"$tmp/heredoc-file.sh"
+    expect "a redirected heredoc writes a file, not operator text" clean "$(scan_pithead_docs "$tmp/heredoc-file.sh")"
+    printf '%s\n' '    cat <<EOF' 'Rendered after the fix landed (#42).' 'EOF' >"$tmp/heredoc-num.sh"
+    expect "a #NNN in a printed heredoc is flagged" hit "$(scan_pithead "$tmp/heredoc-num.sh")"
 
     printf '%s\n' 'const t = "avg window (#168)";' >"$tmp/hit.mjs"
     expect "frontend user string carrying #NNN is flagged" hit "$(scan_frontend "$tmp/hit.mjs")"
