@@ -1,16 +1,27 @@
-name: Release gate (self-hosted)
+name: Release gate (self-hosted, manual dispatch only)
 
 # Tier-4 end-to-end validation against the REAL synced Monero + Tari nodes — the pre-release
 # gate (#54). It runs on the dedicated, self-hosted release server (which holds real wallet /
 # onion keys), so it MUST only ever run code we trust.
 #
+# DISPATCH ONLY. This workflow does not gate `main` and does not claim to (#1048). It carried a
+# `push: [main]` trigger behind an `if:` that no repo variable ever set, so every merge to main
+# recorded a *skipped* run — and a skipped job is green/neutral, so `main` displayed a passing
+# release gate that had never once executed. The gating that is real happens elsewhere and is named
+# in docs/dev/releasing.md § Which gates are automated: `scripts/release.sh` stage 2 runs `make test`
+# and the #54 live matrix at cut time and aborts on failure, plus the operator-run bench e2e.
+#
+# To make this automatic, a self-hosted runner has to exist first: register the release server with
+# the `self-hosted, pithead-release` labels (docs/dev/release-server.md), then add back
+#   push:
+#     branches: [main]
+# Do not add the trigger before the runner — a queued job no runner can claim is auto-cancelled
+# after 24h and shows as a permanent red ✗ on main.
+#
 # SECURITY: there is deliberately NO `pull_request` trigger. A fork PR's code running on this
 # runner could steal the box's keys or persist a backdoor (GitHub recommends against self-hosted
-# runners on public repos for exactly this reason). The gate runs only on:
-#   - workflow_dispatch — a maintainer manually runs it on a ref they've reviewed, OR
-#   - push to main      — post-merge, on trusted code.
-# To end-to-end a specific fork PR, review it first, then dispatch this workflow on that ref.
-# See docs/dev/release-server.md.
+# runners on public repos for exactly this reason). To end-to-end a specific fork PR, review it
+# first, then dispatch this workflow on that ref.
 on:
   workflow_dispatch:
     inputs:
@@ -24,8 +35,6 @@ on:
         default: "check"
         type: choice
         options: [check, matrix]
-  push:
-    branches: [main]
 
 # Never run two gates against the one shared box at the same time.
 concurrency:
@@ -39,12 +48,6 @@ permissions:
 jobs:
   release-gate:
     name: Tier-4 live matrix (real nodes)
-    # Only run automatically once a self-hosted runner is actually wired up — set the repo variable
-    # ENABLE_RELEASE_GATE=true when one is registered. Without this guard, every push to main queues
-    # a job no runner can claim, and GitHub auto-cancels it after a 24h timeout — a permanent red ✗
-    # on main. A skipped job is green/neutral instead. A manual workflow_dispatch ALWAYS runs, so a
-    # maintainer can still validate a reviewed ref on a registered runner on demand.
-    if: ${{ github.event_name == 'workflow_dispatch' || vars.ENABLE_RELEASE_GATE == 'true' }}
     # Register the server with these labels: `pithead-release` scopes the gate to the dedicated
     # box; prefer an ephemeral / just-in-time runner in its own runner group.
     runs-on: [self-hosted, pithead-release]

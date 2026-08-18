@@ -15,7 +15,7 @@
 #     - the bundle's own VERSION equals the tag (the #376 rollback guard — an older signed bundle
 #       served at the vX.Y.Z URL is caught);
 #     - every published image verifies, and an unrelated key is refused.
-#   If the release is UNSIGNED (signing is opt-in, #376), that is reported plainly — never a false
+#   If the release is UNSIGNED (releases up to v1.3.x, or a --unsigned cut) that is reported plainly — never a false
 #   pass. Runnable from any box with `gh` auth + network; needs no deployed stack.
 #
 # Phase 2 (--upgrade DIR): drive the REAL #59 host path against a previous-release install — enqueue
@@ -109,7 +109,7 @@ verify_release() {
     # running install already trusts), never the bundle's own copy — a key that arrives inside the
     # artifact it vouches for proves nothing.
     if [ ! -f "$pub" ] && [ "$SIG_PUBLISHED" -eq 0 ]; then
-        warn "UNSIGNED release: no committed cosign.pub and no pithead.tar.gz.sig asset. Release signing is opt-in (#376) — releases up to v1.3.x, and any cut with signing off, ship unsigned. Nothing to cosign-verify; bundle integrity rests on the digest-pinned compose + TLS to GitHub. (Not a failure.)"
+        warn "UNSIGNED release: no committed cosign.pub and no pithead.tar.gz.sig asset. Releases up to v1.3.x predate signing, and a --unsigned cut ships without it (#960). Nothing to cosign-verify; bundle integrity rests on the digest-pinned compose + TLS to GitHub. (Not a failure.)"
         return 0
     fi
     # A half state is a misconfiguration, not a pass — surface it.
@@ -205,7 +205,7 @@ verify_release_images_direct() {
     # Negative: corrupt ONE image's pinned digest in a COPY of the bundle and re-run the real
     # function. Needs a cosign.pub to reach the real cosign dial (the bundle's own, or the one
     # committed to this checkout) — without one, verify_release_images's documented fallback is to
-    # WARN and proceed (#376 opt-in), which is a different, already-covered behaviour, not this gate.
+    # WARN and proceed (#461 — an install predating signing), a different, already-covered behaviour.
     local pub_src=""
     [ -f "$bundle_dir/cosign.pub" ] && pub_src="$bundle_dir/cosign.pub"
     [ -z "$pub_src" ] && [ -f "$REPO_ROOT/cosign.pub" ] && pub_src="$REPO_ROOT/cosign.pub"
@@ -314,5 +314,5 @@ printf '\n'
 if [ "$SIGNED" -eq 1 ]; then
     ok "Smoke passed: $TAG is signed and verifies for real$([ -n "$UPGRADE_DIR" ] && echo ', and upgrades cleanly')."
 else
-    ok "Smoke passed: $TAG downloaded and checked; release is UNSIGNED (opt-in signing off)$([ -n "$UPGRADE_DIR" ] && echo '; upgrade path exercised')."
+    ok "Smoke passed: $TAG downloaded and checked; release is UNSIGNED (cut without signing)$([ -n "$UPGRADE_DIR" ] && echo '; upgrade path exercised')."
 fi
