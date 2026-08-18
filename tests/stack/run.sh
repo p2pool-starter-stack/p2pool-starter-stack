@@ -10887,6 +10887,135 @@ assert_eq "the wait polls its full 25-try budget, not a single-shot check" "$(wc
 touch "$LW/loop0p1" "$LW/loop0p2"
 lw_run "$LW/loop0"
 assert_rc "regular files at p1/p2 do not satisfy the wait — block devices required" "$?" "1"
+echo "== unit: doctor sees control units that do not point at this install (#33) =="
+# The failure this guards is silent by construction: the dashboard writes control requests into
+# its own install's spool, a box-global systemd unit watches some absolute path, and when the two
+# disagree nothing reports it — the config editor and one-click upgrade just never complete.
+# Seen in the field on a production box: a failed upgrade repointed the units at the half-installed
+# tree, and two operator upgrade requests sat unread for a day with no error on either side.
+#
+# Mutation proof (each assertion below fails if the guard regresses):
+#   - drop the `[ "$owner" != "$here" ]` arm      -> "units point elsewhere" goes green->red
+#   - flip that `!=` to `=`                        -> mismatch AND aligned assertions both flip
+#   - drop the spool comparison arm                -> "watches a different spool" goes red
+#   - drop the `-z "$owner"` arm                   -> "no units installed" loses its message
+#   - drop the enabled gate's `return 0`           -> "disabled" assertion sees a FAIL
+CCU="$SANDBOX/ccu"
+mkdir -p "$CCU/units" "$CCU/bin" "$CCU/install" "$CCU/other"
+# uname/systemctl stubs: the check gates on Linux + systemctl, so dev Macs run the branch too.
+printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$CCU/bin/uname"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$CCU/bin/systemctl"
+chmod +x "$CCU/bin/uname" "$CCU/bin/systemctl"
+
+ccu_run() { # <owner-dir|-> <spool-in-path-unit|-> <enabled> <run-dir> [control-dir-in-env] -> output
+    rm -f "$CCU/units/pithead-control.service" "$CCU/units/pithead-control.path"
+    [ "$1" != "-" ] && printf '[Service]\nExecStart=%s/pithead control-run-pending\n' "$1" >"$CCU/units/pithead-control.service"
+    [ "$2" != "-" ] && printf '[Path]\nPathExistsGlob=%s/requests/*.json\n' "$2" >"$CCU/units/pithead-control.path"
+    printf 'DASHBOARD_CONTROL_ENABLED=%s\nCONTROL_DIR=%s\n' "$3" "${5:-$4/data/control}" >"$4/.env"
+    (
+        cd "$4" || exit
+        PATH="$CCU/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        PITHEAD_UNIT_DIR="$CCU/units" check_control_units 2>&1
+    )
+}
+
+# The production shape: units name a tree that is not this install. Must FAIL, and must name both
+# paths — an operator who cannot see which directory is wrong cannot fix it.
+out="$(ccu_run "$CCU/other" "$CCU/install/data/control" true "$CCU/install")"
+assert_contains "units point elsewhere -> FAIL" "$out" "FAIL"
+assert_contains "units point elsewhere -> names the unit's directory" "$out" "$CCU/other"
+assert_contains "units point elsewhere -> names this install" "$out" "$CCU/install"
+
+# Aligned: same install, same spool. Must be OK and must NOT fail.
+out="$(ccu_run "$CCU/install" "$CCU/install/data/control" true "$CCU/install")"
+assert_not_contains "aligned units -> no FAIL" "$out" "FAIL"
+assert_contains "aligned units -> OK" "$out" "target this install"
+
+# Control enabled but the units were never installed at all. Assert the DISTINCT message, not just
+# that something failed: with no units the owner is empty, so the mismatch arm below would fail on
+# its own and an assertion for bare "FAIL" would stay green with this arm deleted — and the operator
+# would get "point at , but this install is ..." instead of being told the units are simply missing.
+out="$(ccu_run - - true "$CCU/install")"
+assert_contains "no units installed -> FAIL naming the real cause" "$out" "no runner units are installed"
+
+# Service unit right, path unit watching someone else's spool: requests are still never read.
+out="$(ccu_run "$CCU/install" "$CCU/other/data/control" true "$CCU/install")"
+assert_contains "path unit watches a different spool -> FAIL" "$out" "FAIL"
+
+# Control disabled: the units are irrelevant, so a mismatch must NOT be reported as a fault.
+out="$(ccu_run "$CCU/other" "$CCU/other/data/control" false "$CCU/install")"
+assert_not_contains "control disabled -> no FAIL" "$out" "FAIL"
+
+# The two spellings of one checkout (versioned dir vs the `current` symlink) are the SAME install.
+# A literal string compare would call this a mismatch and cry wolf on every production box.
+mkdir -p "$CCU/versions/pithead-v1.9.3"
+ln -sfn "$CCU/versions/pithead-v1.9.3" "$CCU/current"
+# .env and the path unit both carry the versioned spelling, as one render always writes them;
+# only the invocation goes through the symlink. The owner compare must resolve both to one install.
+out="$(ccu_run "$CCU/versions/pithead-v1.9.3" "$CCU/versions/pithead-v1.9.3/data/control" true \
+    "$CCU/current" "$CCU/versions/pithead-v1.9.3/data/control")"
+assert_not_contains "versioned dir vs current symlink -> same install, no FAIL" "$out" "FAIL"
+
+# A stranded unit usually names a directory that no longer exists; the check must still resolve a
+# printable path and report the mismatch rather than going quiet on an empty answer.
+out="$(ccu_run "$CCU/deleted-tree" "$CCU/install/data/control" true "$CCU/install")"
+assert_contains "unit names a deleted directory -> still FAILs" "$out" "FAIL"
+assert_contains "unit names a deleted directory -> still names it" "$out" "$CCU/deleted-tree"
+
+# The documented layout keeps the PREVIOUS version dir for rollback, and the one-click upgrade runs
+# in the browser, so the operator's shell is routinely still sitting in it. The units correctly name
+# the live dir there. Calling that box broken would be a cry-wolf FAIL on a healthy install — and
+# worse, the printed fix ('apply' from here) would repoint the units at the rollback dir and break
+# the live install for real. A superseded version dir must report INFO and no verdict.
+# Mutation: delete the `current`-symlink guard in check_control_units -> this goes red (FAIL returns).
+mkdir -p "$CCU/deploy/pithead-v1.19.0" "$CCU/deploy/pithead-v1.19.1/data/control"
+ln -sfn pithead-v1.19.1 "$CCU/deploy/current"
+out="$(ccu_run "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control" true \
+    "$CCU/deploy/pithead-v1.19.0" "$CCU/deploy/pithead-v1.19.1/data/control")"
+assert_not_contains "superseded rollback dir -> no FAIL (units belong to the live install)" "$out" "FAIL"
+assert_contains "superseded rollback dir -> says which dir is live" "$out" "$CCU/deploy/pithead-v1.19.1"
+# ...and the live dir itself still gets a real verdict, so the guard cannot silence everything.
+out="$(ccu_run "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control" true \
+    "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control")"
+assert_contains "the live install still gets a verdict" "$out" "target this install"
+unset CCU ccu_run out
+
+echo "== unit: apply converges the control units even when nothing changed (#33) =="
+# doctor's fix instruction is "run './pithead apply' from this directory". A box whose units point
+# at a dead install has an UNCHANGED config by definition — the fault is in the unit files, not
+# config.json — so apply's "nothing to apply" early return used to make the prescribed fix a no-op
+# on the only box the check fires for.
+# Mutation: remove provision_control_runner from apply's no-change branch -> this goes red.
+apply_noop_steps() {
+    (
+        cd "$SANDBOX" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        require_env() { :; }
+        ensure_onion_password() { :; }
+        parse_and_validate_config() { :; }
+        load_preserved_state() { :; }
+        onion_missing() { return 1; }
+        is_deployed() { return 0; }
+        ensure_directories() { :; }
+        resolve_dashboard_host() { :; }
+        render_env() { [ -n "${1:-}" ] && : >"$1"; }
+        env_changed_keys() { :; } # nothing changed
+        P2POOL_ONION="abc.onion"  # provisioning marker; read under `set -u` before the stub
+        log() { :; }
+        provision_control_runner() { echo provision; }
+        compose_up_checked() { echo compose; }
+        apply
+    ) | grep -xE 'provision|compose' | tr '\n' ','
+}
+: >"$SANDBOX/.env"
+assert_eq "a no-change apply still converges the control units, and recreates nothing" \
+    "$(apply_noop_steps)" "provision,"
+unset apply_noop_steps
 
 # ---------------------------------------------------------------------------
 echo ""
