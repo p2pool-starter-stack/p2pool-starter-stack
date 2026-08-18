@@ -288,8 +288,12 @@ main() {
         }
     fi
 
+    # $validated is the stick MERGED OVER the running config, never the stick's own file — so this
+    # compares the outcome, not the two documents. A stick whose every setting the merge absorbs is
+    # a no-op, and that is what the message says: it would change nothing. Saying the files "match"
+    # would be a claim about the stick that was never tested.
     if [ ! -f "$RUNNING_CONFIG" ] || media_config_identical "$RUNNING_CONFIG" "$validated"; then
-        _console "" "Media configuration channel: the staged configuration matches the running one — continuing boot."
+        _console "" "Media configuration channel: the staged configuration would change nothing — continuing boot."
         rm -f "$validated"
         return 0
     fi

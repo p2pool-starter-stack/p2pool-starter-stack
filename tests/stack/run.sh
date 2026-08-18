@@ -10431,6 +10431,13 @@ merged=$(
     media_merge_config "$MC/running-full.json" "$MC/minimal-stick.json"
 )
 assert_eq "the named setting changes" "$(jq -r '.p2pool.pool' "$merged")" "nano"
+# THE assertion that separates a deep merge from a shallow one. Every other check below reads a
+# key in a top-level object the stick never names, and `.[0] + .[1]` preserves those too — so the
+# suite stayed byte-identical under the one-character mutation that reverts the merge and re-opens
+# #965. stratum_password is the sibling of the key the stick DOES name: a shallow merge replaces
+# the whole p2pool object and takes the secret with it.
+assert_eq "a secret beside the named key survives — the merge is deep, not a shallow replace" \
+    "$(jq -r '.p2pool.stratum_password' "$merged")" "auto"
 assert_eq "the unnamed dashboard password is preserved, not dropped" \
     "$(jq -r '.dashboard.auth.password' "$merged")" "the-firstboot-password"
 assert_eq "the unnamed appliance defaults are preserved (control.enabled)" \
