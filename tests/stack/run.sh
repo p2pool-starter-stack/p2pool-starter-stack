@@ -9279,6 +9279,40 @@ unset PITHEAD_TLS_DIR
 rm -rf "$TLSSB"
 unset TLSSB fp1 fp2
 
+echo "== unit: stage_wizard_spool re-arms a wiped spool, so a retry keeps its TLS (#1063) =="
+# The accept path removes the whole spool before provisioning. Staging used to run ONCE before the
+# loop, so a provisioning failure re-entered it with the certificate, the reference schema and the
+# rig pre-fill gone — and wizard.py gates TLS on the cert FILE existing, so the retry served the
+# setup page (payout address, dashboard password, node secrets) in CLEARTEXT while the console
+# still advertised HTTPS and a fingerprint. MUTATION PROOF: stage once before the loop again and
+# "a wiped spool is fully re-armed" + "the retry can still serve TLS" go red.
+SWS=$(mktemp -d)
+export PITHEAD_TLS_DIR="$SWS/tls"
+sws_fp=$(run_sourced "$ROOT" stage_wizard_spool "$SWS/spool" 2>/dev/null)
+assert_contains "staging prints the certificate fingerprint the console advertises" "$sws_fp" ":"
+for f in wizard.crt wizard.key config.reference.json rig-defaults.json; do
+    assert_eq "staged: $f" "$([ -s "$SWS/spool/$f" ] && echo present || echo absent)" "present"
+done
+# The accept path's teardown, exactly as it happens, then the retry the outer loop drives.
+rm -rf "$SWS/spool"
+sws_fp2=$(run_sourced "$ROOT" stage_wizard_spool "$SWS/spool" 2>/dev/null)
+sws_missing=""
+for f in wizard.crt wizard.key config.reference.json rig-defaults.json; do
+    [ -s "$SWS/spool/$f" ] || sws_missing="$sws_missing $f"
+done
+assert_eq "a wiped spool is fully re-armed" "${sws_missing:-none}" "none"
+assert_eq "the retry can still serve TLS — the cert the container is pointed at exists" \
+    "$([ -s "$SWS/spool/wizard.crt" ] && [ -s "$SWS/spool/wizard.key" ] && echo yes || echo no)" "yes"
+# One machine, one certificate: the operator already trusted this fingerprint, and a retry that
+# minted a fresh one would make the console's printed fingerprint a lie in the other direction.
+assert_eq "the fingerprint survives the retry" "$sws_fp2" "$sws_fp"
+# And the loop must actually call it per session — staging that only a caller could reach is the
+# bug this fixes. MUTATION PROOF: delete the call from the loop and this goes red.
+assert_contains "the wizard loop re-stages every session" "$(cat "$STACK")" 'cert_fp=$(stage_wizard_spool "$spool")'
+unset PITHEAD_TLS_DIR
+rm -rf "$SWS"
+unset SWS sws_fp sws_fp2 sws_missing
+
 echo "== unit: preflight_remote_nodes dials before provisioning commits =="
 PFSB=$(mktemp -d)
 printf '{"monero":{"mode":"local"},"tari":{"mode":"local"}}' >"$PFSB/local.json"
