@@ -9,6 +9,141 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.19.1] - 2026-08-17
+
+### Fixed
+
+- **The one-click upgrade no longer needs anything installed on the host
+  ([#1072](https://github.com/p2pool-starter-stack/pithead/issues/1072)).** Release verification
+  used to require the `cosign` binary, which has no Ubuntu package — so it was a prerequisite no
+  prerequisites list mentioned and no dependency check installed. Because the first start gates on
+  it too, a fresh install from the documented Quick Start dead-ended on any clean host, after the
+  wizard had already collected the operator's wallet addresses; and every install predating signed
+  releases hit the same wall on its first signed upgrade. The verifier now runs as a pinned
+  container through Docker, which the stack already requires. Nothing to install, and the
+  prerequisites are unchanged.
+- **A failed upgrade can no longer disable the upgrade button
+  ([#1070](https://github.com/p2pool-starter-stack/pithead/issues/1070)).** The control-runner
+  systemd units were pointed at the new release's directory before that release was live, so an
+  upgrade that aborted partway left them watching a directory the running dashboard never writes
+  to. The control channel went quiet with no error anywhere, taking the one-click upgrade with it —
+  the repair needed a shell on the host. The units are now updated only once the new version is
+  actually live, so a failed upgrade leaves the working install untouched and still serving.
+- **A slow upgrade is no longer reported as a failed one
+  ([#1071](https://github.com/p2pool-starter-stack/pithead/issues/1071)).** The dashboard gave up
+  waiting before the host had spent even its download budget, then blamed the control channel —
+  which was working. Re-clicking then met the ten-minute throttle. The page now waits long enough
+  for a slow connection and, if it does stop watching, says the host is still working rather than
+  claiming the upgrade failed.
+- **Container image scanning is green again
+  ([#1073](https://github.com/p2pool-starter-stack/pithead/issues/1073)).** A util-linux
+  vulnerability became fixable upstream and started failing the image gate on every branch at once.
+  The base image is bumped and the finding accepted until the patched build reaches it, the way the
+  other base-distro findings already are.
+
+## [1.19.0] - 2026-08-16
+
+### Added
+
+- **Worker Inspect shows a per-rig hashrate chart, and config changes mark it (#1013/#1014/#1015).**
+  The same range-selectable chart the fleet view uses (24 Hr / 1 Wk / All) now renders for a
+  single rig, and every config apply or upgrade against that rig appears on it as a marker — a
+  diamond for an apply, a triangle for an upgrade, coloured by outcome. A one-click rig upgrade
+  now leaves a change-history row too: the immediate 202 response previously meant nothing ever
+  recorded how the rebuild finished, whether or not the operator's tab stayed open to see it land.
+- **Container healthchecks cover the five services that had none (#904).** xmrig-proxy, dashboard,
+  Caddy, and the two Docker socket proxies used to report `Up` with no health signal, so a
+  dead-inside container — the v1.8.1 incident, dashboard serving 502s behind an `Up` container —
+  stayed invisible to `pithead status` and the container-health alert. Each new probe checks
+  actual readiness, not just that the process exists, using only tooling its own image ships.
+- **The XvB winners-feed archiver ships as an operator tool (#906).**
+  `scripts/xvb-winners-archive.sh` snapshots the public winners feed daily (Tor-routed, atomic
+  writes, about 90 KB/day) for recalibrating the measured delivery band over time. `operations.md`
+  documents what it collects and a crontab line that points at a directory outside the
+  version-numbered install path — a version-dir default would have lost every snapshot on the
+  next upgrade.
+
+### Fixed
+
+- **The one-click upgrade refuses to run without cosign, key or no key (#1023).** The
+  pre-download guard checked only the locally installed `cosign.pub`, missing the one case that
+  needed it most: an install cut before release signing engaged, upgrading to a signed release.
+  That combination hit production on the v1.18.1 upgrade — the guard passed, the bundle
+  downloaded and extracted, and the abort landed inside the new CLI's image gate mid-upgrade,
+  leaving the operator to finish from a shell. cosign is now a flat precondition, checked up
+  front alongside the existing source-checkout refusal.
+- **monerod restarts whenever tor restarts, and `doctor` catches it when that doesn't happen
+  (#972).** A tor container restart or recreate kills every SOCKS connection monerod is using,
+  and monerod doesn't notice on its own — bench runs saw a node sit at 0 peers for hours with
+  every healthcheck still green. monerod now carries a tor dependency that restarts it whenever
+  tor does (through `pithead up`, `apply`, `upgrade`, or `restart tor`), the auto-heal path
+  cycles it directly, and `pithead doctor` gained a sync check that warns and names
+  `restart monerod` as the fix for whatever still slips through.
+- **Rig config applies and upgrades no longer get stuck reading "accepted" (#1001, #1009).**
+  RigForge can end a rig operation in `noop`, `throttled`, or `failed`, not only the outcomes
+  pithead already understood; the apply/upgrade poll and the enriched-feed reconciler that
+  catches slower terminal outcomes both recognized just a subset. A rig that hit one of the
+  missing outcomes burned its full poll window and then sat in the change-history table reading
+  "accepted" forever. Both paths now recognize the full six-outcome vocabulary RigForge ships as
+  of v1.15.0.
+- **Dashboard text meets WCAG AA contrast in both themes (#939).** The palette's `--ok`/`--bad`/
+  `--warn`/`--purple`/`--accent` tokens are fill shades, but the dashboard also used them as text
+  colour — white-on-accent badges measured 2.53:1 on dark and status-tinted worker names 3.74:1,
+  both under the AA threshold, with a hovered status-tinted row bottoming at 2.75:1. New
+  `-emphasis` (fill under white text) and `-fg` (colour as text) tokens split the two roles per
+  theme; hovered status-tinted rows drop the tint entirely, and the light theme's borderline
+  muted/warn/accent text steps off the 4.5-5.0 range.
+- **The XvB decision table stays visible when XvB is disabled (#938).** The per-tier odds,
+  donation cost, and tempered-estimate table exists to help decide whether to turn XvB on, so
+  hiding it behind the flag defeated the point. It still computes from local config and the
+  cached public feeds with XvB off; only the live-donation surfaces (current tier, header split,
+  hero KPIs) go quiet, since those need the raffle actually running.
+- **A won XvB round is protected within minutes instead of up to half an hour (#892).** The
+  in-round hold that stops a controller from spending down a round it just won only engages once
+  the dashboard notices the win, and the fixed 30-minute sync gate left that window open long
+  enough to actually end a whale-tier round live. The gate now tightens to 150 seconds whenever
+  the credited average sits close to the tier threshold or a win landed in the last 90 minutes,
+  cutting detection latency to about 5 minutes in that window while the normal-case sync rate is
+  unchanged.
+- **The energy tab's net profit and the XvB expected-reward table price XvB at measured
+  delivery, not face value (#902).** Every other XvB money surface already tempers the published
+  raffle bonus by what winners measurably receive; these two still used the raw figure and read
+  roughly 3x high on a donating box. Both now follow the same precedence — a wallet's own
+  measured realization once it has enough wins, otherwise the delivery study's midpoint.
+- **Three dashboard display oddities are fixed (#992).** The expected-vs-actual percentage
+  withholds the number past 999% and explains why in the row's tooltip, instead of printing a
+  five-digit ratio for a box that was idle most of the window. The Tari per-block reward now
+  shows whenever p2pool reports it, instead of disappearing behind the same hashrate gate as the
+  what-if estimates derived from it. And the pool's last-block time reads as `<duration> ago`
+  — "Never" before the pool's first block — instead of a bare timestamp with no date or timezone.
+
+### Changed
+
+- **The Tari disk budget is raised from 170 to 200 GiB (#1004).** The live reference deployment
+  measured 149 GiB on 2026-08-15, continuing a linear ~6.6-6.8 GiB/month growth rate that had
+  left the 170 GiB budget about three months of headroom. 200 GiB restores roughly eight months
+  at the observed rate; the summed minimums setup preflight, `doctor`, and the docs quote move
+  with it, to about 330 GB pruned / 530 GB full.
+- **Documentation corrected against the code, remote-node story first (#1034).** `hardware.md`
+  never mentioned `tari.mode: remote` and stated that remote-node mode still runs Tari, true only
+  of the Monero half — a real gap, since Tari is the larger line item in the disk budget the code
+  enforces. A wider sweep re-derived and corrected other stale claims across the doc set: a
+  sizing example, the non-root service list, the control channel's action count, and the
+  configured key count among them. A separate pass cleaned up a stale code comment, the repo's
+  last unverified-upstream doc marker, and three unused image files (#989).
+- **Test coverage and CI hardening.** The dashboard's frontend entry point is unit-tested for the
+  first time, having previously run its side effects at import (#903). The live e2e matrix gained
+  five rows — remote Tari, stratum TLS, the Tor-egress-firewall-off path, payout confirmation,
+  and insecure mode paired with the main sidechain — plus rig-upgrade and writable-config legs
+  (#942, #1002), and the harness itself is more honest: a pre-flight bench-sync check, a
+  `--no-miner` flag that actually skips the mining-only assertions it claims to, and a
+  post-restore proof that the running containers match the on-disk config, not just a passing
+  healthcheck (#914, #905, #880, #971). The patch-coverage gate no longer passes vacuously on an
+  untested changed file (#1000), the test-inventory drift check now runs on every PR (#981), and
+  the frontend fixture-drift guard compares the full nested payload shape instead of only
+  top-level keys (#974) — the fixture itself was regenerated to match what the server actually
+  sends (#948).
+
 ## [1.18.1] - 2026-08-14
 
 Supersedes 1.18.0, withdrawn before general adoption. Investigating its missing bundle signature
