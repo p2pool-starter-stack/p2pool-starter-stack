@@ -14,16 +14,15 @@ automatable should move off it, and anything that keeps biting should get a harn
 
 ### Confirm what the harness cannot see
 
-The KVM battery boots a VM on a virtual NIC with a private address, a fresh virtual disk, and
-no firmware. It is structurally blind to the following, all of which have produced real defects:
+The KVM battery boots a VM on a virtual NIC with a private address, one virtual disk, and no
+firmware. It is structurally blind to the following, all of which have produced real defects:
 
 | Check | Why a VM cannot show it |
 |---|---|
 | No world-addressable address is served | The guest only ever has a private LAN address. A real box gets an ISP-assigned globally-routable IPv6, and the dashboard was found bound to it. |
-| Install onto a disk that **already holds an installation** | The battery's install phase drives a fresh guest. The reinstall-over-existing path is what every existing owner takes, and it hid a blocker that made install-from-stick impossible. |
 | Secure Boot, firmware power-on behaviour, real disk topology | No firmware, one virtual disk. |
 | Thermals, CPU governor, the hardware watchdog actually resetting a wedged board | A VM has no watchdog device and no heat. |
-| First-boot wall-clock on real media | Writing container storage to a USB stick is nothing like a virtual disk, and the operator experience lives in that gap. |
+| First-boot on real media — wall-clock, and what a power cut leaves behind | Writing container storage to a USB stick is nothing like a virtual disk, and the operator experience lives in that gap. An interrupted write to a stick left a store that was present, digest-matched and unrunnable, and it bricked install-from-stick on every later boot (#1029). A virtual disk does not produce that damage; the repair for it is covered at tier 1, the cause is not. |
 
 ### Reserve the hardware
 
