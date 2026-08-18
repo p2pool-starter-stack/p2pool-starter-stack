@@ -98,6 +98,34 @@ class TestGitHubReleaseClient:
         ):  # no html_url
             assert c.latest_release() is None
 
+    def test_surfaces_raucb_asset_size(self):
+        # The appliance's OS bundle rides the release as a .raucb asset; its size feeds the
+        # OS-update control's "what a download costs" line.
+        c = GitHubReleaseClient("u")
+        payload = {
+            "tag_name": "v1.4.0",
+            "html_url": "h",
+            "assets": [
+                {"name": "pithead.tar.gz", "size": 5},
+                {"name": "pithead-os-v1.4.0.raucb", "size": 123456},
+            ],
+        }
+        with patch(
+            "mining_dashboard.service.update_checker.bounded_get",
+            return_value=self._resp(200, payload),
+        ):
+            assert c.latest_release() == {"tag": "v1.4.0", "url": "h", "raucb_size": 123456}
+
+    def test_release_without_raucb_omits_the_key(self):
+        # Every DIY-only release (and RigForge's) has no .raucb — the key just isn't there.
+        c = GitHubReleaseClient("u")
+        payload = {"tag_name": "v1.4.0", "html_url": "h", "assets": [{"name": "pithead.tar.gz"}]}
+        with patch(
+            "mining_dashboard.service.update_checker.bounded_get",
+            return_value=self._resp(200, payload),
+        ):
+            assert c.latest_release() == {"tag": "v1.4.0", "url": "h"}
+
 
 class _FakeClient:
     def __init__(self, rel=None):
@@ -139,6 +167,11 @@ class TestUpdateChecker:
     def test_up_to_date_yields_none(self):
         uc = UpdateChecker(_FakeClient({"tag": "v0.1.0", "url": "u"}), "0.1.0", enabled=True)
         assert uc.maybe_check(1000) is None
+
+    def test_raucb_size_rides_the_update_payload(self):
+        c = _FakeClient({"tag": "v0.2.0", "url": "u", "raucb_size": 999})
+        uc = UpdateChecker(c, "0.1.0", enabled=True)
+        assert uc.maybe_check(1000)["raucb_size"] == 999
 
 
 class TestLatestReleaseCached:

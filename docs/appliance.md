@@ -295,12 +295,18 @@ came up. If it did not — it fails to boot, or the stack does not start — **t
 goes back to the previous version on its own**, with nobody present. That is the entire
 point of keeping two copies.
 
-**In this test build there is no update button yet.** Applying an OS image update from
-the dashboard — and rolling back from it — is being built; until it ships, updates to a
-test machine are applied by the release process, not by you. The dashboard's update
-notice may still tell you a newer version exists; the one-click action it offers on
-other installs refuses on the appliance on purpose, because it would apply the wrong
-kind of update.
+Updates are applied from the dashboard: an **OS updates** control in the header checks
+for a new release, downloads its signed image to the data partition (over Tor, resumable
+— mining keeps running), verifies the file on the machine before anything is written to
+the idle copy, installs it, and then waits for you: **nothing reboots on its own**. The
+reboot is a separately confirmed step, the only one that pauses mining — typically under
+five minutes — and after it the machine runs its normal health checks before keeping the
+new version. A banner reports the outcome, including an automatic return to the previous
+version if the new one failed. The machine refuses images that are unsigned, built for
+different hardware, or older than what it runs; there is no override. See
+[Dashboard › Updating the appliance OS](dashboard.md#updating-the-appliance-os) for the
+step-by-step. The one-click tarball upgrade other installs offer refuses on the
+appliance on purpose — it would apply the wrong kind of update.
 
 Your data is never part of an update. Wallets, settings and the chain live on a separate
 partition that updates and rollbacks do not touch.

@@ -52,6 +52,26 @@ if [ -f machine-role ] && [ "$(tr -d '[:space:]' <machine-role)" = "rig" ]; then
     exit 1
 fi
 
+# OS-update verdict, rollback half: a dashboard-driven install leaves an in-flight flag naming
+# the version the machine was headed to. Booting a DIFFERENT version with that flag present
+# means the bootloader already fell back — the update failed its health gate and the fallback
+# is terminal, so the verdict is written now, into the state file the dashboard renders through
+# the control spool. The success half lives at the commit below: "updated" is only honest once
+# this slot marks good. Every step best-effort — a verdict must never break a boot.
+OS_INFLIGHT=data/os-update/in-flight.json
+OS_STATE_DIR=data/control/results
+if [ -f "$OS_INFLIGHT" ] && command -v jq >/dev/null 2>&1; then
+    to=$(jq -r '.to // ""' "$OS_INFLIGHT" 2>/dev/null)
+    if [ -n "$to" ] && [ "$to" != "$(tr -d '[:space:]' <VERSION 2>/dev/null)" ]; then
+        mkdir -p "$OS_STATE_DIR" 2>/dev/null || true
+        jq -n --arg f "$(jq -r '.from // ""' "$OS_INFLIGHT" 2>/dev/null)" --arg t "$to" \
+            '{step:"idle",verdict:{outcome:"rolled_back",from:$f,to:$t,ts:(now|floor)}}' \
+            >"$OS_STATE_DIR/os-update-state.json" 2>/dev/null || true
+        rm -f "$OS_INFLIGHT"
+        echo "pithead-boot: the $to update never committed — the bootloader fell back and this boot runs the previous version"
+    fi
+fi
+
 # Containers are DERIVED too (#798): the baked archives ship in the slot, but podman's store
 # lives on /data and the image tag is constant across releases — a keep-reinstall or A/B
 # update ran RC-old containers under an RC-new OS until this loaded them. ONE loader, shared
@@ -104,6 +124,19 @@ for _ in $(seq 90); do
     if [ "${code:-000}" != "000" ] && ./pithead doctor --json >/run/pithead-boot-doctor.json 2>/dev/null; then
         command -v rauc >/dev/null 2>&1 && rauc status mark-good
         echo "pithead-boot: stack is serving (HTTP $code) and doctor reports healthy — booted slot committed"
+        # OS-update verdict, success half: this slot just committed while an in-flight flag names
+        # exactly this version — the dashboard-driven update landed and can no longer fall back.
+        if [ -f "$OS_INFLIGHT" ] && command -v jq >/dev/null 2>&1; then
+            to=$(jq -r '.to // ""' "$OS_INFLIGHT" 2>/dev/null)
+            if [ -n "$to" ] && [ "$to" = "$(tr -d '[:space:]' <VERSION 2>/dev/null)" ]; then
+                mkdir -p "$OS_STATE_DIR" 2>/dev/null || true
+                jq -n --arg f "$(jq -r '.from // ""' "$OS_INFLIGHT" 2>/dev/null)" --arg t "$to" \
+                    '{step:"idle",verdict:{outcome:"updated",from:$f,to:$t,ts:(now|floor)}}' \
+                    >"$OS_STATE_DIR/os-update-state.json" 2>/dev/null || true
+                echo "pithead-boot: OS update to $to committed — verdict published to the dashboard"
+            fi
+            rm -f "$OS_INFLIGHT"
+        fi
         # Post-commit, the held chain services start and the forward migration runs NOW — the
         # slot is committed, so a fallback can no longer strand migrated data. Marker removal
         # comes first: if the chain start fails, the slot stays committed, the next boot takes
