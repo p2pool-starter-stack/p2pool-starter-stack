@@ -10,7 +10,7 @@ IP=172.28.0.26
 Environment=MONERO_NODE_USERNAME=rendered-node-user MONERO_NODE_PASSWORD=rendered-node-password MONERO_ONION_ADDRESS=rendered-monero-onion.onion MONERO_PRUNE=true MONERO_CLEARNET_SYNC=false MONERO_PREP_THREADS=4 MONERO_OUT_PEERS=48 NETWORK_PREFIX=172.28.0
 Volume=/opt/pithead/data/monero:/home/ubuntu/.bitmonero
 Volume=/dev/hugepages:/dev/hugepages
-Volume=/home/vijit/pithead/build/monero/bitmonero.conf.template:/home/ubuntu/bitmonero.conf.template:ro
+Volume=/home/pithead/build/monero/bitmonero.conf.template:/home/ubuntu/bitmonero.conf.template:ro
 Volume=/opt/pithead/data/clearnet-state:/clearnet-state:ro
 Tmpfs=/tmp:size=64m,mode=1777
 PublishPort=127.0.0.1:18081:18081

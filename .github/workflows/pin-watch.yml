@@ -52,7 +52,7 @@ jobs:
             gh issue create \
               --title "${name}: pinned ${pinned}, upstream released ${latest}" \
               --label appliance --label infra \
-              --body "Weekly pin-watch (#833): \`os/rootfs/Dockerfile\` pins ${name} at \`${pinned}\`; upstream's latest release is \`${latest}\` (https://github.com/${upstream}/releases). Bumping means updating both the version ARG and its sha256 ARG in the Dockerfile. If the pin is being held back on purpose, say why here and leave this open — the watcher will not file a duplicate while it is."
+              --body "Weekly pin-watch (#833): \`os/rootfs/Dockerfile\` pins ${name} at \`${pinned}\`; upstream's latest release is \`${latest}\` (https://github.com/${upstream}/releases). Bumping means updating both the version ARG and its _COMMIT ARG in the Dockerfile (the rootfs COMPILES these two from source on a pinned Go toolchain rather than downloading release binaries, so the pin is an upstream commit, not a binary sha256). Get the commit with \`gh api repos/${upstream}/commits/${latest} --jq .sha\`. If the pin is being held back on purpose, say why here and leave this open — the watcher will not file a duplicate while it is."
             echo "${name}: stale (${pinned} -> ${latest}) — issue filed"
           }
 
