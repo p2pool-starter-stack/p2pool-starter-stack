@@ -282,6 +282,23 @@ test("Download with only a passive badge asks the host to check before it downlo
   assert.deepEqual(posted[1], { action: "download", version: "v1.19.2" });
 });
 
+test("a stale badge whose check comes back not-newer stops, instead of posting a doomed download", async () => {
+  // The other half of the same loop: the host refuses an equal version, so posting one lands in the
+  // error pane whose Retry posts it again. Nothing should be downloaded at all here.
+  const posted = [];
+  const c = inst({ os: { step: "idle" }, update: { available: true, latest: "v1.19.0" }, enabled: true });
+  await withFastPoll(async (url, opts) => {
+    if (opts && opts.method === "POST") {
+      posted.push(JSON.parse(opts.body));
+      return { status: 202, ok: false, json: async () => ({ id: ID, status: "pending" }) };
+    }
+    return okResult({ id: ID, status: "checked", version: "v1.19.0", newer: false });
+  }, () => c.download());
+  // The whole assertion is what was NOT posted: one check, no download. (Phase is not readable
+  // here — setState on an unmounted component lands in _nextState, not this.state.)
+  assert.deepEqual(posted.map((p) => p.action), ["check"]);
+});
+
 test("the error state offers Retry (which resumes) and shows the host's words", () => {
   const c = inst({
     os: { step: "downloading", version: "1.19.0" },

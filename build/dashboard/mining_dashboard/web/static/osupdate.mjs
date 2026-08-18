@@ -197,6 +197,14 @@ export class OsUpdateControl extends Component {
       checked = await this.check();
       if (!checked) return;
     }
+    // A stale passive badge can offer Download for a release the host then reports as not newer.
+    // Posting it anyway earns "an equal version is nothing to update" and puts the error pane's
+    // Retry back into the same loop this guard exists to break. Fall back to idle instead, where
+    // the pane now renders off the fresh check and offers no Download at all.
+    if (checked.newer === false) {
+      this.setState({ phase: "idle", check: checked });
+      return;
+    }
     const version = checked.version || this.targetVersion();
     if (!version) return;
     this.cancelled = false;
