@@ -29,6 +29,8 @@
 #   --draft              Create the GitHub Release as a DRAFT (held for review; publish it by hand).
 #   --resume-promote     Skip build/stage; promote the already-staged digests (retry after a smoke pass).
 #   --allow-dirty        Don't require a clean git working tree (for local experimentation only).
+#   --unsigned           Publish WITHOUT cosign signatures. One-click upgrades refuse an unsigned
+#                        release once cosign.pub is committed — deliberate, loud, and rarely right.
 #   -y, --yes            Don't prompt before the irreversible steps (push, tag, publish).
 #   -h, --help           Show this help.
 #
@@ -41,6 +43,7 @@
 #   COSIGN_KEY / COSIGN_PASSWORD  Release signing (#376): path to the cosign private key on this box
 #                           and its passphrase. Promoted digests + the bundle get key signatures;
 #                           the committed cosign.pub (repo root, shipped in the bundle) verifies them.
+#                           Required — preflight refuses the cut without them (#960).
 #
 set -euo pipefail
 
@@ -115,6 +118,7 @@ RESUME_PROMOTE=0
 ALLOW_DIRTY=0
 ASSUME_YES=0
 DRAFT=0
+UNSIGNED=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -130,9 +134,10 @@ while [ $# -gt 0 ]; do
     --draft) DRAFT=1 ;;
     --resume-promote) RESUME_PROMOTE=1 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
+    --unsigned) UNSIGNED=1 ;;
     -y | --yes) ASSUME_YES=1 ;;
     -h | --help)
-        sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
     *) die "Unknown option: $1 (try --help)" ;;
@@ -216,6 +221,120 @@ check_release_toolchain() {
     ok "Lint/test toolchain present (${LINT_TOOLCHAIN[*]})."
 }
 
+# --- Release signing (#376, #960) -----------------------------------------------------------------
+#
+# Signing is MANDATORY to publish, because it is mandatory to consume. Once `cosign.pub` is committed
+# it ships inside every bundle, and from that release on `pithead`'s one-click upgrade refuses any
+# release with no `pithead.tar.gz.sig`. So a cut made on a box with no key does not produce a
+# degraded release — it produces a bundle every install in the fleet rejects, and GitHub release
+# assets are immutable, so the signature can never be attached afterwards. That is how v1.18.0 had to
+# be withdrawn and re-cut (#960). The decision below therefore aborts the cut rather than warning.
+#
+# It also runs on --dry-run, and only the signing itself is skipped. The check used to sit inside
+# `if [ "$DRY_RUN" -eq 0 ]`, which meant the one rehearsal that exists to catch a mis-configured
+# signing box could only ever print "signing OFF" — the failure state, unconditionally (#1108).
+
+# What the signing environment is missing, one gap per line; empty output means it is complete. Pure
+# given PATH and the environment, so the tests can drive every combination without a release.
+signing_env_gaps() {
+    command -v cosign >/dev/null 2>&1 || echo "cosign is not on PATH"
+    if [ -z "${COSIGN_KEY:-}" ]; then
+        echo "COSIGN_KEY is unset"
+    elif [ ! -f "$COSIGN_KEY" ]; then
+        echo "COSIGN_KEY names no file ($COSIGN_KEY)"
+    fi
+    # Set-but-empty is a legitimate key with no passphrase; unset is not. cosign would prompt for it
+    # at stage 6b — after the images are promoted, where there is nothing left to abort into.
+    [ -n "${COSIGN_PASSWORD+x}" ] || echo "COSIGN_PASSWORD is unset"
+}
+
+# Both signing calls pass `--tlog-upload=false`, which cosign v3 removed. A box that has drifted to
+# v3 passes every other check here and then dies at stage 6b with the tag pushed and the images
+# promoted (#960 — the bench box had drifted exactly this way). Probe the flag rather than parse a
+# version: the flag is the thing that actually has to work, and it stays true across future majors.
+cosign_flags_supported() { cosign sign-blob --help 2>&1 | grep -q -- '--tlog-upload'; }
+
+resolve_signing() {
+    local gaps
+    gaps="$(signing_env_gaps)"
+    if [ -z "$gaps" ]; then
+        cosign_flags_supported ||
+            die "This box's cosign does not support --tlog-upload, which both signing calls pass — cosign v3 removed it. The cut would die at stage 6b with the images already promoted. Install the pinned cosign: docs/dev/release-server.md § The release signing key."
+        COSIGN_ENABLED=1
+        ok "Release signing ON — the promoted digests and the install bundle will be signed."
+        return 0
+    fi
+    COSIGN_ENABLED=0
+    # No committed public key means no install has a verifier, so nothing in the field fails closed
+    # on a missing signature. Honest, and the state every release before v1.18.1 shipped in.
+    if [ ! -f cosign.pub ]; then
+        warn "Release signing OFF — no cosign.pub is committed, so installs have no key to verify against and will proceed unverified (${gaps//$'\n'/; })."
+        return 0
+    fi
+    if [ "$UNSIGNED" -eq 1 ]; then
+        warn "Release signing OFF by --unsigned, with cosign.pub committed: this release will carry no pithead.tar.gz.sig, and every one-click upgrade in the field REFUSES a release that has none. Release assets are immutable — the signature cannot be added later."
+        return 0
+    fi
+    die "Release signing is not configured on this box: ${gaps//$'\n'/; }. cosign.pub is committed, so the bundle this cut would publish is one every one-click upgrade refuses, and release assets are immutable — it could not be signed afterwards (#960). Configure the key (docs/dev/release-server.md § The release signing key), or pass --unsigned to publish an unsigned release deliberately."
+}
+
+# --- The release verifier image (#1084) -----------------------------------------------------------
+#
+# Since #1072 every install verifies its images and its one-click upgrade bundle by running ONE
+# digest-pinned cosign container — `pithead`'s COSIGN_IMAGE — so that image is the trust root for the
+# whole fleet, and it was the one input nothing checked. The stack tests exercise the logic around it
+# against a fake `docker`, which passes identically whether the digest is real, typo'd or deleted
+# upstream; the tier-4 e2e deploys a source checkout, where verification is skipped by design; and
+# release-smoke runs AFTER the publish, when the assets are already immutable. So a bad pin shipped a
+# stack that cannot start, and the operator-facing failure reads "signature verification FAILED" —
+# tampering, not our pin having moved. The realistic cause is mundane: a CVE bump, one wrong
+# character, every test still green.
+
+# The pin, read from `pithead` the same way pin() reads the component versions out of the Dockerfiles.
+cosign_image_pin() { grep -oE '^readonly COSIGN_IMAGE="[^"]+"' pithead | head -1 | cut -d'"' -f2; }
+
+# One verify-blob through the pinned container, mirroring pithead's cosign_run: a single read-only
+# mount at /w with every path relative to it, and HOME=/tmp so cosign does not warn about a TUF cache
+# it cannot write. Same shape the install side runs, so a mount or path mistake shows up here first.
+verifier_verify_blob() { # <probe-dir> <image>
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$1:/w:ro" -w /w "$2" \
+        verify-blob --key cosign.pub --signature blob.sig --insecure-ignore-tlog=true blob >/dev/null 2>&1
+}
+
+# Prove the pinned verifier before anything is built: it pulls, it runs, and — when this box can sign
+# — it accepts a signature made with THIS release key and refuses a tampered blob. The round trip is
+# what makes the check real rather than a liveness probe: it also catches a `cosign.pub` that no
+# longer matches `COSIGN_KEY`, which would make every install refuse every artifact of this release.
+check_verifier_image() {
+    local img
+    img="$(cosign_image_pin)"
+    [ -n "$img" ] || die "Could not read COSIGN_IMAGE out of ./pithead — the release verifier pin moved or changed shape, so this cut cannot validate the thing every install verifies with."
+    case "$img" in
+    *@sha256:*) ;;
+    *) die "COSIGN_IMAGE is not pinned by digest ($img). On a tag, a hostile registry could serve a 'cosign' that exits 0 on everything and turn verification into theatre — pin it by @sha256 (pithead: COSIGN_IMAGE)." ;;
+    esac
+    docker run --rm "$img" version >/dev/null 2>&1 ||
+        die "The pinned release verifier will not run: $img. Every install and every one-click upgrade pulls exactly this digest, so a release cut against it would fail at the first 'up'. Check the pin in pithead (COSIGN_IMAGE) and that the digest is still published."
+    if [ "${COSIGN_ENABLED:-0}" -ne 1 ]; then
+        warn "Release verifier pulls and runs, but the signature round trip was skipped — this cut is not signing, so there is no signature to prove it against."
+        return 0
+    fi
+    local d
+    d="$(mktemp -d)"
+    printf 'pithead release verifier probe\n' >"$d/blob"
+    cp cosign.pub "$d/cosign.pub"
+    cosign sign-blob --key "${COSIGN_KEY:-}" --tlog-upload=false --yes --output-signature "$d/blob.sig" "$d/blob" >/dev/null 2>&1 ||
+        die "Could not sign a probe blob with COSIGN_KEY — the key or COSIGN_PASSWORD is wrong. Better here than at stage 6b, with the images already promoted."
+    verifier_verify_blob "$d" "$img" ||
+        die "The pinned release verifier refused a signature this box just made with COSIGN_KEY. Either the verifier image is not the cosign it claims to be, or the committed cosign.pub is not the public half of COSIGN_KEY — in which case every install would refuse every artifact of this release."
+    printf 'tampered\n' >>"$d/blob"
+    if verifier_verify_blob "$d" "$img"; then
+        die "The pinned release verifier ACCEPTED a tampered blob — it is not verifying anything. Every install trusts this image (pithead: COSIGN_IMAGE); do not cut a release against it."
+    fi
+    rm -rf "$d"
+    ok "Release verifier validated end to end (${img##*@}: signs, verifies, refuses a tampered blob)."
+}
+
 preflight() {
     stage "1/7  Preflight"
 
@@ -228,22 +347,8 @@ preflight() {
     if [ "$DRY_RUN" -eq 0 ] && [ "$SKIP_TESTS" -eq 0 ] && [ "$RESUME_PROMOTE" -eq 0 ]; then
         check_release_toolchain
     fi
-    # Release signing (#376) is OPT-IN and pure defense-in-depth. The tag-substitution vector it
-    # exists for — the first-party images pull by mutable `:vX.Y.Z` tag, so a re-pointed tag / leaked
-    # registry token could serve a malicious root-running image — is ALREADY closed by digest-pinning
-    # those images in the bundle (make_bundle). cosign additionally signs the promoted digests + the
-    # bundle for operators who want to verify. So a normal cut needs NOTHING off-repo: signing turns
-    # on only when a key is configured on this box AND cosign.pub is committed; otherwise we warn and
-    # skip it rather than block the release.
-    COSIGN_ENABLED=0
-    if [ "$DRY_RUN" -eq 0 ]; then
-        if command -v cosign >/dev/null 2>&1 && [ -n "${COSIGN_KEY:-}" ] && [ -f "${COSIGN_KEY:-/nonexistent}" ] && [ -f cosign.pub ]; then
-            COSIGN_ENABLED=1
-            ok "Release signing ON (cosign key + committed cosign.pub present)."
-        else
-            warn "Release signing OFF — shipping digest-pinned images + bundle without cosign signatures (#376 is opt-in). Installs are protected by the pinned digests; to also sign, see docs/dev/release-server.md § The release signing key."
-        fi
-    fi
+    resolve_signing
+    check_verifier_image
 
     STACK_VERSION="$(tr -d ' \t\r\n' <VERSION)"
     is_semver "$STACK_VERSION" || die "VERSION ('$STACK_VERSION') is not SemVer (expected X.Y.Z)."
@@ -473,7 +578,7 @@ promote() {
 # the environment — it never touches argv, run(), or the log.
 sign_images() {
     if [ "${COSIGN_ENABLED:-0}" -ne 1 ]; then
-        log "Release signing off — skipping image signatures (the bundle is digest-pinned; #376 opt-in)."
+        log "Release signing off — skipping image signatures; the bundle stays digest-pinned."
         return 0
     fi
     stage "6b/7 Sign the promoted digests (cosign, #376)"
@@ -503,7 +608,7 @@ publish() {
     write_manifest "$manifest"
     local bundle="$WORKDIR/pithead.tar.gz" # versionless name → stable /releases/latest/download/ URL
     make_bundle "$bundle"
-    local bundle_sig="" # pithead.tar.gz.sig — only when signing is on (#376 opt-in)
+    local bundle_sig="" # pithead.tar.gz.sig — absent only on a deliberate --unsigned cut (#960)
     if [ "${COSIGN_ENABLED:-0}" -eq 1 ]; then
         bundle_sig="$bundle.sig" # the #59 upgrade runner fetches it by name
         sign_bundle "$bundle" "$bundle_sig"

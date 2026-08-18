@@ -232,7 +232,8 @@ stack_up() {
     # #452: a fresh release install's first `up` pulls the 5 first-party images (pull policy
     # `missing`) — gate that pull on the same cosign check `upgrade` uses, so first install is not
     # the one unverified pull. Same guard: source checkouts skip, a missing cosign.pub warns and
-    # proceeds (signing is opt-in, #461), a present key that fails aborts before anything starts.
+    # proceeds (#461 — an install predating the first signed release has no key to verify against),
+    # a present key that fails aborts before anything starts.
     verify_release_images
     # Docker Compose automatically picks up COMPOSE_PROFILES from .env
     if ! compose_up_checked -d; then
@@ -456,8 +457,11 @@ cosign_container_path() { # <path>
 #
 # The decision table, fail-closed where a key exists:
 #   source checkout                          -> skip: locally built images are unsigned by design
-#   no cosign.pub (an older/unsigned bundle) -> proceed with one loud warning (signing is opt-in per
-#                                               #461; the digest-pinned bundle is the protection)
+#   no cosign.pub (an older/unsigned bundle) -> proceed with one loud warning (#461 — an install
+#                                               predating the first signed release has no key to
+#                                               verify with; the digest-pinned bundle is what
+#                                               protects it. Every bundle since ships the key, so
+#                                               this is a legacy path, not a way to opt out)
 #   cosign.pub present, docker missing       -> ABORT — an absent verifier must not silently
 #                                               disable verification (docker is a prerequisite and
 #                                               the very next step pulls images with it anyway)
@@ -844,6 +848,28 @@ cpu_has_avx2() {
     fi
 }
 
+# Release-signature verification (#376): the state the next pull — `up` or `upgrade` — will act on.
+# Extracted from doctor() so each branch is unit-testable, like the other doctor checks. Every branch
+# mirrors a refusal the one-click upgrade runner makes, so this answers "can this box take an
+# upgrade" BEFORE one is attempted rather than during it (#1108). Read-only: nothing is pulled.
+check_release_verification() {
+    if is_source_checkout; then
+        dr_info "Source checkout — images build locally and are not signature-verified (#376), and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'."
+    elif [ ! -f cosign.pub ]; then
+        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
+    elif ! cosign_available; then
+        dr_warn "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon."
+    elif docker image inspect "$COSIGN_IMAGE" >/dev/null 2>&1; then
+        dr_ok "'up' and 'upgrade' verify the release images against cosign.pub; the pinned verifier image is already here, nothing to install."
+    else
+        # The verifier is fetched on demand, so a box that has never run a verified operation simply
+        # does not have it yet. Worth saying plainly: if that one fetch fails, the operation reports a
+        # *signature* failure — which reads as a tampered release rather than as an image this host
+        # could not pull (#1084).
+        dr_warn "The pinned release verifier image is not on this host yet — the next 'up' or 'upgrade' fetches it. If that fetch fails, the operation reports a signature failure even though nothing was tampered with. Pre-fetch it with: docker pull $COSIGN_IMAGE"
+    fi
+}
+
 doctor() {
     DR_OK=0
     DR_WARN=0
@@ -877,16 +903,7 @@ doctor() {
     else
         dr_fail "docker compose (v2 plugin) not found — install 'docker-compose-v2'."
     fi
-    # Release-signature verification (#376): report the state the next pull (up or upgrade) will act on.
-    if is_source_checkout; then
-        dr_info "Source checkout — images build locally and are not signature-verified (#376)."
-    elif [ ! -f cosign.pub ]; then
-        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
-    elif cosign_available; then
-        dr_ok "'up' and 'upgrade' verify the release images against cosign.pub; the verifier runs as a container, nothing to install."
-    else
-        dr_warn "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon."
-    fi
+    check_release_verification
 
     # --- Docker daemon ---
     echo ""
