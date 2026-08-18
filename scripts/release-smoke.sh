@@ -284,10 +284,38 @@ smoke_upgrade() {
     [ "$status" = "upgraded" ] ||
         die "Upgrade did not report success (status='${status:-none}' after ${waited}s): $(cat "$result" 2>/dev/null || echo '<no result file>')"
 
-    local new
-    new="$(tr -d '[:space:]' <"$dir/VERSION")"
-    [ "v$new" = "$TAG" ] || die "Runner reported 'upgraded' but $dir/VERSION is '$new', not $TAG."
-    ok "Install at $dir upgraded cleanly $cur → $new via the real #59 control path."
+    local landed
+    landed="$(upgraded_install_dir "$dir")"
+    local new=""
+    [ -n "$landed" ] && new="$(tr -d '[:space:]' <"$landed/VERSION" 2>/dev/null || true)"
+    [ "v$new" = "$TAG" ] ||
+        die "Runner reported 'upgraded' but no install at or beside $dir is $TAG (found '${new:-none}' at '${landed:-nothing}'). Check 'current ->' and the versioned dirs."
+    ok "Install at $landed upgraded cleanly $cur → $new via the real #59 control path."
+}
+
+# Where the upgrade actually landed, resolved AT ASSERT TIME.
+#
+# The #59 path never rewrites the old install in place — that is what makes rollback possible. It
+# extracts the new release into a fresh `pithead-v<new>` directory and repoints `current` at it. So
+# asserting on the directory this run was POINTED at could only pass if the upgrade overwrote the
+# previous install, i.e. never: a correct upgrade reported as a failed one, on the documented final
+# gate of a release (#1068).
+#
+# Two shapes to resolve, because both are legitimate inputs:
+#   `current` symlink  — resolve it now, after the upgrade moved it (this is why the v1.19.2 cut
+#                        did not hit the false red: it was handed the symlink);
+#   versioned dir      — unchanged by design, so look for the `current` beside it.
+upgraded_install_dir() { # <dir-as-given> -> the dir holding the post-upgrade install
+    local given="$1" resolved sibling
+    resolved="$(readlink -f "$given" 2>/dev/null || printf '%s' "$given")"
+    # `current` in the same parent is where a versioned dir's upgrade lands.
+    sibling="$(readlink -f "$(dirname "$resolved")/current" 2>/dev/null || true)"
+    if [ -n "$sibling" ] && [ -f "$sibling/VERSION" ] &&
+        [ "$(tr -d '[:space:]' <"$sibling/VERSION" 2>/dev/null)" != "$(tr -d '[:space:]' <"$resolved/VERSION" 2>/dev/null)" ]; then
+        printf '%s' "$sibling"
+        return 0
+    fi
+    printf '%s' "$resolved"
 }
 
 # Interactive gate before the destructive phase-2 upgrade (auto-yes when not a TTY, so a runbook
@@ -300,6 +328,11 @@ confirm_upgrade() {
 }
 
 # --- Main ----------------------------------------------------------------------------------------
+
+# Sourceable for the test suite (functions only), the same guard os/overlay/pithead-data-reset uses:
+# the assert-time resolution below is the kind of path arithmetic that is cheap to unit-test and
+# expensive to get wrong, and it only ever ran post-publish where a mistake is already in the field.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then return 0 2>/dev/null || true; fi
 
 log "Post-publish release smoke test (#459) — $TAG"
 fetch_published_bundle
