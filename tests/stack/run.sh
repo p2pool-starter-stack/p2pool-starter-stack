@@ -2351,17 +2351,21 @@ echo "== unit: release-smoke resolves the upgraded install at ASSERT time (#1068
 # upgrade reported as a failure, on the documented final gate of a release. MUTATION PROOF: return
 # the given path unresolved and both "lands on" assertions go red.
 SMK="$SANDBOX/smoke1068"
+SMOKE_SH="$ROOT/scripts/release-smoke.sh"
 mkdir -p "$SMK/pithead-v1.18.1" "$SMK/pithead-v1.19.0"
 printf '1.18.1\n' >"$SMK/pithead-v1.18.1/VERSION"
 printf '1.19.0\n' >"$SMK/pithead-v1.19.0/VERSION"
 ln -sfn "$SMK/pithead-v1.19.0" "$SMK/current"
 smoke_resolve() { # <dir-as-given>
     (
-        _arg="$1" # saved before `set --`, which release-smoke's own arg parser needs empty
+        _arg="$1"          # saved before `set --`, which release-smoke's own arg parser needs empty
         cd "$ROOT" || exit # its top level insists on a git repo, like the real invocation
         set --
+        # Sourced through a variable, never a literal path: shellcheck follows a literal that names
+        # another file in the same invocation, and release-smoke pulls in release.sh, whose
+        # `local tool missing=()` then collides with this file's own scalar `missing` (SC2178).
         # shellcheck disable=SC1090
-        source "$ROOT/scripts/release-smoke.sh" 2>/dev/null
+        source "$SMOKE_SH" 2>/dev/null
         set +eu
         upgraded_install_dir "$_arg"
     )
@@ -2383,7 +2387,7 @@ assert_eq "with current pointing at it, the same dir resolves to itself" \
 # normalises the path that lands in the pass and failure messages. Recorded here so the next reader
 # does not mistake it for a covered behaviour.
 rm -rf "$SMK"
-unset SMK
+unset SMK SMOKE_SH
 
 echo "== unit: release.sh signs the promoted digests (#376) =="
 # sign_images must sign the recorded manifest-LIST digest (repo@sha256:… — never the mutable tag,
