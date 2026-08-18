@@ -22,12 +22,19 @@ CVE-2026-56852
 # github.com/docker/docker authz bypass, vendored in compose (server-side moby code, and the
 # appliance talks to podman's compat socket, not dockerd — no exposed authz plugin path here):
 CVE-2026-34040
-# Go stdlib (both binaries built with go1.26.4; clears with upstream rebuilds):
-CVE-2026-39822
-# Go stdlib net/http idna + dns/dnsmessage (2026-08 batch, fixed only in go1.25.13/1.26.6 —
-# compose v5.4.0 is still go1.26.5, cosign has no newer release; verified 2026-08-14):
-CVE-2026-39821
-CVE-2026-46600
+# NOTE ON GO STDLIB FINDINGS — there are none listed here on purpose. The appliance rootfs used
+# to download upstream release binaries and inherit whichever Go toolchain built them, so every Go
+# stdlib CVE became an accepted finding we could not clear (nine of them by 2026-08). It now
+# COMPILES docker-compose and cosign itself on a pinned, patched toolchain (os/rootfs/Dockerfile,
+# the gobuild stage), so stdlib findings are fixed at the source instead of accepted. If a stdlib
+# CVE appears here again, the answer is to bump the builder image, not to add a line below.
 # google.golang.org/grpc vendored in both pinned binaries (GHSA id — Trivy gates on it like a
 # CVE; same clearing condition as the three above: upstream rebuilds on the fixed module):
 GHSA-hrxh-6v49-42gf
+# util-linux family (bsdutils, libmount1, libuuid1, login, mount, util-linux): the fix is a
+# base-distro point release, 2.41.5-0+deb13u1, and no published python:3.11-slim carries it yet —
+# the newest digest still ships 2.41-5. Same shape as CVE-2026-45447 above: `--ignore-unfixed` hid
+# this until Debian published a fix, at which point it reddened every branch at once without any
+# change on our side. Cleared when a base bump brings 2.41.5-0+deb13u1 in; the weekly CVE sweep
+# (#833) re-surfaces it regardless, so this cannot rot silently.
+CVE-2026-53615

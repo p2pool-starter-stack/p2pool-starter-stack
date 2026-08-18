@@ -25,11 +25,15 @@
 set -eu
 
 GENDIR="${1:-/run/systemd/generator}"
+# ponytail: env seam so the stack suite can feed a staged mountinfo — an env var, not a second
+# positional, because systemd calls generators with THREE dir arguments (and an empty
+# environment, so production never sets it).
+MOUNTINFO="${PITHEAD_MOUNTINFO:-/proc/self/mountinfo}"
 
 # The device backing / — mountinfo field layout: the filesystem source is the second field
 # after the "-" separator. This is the resolved kernel device (e.g. /dev/sda2), not a symlink.
 rootsrc=$(awk '$5 == "/" { for (i = 7; i <= NF; i++) if ($i == "-") { print $(i + 2); exit } }' \
-    /proc/self/mountinfo)
+    "$MOUNTINFO")
 case "$rootsrc" in
 /dev/*) ;;
 *) exit 0 ;; # container or unexpected root — generate nothing rather than guess

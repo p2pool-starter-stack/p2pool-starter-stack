@@ -138,7 +138,7 @@ unread manifest field is a claim, not a contract.
 ## Development loop
 
 Everything runs from the repo root on a Linux box with docker, KVM and libvirt. The
-bench is `gouda`; a laptop cannot run this (`/dev/kvm` is required).
+bench is the KVM-capable build box; a laptop cannot run this (`/dev/kvm` is required).
 
 ```bash
 os/build-image.sh --ssh && sudo os/rauc/mkimage.sh --dev
