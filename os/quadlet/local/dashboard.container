@@ -13,8 +13,8 @@ Volume=/opt/pithead/data/control/results:/control/results:ro
 Volume=/opt/pithead/data/control/audit:/control/audit:ro
 Volume=/opt/pithead/data/control/masked:/control/masked:ro
 Volume=/opt/pithead/data/caddy-logs:/access-log:ro
-Volume=/home/vijit/pithead/config.reference.json:/host-config/config.reference.json:ro
-Volume=/home/vijit/pithead/config.core-keys.json:/host-config/config.core-keys.json:ro
+Volume=/home/pithead/config.reference.json:/host-config/config.reference.json:ro
+Volume=/home/pithead/config.core-keys.json:/host-config/config.core-keys.json:ro
 Tmpfs=/tmp:size=64m,mode=1777
 ReadOnly=true
 DropCapability=all

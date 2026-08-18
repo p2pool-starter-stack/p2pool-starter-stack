@@ -12,6 +12,55 @@
 # Pinned by digest (#135) so the debian:trixie-slim tag can't be silently re-pointed. The digest
 # bump is how base-distro CVE fixes reach the appliance (#833): there is no apt on the running
 # box — every Debian package here is frozen until the next bake.
+# ---------------------------------------------------------------------------------------------
+# Builder: docker-compose and cosign, compiled here rather than downloaded as upstream binaries.
+#
+# Both projects publish release binaries built on whatever Go toolchain they happened to use, and
+# that toolchain's stdlib CVEs become ours — baked into a read-only appliance image that cannot be
+# patched in place. In August 2026 that was nine fixable HIGH findings the scan gated on, and no
+# pin bump could clear them: cosign v3.1.3 (the newest release) ships built with go1.26.4, the
+# same toolchain as v3.1.2, and docker-compose v5.4.0 ships go1.26.5 — both below the go1.26.6
+# that carries the fixes. Verified by reading the build stamps out of the published binaries, not
+# from release notes. Waiting for upstream to rebuild is not a schedule we control, so we compile
+# them ourselves on a patched toolchain and the findings go away at the source.
+#
+# Provenance is not weakened by this, it moves: the old pin was a sha256 of a downloaded binary,
+# this one is an exact upstream COMMIT (never a tag — a tag can be re-pointed, the same reason
+# RIGFORGE_REF below pins a commit) plus Go module integrity from each project's own go.sum. The
+# build flags mirror each project's Makefile so the binaries identify themselves normally:
+# `docker-compose version` and `cosign version` report the release they were built from.
+FROM golang:1.26.6-trixie@sha256:b75d466dd608587fd66cca705a307ba65b889827d06ad61d6a75f0482b51b7c7 AS gobuild
+
+ARG COMPOSE_VERSION=v5.4.0
+ARG COMPOSE_COMMIT=ef61d7410a0c816a71705026e638ec256a591d69
+ARG COSIGN_VERSION=v3.1.3
+ARG COSIGN_COMMIT=11926fa5bbbbde47e88fc006b625a17769b743b2
+ENV CGO_ENABLED=0
+
+# Blobless clone then detach to the commit: the tag is only a convenience for the version string.
+RUN git clone --filter=blob:none --no-checkout https://github.com/docker/compose /src/compose \
+    && git -C /src/compose checkout --detach "${COMPOSE_COMMIT}" \
+    && go build -C /src/compose -trimpath -tags e2e \
+        -ldflags "-w -X github.com/docker/compose/v5/internal.Version=${COMPOSE_VERSION}" \
+        -o /out/docker-compose ./cmd
+
+RUN git clone --filter=blob:none --no-checkout https://github.com/sigstore/cosign /src/cosign \
+    && git -C /src/cosign checkout --detach "${COSIGN_COMMIT}" \
+    && go build -C /src/cosign -trimpath \
+        -ldflags "-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=${COSIGN_VERSION} \
+            -X sigs.k8s.io/release-utils/version.gitCommit=${COSIGN_COMMIT} \
+            -X sigs.k8s.io/release-utils/version.gitTreeState=clean" \
+        -o /out/cosign ./cmd/cosign
+
+# Fail the build here rather than shipping a binary that cannot run: a wrong build path or a
+# broken ldflag produces a file that exists and does nothing useful, which every later stage
+# would happily copy.
+RUN /out/docker-compose version && /out/cosign version
+
+# ---------------------------------------------------------------------------------------------
+# Pinned by digest (#135) so the debian:trixie-slim tag can't be silently re-pointed. The digest
+# bump is how base-distro CVE fixes reach the appliance (#833): there is no apt on the running
+# box — every Debian package here is frozen until the next bake.
 FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -73,24 +122,23 @@ RUN chmod +x /opt/pithead/pithead
 # the tracked migration (docs/dev/dual-distribution-plan.md), not a second parallel path.
 # /etc/containers/nodocker silences the shim's stderr banner, which would otherwise leak into
 # every parsed command output.
-ARG COMPOSE_VERSION=v5.3.1
-ARG COMPOSE_SHA256=f9ebc6ebdb19d769b793c245a736caaeb198c62587f13b25c660c13b4987f959
-ARG COSIGN_VERSION=v3.1.2
-ARG COSIGN_SHA256=f7622ed3cf22e55e1ae6377c080979ff77a22da9981c11df222a2e444991e7cf
-RUN curl -fsSL -o /usr/local/bin/docker-compose \
-        "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
-    && echo "${COMPOSE_SHA256}  /usr/local/bin/docker-compose" | sha256sum -c - \
-    && curl -fsSL -o /usr/local/bin/cosign \
-        "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" \
-    && echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c - \
-    && chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
+# Built in the gobuild stage above, on a Go toolchain we choose, rather than downloaded. See the
+# rationale there — upstream release binaries carry their builder's stdlib CVEs into an image that
+# cannot be patched in place.
+COPY --from=gobuild /out/docker-compose /out/cosign /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
     && touch /etc/containers/nodocker
 
 # The built-in miner (#796): a pinned RigForge tree plus everything it needs, baked at image
 # build because nothing can be installed later — apt cannot run on the read-only root, and even
 # a rw-remount install leaves its /etc state (alternatives, ld.so.cache) on the volatile overlay
-# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.14.0 release tag
+# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.15.1 release
 # (by commit, not tag name, so a moved tag cannot change the bake); bump it release by release.
+# v1.15.1 and not v1.15.0: GitHub's releases/latest pointer still names v1.15.0, so RigForge's own
+# `upgrade --check` calls the newer patch a development build (rigforge#371) — but v1.15.1 is the
+# published release, it carries the API-reader fix that stopped a dead worker API aborting tune
+# and autotune sweeps outright, and it is what every rig in the field runs. Baking the older tree
+# would ship an appliance whose built-in miner is behind the workers beside it.
 # pithead-sync copies the tree to /data/rigforge every boot; `pithead local-miner` runs
 # its setup with RIGFORGE_APPLIANCE=1 when local_miner.enabled.
 #
@@ -101,7 +149,7 @@ RUN curl -fsSL -o /usr/local/bin/docker-compose \
 RUN apt-get install -y --no-install-recommends \
         git build-essential cmake libuv1-dev libssl-dev libhwloc-dev gettext-base python3 \
         linux-cpupower msr-tools
-ARG RIGFORGE_REF=a8840b3c8108ee6def9d850221a440f2fd355cf6
+ARG RIGFORGE_REF=60aa883901fc74ea39ed2f21962b8ba7f96d73ba
 RUN curl -fsSL -o /tmp/rigforge.tar.gz \
         "https://github.com/p2pool-starter-stack/rigforge/archive/${RIGFORGE_REF}.tar.gz" \
     && mkdir -p /opt/rigforge \

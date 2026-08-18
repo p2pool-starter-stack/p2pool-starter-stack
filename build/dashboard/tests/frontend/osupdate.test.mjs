@@ -251,8 +251,52 @@ test("the reboot gate requires the typed REBOOT and says mining pauses", () => {
   assert.match(out, /Mining pauses/);
   assert.match(out, /Type <code>REBOOT<\/code>/);
   assert.match(out, /returns to the\s+current one on its own/);
+  // The gate is only a gate if it is CLOSED before the word is typed. Asserting the armed state
+  // alone passes with the whole confirmation deleted — and that gate is what stands between a
+  // stray click and rebooting a mining box. Both sides, in order.
+  assert.match(out, /disabled[^>]*>\s*Reboot now/);
+  c.state.confirmText = "REBOO";
+  assert.match(renderToString(c.render()), /disabled[^>]*>\s*Reboot now/);
   c.state.confirmText = "REBOOT";
   assert.doesNotMatch(renderToString(c.render()), /disabled.*Reboot now/);
+});
+
+test("Download with only a passive badge asks the host to check before it downloads", async () => {
+  // The first thing a fresh appliance ever does with this feature. target.json is written only by
+  // os-check, so a download posted straight off the passive badge is refused by the host and the
+  // error pane's Retry re-posts it forever. The client must resolve the target itself first.
+  const posted = [];
+  const c = inst({ os: { step: "idle" }, update: { available: true, latest: "v1.19.0" }, enabled: true });
+  await withFastPoll(async (url, opts) => {
+    if (opts && opts.method === "POST") {
+      posted.push(JSON.parse(opts.body));
+      return { status: 202, ok: false, json: async () => ({ id: ID, status: "pending" }) };
+    }
+    const action = posted[posted.length - 1].action;
+    if (action === "check")
+      return okResult({ id: ID, status: "checked", version: "v1.19.2", newer: true, size: 1 });
+    return okResult({ id: ID, status: "downloaded", version: "v1.19.2" });
+  }, () => c.download());
+  assert.equal(posted[0].action, "check");
+  // and the download that follows carries the version the HOST resolved, not the stale badge
+  assert.deepEqual(posted[1], { action: "download", version: "v1.19.2" });
+});
+
+test("a stale badge whose check comes back not-newer stops, instead of posting a doomed download", async () => {
+  // The other half of the same loop: the host refuses an equal version, so posting one lands in the
+  // error pane whose Retry posts it again. Nothing should be downloaded at all here.
+  const posted = [];
+  const c = inst({ os: { step: "idle" }, update: { available: true, latest: "v1.19.0" }, enabled: true });
+  await withFastPoll(async (url, opts) => {
+    if (opts && opts.method === "POST") {
+      posted.push(JSON.parse(opts.body));
+      return { status: 202, ok: false, json: async () => ({ id: ID, status: "pending" }) };
+    }
+    return okResult({ id: ID, status: "checked", version: "v1.19.0", newer: false });
+  }, () => c.download());
+  // The whole assertion is what was NOT posted: one check, no download. (Phase is not readable
+  // here — setState on an unmounted component lands in _nextState, not this.state.)
+  assert.deepEqual(posted.map((p) => p.action), ["check"]);
 });
 
 test("the error state offers Retry (which resumes) and shows the host's words", () => {
