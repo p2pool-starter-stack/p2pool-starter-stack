@@ -114,6 +114,12 @@ see [Running a node elsewhere](#running-a-node-elsewhere).
 > becomes ~75% of total RAM — 6 GB of an 8 GB host. On a host that small, set `tari.mem_limit` by
 > hand (e.g. `"3g"`), or run `tari.mode: remote` and leave the memory to `monerod` and P2Pool.
 > Prefer 16 GB+.
+>
+> The [appliance](appliance.md) makes this call itself: 16 GB is its supported floor, and on a
+> machine below it the boot shrinks the reservation to 5 GB — the smallest pool that still holds
+> both RandomX datasets — announces it on the console, and `doctor` reports it as a warning until
+> the machine has 16 GB. Far below the floor (under ~7 GB) the reservation is released entirely
+> and the stack will not run reliably.
 
 ### Disk
 

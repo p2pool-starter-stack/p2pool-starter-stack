@@ -195,6 +195,8 @@ no VM needed, run on every image build.
 | Rig role: no containers, mines from the baked binary, takes an A/B update like a coordinator | battery `--phase rig` | 4 ✅ |
 | Physical-presence config channel (#786 sub-issue D): identical-config short-circuit, diff building + secret masking, consumed-marker, the abort/apply state machine (media removed, keypress, countdown timeout, absence of input is not abort), merge semantics (#965: unnamed settings keep their running values, `null` clears, an unmergeable file passes through to validation, a minimal stick preserves the dashboard login / appliance defaults / node credentials end to end) | `tests/stack/run.sh` (sourced, stubbed lsblk/mount) | 1 ✅ |
 | Physical-presence config channel: exact diff on the console, countdown applies, the changed setting takes effect, the stick is consumed, pulling the stick mid-countdown cancels; a MINIMAL stick (#965) keeps the pre-apply dashboard login working against the served dashboard and preserves appliance defaults + node credentials | battery `--phase media` (opt-in) | 4 (added — not yet run at the release gate) |
+| Hugepages sizing (#977): tier thresholds over meminfo shapes, the degraded boot shrinks the pool + leaves the plain-words marker, doctor WARNs (never FAILs) on it | `tests/stack/run.sh` (sourced, fixture meminfo) | 1 ✅ |
+| Hugepages sizing is a no-op on supported RAM: full 3072-page pool intact and no degraded marker on the 16 GiB guest, on both the first and a provisioned boot | battery `--phase boot` + `--phase provision` | 4 (added — unverified until the next battery run) |
 | Power cuts mid-write and mid-commit; corrupt bundle — a brick is disqualifying | battery `--phase fault` (opt-in) | 4 ✅ |
 
 ## Running each tier
