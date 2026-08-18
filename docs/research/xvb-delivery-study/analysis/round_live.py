@@ -1,6 +1,6 @@
-import json, time, datetime
+import json, time, datetime, sys
 
-rows = [json.loads(l) for l in open("/home/vijit/xvb-experiment/log.jsonl")]
+rows = [json.loads(l) for l in open(sys.argv[1] if len(sys.argv) > 1 else "xvb-experiment/log.jsonl")]
 r = rows[-1]
 now = r["t"]
 print("latest poll:", time.strftime("%H:%M:%S", time.localtime(now)),
