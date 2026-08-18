@@ -65,6 +65,46 @@ resolve_overrides "monero.mode=remote"
 rc=$?
 assert_rc "remote ok with endpoint" "$rc" "0"
 assert_contains "augments remote host" "$RESOLVED" "monero.remote.host=10.0.0.5:18081"
+# tari.mode remote (#103/#942): same shape as monero's above, its own global/endpoint.
+REMOTE_TARI_HOST=""
+resolve_overrides "tari.mode=remote"
+rc=$?
+assert_rc "tari remote skips without endpoint" "$rc" "1"
+assert_contains "skip names --remote-tari-host" "$SKIP_REASON" "--remote-tari-host"
+REMOTE_TARI_HOST="10.0.0.6:18142"
+resolve_overrides "tari.mode=remote"
+rc=$?
+assert_rc "tari remote ok with endpoint" "$rc" "0"
+assert_contains "augments remote tari host" "$RESOLVED" "tari.remote.host=10.0.0.6:18142"
+unset REMOTE_TARI_HOST
+# Payout confirmation (#381/#462/#942): the "payout_confirm=env" marker gates on
+# IT_MONERO_VIEW_KEY, is always stripped from RESOLVED, and folds in tari's pair only when BOTH
+# tari env vars are set.
+unset IT_MONERO_VIEW_KEY IT_TARI_VIEW_KEY IT_TARI_SPEND_PUBLIC_KEY
+resolve_overrides "p2pool.pool=main payout_confirm=env"
+rc=$?
+assert_rc "payout confirm skips without IT_MONERO_VIEW_KEY" "$rc" "1"
+assert_contains "skip names IT_MONERO_VIEW_KEY" "$SKIP_REASON" "IT_MONERO_VIEW_KEY"
+IT_MONERO_VIEW_KEY="deadbeef"
+resolve_overrides "p2pool.pool=main payout_confirm=env"
+rc=$?
+assert_rc "payout confirm ok with the monero key" "$rc" "0"
+assert_contains "augments monero.view_key" "$RESOLVED" "monero.view_key=deadbeef"
+case "$RESOLVED" in
+*payout_confirm=env*) it_fail "marker stripped from RESOLVED" "payout_confirm=env leaked into $RESOLVED" ;;
+*) it_pass "marker stripped from RESOLVED" ;;
+esac
+case "$RESOLVED" in
+*tari.view_key=*) it_fail "tari pair absent without both tari env vars" "tari.view_key present in $RESOLVED" ;;
+*) it_pass "tari pair absent without both tari env vars" ;;
+esac
+IT_TARI_VIEW_KEY="tvk" IT_TARI_SPEND_PUBLIC_KEY="tspk"
+resolve_overrides "payout_confirm=env"
+rc=$?
+assert_rc "payout confirm ok with both tari env vars too" "$rc" "0"
+assert_contains "augments tari.view_key" "$RESOLVED" "tari.view_key=tvk"
+assert_contains "augments tari.spend_public_key" "$RESOLVED" "tari.spend_public_key=tspk"
+unset IT_MONERO_VIEW_KEY IT_TARI_VIEW_KEY IT_TARI_SPEND_PUBLIC_KEY
 # Compound prerequisites both augment.
 BASELINE_PRUNE=1
 FULL_DATA_DIR="/srv/full"
@@ -111,6 +151,19 @@ echo "== moved-subnet matrix scenario (#201/#180) =="
 assert_contains "matrix has a moved-subnet scenario" "$(scenario_names)" "local-pruned-main-subnet"
 assert_contains "subnet scenario sets a non-default /24" "$(scenario_overrides local-pruned-main-subnet)" "network.subnet=10.84.0.0/24"
 
+echo "== #942 matrix rows: tari-remote, stratum TLS, firewall opt-out, payout confirm, insecure+main =="
+assert_contains "matrix has a tari.mode=remote scenario" "$(scenario_names)" "remote-tari-main-secure"
+assert_contains "tari-remote scenario sets tari.mode=remote" "$(scenario_overrides remote-tari-main-secure)" "tari.mode=remote"
+assert_contains "matrix has a stratum-TLS scenario" "$(scenario_names)" "local-pruned-main-stratum-tls"
+assert_contains "stratum-TLS scenario sets p2pool.stratum_tls=true" "$(scenario_overrides local-pruned-main-stratum-tls)" "p2pool.stratum_tls=true"
+assert_contains "matrix has a firewall opt-out scenario" "$(scenario_names)" "local-pruned-main-firewall-off"
+assert_contains "firewall opt-out scenario sets network.tor_egress_firewall=false" "$(scenario_overrides local-pruned-main-firewall-off)" "network.tor_egress_firewall=false"
+assert_contains "matrix has a payout-confirmation scenario" "$(scenario_names)" "local-pruned-main-payout-confirm"
+assert_contains "payout-confirm scenario carries the env marker" "$(scenario_overrides local-pruned-main-payout-confirm)" "payout_confirm=env"
+assert_contains "matrix has an insecure+main scenario (decoupled from nano)" "$(scenario_names)" "local-pruned-main-insecure"
+assert_contains "insecure+main scenario pairs secure=false with pool=main" "$(scenario_overrides local-pruned-main-insecure)" "dashboard.secure=false"
+assert_contains "insecure+main scenario pairs secure=false with pool=main" "$(scenario_overrides local-pruned-main-insecure)" "p2pool.pool=main"
+
 echo "== expected/absent services: profile gating =="
 LOCAL='{"monero":{"mode":"local"}}'
 REMOTE='{"monero":{"mode":"remote"}}'
@@ -119,6 +172,28 @@ assert_contains "local includes p2pool" "$(expected_services "$LOCAL")" "p2pool"
 case "$(expected_services "$REMOTE")" in *monerod*) it_fail "remote excludes monerod" "monerod present" ;; *) it_pass "remote excludes monerod" ;; esac
 assert_eq "remote marks monerod absent" "$(absent_services "$REMOTE")" "monerod"
 assert_eq "local marks nothing absent" "$(absent_services "$LOCAL")" ""
+# tari.mode is an independent axis from monero.mode (#103/#942): each chain toggles its own
+# bundled-node/onion coverage without disturbing the other's.
+TARI_REMOTE='{"tari":{"mode":"remote"}}'
+BOTH_REMOTE='{"monero":{"mode":"remote"},"tari":{"mode":"remote"}}'
+assert_contains "monero-local still includes tari (tari.mode unset -> local default)" "$(expected_services "$LOCAL")" "tari"
+assert_contains "monero-remote still includes tari (independent axis)" "$(expected_services "$REMOTE")" "tari"
+if printf '%s\n' "$(expected_services "$TARI_REMOTE")" | grep -qx tari; then
+    it_fail "tari.mode=remote excludes tari" "tari present"
+else
+    it_pass "tari.mode=remote excludes tari"
+fi
+assert_eq "tari.mode=remote marks tari absent" "$(absent_services "$TARI_REMOTE")" "tari"
+assert_eq "both remote marks both absent" "$(absent_services "$BOTH_REMOTE")" "$(printf 'monerod\ntari')"
+# wallet-rpc/tari-wallet (#381/#462) only run when their view key is set.
+VIEWKEY_MONERO='{"monero":{"mode":"local","view_key":"vk"}}'
+VIEWKEY_TARI='{"tari":{"mode":"local","view_key":"tvk"}}'
+assert_contains "monero.view_key set -> wallet-rpc expected" "$(expected_services "$VIEWKEY_MONERO")" "wallet-rpc"
+case "$(expected_services "$LOCAL")" in
+*wallet-rpc*) it_fail "no view_key -> wallet-rpc not expected" "wallet-rpc present" ;;
+*) it_pass "no view_key -> wallet-rpc not expected" ;;
+esac
+assert_contains "tari.view_key set -> tari-wallet expected" "$(expected_services "$VIEWKEY_TARI")" "tari-wallet"
 assert_eq "pool_label main" "$(pool_label main)" "Main"
 assert_eq "pool_label mini" "$(pool_label mini)" "Mini"
 assert_eq "pool_label nano" "$(pool_label nano)" "Nano"
@@ -505,6 +580,31 @@ _ss='{"sync":{"monero":{"state":"done","current":3487100,"target":3487100},"tari
 assert_eq "sync summary reads state + current/target for both chains" \
     "$(printf '%s' "$_ss" | jq -r "$E2E_SYNC_SUMMARY_JQ")" \
     "done 3487100/3487100 syncing 12000/12217"
+
+echo "== env_bake_verdict: restore-proof marker compare (#971) =="
+# The incident shape: an e2e restore left the live containers on harness-rendered creds while the
+# on-disk .env kept the real ones. The verdict compares whole KEY=VALUE lines and prints a word —
+# never a value — so e2e.sh can assert the bake without leaking secrets into its log.
+_disk='MONERO_NODE_USERNAME=pithead
+MONERO_NODE_PASSWORD=disk-secret'
+_baked='PATH=/usr/local/bin
+MONERO_NODE_PASSWORD=disk-secret
+TZ=Etc/UTC'
+assert_eq "same baked line -> match" "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" "$_baked")" "match"
+_baked_wrong='PATH=/usr/local/bin
+MONERO_NODE_PASSWORD=harness-secret'
+assert_eq "different value -> mismatch (the incident)" "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" "$_baked_wrong")" "mismatch"
+assert_eq "var missing on disk -> no-disk-value" "$(env_bake_verdict MONERO_NODE_PASSWORD 'OTHER=x' "$_baked")" "no-disk-value"
+assert_eq "var missing in container -> not-baked" "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" 'PATH=/usr/local/bin')" "not-baked"
+# Present-but-empty on both sides is still consistent — the line compare sees VAR= on each.
+assert_eq "empty on both sides -> match" "$(env_bake_verdict MONERO_NODE_PASSWORD 'MONERO_NODE_PASSWORD=' 'MONERO_NODE_PASSWORD=')" "match"
+# A longer var name must not satisfy the marker's anchored grep.
+assert_eq "longer var name is not the marker" "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" 'MONERO_NODE_PASSWORD_FILE=/x')" "not-baked"
+# And the verdicts never echo the secret itself.
+case "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" "$_baked_wrong")" in
+*disk-secret* | *harness-secret*) it_fail "verdict never carries a value" "secret leaked into the verdict" ;;
+*) it_pass "verdict never carries a value" ;;
+esac
 
 # --- Tally ------------------------------------------------------------------
 echo ""

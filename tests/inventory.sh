@@ -43,6 +43,20 @@ n_mini=$(grep -cE 'log "scenario [0-9]' tests/integration/mini-stack/run-mini-st
 
 total=$((n_py_dash + n_py_fake + n_node + n_stack + n_selftest + n_scen + n_mini))
 
+# --- drift gate -----------------------------------------------------------
+# The gathering above is grep-based, so a suite that moves, renames, or changes shape
+# enumerates as zero without erroring. Fail loudly instead of emitting an inventory that
+# silently under-counts — CI runs this on every PR (#981).
+# ponytail: zero-count is the only drift detectable since #414 untracked the generated file;
+# per-suite freshness would need the file back under git and its merge conflicts with it.
+for c in n_py_dash n_py_fake n_node n_stack n_selftest n_scen n_axes n_mini; do
+    if [ "${!c:-0}" -eq 0 ]; then # :-0 — grep -c on a deleted file emits nothing, not 0
+        echo "inventory drift: $c counted 0 tests — a suite moved or its shape changed;" \
+            "update the matching pattern in tests/inventory.sh" >&2
+        exit 1
+    fi
+done
+
 # --- emit -----------------------------------------------------------------
 cat <<EOF
 # Test Inventory

@@ -163,6 +163,35 @@ Two build variants, chosen by one flag:
 The updater defaults to RAUC; an image built without it cannot take another update, and the
 only way to get one now is to set `PITHEAD_UPDATER` to something else on purpose.
 
+### Updating a bench over SSH, and the signing trap that stops you
+
+A bench appliance can be moved to a new build entirely over SSH — copy the bundle to it and run
+`pithead os-update BUNDLE`, then reboot. No USB, no console, and `/data` is never touched, so a
+synced chain survives. This is proven on the physical bench: a full A/B update installed and the
+machine came back on the new slot with its chain intact.
+
+The trap is signing. **`mkbundle.sh --dev` generates a fresh throwaway chain on every run**, so a
+`--dev` bundle only installs on a machine whose keyring came from that same run. Point it at any
+other bench and RAUC refuses with `signature verification failed: Verify error: self-signed
+certificate`. To update a bench you built earlier, name that build's chain instead of generating
+a new one:
+
+```sh
+PITHEAD_RAUC_CERT=<build>/os/rauc/certs/cert.pem \
+PITHEAD_RAUC_KEY=<build>/os/rauc/certs/key.pem \
+  os/rauc/mkbundle.sh          # no --dev: naming the key IS the signal
+```
+
+Confirm before copying anything, by comparing fingerprints — the target's trusted chain is at
+`/etc/rauc/keyring.pem`:
+
+```sh
+openssl x509 -in /etc/rauc/keyring.pem -noout -fingerprint -sha256
+```
+
+Check the variant first as well: an update from a debug build to a release bundle removes the SSH
+channel you are driving it over, and `--yes` skips the guard that would have asked.
+
 The rootfs Dockerfile deliberately keeps its `apt-get update` layer cached across later install
 steps (layer economy); on a warm builder cache that layer can outlive a mirror rotating a
 package, and the install then 404s on a package the stale index still thinks exists. Rerun with

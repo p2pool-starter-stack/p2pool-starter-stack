@@ -484,8 +484,10 @@ def test_parse_worker_control_status_absent_is_none():
 
 
 def test_parse_worker_control_status_non_terminal_is_none():
-    # 'accepted' (queued, outcome not yet observed) and 'running' are in-flight — never reconciled.
-    for status in ("accepted", "running", "unknown", ""):
+    # 'accepted' (queued, outcome not yet observed) and 'running' are this dashboard's own
+    # in-flight placeholders; 'started' is rigforge#320's own in-flight upgrade marker — all
+    # never reconciled.
+    for status in ("accepted", "running", "started", "unknown", ""):
         block = {**RIGFORGE_BLOCK, "control": {"change_id": "abc123", "status": status}}
         assert parse_worker_control_status({"rigforge": block}) is None
 
@@ -516,3 +518,20 @@ def test_parse_worker_control_status_reason_defaults_none():
     block = {**RIGFORGE_BLOCK, "control": {"change_id": "abc123", "status": "applied"}}
     ctrl = parse_worker_control_status({"rigforge": block})
     assert ctrl == {"change_id": "abc123", "status": "applied", "reason": None}
+
+
+def test_parse_worker_control_status_full_terminal_vocabulary():
+    # #1009: applied/rejected/rolled_back/failed from a control-apply, plus noop (already on
+    # target)/throttled (the rig's own anti-beacon window) from a control-upgrade (rigforge#320) —
+    # the SAME vocabulary pithead's own control_worker_apply/control_worker_upgrade poll cases
+    # accept (#1001). Each must parse through, not just the three pre-#1009 members.
+    for status in ("applied", "rejected", "rolled_back", "failed", "noop", "throttled"):
+        block = {
+            **RIGFORGE_BLOCK,
+            "control": {"change_id": "abc123", "status": status, "reason": "rig-supplied"},
+        }
+        assert parse_worker_control_status({"rigforge": block}) == {
+            "change_id": "abc123",
+            "status": status,
+            "reason": "rig-supplied",
+        }

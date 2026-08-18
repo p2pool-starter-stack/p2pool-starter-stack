@@ -1,27 +1,29 @@
 # Architecture
 
-The stack runs eleven containerized services under Docker Compose — two of them opt-in view-only
-wallets for payout confirmation. This doc lists each service and how they connect.
+The stack defines eleven containerized services under Docker Compose; a default install starts nine.
+Two are opt-in view-only wallets for payout confirmation, and either bundled node drops out when you
+point the stack at one running elsewhere. This doc lists each service and how they connect.
 
 The services provide a Monero full node, P2Pool sidechain mining, Tari merge-mining, a single worker
-endpoint, and a monitoring dashboard. All node P2P and transaction traffic routes over Tor; no public
-port forwarding is required.
+endpoint, and a monitoring dashboard. A node running here routes its P2P and transaction traffic
+over Tor, and no public port forwarding is required; a node you point at over the network is reached
+directly instead.
 
 ## The services
 
 | # | Service | Role |
 |---|---|---|
-| 1 | **Monerod** | The Monero daemon (full node). Configured for restricted RPC and Tor transaction broadcasting. |
+| 1 | **Monerod** | The Monero daemon (full node). Configured for restricted RPC and Tor transaction broadcasting. Runs only with `monero.mode: local` (compose profile `local_node`); in `remote` mode no container starts and P2Pool dials your external node's RPC/ZMQ instead. |
 | 2 | **P2Pool** | The mining sidechain. Supports Main, Mini, and Nano pools. |
-| 3 | **Tari Base Node** | The Minotari node, merge-mined alongside Monero. |
+| 3 | **Tari Base Node** | The Minotari node, merge-mined alongside Monero. Runs only with `tari.mode: local` (compose profile `local_tari`); in `remote` mode no container starts, no Tari data dir is used, and P2Pool merge-mines against your external node's gRPC. See [Hardware › Running a node elsewhere](hardware.md#running-a-node-elsewhere). |
 | 4 | **XMRig Proxy** | The single stratum endpoint (`:3333`) all mining hardware connects to; the switching engine reconfigures it at runtime. |
 | 5 | **Tor** | Provides SOCKS5 proxies and hidden services (onion addresses) for the other containers. |
 | 6 | **Dashboard** | The web monitoring UI and the algorithmic switching engine. |
 | 7 | **Docker Proxy** | A **read-only** proxy onto the Docker socket so the dashboard can read container stats/logs — no write access. |
-| 8 | **Docker Control** | A second, minimal socket proxy scoped to **only** `start`/`stop` (nothing else — not create/kill/exec/reads), so the dashboard can reject workers when a node is down (Issue #31), hold p2pool + xmrig-proxy until the chains finish syncing (Issue #35), switch a clearnet-syncing node back to Tor once it's synced (Issue #234), and, opt-in via `dashboard.fail_closed`, hold p2pool + xmrig-proxy again on an unrecoverable dashboard health failure (Issue #490). Kept separate so its write grant can't widen the read-only proxy. |
+| 8 | **Docker Control** | A second, minimal socket proxy scoped to **only** `start`/`stop` (nothing else — not create/kill/exec/reads), so the dashboard can reject workers when a node is down (Issue #31), hold p2pool + xmrig-proxy until the chains finish syncing (Issue #35), switch a clearnet-syncing node back to Tor once it's synced (Issue #234), and, opt-in via `dashboard.fail_closed`, hold p2pool + xmrig-proxy again on an unrecoverable dashboard health failure (Issue #490), restart `tor` when the opt-in guard self-heal (`tor.auto_heal`) finds clearnet egress stuck, and restart `monerod` right after that heal so it re-dials through the fresh Tor. Kept separate so its write grant can't widen the read-only proxy. |
 | 9 | **Caddy** | A reverse proxy that serves the dashboard over HTTPS (automatic local TLS) on the LAN. |
-| 10 | **Monero Wallet-RPC** | Opt-in: runs only when `monero.view_key` is set (compose profile `payout_confirm`). A view-only `monero-wallet-rpc` against the local node, so the dashboard can confirm P2Pool payouts on-chain. See [Dashboard › Payout confirmation](dashboard.md#payout-confirmation). |
-| 11 | **Tari Console Wallet** | Opt-in: runs only when `tari.view_key` is set (compose profile `tari_payout_confirm`). A view-only `minotari_console_wallet` against the local Tari node, confirming merge-mine payouts on-chain. See [Dashboard › Payout confirmation](dashboard.md#payout-confirmation). |
+| 10 | **Monero Wallet-RPC** (`wallet-rpc`) | Opt-in: runs only when `monero.view_key` is set (compose profile `payout_confirm`). A view-only `monero-wallet-rpc` against the local node, so the dashboard can confirm P2Pool payouts on-chain. See [Dashboard › Payout confirmation](dashboard.md#payout-confirmation). |
+| 11 | **Tari Console Wallet** (`tari-wallet`) | Opt-in: runs only when `tari.view_key` is set (compose profile `tari_payout_confirm`). A view-only `minotari_console_wallet` against the local Tari node, confirming merge-mine payouts on-chain. See [Dashboard › Payout confirmation](dashboard.md#payout-confirmation). |
 
 ## High-level diagram
 
@@ -122,8 +124,16 @@ each rig's RigForge API for worker stats, and config applies travel the same pat
 host-side control runner, so the rig tokens never enter the dashboard container (#185). Both are
 direct **LAN** connections to your rigs; they don't route over Tor, so they carry no Tor tag. Node
 colors group services by role: 🟦 control plane (Caddy, Dashboard), 🟪 privacy and isolation (Tor,
-Docker socket proxies), and 🟩 the mining core. In remote-node mode the bundled 🟠 Monero node isn't
-started, and P2Pool talks to your external node instead.
+Docker socket proxies), and 🟩 the mining core.
+
+Each node has its own local/remote switch. With `monero.mode: remote` the bundled 🟠 Monero node
+isn't started and P2Pool dials your external node's RPC/ZMQ; with `tari.mode: remote` the 🟣 Tari
+node isn't started and P2Pool merge-mines against your external node's gRPC. Both add a path that
+leaves the box and is deliberately **not** Tor-routed — P2Pool bridges those legs onto direct
+connections, in plaintext — so keep a remote node on your LAN or behind WireGuard. The Tor-only
+egress firewall backs that up for the bridged containers, dropping any destination outside the
+private ranges; the host-networked dashboard, which polls a remote Tari node for sync state, sits
+outside those rules.
 
 > The one exception is **optional clearnet initial sync** (`monero.clearnet_initial_sync` /
 > `tari.clearnet_initial_sync`, default **off**): while active, that node's P2P leaves Tor to sync
@@ -132,11 +142,14 @@ started, and P2Pool talks to your external node instead.
 
 ## Privacy by design
 
-The stack is Tor-first. The Tor daemon provides hidden services (onion addresses) for Monero, Tari,
-and P2Pool, so inbound connectivity needs no public IPv4 port forwarding. Monero and Tari route their
-P2P and transaction traffic over Tor, and the clearnet DNS lookups those nodes formerly leaked are
-closed (monerod checkpoints/blocklist/update-check, Tari DNS seeds + Pulse). The node's RPC binds to
-`127.0.0.1` by default; set `monero.rpc_lan_access: true` for LAN access.
+The stack is Tor-first. The Tor daemon provides a hidden service (onion address) for P2Pool always,
+and for the Monero and Tari nodes whenever they run locally — a node running elsewhere accepts its
+own peers, so no onion is published for it. Inbound connectivity needs no public IPv4 port
+forwarding. Monero and Tari route their P2P and transaction traffic over Tor, and the clearnet DNS
+lookups those nodes formerly leaked are closed (monerod checkpoints/blocklist/update-check, Tari DNS
+seeds + Pulse). Every published node port binds `127.0.0.1` by default — the Monero RPC (`18081`),
+the Monero ZMQ feed (`18083`), and the Tari base-node gRPC (`18142`) — each opened to the LAN by its
+own switch: `monero.rpc_lan_access`, `monero.zmq_lan_access`, `tari.grpc_lan_access`.
 
 Two outbound yield paths used clearnet in v1.0 and exposed the host IP: P2Pool's outbound sidechain
 peers and XvB donation mining. As of v1.1 both route over Tor by default, each with an opt-out
@@ -147,12 +160,15 @@ map and the remaining lock-down steps.
 
 ## Security posture
 
-- **Containerized, non-root, least-privilege.** Services run in containers, and every one runs its
-  main process as a non-root user (not uid 0). pithead owns the data directories and chowns each
-  bind-mount to the uid its container uses, so a breakout or RCE in any daemon lands as an
-  unprivileged user. Where a privilege is genuinely needed (e.g. P2Pool's memory locking) it's
-  granted narrowly: P2Pool relies on an unlimited `memlock` ulimit rather than running privileged.
-  The leaf services (Caddy, the dashboard, the two Docker socket proxies, and `xmrig-proxy`) run
+- **Containerized, non-root where it counts, least-privilege.** Every daemon that touches the
+  network or the chains — `monerod`, P2Pool, the Tari node, `xmrig-proxy`, the dashboard, Tor —
+  runs its main process as a non-root user, and pithead chowns each bind-mount to the uid its
+  container uses, so a breakout or RCE in any of them lands as an unprivileged user. Caddy and the
+  two Docker socket proxies are the exceptions: they run as uid 0 inside their containers, which is
+  why they hold no chain data, drop every capability, and sit on host-loopback-only ports. Where a
+  privilege is genuinely needed (e.g. P2Pool's memory locking) it's granted narrowly: P2Pool relies
+  on an unlimited `memlock` ulimit rather than running privileged. The leaf services (Caddy, the
+  dashboard, the two Docker socket proxies, `xmrig-proxy`, and the two view-only payout wallets) run
   with `no-new-privileges`, and all of them drop every Linux capability (`cap_drop: [ALL]`). Caddy
   keeps only `NET_BIND_SERVICE` so it can bind `:80`/`:443`. The dashboard writes its history
   database as that non-root user into its (matching-owned) volume, so it no longer needs root's
@@ -161,7 +177,7 @@ map and the remaining lock-down steps.
   DBs, Tor's keys, the dashboard's history, Caddy's certs) plus a small, size-capped ephemeral
   `tmpfs` (`noexec`, wiped on restart) for rendered configs and scratch. A compromised process
   cannot stage tooling in, or persist changes to, its container image.
-- **Mining endpoint stays on the LAN.** The stratum port (`3333`) your rigs connect to is meant for
+- **Mining endpoint stays on the LAN.** The stratum port your rigs connect to (`p2pool.stratum_port`, default `3333`) is meant for
   your local network, never the public internet. It's published on all interfaces by default so LAN
   rigs work without extra config; narrow it with `p2pool.stratum_bind` (a specific LAN IP, or
   `127.0.0.1`) and firewall it to your LAN. See [Connecting Miners › Firewall](workers.md#firewall).
