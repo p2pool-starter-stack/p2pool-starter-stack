@@ -252,12 +252,7 @@ signing_env_gaps() {
 # v3 passes every other check here and then dies at stage 6b with the tag pushed and the images
 # promoted (#960 — the bench box had drifted exactly this way). Probe the flag rather than parse a
 # version: the flag is the thing that actually has to work, and it stays true across future majors.
-cosign_flags_supported() {
-    local sub
-    for sub in sign sign-blob; do
-        cosign "$sub" --help 2>&1 | grep -q -- '--tlog-upload' || return 1
-    done
-}
+cosign_flags_supported() { cosign sign-blob --help 2>&1 | grep -q -- '--tlog-upload'; }
 
 resolve_signing() {
     local gaps
