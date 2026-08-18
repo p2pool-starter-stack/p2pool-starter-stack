@@ -28,6 +28,13 @@ TARBALL="os/build/pithead-root.tar"
 #   PITHEAD_MIN_OS_VERSION=X.Y.Z — the lowest OS version that can still read /data once it has.
 # A migrating release MUST name that floor: without it a later rollback silently strands the
 # migrated chain data (os-update reads the floor back to refuse exactly that).
+# The stamped version is ALWAYS the checkout's VERSION, and deliberately has no override. The
+# manifest version and the version the payload actually ships must agree: pithead-boot judges an
+# update by comparing the in-flight target to the booted slot's VERSION file, and STACK_VERSION is
+# derived from that same file and tags every first-party image. A bundle whose manifest disagreed
+# with its payload would report a rollback that never happened, and one whose payload was rewritten
+# to agree would hunt image tags that were never published. Both were tried; both broke. Anything
+# that wants a version delta changes what the TARGET is running, not what the bundle claims.
 OS_VERSION=$(tr -d ' \t\r\n' <VERSION)
 DATA_MIGRATION=${PITHEAD_DATA_MIGRATION:-false}
 case "$DATA_MIGRATION" in

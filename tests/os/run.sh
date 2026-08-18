@@ -90,6 +90,10 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 KEY="$HOME/.ssh/pithead-os-test"
 ip=""
+# Overwritten by every _ssh call with that call's stderr (empty on success). Not a log — just the
+# LAST attempt's error text, so a caller that just gave up can classify why without another round
+# trip. See _ssh_unreachable_reason.
+SSH_ERR="/tmp/pithead-os-ssh.err"
 
 # The wallet every phase submits. It must be checksum-VALID: p2pool refuses a well-formed but
 # checksum-invalid address at startup with a SIGABRT and crash-loops (#829), which killed the
@@ -102,21 +106,28 @@ HARNESS_WALLET="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F
 # handoff. Same throwaway address the stack suite uses.
 HARNESS_TARI="126J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5BJ"
 
-# Every remote call is bounded. Debian socket-activates sshd: the socket unit accepts the TCP
-# connection as soon as it listens and only THEN starts ssh@.service, so a guest that is still
-# booting satisfies ConnectTimeout and stalls in the handshake — which no ssh option bounds.
-# An unbounded call therefore outlives its caller's deadline instead of failing it: on 2026-08-15
-# one boot-phase probe held for five hours against a guest that answered ssh normally the whole
-# time, and the phase reported "SSH never came up" the instant that probe was killed. SSH_TIMEOUT
-# is the per-call ceiling. The default is deliberately far larger than any legitimate call (the
-# longest here is the 1800 s local-miner wait; a slot copy on slow storage is the other long one):
-# this exists ONLY to stop an infinite hang, so it must never be the thing that ends real work —
-# if a call is legitimately slower than this, raise it rather than let the ceiling arbitrate.
+# Every remote call is bounded. CORRECTION (this comment used to claim Debian socket-activates
+# sshd — disproven): os/rootfs/Dockerfile only ever `systemctl enable`/`disable`s the plain
+# ssh.service; no ssh.socket unit is ever enabled. What actually gates it is
+# os/overlay/pithead-ssh-host-keys.conf, a drop-in that adds RequiresMountsFor=/data plus an
+# ExecStartPre chain (generate the host key onto /data, then `sshd -t`) — so ssh.service cannot
+# even begin starting until data.mount is active, and /data is freshly mkfs'd and grown by
+# systemd-repart (os/rootfs/repart.d/40-data.conf) on every first boot. A guest whose sshd has
+# not started yet therefore just refuses the connection (nothing is listening); it does not stall
+# the handshake. The five-hour stall this bound exists for (2026-08-15: one boot-phase probe held
+# for five hours against a guest that answered ssh normally the whole time, and the phase reported
+# "SSH never came up" the instant that probe was killed) was an unbounded remote call outliving
+# its own caller's deadline, not sshd's start order — bounding every call here is what fixed it,
+# regardless of which cause produces the next stall. SSH_TIMEOUT is the per-call ceiling. The
+# default is deliberately far larger than any legitimate call (the longest here is the 1800 s
+# local-miner wait; a slot copy on slow storage is the other long one): this exists ONLY to stop
+# an infinite hang, so it must never be the thing that ends real work — if a call is legitimately
+# slower than this, raise it rather than let the ceiling arbitrate.
 # ponytail: polling loops lower it to a few seconds — a stalled handshake must read as "not ready
 # yet" so the loop re-evaluates its own deadline, which is the whole point of having one.
 _ssh() {
     timeout "${SSH_TIMEOUT:-5400}" ssh -i "$KEY" -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "root@$ip" "$@" 2>/dev/null
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "root@$ip" "$@" 2>"$SSH_ERR"
 }
 _wait_ssh() { # $1 seconds — the definition of "not bricked"
     local deadline=$(($(date +%s) + $1)) SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}"
@@ -125,6 +136,38 @@ _wait_ssh() { # $1 seconds — the definition of "not bricked"
         sleep 5
     done
     return 1
+}
+# Classify why _wait_ssh gave up, using only signals that do NOT need a working SSH session — the
+# guest either isn't running, isn't the one we're still probing, or is running and refusing the
+# connection (sshd not up yet, or genuinely dead) vs. not answering the network at all. $1 is the
+# ip that was being probed.
+_ssh_unreachable_reason() {
+    local probed_ip="$1" state cur_ip
+    state=$(virsh domstate "$VM" 2>/dev/null || echo unknown)
+    if [ "$state" != "running" ]; then
+        printf 'guest VM is not running (libvirt state: %s) — it never had a chance to answer SSH' "$state"
+        return
+    fi
+    cur_ip=$(virsh domifaddr "$VM" 2>/dev/null | awk '/ipv4/{print $4}' | cut -d/ -f1 | head -1)
+    if [ -n "$cur_ip" ] && [ "$cur_ip" != "$probed_ip" ]; then
+        printf 'guest now holds a DIFFERENT DHCP lease (%s, was probing %s) — it rebooted mid-boot and the probe was aimed at a dead lease, not a dead sshd' "$cur_ip" "$probed_ip"
+        return
+    fi
+    if grep -qi refused "$SSH_ERR" 2>/dev/null; then
+        printf 'guest answers on the network but refuses port 22 — sshd is still gated behind the /data mount + host-key generation (pithead-ssh-host-keys.conf), or failed to start; not a network problem'
+        return
+    fi
+    # An auth rejection is the single most diagnostic answer here and it used to fall through to
+    # the catch-all below, which reported a BENCH KEY MISMATCH as "guest never answered the
+    # network — DHCP/routing/firewall problem". That is the opposite of what happened: sshd was up,
+    # reachable, and said no. The misreport sent several sessions hunting product-side boot theories
+    # (socket activation, RequiresMountsFor=/data) for a harness misconfiguration, so the classifier
+    # names it explicitly and says which key it offered.
+    if grep -qiE 'permission denied|no supported authentication|too many authentication' "$SSH_ERR" 2>/dev/null; then
+        printf 'guest sshd is UP and REJECTED our key (%s) — this is authentication, not boot and not networking. The image bakes the pubkey passed to os/build-image.sh --ssh; if that is not the counterpart of the key this harness probes with, every phase that needs SSH fails like a dead guest' "$KEY"
+        return
+    fi
+    printf 'guest never answered the network at all (last ssh error: %s) — DHCP/routing/firewall problem, not an sshd problem' "$(tr -s ' \n' ' ' <"$SSH_ERR" 2>/dev/null || echo none)"
 }
 _marker() { _ssh cat /etc/pithead-test-marker 2>/dev/null | tr -d "\r\n"; }
 
@@ -185,6 +228,30 @@ _build_image() {
         return 1
     }
     printf 'os/rauc/build/system.img'
+}
+
+# The checkout's VERSION with the patch component DECREMENTED — the version leg 4 makes the guest
+# claim to be running, so that the bundle (stamped with the real VERSION) is a genuine update.
+#
+# It has to be done on this side. The obvious move — stamp the BUNDLE one patch newer — produces a
+# bundle whose manifest and payload disagree, and that breaks two things at once. pithead-boot
+# writes the `rolled_back` verdict purely by comparing the in-flight target to the booted slot's
+# VERSION, before the health gate runs at all, so a mismatch reports a rollback that never
+# happened. And STACK_VERSION is derived from that same VERSION file and tags all five first-party
+# images, so a payload rewritten to match would send the post-update boot hunting image tags that
+# were never published — turning the fake rollback into a real one.
+_prev_patch_version() {
+    local v major minor patch
+    v=$(tr -d ' \t\r\n' <VERSION)
+    major=${v%%.*}
+    patch=${v##*.}
+    minor=${v#*.}
+    minor=${minor%%.*}
+    [ "$patch" -gt 0 ] 2>/dev/null || {
+        printf '%s' "$v"
+        return 1
+    }
+    printf '%s.%s.%s' "$major" "$minor" "$((patch - 1))"
 }
 
 # Build an update bundle carrying $1 as its marker.
@@ -248,6 +315,44 @@ require_host() {
             exit 2
         }
     fi
+    require_probe_key_matches_image
+}
+
+# The harness probes the guest as root with $KEY; the image authorizes whatever pubkey was passed
+# to `os/build-image.sh --ssh`. Nothing tied those together, and when they drifted apart — the
+# driver built as an unprivileged user with that user's key while the harness ran under sudo with
+# root's DIFFERENT key — the guest correctly refused every probe. That is indistinguishable from a
+# dead guest once you are only watching a timeout, and it cost several sessions: three separate
+# product-side theories were written up for what was a bench key mismatch, and the boot leg had in
+# fact never once passed. Compare them here, before a multi-minute build and boot, and say so.
+require_probe_key_matches_image() {
+    [ -f "$KEY" ] || {
+        echo "probe key $KEY not found — the harness authenticates to the guest with it" >&2
+        exit 2
+    }
+    [ -n "$IMAGE" ] && [ -f "$IMAGE" ] || return 0
+    local want
+    # ssh-keygen -y derives the public half from the PRIVATE key, so this checks the actual keypair
+    # rather than trusting a .pub file that may not be its counterpart — which is exactly how the
+    # two drifted apart.
+    want=$(ssh-keygen -y -f "$KEY" 2>/dev/null | awk '{print $1" "$2}')
+    [ -n "$want" ] || return 0 # passphrase-protected or unreadable: not our call to judge here
+    # Presence, not "the first key in the image": an image legitimately contains other keys (host
+    # keys, fixtures), so comparing against whichever one appears first would refuse perfectly good
+    # benches. If our pubkey is absent it cannot possibly authorize us, and that is the whole test.
+    # A release image is shell-less and carries no authorized key at all, so only assert on debug
+    # images — the only ones the harness can drive.
+    grep -aq 'pithead-variant\|authorized_keys' "$IMAGE" 2>/dev/null || return 0
+    grep -aqF "$want" "$IMAGE" 2>/dev/null || {
+        echo "refusing to run: this image does not authorize the key the harness probes with." >&2
+        echo "  harness key: $KEY" >&2
+        echo "  its pubkey : $want" >&2
+        echo "Every phase that needs SSH would fail like a dead guest — sshd answers and says no," >&2
+        echo "which reads as a boot or network fault. Rebuild the image with" >&2
+        echo "  os/build-image.sh --ssh $KEY.pub" >&2
+        echo "or point \$KEY at the keypair the image was built with." >&2
+        exit 2
+    }
 }
 
 # A stray VM on the same libvirt network can take the DHCP lease the harness then reads back,
@@ -281,7 +386,7 @@ cleanup() {
         return
     fi
     vm_destroy
-    rm -f "$DISK" "$SERIAL"
+    rm -f "$DISK" "$SERIAL" "$SSH_ERR"
 }
 trap cleanup EXIT
 
@@ -363,8 +468,17 @@ phase_boot() {
     # and it starts while the image build's export I/O is still settling. 420 s passed idle but
     # clipped under full-battery load (proven both ways on the bench, 2026-08-15); the budget is
     # sized for the loaded case because a deadline that only holds on an idle host is a flake.
+    #
+    # NOT raised again here even though 900 s has since been seen to time out too: that number was
+    # only just proven sufficient on the bench the same day, on the same class of run, so a bigger
+    # arbitrary guess would repeat the exact mistake this file's own history warns about (raising
+    # the ceiling instead of finding out why it was hit) rather than fix anything. What changed
+    # instead is the failure message below — it tells the NEXT run which of three things happened
+    # (guest never running at all, guest rebooted onto a different lease mid-boot, or guest is up
+    # and simply refusing port 22) instead of one flat "never came up", so the next bench timeout
+    # carries the evidence a budget change would need.
     _wait_ssh 900 || {
-        bad "host SSH never came up after the wizard gate — cannot read hugepages/machine-id"
+        bad "host SSH never came up after the wizard gate — cannot read hugepages/machine-id ($(_ssh_unreachable_reason "$ip"))"
         return
     }
 
@@ -590,6 +704,16 @@ phase_update() {
     fi
 
     info "leg 3 — operator-initiated rollback off a committed update"
+    # Mark the serial BEFORE issuing the reboot that leg 4 provisions against: neither
+    # config.json nor machine-role ever gets written by legs 1-3 (they only drive rauc), so
+    # pithead-firstboot's ConditionPathExists stays satisfied and every one of the five reboots
+    # above re-ran the wizard and minted its own token, none of them flushed by
+    # _vm_boot_disk's one-time truncate (before leg 1). Taking the mark here — not on
+    # entry to _wizard_provision_capture — is what makes it safe: anything already on the
+    # serial before this point is a dead token from an earlier, now-destroyed wizard container,
+    # and everything after belongs to the boot leg 4 actually runs against.
+    local serial_mark
+    serial_mark=$(wc -c <"$SERIAL" 2>/dev/null | tr -d ' ')
     _ssh "$(_rollback_cmd)" || true
     sleep 10
     _wait_ssh 300 || {
@@ -600,38 +724,56 @@ phase_update() {
     [ "$marker" = "v1" ] && ok "ROLLBACK: an operator can return to v1 after committing v2" ||
         bad "expected v1 after the operator rollback, got '$marker'"
 
-    phase_update_dashboard "$bundle"
+    phase_update_dashboard "$bundle" "${serial_mark:-0}"
 }
 
 # Provision the wizard-gated stack over its real HTTP flow — the slim shape of what
 # phase_provision drives with full assertions — and CAPTURE the generated dashboard login for
-# API-driving legs. Sets DASH_USER/DASH_PASS. rc 1 on any failure (the caller reports).
+# API-driving legs. Sets DASH_USER/DASH_PASS. rc 1 on any failure; WIZ_FAIL_REASON names which of
+# the six gates lost (the caller reports it — "no dashboard, no control channel" used to be the
+# whole story, and every diagnostic run since has cost a battery pass to learn nothing more).
 DASH_USER=""
 DASH_PASS=""
-_wizard_provision_capture() {
-    local token="" tries=0 jar scode handoff=""
+WIZ_FAIL_REASON=""
+_wizard_provision_capture() { # <serial-byte-offset-before-this-boot, default 0>
+    local mark="${1:-0}" token="" tries=0 jar scode handoff="" tok_total
+    WIZ_FAIL_REASON=""
     while [ -z "$token" ] && [ "$tries" -lt 40 ]; do
-        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        # Only the tail past $mark: content from before this boot is a dead token from an
+        # earlier, now-destroyed wizard container (see the leg-3 comment on serial_mark).
+        token=$(tail -c "+$((mark + 1))" "$SERIAL" 2>/dev/null | tr -d '\r' | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
         [ -n "$token" ] || sleep 3
         tries=$((tries + 1))
     done
-    [ -n "$token" ] || return 1
-    _wait_setup_page 180 || return 1
+    if [ -z "$token" ]; then
+        WIZ_FAIL_REASON="gate: token — no pit-XXXXXX ever appeared on the serial console for this boot (waited ${tries}x3s)"
+        return 1
+    fi
+    if ! _wait_setup_page 180; then
+        WIZ_FAIL_REASON="gate: setup page — https://$ip/ never answered 'Pithead setup' within 180s (token: $token)"
+        return 1
+    fi
     jar=$(mktemp)
-    curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null || {
+    if ! curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null; then
+        # The number that confirms or kills the stale-token theory in one run: how many DISTINCT
+        # tokens the whole serial (not just this boot's slice) is carrying right now.
+        tok_total=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | sort -u | wc -l | tr -d ' ')
+        WIZ_FAIL_REASON="gate: auth POST — https://$ip/auth rejected token $token ($tok_total distinct pit- token(s) on the serial so far)"
         rm -f "$jar"
         return 1
-    }
-    grep -q "wizard_session" "$jar" || {
+    fi
+    if ! grep -q "wizard_session" "$jar"; then
+        WIZ_FAIL_REASON="gate: session cookie — /auth returned 200 but set no wizard_session cookie (token: $token)"
         rm -f "$jar"
         return 1
-    }
+    fi
     scode=$(curl -sSk -b "$jar" --data "monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini" \
         "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
-    [ "$scode" = "200" ] || {
+    if [ "$scode" != "200" ]; then
+        WIZ_FAIL_REASON="gate: submit — /submit returned $scode, want 200"
         rm -f "$jar"
         return 1
-    }
+    fi
     tries=0
     while [ "$tries" -lt 24 ]; do
         handoff=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null)
@@ -639,14 +781,16 @@ _wizard_provision_capture() {
         sleep 5
         tries=$((tries + 1))
     done
-    printf '%s' "$handoff" | grep -q '"password"' || {
+    if ! printf '%s' "$handoff" | grep -q '"password"'; then
+        WIZ_FAIL_REASON="gate: handoff — /api/handoff never carried a password (waited ${tries}x5s)"
         rm -f "$jar"
         return 1
-    }
+    fi
     DASH_USER=$(printf '%s' "$handoff" | jq -r '.username // "admin"')
     DASH_PASS=$(printf '%s' "$handoff" | jq -r '.password // ""')
     curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null
     rm -f "$jar"
+    [ -n "$DASH_PASS" ] || WIZ_FAIL_REASON="gate: handoff — password came back empty"
     [ -n "$DASH_PASS" ]
 }
 
@@ -723,11 +867,11 @@ PYEOF
 # bundle download are pointed at a bench-local server through the root-owned test seam
 # (os-update-test-base); RAUC signature verification still runs for real against the slot
 # keyring, so the bad-signature refusal is genuine, not simulated.
-phase_update_dashboard() { # <good-bundle-path>
-    local good_bundle="$1" marker
+phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-boot>
+    local good_bundle="$1" serial_mark="${2:-0}" marker
     info "leg 4 — dashboard OS-update action end-to-end (provision, then check/download/verify/install/reboot)"
-    if ! _wizard_provision_capture; then
-        bad "leg 4: could not provision the stack through the wizard (no dashboard, no control channel)"
+    if ! _wizard_provision_capture "$serial_mark"; then
+        bad "leg 4: could not provision the stack through the wizard (${WIZ_FAIL_REASON:-no dashboard, no control channel})"
         return
     fi
     ok "leg 4: stack provisioned; dashboard login captured"
@@ -764,6 +908,8 @@ phase_update_dashboard() { # <good-bundle-path>
 
     # Bench-local release server: the good v2 bundle plus a corrupted twin, behind the seam.
     local tag srv host_addr port=8931 size srv_pid
+    # The tag the bench release server publishes MUST match the bundle's own stamp, which is the
+    # checkout's VERSION — the bundle is built from this tree.
     tag="v$(tr -d ' \t\r\n' <VERSION)"
     srv=$(mktemp -d)
     cp "$good_bundle" "$srv/pithead-os-$tag.raucb"
@@ -783,6 +929,25 @@ phase_update_dashboard() { # <good-bundle-path>
         rm -rf "$srv"
         return
     }
+
+    # A real update arrives at a box running something OLDER, and the dashboard door refuses an
+    # equal target on purpose: an equal-version reinstall is a forced-downtime and flash-wear loop
+    # for a compromised container. Both images here are built from the one checkout, so without
+    # this the guest is already running the version the bundle carries and leg 4 could never get
+    # past its first download — it reported #976's path as broken while never offering it anything
+    # to install. Age the RUNNING side, never the bundle's stamp (see _prev_patch_version).
+    #
+    # Safe here specifically: nothing renders .env or runs compose between this write and the
+    # reboot — `pithead os-update` is a rauc install — and pithead-sync restores the slot's real
+    # VERSION on the next boot, before pithead-boot reads it to judge the update. So the guest
+    # claims the older version exactly for the length of the check/download/install window.
+    local aged
+    if aged=$(_prev_patch_version); then
+        _ssh "printf '%s\n' '$aged' > /data/pithead/VERSION" ||
+            bad "leg 4: could not age the guest's running version to $aged"
+    else
+        bad "leg 4: VERSION patch component is 0 — cannot age the running version below it"
+    fi
 
     local out st
     # Check: the host derives tag + size from the (redirected) release lookup.
@@ -1483,6 +1648,13 @@ phase_install() {
     local restore_archive="/tmp/pithead-os-restore-test.tar.gz.enc"
     local restore_pass="pithead-os-restore-test-passphrase" # fixture value, not real secret material
     rm -f "$restore_archive"
+    # State of the two files the backup collects unguarded, captured BEFORE the run (#1059). The
+    # backup failed here with `tar: data/pithead/config.json: Cannot stat` on a machine that was
+    # serving a live stack, and the guest is recycled before anyone can look. `tar` reports exactly
+    # that for a DANGLING SYMLINK as well as for a missing file, and `.env` beside it archived
+    # fine, so what the path actually IS matters more than whether `ls` finds something there.
+    _ssh "ls -la /data/pithead/config.json /data/pithead/.env 2>&1; readlink -f /data/pithead/config.json 2>&1" |
+        tr -d '\r' | sed 's/^/     · /'
     if _ssh "cd /data/pithead && PITHEAD_BACKUP_PASSPHRASE=$restore_pass ./pithead backup -y >/tmp/restore-backup.log 2>&1"; then
         ok "restore leg: took a real encrypted backup off the live machine"
     else
@@ -2128,7 +2300,20 @@ phase_provision() {
     local ou_out
     if ! ou_out=$(_ssh "cd /data/pithead && ./pithead os-update /data/update.bundle --yes 2>&1"); then
         printf '     os-update output: %s\n' "$(printf '%s' "$ou_out" | tail -8)"
-        bad "pithead os-update failed on the guest (manifest unreadable, or a guard misfired)"
+        # Capture the guest's own account BEFORE the assertion, because the guest is recycled
+        # moments later and this failure has outlived three batteries without anyone seeing it
+        # (#1060). It stops dead partway through "Copying image to rootfs.1" with no rauc error,
+        # which is the signature of a KILLED command rather than a failed one — so the kernel log
+        # and the memory picture are the evidence, not the CLI output. This leg runs after
+        # provisioning, so hugepages are already carved out of the guest's RAM before a multi-GB
+        # slot copy starts, which is the standing hypothesis this is here to confirm or kill.
+        printf '     --- guest evidence (#1060) ---\n'
+        _ssh "journalctl -k --no-pager 2>/dev/null | grep -iE 'out of memory|oom-kill|killed process' | tail -5
+              echo '-- rauc unit --'; journalctl -u rauc --no-pager -n 8 2>/dev/null
+              echo '-- memory --'; free -m | head -2
+              grep -E 'MemAvailable|HugePages_Total|^Dirty|^Writeback:' /proc/meminfo" 2>/dev/null |
+            tr -d '\r' | sed 's/^/     · /'
+        bad "pithead os-update failed on the guest — see the guest evidence above, and do not restate the cause without reading it"
         return
     fi
     marker=$(_ssh "cat /data/pithead/.os-migration-pending 2>/dev/null" | tr -d ' \r\n')
