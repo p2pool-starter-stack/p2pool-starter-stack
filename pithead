@@ -5320,7 +5320,7 @@ apply() {
     local apply_marker="${ENV_FILE}.apply-incomplete" incomplete=0
     [ -f "$apply_marker" ] && incomplete=1
 
-    local destructive=0 caddy_changed=0 caddy_before="" wallet_keys=() line flag msg old new
+    local destructive=0 caddy_changed=0 caddy_before="" caddy_had=0 wallet_keys=() line flag msg old new
     if [ "${#changed[@]}" -gt 0 ]; then
         echo ""
         log "The following changes will be applied:"
@@ -5385,13 +5385,17 @@ apply() {
         # dashboard.expose_public_ip was missing from it, so turning OFF the opt-in that serves the
         # dashboard on a globally-routable address re-rendered the Caddyfile without its bind lines
         # and left caddy holding the wildcard listener — the operator sees the setting saved, sees
-        # the file change, and the box stays exposed. Any Caddyfile input has the same shape, so
-        # the guard is the content, not the cause. An absent previous file is a fresh install:
-        # compose starts caddy on the new one below, and there is no old configuration to displace.
-        caddy_before=""
-        [ -f "Caddyfile" ] && caddy_before=$(cat "Caddyfile")
+        # the file change, and the box stays exposed.
+        #
+        # An absent previous file is a fresh install: compose starts caddy on the new one below, so
+        # there is no old configuration to displace. Emptiness is not absence — a zero-byte file
+        # left by a crashed render is a box whose caddy serves nothing, and that wants the restart.
+        if [ -f "Caddyfile" ]; then
+            caddy_had=1
+            caddy_before=$(cat "Caddyfile")
+        fi
         generate_caddyfile
-        if [ -n "$caddy_before" ] && [ "$caddy_before" != "$(cat "Caddyfile" 2>/dev/null)" ]; then
+        if [ "$caddy_had" -eq 1 ] && [ "$caddy_before" != "$(cat "Caddyfile" 2>/dev/null)" ]; then
             caddy_changed=1
         fi
     else
