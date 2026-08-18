@@ -2498,6 +2498,24 @@ firstboot_wizard() {
                 log "Configuration accepted — provisioning now."
                 ensure_appliance_dashboard_password "$spool" || true
                 apply_appliance_defaults || true
+                # The candidate was validated BEFORE those two ran, so until #1066 the config the
+                # operator was told had been accepted was not the config about to be provisioned.
+                # Validate what actually lands: anything the appliance itself injects has to pass
+                # the same gate, and a collision must hand the form back HERE — while the page is
+                # still up — rather than fail after it has gone dark.
+                local post_err
+                # Same isolation the other two validator calls use: a fresh bash so the
+                # validator's own error() exit cannot take this loop with it, and CONFIG_FILE
+                # (readonly) is aimed by the env var rather than reassigned.
+                if ! post_err=$(PITHEAD_CONFIG_FILE="$PWD/config.json" bash -c "source '${BASH_SOURCE[0]}' && parse_and_validate_config" 2>&1); then
+                    printf '%s' "$post_err" | tail -c 300 >"$spool/error.txt"
+                    jq -c . "$PWD/config.json" >"$spool/last-attempt.json" 2>/dev/null
+                    chown 1000:1000 "$spool/error.txt" "$spool/last-attempt.json" 2>/dev/null || true
+                    rm -f "$PWD/config.json" "$spool/install-request"
+                    warn "The machine's own defaults collide with this configuration: $post_err"
+                    sleep 2
+                    continue
+                fi
                 local stratum_addr dash_user dash_pass
                 stratum_addr="stratum+tcp://$(hostname).local:$(jq -r '.p2pool.stratum_port // 3333' "$PWD/config.json" 2>/dev/null || echo 3333)"
                 dash_user=$(jq -r '.dashboard.auth.username // "admin"' "$PWD/config.json")
@@ -5296,9 +5314,16 @@ apply_appliance_defaults() {
     # without this the machine is unconfigurable after first boot and the only route to a changed
     # payout address is a reflash. Production runs with it on. It sits behind the generated
     # login, which is why the password above is not optional.
+    # ...but only behind a password. `strip_defaults` drops any wizard answer equal to the
+    # reference default, and the reference has control.enabled false, so the key is absent from
+    # EVERY submission — including "No login", which leaves the password empty. Injecting
+    # unconditionally therefore built the exact pair parse_and_validate_config refuses, and the
+    # machine dead-ended on first boot after the operator had been told provisioning started
+    # (#1066). An unauthenticated config editor is what that rule exists to prevent, so the
+    # honest resolution is to leave the channel off rather than to weaken the rule.
     if jq '
         if .tor.auto_heal == null then (.tor //= {}) | .tor.auto_heal = true else . end
-        | if .dashboard.control.enabled == null
+        | if .dashboard.control.enabled == null and ((.dashboard.auth.password // "") != "")
           then (.dashboard //= {}) | (.dashboard.control //= {}) | .dashboard.control.enabled = true
           else . end' \
         "$CONFIG_FILE" >"$tmp" && mv "$tmp" "$CONFIG_FILE"; then
