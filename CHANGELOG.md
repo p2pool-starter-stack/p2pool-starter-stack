@@ -9,6 +9,38 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.19.1] - 2026-08-17
+
+### Fixed
+
+- **The one-click upgrade no longer needs anything installed on the host
+  ([#1072](https://github.com/p2pool-starter-stack/pithead/issues/1072)).** Release verification
+  used to require the `cosign` binary, which has no Ubuntu package — so it was a prerequisite no
+  prerequisites list mentioned and no dependency check installed. Because the first start gates on
+  it too, a fresh install from the documented Quick Start dead-ended on any clean host, after the
+  wizard had already collected the operator's wallet addresses; and every install predating signed
+  releases hit the same wall on its first signed upgrade. The verifier now runs as a pinned
+  container through Docker, which the stack already requires. Nothing to install, and the
+  prerequisites are unchanged.
+- **A failed upgrade can no longer disable the upgrade button
+  ([#1070](https://github.com/p2pool-starter-stack/pithead/issues/1070)).** The control-runner
+  systemd units were pointed at the new release's directory before that release was live, so an
+  upgrade that aborted partway left them watching a directory the running dashboard never writes
+  to. The control channel went quiet with no error anywhere, taking the one-click upgrade with it —
+  the repair needed a shell on the host. The units are now updated only once the new version is
+  actually live, so a failed upgrade leaves the working install untouched and still serving.
+- **A slow upgrade is no longer reported as a failed one
+  ([#1071](https://github.com/p2pool-starter-stack/pithead/issues/1071)).** The dashboard gave up
+  waiting before the host had spent even its download budget, then blamed the control channel —
+  which was working. Re-clicking then met the ten-minute throttle. The page now waits long enough
+  for a slow connection and, if it does stop watching, says the host is still working rather than
+  claiming the upgrade failed.
+- **Container image scanning is green again
+  ([#1073](https://github.com/p2pool-starter-stack/pithead/issues/1073)).** A util-linux
+  vulnerability became fixable upstream and started failing the image gate on every branch at once.
+  The base image is bumped and the finding accepted until the patched build reaches it, the way the
+  other base-distro findings already are.
+
 ## [1.19.0] - 2026-08-16
 
 ### Added

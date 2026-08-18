@@ -839,18 +839,95 @@ up_sig_order=$(
 assert_eq "first-install up verifies release-image signatures before 'compose up' (#452)" \
     "$(printf '%s\n' "$up_sig_order" | grep -xE 'verify|compose' | tr '\n' ',')" "verify,compose,"
 
+echo "== black-box: a failed upgrade never repoints the control-runner units (#1070) =="
+# The units are host-global and bake an absolute path. On a one-click deploy stack_upgrade runs from
+# the NEW version dir while `current ->` still names the old one, so provisioning them before the
+# release is live points them at a dir that may never become the install. That is what bricked
+# pithead-prod: the image gate aborted, `current` never moved, and the path unit was left watching a
+# spool the running dashboard does not write to — silently killing the control channel, and with it
+# the one-click upgrade that would have fixed it. Provisioning must therefore come last, after
+# update_current_symlink. Both directions are asserted: the ordering on success, and — the one that
+# actually bites — that an abort at the gate repoints nothing at all.
+upg_step_order() { # <verify_release_images body> — the step markers stack_upgrade reaches, in order
+    (
+        cd "$SANDBOX" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        require_env() { :; }
+        ensure_onion_password() { :; }
+        parse_and_validate_config() { :; }
+        load_preserved_state() { :; }
+        ensure_directories() { :; }
+        resolve_dashboard_host() { :; }
+        render_env() { [ -n "${1:-}" ] && : >"$1"; }
+        provision_node_onions() { :; }
+        inject_service_configs() { :; }
+        generate_caddyfile() { :; }
+        migrate_compose_project() { :; }
+        apply_tor_egress_firewall() { :; }
+        migrate_dashboard_data() { :; }
+        is_source_checkout() { return 1; }
+        log() { :; }
+        eval "verify_release_images() { $1 }"
+        compose_up_checked() { echo compose; }
+        update_current_symlink() { echo symlink; }
+        provision_control_runner() { echo provision; }
+        stack_upgrade
+    ) | grep -xE 'verify|compose|symlink|provision' | tr '\n' ','
+}
+assert_eq "successful upgrade provisions the units only after 'current ->' moves (#1070)" \
+    "$(upg_step_order 'echo verify;')" "verify,compose,symlink,provision,"
+# The red test for #1070: abort at the image gate, exactly as a host without a runnable verifier
+# does. If provisioning ever migrates back above the pull, `provision` reappears here and this fails.
+assert_eq "an upgrade that aborts at the gate repoints no units and moves no symlink (#1070)" \
+    "$(upg_step_order 'echo verify; error "gate refused";')" "verify,"
+
 echo "== black-box: verify_release_images fail-closed gate (#376) =="
-# The verification decision itself, against a fake cosign on a PINNED PATH ($VRI/bin:/usr/bin:/bin
-# — coreutils stay, any real cosign install on the host disappears, so the host can never decide
-# the outcome). A release install is a dir without build/dashboard/Dockerfile.
-VRI="$SANDBOX/verify376"
-mkdir -p "$VRI/bin"
-cat >"$VRI/bin/cosign" <<'EOF'
+# The verification decision itself, against a fake docker on a PINNED PATH ($VRI/bin:/usr/bin:/bin
+# — coreutils stay, so the host can never decide the outcome). Since #1072 the verifier is a
+# container, so the stub is `docker`, not `cosign`: it answers the availability probe, pretends the
+# pinned image is already present, and logs the cosign argv that follows the image ref — which keeps
+# every assertion below reading exactly as it did when cosign was a host binary. A release install
+# is a dir without build/dashboard/Dockerfile.
+write_fake_docker() { # <bin-dir> — the containerized verifier's stand-in (#1072)
+    mkdir -p "$1"
+    cat >"$1/docker" <<'EOF'
 #!/usr/bin/env bash
-echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
-exit "${COSIGN_RC:-0}"
+case "$1" in
+info | pull) exit 0 ;;
+image) exit 0 ;; # `image inspect` -> pinned verifier already local, nothing pulled
+run)
+    shift
+    # Drop the run flags up to and including the pinned verifier image; what remains is the cosign
+    # argv the caller actually asked for.
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        *sigstore/cosign*)
+            shift
+            break
+            ;;
+        *) shift ;;
+        esac
+    done
+    echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
+    exit "${COSIGN_RC:-0}"
+    ;;
+esac
+exit 0
 EOF
-chmod +x "$VRI/bin/cosign"
+    chmod +x "$1/docker"
+}
+write_unreachable_docker() { # <bin-dir> — docker present, daemon down: the "cannot verify" branch.
+    # Probing the daemon rather than unsetting PATH keeps this deterministic on hosts that ship
+    # /usr/bin/docker, which the pinned PATHs below deliberately still expose.
+    mkdir -p "$1"
+    printf '#!/usr/bin/env bash\n[ "$1" = "info" ] && exit 1\nexit 0\n' >"$1/docker"
+    chmod +x "$1/docker"
+}
+VRI="$SANDBOX/verify376"
+write_fake_docker "$VRI/bin"
+write_unreachable_docker "$VRI/nodocker"
 
 # A deterministic 64-hex digest per image, and a digest-pinned compose (#461) so verify has the same
 # @sha256 bytes to check that a release install's compose would pull (#451). TOR_DG is what the tor
@@ -870,16 +947,16 @@ write_pinned_compose "$VRI"
 
 # No cosign.pub (an install older than the first signed release): documented fallback — proceed,
 # but say loudly that nothing was verified.
-out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
+out="$(PATH="$VRI/bin:/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
 assert_rc "no pubkey -> pull proceeds (documented fallback)" "$?" "0"
 assert_contains "no pubkey -> loud NOT-verified warning" "$out" "NOT be signature-verified"
 
-# cosign.pub present but no cosign binary anywhere on PATH: FAIL CLOSED with an install pointer —
-# a missing verifier must not silently disable verification.
+# cosign.pub present but the verifier cannot run (docker daemon unreachable): FAIL CLOSED — an
+# unavailable verifier must not silently disable verification.
 printf 'fake release public key' >"$VRI/cosign.pub"
-out="$(PATH="/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
-assert_rc "pubkey without cosign -> pull aborts" "$?" "1"
-assert_contains "cosign-missing abort points at the install doc" "$out" "not installed"
+out="$(PATH="$VRI/nodocker:/usr/bin:/bin" run_sourced "$VRI" verify_release_images 2>&1)"
+assert_rc "pubkey without a runnable verifier -> pull aborts" "$?" "1"
+assert_contains "verifier-missing abort names docker, not a host cosign" "$out" "docker is not available"
 
 # Valid signatures (fake cosign exits 0): all 5 images verified with the committed key, no Rekor
 # (--private-infrastructure), against the EXACT @sha256 digest compose pins and pulls (#451 — bound
@@ -939,6 +1016,31 @@ out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_RC=1 COSIGN_LOG="$VRI/cosign.log" ru
 assert_rc "source checkout -> verification skipped" "$?" "0"
 assert_eq "source checkout -> cosign never invoked" "$(cat "$VRI/cosign.log")" ""
 rm -rf "$VRI/build"
+
+echo "== unit: cosign_container_path maps host paths into the verifier's mount (#1072) =="
+# The verifier container sees the install dir at /w, so every file argument has to be renamed into
+# that mount. The refusal case is the one that matters: both callers report a cosign failure as a
+# SIGNATURE failure, so a path this function got wrong would read as a tampered download and burn a
+# genuine release. It must fail rather than emit a path the mount does not cover.
+CCP="$SANDBOX/ccp"
+mkdir -p "$CCP/data/control/staged"
+touch "$CCP/cosign.pub" "$CCP/data/control/staged/.abc.tar.gz"
+assert_eq "file beside pithead -> /w/<name>" \
+    "$(run_sourced "$CCP" cosign_container_path "$CCP/cosign.pub")" "/w/cosign.pub"
+assert_eq "staged bundle -> /w/<relative dirs>/<name>" \
+    "$(run_sourced "$CCP" cosign_container_path "$CCP/data/control/staged/.abc.tar.gz")" \
+    "/w/data/control/staged/.abc.tar.gz"
+# The `current -> pithead-vX.Y.Z` layout: CONTROL_DIR in .env can name the same file through the
+# symlink while the runner's cwd is the physical dir. Canonicalizing both sides is what makes these
+# agree — a plain "${path#$PWD/}" prefix strip silently does not, and would fail closed on prod.
+ln -sfn "$CCP" "$SANDBOX/ccp-current"
+assert_eq "same file reached via the current symlink still resolves" \
+    "$(run_sourced "$CCP" cosign_container_path "$SANDBOX/ccp-current/data/control/staged/.abc.tar.gz")" \
+    "/w/data/control/staged/.abc.tar.gz"
+run_sourced "$CCP" cosign_container_path "$SANDBOX/outside.txt" >/dev/null 2>&1
+assert_rc "a path outside the install dir is refused, not guessed at" "$?" "1"
+run_sourced "$CCP" cosign_container_path "/etc/hosts" >/dev/null 2>&1
+assert_rc "an absolute path elsewhere on the box is refused" "$?" "1"
 
 # apply had the same after-compose ordering bug as #272's stack_upgrade — fixed alongside #291. Take
 # the no-change-but-incomplete-marker retry path so apply recreates containers without the interactive
@@ -5935,11 +6037,10 @@ make_stubs "$UPG/bin"
 # tar; on a Mac with gnu-tar installed, route this block's tar there too so the bug reproduces.
 command -v gtar >/dev/null 2>&1 && ln -sf "$(command -v gtar)" "$UPG/bin/tar"
 # Every release bundle ships cosign.pub, so the runner requires the verifier before it downloads
-# anything (#1023) — the fixture carries one so the paths that are supposed to proceed do not
-# depend on whether the host happens to have cosign installed. It stays inert: this install has no
-# cosign.pub, so no signature is ever fetched and nothing here invokes it.
-printf '#!/usr/bin/env bash\nexit 0\n' >"$UPG/bin/cosign"
-chmod +x "$UPG/bin/cosign"
+# anything (#1023) — the fixture carries a runnable one so the paths that are supposed to proceed do
+# not depend on the host. Since #1072 that means a fake docker, not a fake cosign. It stays inert
+# here: this install has no cosign.pub, so no signature is ever fetched and nothing invokes it.
+write_fake_docker "$UPG/bin"
 printf '1.3.1' >"$UPG/VERSION"
 printf '{}' >"$UPG/config.json" # #637: the in-place path snapshots config.json before extracting
 # #544/#555: a real release install carries non-empty build/* config-template mounts (see the
@@ -6046,17 +6147,17 @@ seed_upgrade_env true
 # Same pinned PATH as its key-holding twin below, so a host cosign can't decide the test.
 reset_upgrade_state
 ln -sf "$(command -v jq)" "$UPG/bin/jq" # PATH is pinned below, which may not carry jq
-mv "$UPG/bin/cosign" "$UPG/cosign.hidden"
+write_unreachable_docker "$UPG/nodocker"
+ln -sf "$(command -v jq)" "$UPG/nodocker/jq"
 upgrade_intent "$UUPG" "v9.9.9"
-(cd "$UPG" && PATH="$UPG/bin:/usr/bin:/bin" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+(cd "$UPG" && PATH="$UPG/nodocker:/usr/bin:/bin" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
     CURL_BUNDLE="$UPGB/bundle.tar.gz" ./pithead control-run-pending >/dev/null 2>&1)
-mv "$UPG/cosign.hidden" "$UPG/bin/cosign"
 rm -f "$UPG/bin/jq"
-assert_eq "upgrade without cosign is rejected on a key-less install" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
-assert_contains "cosign-missing refusal names the verifier" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "cosign is not installed"
-assert_eq "cosign-missing refusal dials nothing" "$(cat "$UPG/curl.log" 2>/dev/null)" ""
-assert_eq "cosign-missing refusal extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
-assert_eq "cosign-missing refusal claims no throttle" "$(ls "$UPG/data/control/staged/.upgrade-stamp" 2>/dev/null)" ""
+assert_eq "upgrade without a runnable verifier is rejected on a key-less install" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "verifier-missing refusal names docker" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "docker is not available"
+assert_eq "verifier-missing refusal dials nothing" "$(cat "$UPG/curl.log" 2>/dev/null)" ""
+assert_eq "verifier-missing refusal extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
+assert_eq "verifier-missing refusal claims no throttle" "$(ls "$UPG/data/control/staged/.upgrade-stamp" 2>/dev/null)" ""
 
 # Malformed / missing version: refused BEFORE any network dial (curl must never run).
 reset_upgrade_state
@@ -6406,14 +6507,9 @@ seed_v629_env
 
 echo "== black-box: control upgrade verifies the bundle signature (#376) =="
 # Give the install a trust anchor (cosign.pub next to pithead — what a signed release bundle
-# ships) plus a fake cosign; the runner must fetch pithead.tar.gz.sig over the same Tor SOCKS and
-# verify the download against the EXISTING key before a byte of it is extracted.
-cat >"$UPG/bin/cosign" <<'EOF'
-#!/usr/bin/env bash
-echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
-exit "${COSIGN_RC:-0}"
-EOF
-chmod +x "$UPG/bin/cosign"
+# ships) plus a runnable verifier; the runner must fetch pithead.tar.gz.sig over the same Tor SOCKS
+# and verify the download against the EXISTING key before a byte of it is extracted.
+write_fake_docker "$UPG/bin"
 printf 'fake release public key' >"$UPG/cosign.pub"
 printf 'fake signature' >"$UPGB/bundle.sig"
 usign() { # <extra env VAR=val...> — one signed-mode runner invocation
@@ -6452,19 +6548,19 @@ assert_contains "missing-signature failure names the asset" "$(jq -r '.error' "$
 assert_eq "missing signature extracts nothing" "$(cat "$UPG/VERSION")" "1.3.1"
 
 # The other half of the same precondition (#1023): an install that already HOLDS the key is
-# refused for the same reason a key-less one is — no cosign, no upgrade — BEFORE the download, with
-# an install pointer. PATH is pinned to the stub bin + /usr/bin:/bin so a real host cosign can't
+# refused for the same reason a key-less one is — no runnable verifier, no upgrade — BEFORE the
+# download. PATH is pinned to the daemon-down stub + /usr/bin:/bin so a working host docker can't
 # leak in; jq rides along as a symlink since the pinned PATH may not carry it.
 reset_upgrade_state
-ln -sf "$(command -v jq)" "$UPG/bin/jq"
-rm -f "$UPG/bin/cosign"
+write_unreachable_docker "$UPG/nodocker"
+ln -sf "$(command -v jq)" "$UPG/nodocker/jq"
 upgrade_intent "$UUPG" "v9.9.9"
-(cd "$UPG" && PATH="$UPG/bin:/usr/bin:/bin" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
+(cd "$UPG" && PATH="$UPG/nodocker:/usr/bin:/bin" CURL_LOG="$UPG/curl.log" CURL_API_RESPONSE="$UPGB/api.json" \
     CURL_BUNDLE="$UPGB/bundle.tar.gz" CURL_SIG="$UPGB/bundle.sig" ./pithead control-run-pending >/dev/null 2>&1)
-assert_eq "pubkey without cosign rejects the upgrade" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
-assert_contains "cosign-missing rejection points at the install doc" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "not installed"
-assert_eq "cosign-missing refusal downloads no bundle" "$(grep -c 'releases/download' "$UPG/curl.log" || true)" "0"
-rm -f "$UPG/cosign.pub" "$UPG/bin/jq"
+assert_eq "pubkey without a runnable verifier rejects the upgrade" "$(jq -r '.status' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "rejected"
+assert_contains "verifier-missing rejection names docker" "$(jq -r '.error' "$UPGRESULTS/$UUPG.json" 2>/dev/null)" "docker is not available"
+assert_eq "verifier-missing refusal downloads no bundle" "$(grep -c 'releases/download' "$UPG/curl.log" || true)" "0"
+rm -f "$UPG/cosign.pub" "$UPG/nodocker/jq"
 reset_upgrade_state
 
 # The runner refuses to run at all when the channel is off (fail-closed).
@@ -7575,6 +7671,136 @@ ln -s "$PCR/versions/pithead-v1.9.3" "$PCR/current"
 assert_contains "own unit under its versioned spelling, run via the current symlink -> removed" \
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
+
+echo "== unit: doctor sees control units that do not point at this install (#33) =="
+# The failure this guards is silent by construction: the dashboard writes control requests into
+# its own install's spool, a box-global systemd unit watches some absolute path, and when the two
+# disagree nothing reports it — the config editor and one-click upgrade just never complete.
+# Seen in the field on a production box: a failed upgrade repointed the units at the half-installed
+# tree, and two operator upgrade requests sat unread for a day with no error on either side.
+#
+# Mutation proof (each assertion below fails if the guard regresses):
+#   - drop the `[ "$owner" != "$here" ]` arm      -> "units point elsewhere" goes green->red
+#   - flip that `!=` to `=`                        -> mismatch AND aligned assertions both flip
+#   - drop the spool comparison arm                -> "watches a different spool" goes red
+#   - drop the `-z "$owner"` arm                   -> "no units installed" loses its message
+#   - drop the enabled gate's `return 0`           -> "disabled" assertion sees a FAIL
+CCU="$SANDBOX/ccu"
+mkdir -p "$CCU/units" "$CCU/bin" "$CCU/install" "$CCU/other"
+# uname/systemctl stubs: the check gates on Linux + systemctl, so dev Macs run the branch too.
+printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$CCU/bin/uname"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$CCU/bin/systemctl"
+chmod +x "$CCU/bin/uname" "$CCU/bin/systemctl"
+
+ccu_run() { # <owner-dir|-> <spool-in-path-unit|-> <enabled> <run-dir> [control-dir-in-env] -> output
+    rm -f "$CCU/units/pithead-control.service" "$CCU/units/pithead-control.path"
+    [ "$1" != "-" ] && printf '[Service]\nExecStart=%s/pithead control-run-pending\n' "$1" >"$CCU/units/pithead-control.service"
+    [ "$2" != "-" ] && printf '[Path]\nPathExistsGlob=%s/requests/*.json\n' "$2" >"$CCU/units/pithead-control.path"
+    printf 'DASHBOARD_CONTROL_ENABLED=%s\nCONTROL_DIR=%s\n' "$3" "${5:-$4/data/control}" >"$4/.env"
+    (
+        cd "$4" || exit
+        PATH="$CCU/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        PITHEAD_UNIT_DIR="$CCU/units" check_control_units 2>&1
+    )
+}
+
+# The production shape: units name a tree that is not this install. Must FAIL, and must name both
+# paths — an operator who cannot see which directory is wrong cannot fix it.
+out="$(ccu_run "$CCU/other" "$CCU/install/data/control" true "$CCU/install")"
+assert_contains "units point elsewhere -> FAIL" "$out" "FAIL"
+assert_contains "units point elsewhere -> names the unit's directory" "$out" "$CCU/other"
+assert_contains "units point elsewhere -> names this install" "$out" "$CCU/install"
+
+# Aligned: same install, same spool. Must be OK and must NOT fail.
+out="$(ccu_run "$CCU/install" "$CCU/install/data/control" true "$CCU/install")"
+assert_not_contains "aligned units -> no FAIL" "$out" "FAIL"
+assert_contains "aligned units -> OK" "$out" "target this install"
+
+# Control enabled but the units were never installed at all. Assert the DISTINCT message, not just
+# that something failed: with no units the owner is empty, so the mismatch arm below would fail on
+# its own and an assertion for bare "FAIL" would stay green with this arm deleted — and the operator
+# would get "point at , but this install is ..." instead of being told the units are simply missing.
+out="$(ccu_run - - true "$CCU/install")"
+assert_contains "no units installed -> FAIL naming the real cause" "$out" "no runner units are installed"
+
+# Service unit right, path unit watching someone else's spool: requests are still never read.
+out="$(ccu_run "$CCU/install" "$CCU/other/data/control" true "$CCU/install")"
+assert_contains "path unit watches a different spool -> FAIL" "$out" "FAIL"
+
+# Control disabled: the units are irrelevant, so a mismatch must NOT be reported as a fault.
+out="$(ccu_run "$CCU/other" "$CCU/other/data/control" false "$CCU/install")"
+assert_not_contains "control disabled -> no FAIL" "$out" "FAIL"
+
+# The two spellings of one checkout (versioned dir vs the `current` symlink) are the SAME install.
+# A literal string compare would call this a mismatch and cry wolf on every production box.
+mkdir -p "$CCU/versions/pithead-v1.9.3"
+ln -sfn "$CCU/versions/pithead-v1.9.3" "$CCU/current"
+# .env and the path unit both carry the versioned spelling, as one render always writes them;
+# only the invocation goes through the symlink. The owner compare must resolve both to one install.
+out="$(ccu_run "$CCU/versions/pithead-v1.9.3" "$CCU/versions/pithead-v1.9.3/data/control" true \
+    "$CCU/current" "$CCU/versions/pithead-v1.9.3/data/control")"
+assert_not_contains "versioned dir vs current symlink -> same install, no FAIL" "$out" "FAIL"
+
+# A stranded unit usually names a directory that no longer exists; the check must still resolve a
+# printable path and report the mismatch rather than going quiet on an empty answer.
+out="$(ccu_run "$CCU/deleted-tree" "$CCU/install/data/control" true "$CCU/install")"
+assert_contains "unit names a deleted directory -> still FAILs" "$out" "FAIL"
+assert_contains "unit names a deleted directory -> still names it" "$out" "$CCU/deleted-tree"
+
+# The documented layout keeps the PREVIOUS version dir for rollback, and the one-click upgrade runs
+# in the browser, so the operator's shell is routinely still sitting in it. The units correctly name
+# the live dir there. Calling that box broken would be a cry-wolf FAIL on a healthy install — and
+# worse, the printed fix ('apply' from here) would repoint the units at the rollback dir and break
+# the live install for real. A superseded version dir must report INFO and no verdict.
+# Mutation: delete the `current`-symlink guard in check_control_units -> this goes red (FAIL returns).
+mkdir -p "$CCU/deploy/pithead-v1.19.0" "$CCU/deploy/pithead-v1.19.1/data/control"
+ln -sfn pithead-v1.19.1 "$CCU/deploy/current"
+out="$(ccu_run "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control" true \
+    "$CCU/deploy/pithead-v1.19.0" "$CCU/deploy/pithead-v1.19.1/data/control")"
+assert_not_contains "superseded rollback dir -> no FAIL (units belong to the live install)" "$out" "FAIL"
+assert_contains "superseded rollback dir -> says which dir is live" "$out" "$CCU/deploy/pithead-v1.19.1"
+# ...and the live dir itself still gets a real verdict, so the guard cannot silence everything.
+out="$(ccu_run "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control" true \
+    "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control")"
+assert_contains "the live install still gets a verdict" "$out" "target this install"
+unset CCU ccu_run out
+
+echo "== unit: apply converges the control units even when nothing changed (#33) =="
+# doctor's fix instruction is "run './pithead apply' from this directory". A box whose units point
+# at a dead install has an UNCHANGED config by definition — the fault is in the unit files, not
+# config.json — so apply's "nothing to apply" early return used to make the prescribed fix a no-op
+# on the only box the check fires for.
+# Mutation: remove provision_control_runner from apply's no-change branch -> this goes red.
+apply_noop_steps() {
+    (
+        cd "$SANDBOX" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        require_env() { :; }
+        ensure_onion_password() { :; }
+        parse_and_validate_config() { :; }
+        load_preserved_state() { :; }
+        onion_missing() { return 1; }
+        is_deployed() { return 0; }
+        ensure_directories() { :; }
+        resolve_dashboard_host() { :; }
+        render_env() { [ -n "${1:-}" ] && : >"$1"; }
+        env_changed_keys() { :; } # nothing changed
+        P2POOL_ONION="abc.onion"  # provisioning marker; read under `set -u` before the stub
+        log() { :; }
+        provision_control_runner() { echo provision; }
+        compose_up_checked() { echo compose; }
+        apply
+    ) | grep -xE 'provision|compose' | tr '\n' ','
+}
+: >"$SANDBOX/.env"
+assert_eq "a no-change apply still converges the control units, and recreates nothing" \
+    "$(apply_noop_steps)" "provision,"
+unset apply_noop_steps
 
 # ---------------------------------------------------------------------------
 echo ""

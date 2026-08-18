@@ -957,10 +957,10 @@ verifies each image's signature the same way before pulling. An install without 
 pinning, and says so in the journal — upgrading once to a signed release picks up the key. See
 [Releasing › Signed releases](dev/releasing.md#signed-releases).
 
-The `cosign` binary itself is checked first, before the release API is dialled: every bundle ships
-the key, so the upgrade the runner ends up performing will need the verifier no matter what this
-install currently holds. Without it the request is refused outright, with nothing downloaded and
-the throttle unclaimed — install cosign on the host and retry immediately.
+The verifier needs nothing installed. It runs as a digest-pinned container, so the button works on
+any host that can already run the stack; the image is fetched once, quietly, the first time an
+upgrade verifies something. If Docker itself is unreachable the request is refused outright, with
+nothing downloaded and the throttle unclaimed — but a box in that state is not mining either.
 
 **Upgrading from v1.7.x or older shows one last false failure.** Dashboard versions before
 v1.8.1 treat the reverse proxy's brief 502 — normal while the dashboard container recreates
@@ -980,6 +980,15 @@ release stay on disk, and `docker compose` state is recoverable the same way as 
 CLI upgrade. The result names the restore point ([#637](https://github.com/p2pool-starter-stack/pithead/issues/637)):
 on the versioned layout, the previous `pithead-vX.Y.Z` dir; in place, the pre-upgrade
 `config.json`/`.env` copies.
+
+**If the button does nothing at all — no result, no error, no modal — the control units are
+pointing at a different directory than the dashboard writes to.** The dashboard drops each request
+into its own install's spool and a systemd path unit runs the host-side runner when a file lands
+there. The unit names an absolute path and is shared box-wide, so an upgrade that aborted partway
+can leave it watching a tree that is no longer the install. Nothing reports the mismatch: requests
+queue up unread, and the config editor and the upgrade button both sit there. `./pithead doctor`
+names it under **Dashboard control channel**, printing the directory the units point at next to the
+one you ran it from, and `./pithead apply` from the install directory repoints them.
 
 ## Tips
 

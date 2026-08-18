@@ -387,6 +387,60 @@ compose_pinned_digest() {
         grep -oE 'sha256:[0-9a-f]+' | head -1
 }
 
+# The verifier runs as a container, not a host binary (#1072). cosign has no Ubuntu apt package, so
+# requiring it on the host made signing a hidden prerequisite that no doc listed and no dependency
+# check installed: a fresh bundle install dead-ended at first `up`, and every fielded install cut
+# before signing engaged hit the same wall on its first signed upgrade — after the download, the
+# extract, and the control-unit re-provision (#1070). Docker is already a hard prerequisite and the
+# very next step of both callers pulls images with it, so running cosign this way costs the operator
+# nothing to install and nothing to know about.
+#
+# The @sha256 pin is LOAD-BEARING, not cosmetic housekeeping: verifying release images by first
+# pulling a verifier image is itself an unverified pull, and the digest is the only thing that
+# closes it. Pinned, a hostile registry can serve nothing but the exact bytes named here or fail the
+# pull outright; on a tag it could serve a "cosign" that exits 0 on everything and silently turn the
+# whole gate off. Bootstrapping is therefore trust-on-first-use exactly as downloading the binary
+# from GitHub was — no weaker, and pinned to bytes rather than to a mutable tag. Never relax this to
+# a tag, and treat bumping it as a supply-chain change.
+readonly COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign@sha256:4bedb8de1c5c1abd8dea60de704ba449402d238623fa8bb33d2ccaa9beffcbf5" # v2.6.3
+
+# Verification is possible at all — i.e. we can run the verifier. Kept as its own predicate so the
+# callers' fail-closed refusals read the same as they did when this was `command -v cosign`.
+cosign_available() {
+    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+# Run cosign in a container, with the install dir mounted read-only at /w as its working dir.
+# ponytail: ONE mount, because every file cosign is ever handed lives under the install dir —
+# cosign.pub sits next to this script, and the bundle + .sig it verifies on a one-click upgrade go
+# under CONTROL_DIR, which is derived as "$PWD/data/control" and is not operator-settable. A caller
+# that ever needs a path outside $PWD must add its own mount rather than assume this one covers it.
+# HOME=/tmp: cosign caches TUF material under $HOME and prints a multi-line warning when it cannot
+# write there — noise on every verify, and the operator is not meant to see this run at all.
+# The image pull is quiet and happens once; without it docker streams pull progress mid-`up`.
+cosign_run() {
+    docker image inspect "$COSIGN_IMAGE" >/dev/null 2>&1 ||
+        docker pull -q "$COSIGN_IMAGE" >/dev/null 2>&1 ||
+        return 1
+    docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+        -v "$PWD:/w:ro" -w /w "$COSIGN_IMAGE" "$@"
+}
+
+# Translate a host path under the install dir into the path cosign_run's container sees. Both sides
+# are canonicalized, so a caller reaching the same file through a symlink (`current -> pithead-vX`)
+# still resolves. Fails — rather than emitting a path the mount does not cover — when the file is
+# outside the install dir, because every caller reports a cosign failure as a signature failure.
+cosign_container_path() { # <path>
+    local dir root
+    dir=$(cd -- "$(dirname -- "$1")" 2>/dev/null && pwd -P) || return 1
+    root=$(pwd -P) || return 1
+    case "$dir" in
+    # One arm for both depths: at the install root the strip leaves "", giving /w/<name>.
+    "$root" | "$root"/*) printf '/w%s/%s\n' "${dir#"$root"}" "$(basename -- "$1")" ;;
+    *) return 1 ;;
+    esac
+}
+
 # Cryptographic gate on a release pull (#376). Runs before both the upgrade pull and the
 # first-install pull (#452), so every first-party image the pull would fetch must carry a cosign
 # signature that verifies against the cosign.pub shipped next to this script. Key-based signing from
@@ -404,8 +458,9 @@ compose_pinned_digest() {
 #   source checkout                          -> skip: locally built images are unsigned by design
 #   no cosign.pub (an older/unsigned bundle) -> proceed with one loud warning (signing is opt-in per
 #                                               #461; the digest-pinned bundle is the protection)
-#   cosign.pub present, cosign missing       -> ABORT with an install pointer — an absent verifier
-#                                               must not silently disable verification
+#   cosign.pub present, docker missing       -> ABORT — an absent verifier must not silently
+#                                               disable verification (docker is a prerequisite and
+#                                               the very next step pulls images with it anyway)
 #   cosign.pub present, image not pinned     -> ABORT: with no digest there's nothing to bind the
 #                                               verification to the pulled bytes (the #451 window)
 #   any signature that fails to verify       -> ABORT naming the image; nothing pulled or restarted
@@ -415,8 +470,8 @@ verify_release_images() {
         warn "No cosign.pub next to pithead — the release images will NOT be signature-verified. Releases up to v1.3.x shipped no key; the first signed bundle brings it."
         return 0
     fi
-    command -v cosign >/dev/null 2>&1 ||
-        error "cosign.pub is present but the cosign binary is not installed — refusing an unverified pull. Install cosign ($DOCS_URL/docs/dev/releasing.md#verifying-a-release) and re-run '$0'."
+    cosign_available ||
+        error "cosign.pub is present but docker is not available to run the verifier — refusing an unverified pull. Install Docker ($DOCS_URL/docs/getting-started.md#1-prerequisites) and re-run '$0'."
     # The 5 first-party images, verified by the exact digest compose pins them to (#451/#461).
     local suffix repo sha image out
     for suffix in tor monero p2pool xmrig-proxy dashboard; do
@@ -427,7 +482,7 @@ verify_release_images() {
             error "cosign.pub is present but pithead-${suffix} is not digest-pinned in docker-compose.yml — cannot bind verification to the bytes compose pulls; refusing. A signed release bundle pins every first-party image by @sha256."
         fi
         image="${repo}@${sha}"
-        if ! out=$(cosign verify --key cosign.pub --private-infrastructure "$image" 2>&1); then
+        if ! out=$(cosign_run verify --key cosign.pub --private-infrastructure "$image" 2>&1); then
             # Strip control chars: cosign's stderr echoes registry-supplied bytes, and error()
             # prints via `echo -e`, so an attacker-controlled registry response could otherwise
             # inject ANSI escapes into the operator's terminal (#376 review).
@@ -462,7 +517,6 @@ stack_upgrade() {
     provision_node_onions # #103: as in apply — a node switched to local needs its onion first
     inject_service_configs
     generate_caddyfile
-    provision_control_runner # #33: converge the control-runner units on the current toggle
     log "Re-rendered generated config for the current release."
     migrate_compose_project
     # (Re)assert the Tor-only egress firewall BEFORE compose — same ordering as stack_up (#276), for
@@ -503,6 +557,17 @@ stack_upgrade() {
         fi
     fi
     update_current_symlink # #455: only a SUCCESSFUL upgrade moves the `current ->` pointer
+    # #33: converge the control-runner units on the current toggle — LAST, and deliberately after
+    # update_current_symlink. #1070: a fresh-dir one-click deploy runs this function from the NEW
+    # version dir while `current ->` still points at the old one, so provisioning it early (where it
+    # used to sit, before the image gate) pointed the units at a directory that had not become the
+    # install yet. Any abort in between — the image gate, a failed pull, a health-gate failure —
+    # then left the path unit watching a spool the running dashboard never writes to, silently
+    # killing the control channel and with it the one-click upgrade that would have fixed it. The
+    # units are host-global and name an absolute path, so the only safe moment to repoint them is
+    # after this dir IS `current`. A failure before here now leaves the old install's units intact
+    # and still serving. Do not move this back above the pull.
+    provision_control_runner
     log "Stack upgraded."
 }
 
@@ -817,10 +882,10 @@ doctor() {
         dr_info "Source checkout — images build locally and are not signature-verified (#376)."
     elif [ ! -f cosign.pub ]; then
         dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
-    elif command -v cosign >/dev/null 2>&1; then
-        dr_ok "cosign found — 'up' and 'upgrade' verify the release images against cosign.pub (#376/#452)."
+    elif cosign_available; then
+        dr_ok "'up' and 'upgrade' verify the release images against cosign.pub; the verifier runs as a container, nothing to install."
     else
-        dr_warn "cosign.pub is present but cosign is not installed — 'up'/'upgrade' refuse to pull until it is. Install: $DOCS_URL/docs/dev/releasing.md#verifying-a-release."
+        dr_warn "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon."
     fi
 
     # --- Docker daemon ---
@@ -848,6 +913,8 @@ doctor() {
             dr_warn "Docker is NOT enabled to start at boot — after a power loss/reboot the stack won't restart. Fix: 'sudo systemctl enable --now docker'."
         fi
     fi
+
+    check_control_units
 
     # --- CPU: AVX2 (performance only) ---
     echo ""
@@ -1879,6 +1946,54 @@ check_stratum_exposure() {
         [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :$port isn't directly internet-exposed."
     fi
     return 0
+}
+
+# Doctor check (#33): do the installed control units point at THIS install?
+# The dashboard writes control requests into its own install's spool and a systemd path unit
+# watches that spool. The unit names an absolute path and is box-global, so it can end up naming a
+# different directory than the dashboard writes to — and when it does, nothing anywhere reports it:
+# requests pile up unread, and the config editor and one-click upgrade simply never complete. A
+# failed upgrade was enough to cause it in the field (#1070 fixed the ordering that did it; this
+# finds a box already stranded, which that fix by definition cannot reach — the channel it would
+# arrive through is the broken one).
+check_control_units() {
+    [ "$OS_TYPE" == "Linux" ] || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    echo ""
+    echo "Dashboard control channel:"
+    local unit_dir owner here spool
+    unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"
+    if [ "$(normalize_bool "$(env_get DASHBOARD_CONTROL_ENABLED)")" != "true" ]; then
+        dr_info "Disabled for this install — the dashboard cannot apply config changes or upgrade."
+        return 0
+    fi
+    owner=$(control_units_owner_dir)
+    here=$(pwd -P)
+    spool=$(env_get CONTROL_DIR)
+    # A versioned dir that `current` no longer names is a superseded rollback copy, not a
+    # stranded install: the units SHOULD name the live dir, and the dashboard writes there, not
+    # here. Verdicts about the control channel belong to the live install, so say what this dir
+    # is and stop. Same pattern update_current_symlink uses to recognise the layout (#455).
+    local _name _parent _live
+    _name=$(basename "$here")
+    _parent=$(dirname "$here")
+    if [[ "$_name" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -L "$_parent/current" ]; then
+        _live=$(cd "$_parent/current" 2>/dev/null && pwd -P)
+        if [ -n "$_live" ] && [ "$_live" != "$here" ]; then
+            dr_info "This is not the live install — '$_parent/current' points at $_live. Run doctor there to check its control channel."
+            return 0
+        fi
+    fi
+    if [ -z "$owner" ]; then
+        dr_fail "The control channel is enabled but no runner units are installed — the dashboard's config changes and one-click upgrades will never run, with no error shown. Fix: run './pithead apply' from this directory."
+    elif [ "$owner" != "$here" ]; then
+        dr_fail "The control runner units point at $owner, but this install is $here — the dashboard writes its requests here and nothing reads them, so config changes and one-click upgrades silently never run. Fix: run './pithead apply' from this directory."
+    elif [ -n "$spool" ] &&
+        ! grep -qsF "PathExistsGlob=$spool/requests/*.json" "$unit_dir/pithead-control.path"; then
+        dr_fail "The control runner watches a different spool than this install writes to ($spool) — requests are never picked up, with no error shown. Fix: run './pithead apply' from this directory."
+    else
+        dr_ok "Control runner units target this install."
+    fi
 }
 
 # True if the named container is currently running. State only, no sudo — safe for doctor.
@@ -5280,6 +5395,12 @@ apply() {
     else
         rm -f "$newenv"
         if [ "$incomplete" -eq 0 ]; then
+            # #33: converge the control-runner units BEFORE returning. A box whose units point at
+            # a dead install has an unchanged config by definition — the fault is in the unit
+            # files, not config.json — so returning here first made `apply` the one thing that
+            # could not repair it, while doctor was telling the operator to run exactly that.
+            # Idempotent and sudo-free when the units already match.
+            provision_control_runner
             log "No configuration changes detected. Nothing to apply."
             return 0
         fi
@@ -5848,18 +5969,20 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         _upg_reject "this install builds from source — upgrade from the host with 'git pull' then './pithead upgrade'."
         return 0
     fi
-    # #376/#1023: cosign is a PRECONDITION of a one-click upgrade, not a consequence of already
+    # #376/#1023: the verifier is a PRECONDITION of a one-click upgrade, not a consequence of already
     # holding a key. Every release bundle ships cosign.pub (make_bundle copies the committed key
     # unconditionally), so the `pithead upgrade` this runner ends up calling will demand the
     # verifier at its image gate whatever the current install holds. Testing the LOCAL cosign.pub
     # instead — what this guard used to do — was blind to the one upgrade that needs it most: an
     # install cut before signing engaged moving to a signed release, which every fielded install
     # makes exactly once. That sailed past here and aborted inside the new CLI, after the download,
-    # the extraction, and a full config re-render. Checked with the source-checkout refusal above:
-    # both are "this install cannot take a one-click upgrade at all", and neither claims the
-    # throttle or dials out, so a refusal here costs the operator nothing.
-    if ! command -v cosign >/dev/null 2>&1; then
-        _upg_reject "cosign is not installed on the host — release bundles ship a signing key and every image is verified against it before it is pulled, so this upgrade would fail partway through. Install cosign ($DOCS_URL/docs/dev/releasing.md#verifying-a-release) and retry."
+    # the extraction, and a full config re-render. Since #1072 the verifier is a container, so this
+    # can only fail on a box whose docker is gone — which would also mean nothing is mining. Kept
+    # anyway: checked with the source-checkout refusal above, both are "this install cannot take a
+    # one-click upgrade at all", and neither claims the throttle or dials out, so a refusal here
+    # costs the operator nothing.
+    if ! cosign_available; then
+        _upg_reject "docker is not available to run the release verifier — every image is verified against the shipped signing key before it is pulled, so this upgrade would fail partway through. Check the Docker daemon and retry."
         return 0
     fi
     # Throttle: one attempt per 10 minutes, checked before any network dial.
@@ -5933,7 +6056,18 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
             _upg_fail "the $tag release carries no bundle signature (pithead.tar.gz.sig) — refusing to install it unverified (#376); the stack keeps running v$PITHEAD_VERSION."
             return 0
         fi
-        if ! cosign verify-blob --key cosign.pub --signature "$sig" --insecure-ignore-tlog=true "$bundle" >/dev/null 2>&1; then
+        # The verifier is a container that sees the install dir at /w (#1072), so it needs the two
+        # staged files named as IT sees them. Translated with a guard rather than a blind prefix
+        # strip: a path that fell outside the mount would make cosign fail to open the file, and
+        # this call reports any failure as "signature FAILED" — a mount bug must not be able to
+        # masquerade as a tampered download and burn a legitimate release.
+        local cbundle csig
+        if ! cbundle=$(cosign_container_path "$bundle") || ! csig=$(cosign_container_path "$sig"); then
+            rm -f "$bundle" "$sig"
+            _upg_fail "the staged $tag bundle landed outside the install dir, where the release verifier cannot read it — refusing to install it unverified. The stack keeps running v$PITHEAD_VERSION."
+            return 0
+        fi
+        if ! cosign_run verify-blob --key cosign.pub --signature "$csig" --insecure-ignore-tlog=true "$cbundle" >/dev/null 2>&1; then
             rm -f "$bundle" "$sig"
             _upg_fail "bundle signature verification FAILED for $tag — the download does not match the release key; refusing to extract it (#376). The stack keeps running v$PITHEAD_VERSION."
             return 0
@@ -6600,6 +6734,25 @@ control_run_pending() {
     log "Processed $n control request(s)."
 }
 
+# Physical directory the installed control units name, or "" when there is no service unit or its
+# ExecStart is unparseable. One checkout has two spellings — the `current` symlink and the versioned
+# dir it points at (production units carry the versioned spelling) — so this resolves to a PHYSICAL
+# path; comparing the literal string would call our own unit foreign. A stranded unit usually names
+# a directory that no longer exists, so resolve the deepest existing ancestor and keep the rest
+# verbatim: the caller still gets a comparable, printable path instead of an empty answer.
+control_units_owner_dir() {
+    local unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}" owner_dir dir tail
+    owner_dir=$(sed -n 's|^ExecStart=\(/.*\)/pithead control-run-pending$|\1|p' \
+        "$unit_dir/pithead-control.service" 2>/dev/null | head -n 1)
+    [ -n "$owner_dir" ] || return 0
+    dir="$owner_dir" tail=""
+    while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
+        tail="/$(basename "$dir")$tail"
+        dir=$(dirname "$dir")
+    done
+    printf '%s' "$(cd "$dir" 2>/dev/null && pwd -P)$tail"
+}
+
 # Install (or remove) the systemd trigger for the runner (#33): a path unit that fires
 # `pithead control-run-pending` whenever a request file lands in the spool. Root, because `apply`
 # needs iptables/chown; the service is a FIXED ExecStart with no parameter from the container, so
@@ -6622,16 +6775,9 @@ provision_control_runner() {
             # it. If the unit's dir is gone, resolve the deepest existing ancestor and keep the
             # rest verbatim; an unparseable ExecStart is foreign (fail safe, leave it alone).
             if [ -e "$unit_dir/pithead-control.service" ]; then
-                local owner_dir dir tail
-                owner_dir=$(sed -n 's|^ExecStart=\(/.*\)/pithead control-run-pending$|\1|p' \
-                    "$unit_dir/pithead-control.service" | head -n 1)
-                dir="$owner_dir" tail=""
-                while [ -n "$dir" ] && [ "$dir" != "/" ] && [ ! -d "$dir" ]; do
-                    tail="/$(basename "$dir")$tail"
-                    dir=$(dirname "$dir")
-                done
-                if [ -z "$owner_dir" ] ||
-                    [ "$(cd "$dir" 2>/dev/null && pwd -P)$tail" != "$(pwd -P)" ]; then
+                local owner_dir
+                owner_dir=$(control_units_owner_dir)
+                if [ -z "$owner_dir" ] || [ "$owner_dir" != "$(pwd -P)" ]; then
                     log "Leaving the dashboard control runner units alone — they belong to another checkout."
                     return 0
                 fi
