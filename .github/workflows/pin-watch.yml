@@ -1,0 +1,88 @@
+name: Upstream pin watch
+
+# Weekly upstream-currency report (#1128). It REPORTS and never bumps: a Tari or monerod minor is
+# a data migration to schedule, not a bump to merge (#1129 carries three one-time migrations and a
+# one-way wallet-DB change). RigForge's xmrig-bump.yml opens a build-verified PR instead — same
+# shape, different output, because XMRig is a drop-in binary and its build gate proves the
+# candidate.
+#
+# ONE tracking issue, edited in place. An issue persists, is assignable and milestonable, and lets
+# a human write "held until the bench is free, here's why" in a comment — which a report artifact
+# nobody opens cannot do, and which is the failure mode #1128 was filed about.
+#
+# This file lives on the DEFAULT branch on purpose. The previous pin-watch.yml lived on
+# `develop-v2`, where a `schedule:` can never fire, and so ran exactly zero times — the appliance
+# pins it watched were never checked once. That is the same defect class as #1048 and #1064.
+on:
+  schedule:
+    - cron: "30 6 * * 1" # Mondays 06:30 UTC, after the image sweeps
+  workflow_dispatch:
+
+# Least privilege (#282): issues.write is the job's one output — it never pushes or publishes.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  pin-watch:
+    name: Compare upstream component pins against their latest releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the currency report
+        id: report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          # NOT `set -e`: a non-zero exit here means "one or more lookups could not run", which is
+          # a result to publish, not a reason to skip publishing it. The exit code is carried to
+          # the last step instead, so a watcher that could not do its job says so in the artefact
+          # a human reads AND fails the run.
+          bash scripts/pin-watch.sh >report.md
+          rc=$?
+          # An empty report is itself a failure to report — never publish silence.
+          [ -s report.md ] || { echo "The pin watcher produced no report at all — see the run log." >report.md; rc=1; }
+          echo "rc=$rc" >>"$GITHUB_OUTPUT"
+      - name: Publish it to the one tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "Upstream pin currency (weekly report)"
+          RC: ${{ steps.report.outputs.rc }}
+        run: |
+          set -Eeuo pipefail
+          body=$(cat report.md)
+          # Exact title match over the open list, NOT `--search`: the search index lags behind
+          # issue creation by minutes, so a search-based dedup files a second issue on the very
+          # next run and then keeps both stale.
+          n=$(gh issue list --state open --limit 200 --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          # A run that could not do its job replaces the report with a failure notice, which would
+          # otherwise DELETE the "last fully successful check" date — and that date is the only
+          # thing separating "failed once this morning" from "has been dead for six weeks". Carry
+          # the previous one forward. A watcher whose own silence is invisible is the exact defect
+          # this watcher exists to catch, so it must not have it.
+          if [ "$RC" != "0" ] && [ -n "$n" ]; then
+            prev=$(gh issue view "$n" --json body --jq .body | grep -a "^_Last fully successful check:" || true)
+            # A real `if`, not `[ -n "$prev" ] && body=...`. The && form is safe HERE (set -e is
+            # ignored for a non-final command in an AND-OR list, checked rather than assumed), but
+            # it evaluates to 1 when $prev is empty — so it only stays safe while something else
+            # follows it. That is a reordering hazard for one saved line.
+            if [ -n "$prev" ]; then
+              body="$body"$'\n\n'"$prev (this run could not complete)"
+            fi
+          fi
+          if [ -n "$n" ]; then
+            gh issue edit "$n" --body "$body"
+            echo "updated #$n"
+          else
+            gh issue create --title "$TITLE" --label infra --body "$body"
+          fi
+      - name: Fail the run if any lookup could not be made
+        if: steps.report.outputs.rc != '0'
+        run: |
+          echo "::error::one or more upstream lookups could not run — those pins are UNCHECKED, not current"
+          exit 1

@@ -44,6 +44,17 @@ of each product release, not independent releases:
   release: bump the pin → cut a stack patch → re-run the integration gate → ship. The bundle
   ships re-tested.
 
+Noticing that a bump is available is a separate job from making one, and nothing did it until
+`scripts/pin-watch.sh`. It runs weekly from `.github/workflows/pin-watch.yml`, compares each pin
+against the component's latest upstream release, and keeps one tracking issue up to date. It
+reports and never bumps: a Tari or `monerod` minor can carry a one-time data migration, which is
+work to schedule rather than a pull request to merge. Dependabot covers the base images it can see
+and is set to ignore minor and major bumps on the component pins for the same reason.
+
+A lookup that could not be made is reported as unchecked, never as current, and the run fails. The
+report carries the date of the last fully successful check, so a watcher that has stopped looks
+different from one with nothing to say.
+
 ## Published images: GHCR, single-tag model
 
 Images are published to GitHub Container Registry (`ghcr.io/p2pool-starter-stack/*`). Public
