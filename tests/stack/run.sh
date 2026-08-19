@@ -111,6 +111,16 @@ echo "== unit: lint-operator-strings self-test (#755) =="
 bash "$ROOT/scripts/lint-operator-strings.sh" --self-test >/dev/null 2>&1
 assert_rc "operator-strings guard self-test passes" "$?" "0"
 
+echo "== unit: pin-watch self-test (#1128) =="
+# The watcher's whole product is the COMPARISON: our pins do not spell versions the way upstream
+# tags them (`caddy:2.11.4` vs `v2.11.4`, `minotari_node:v5.3.1-mainnet` vs `v5.6.0`), so a plain
+# string compare reports two components stale every week for ever and the report gets muted — as
+# useless as the scheduled workflow that lived on a non-default branch and never ran at all. Its
+# --self-test drives the normalisation over the real pin spellings and drives both lookup failure
+# paths, because an upstream lookup that could not run must never read as "current".
+bash "$ROOT/scripts/pin-watch.sh" --self-test >/dev/null 2>&1
+assert_rc "pin-watch self-test passes" "$?" "0"
+
 echo "== unit: patch-coverage overlap self-test (#1000) =="
 # diff-cover exits 0 on "No lines with coverage information" — a vacuous pass. The wrapper's
 # overlap check is what turns that into a loud not-applicable pass or a real failure; its
