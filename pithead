@@ -3340,6 +3340,50 @@ readonly CURL_CAP_SMALL=1048576 # 1 MiB — GitHub release JSON, rig control res
 # cap-hit surfaces as _upg_fail's "could not download over Tor", loud but network-flavoured).
 readonly CURL_CAP_BUNDLE=16777216 # 16 MiB — the pithead.tar.gz release bundle (code + configs)
 
+# The latest-release JSON for a GitHub repo, over the stack's own Tor SOCKS like every other
+# stack egress. Prints the JSON and returns 0; on failure prints nothing, returns 1, and leaves
+# GH_RELEASE_HINT holding the sentence the operator should actually be told.
+#
+# The reason this is a function and not two `curl -fsS` calls: `-f` collapses every non-2xx into
+# one exit code, so a 403 came out as "could not reach GitHub over Tor" and sent the operator to a
+# doctor run that correctly reports Tor healthy. GitHub's unauthenticated limit is 60 requests an
+# hour PER IP, and a Tor exit is shared with everyone else using it, so a spent budget is a normal
+# condition with nothing wrong with this machine — and a different remedy (pick a new exit) from a
+# dial that genuinely failed.
+GH_RELEASE_HINT=""
+gh_release_fetch() { # <owner/repo> -> release JSON on stdout
+    local repo="$1" prefix socks out code
+    prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
+    [ -n "$prefix" ] || prefix="172.28.0"
+    socks="${prefix}.25:9050"
+    GH_RELEASE_HINT=""
+    # -w appends the status on its own line, so a non-2xx keeps its BODY — which is where GitHub
+    # says the limit was exceeded. Without -f, curl's own non-zero exit now means only a transport
+    # failure, which is exactly the distinction that was missing.
+    if ! out=$(curl -sS --max-time 60 --max-filesize "$CURL_CAP_SMALL" -w '\n%{http_code}' \
+        --socks5-hostname "$socks" -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null); then
+        GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        return 1
+    fi
+    code=${out##*$'\n'}
+    out=${out%$'\n'*}
+    case "$code" in
+    2*)
+        printf '%s' "$out"
+        return 0
+        ;;
+    403 | 429)
+        if printf '%s' "$out" | grep -qi 'rate limit'; then
+            GH_RELEASE_HINT="the Tor exit this machine is currently using has spent GitHub's shared hourly request budget — nothing is wrong with this box, and 'doctor' will say so. Run './pithead restart tor' to pick a new exit, then retry."
+            return 1
+        fi
+        ;;
+    esac
+    GH_RELEASE_HINT="the GitHub release API answered HTTP $code — nothing was changed. Retry in a few minutes."
+    return 1
+}
+
 # Render the pre-masked prefill copy (#440): the live config with every SET secret leaf replaced
 # by the {"__secret__":true} sentinel, written atomically to <control-dir>/masked/config.json.
 # The dashboard serves the Configuration form from THIS file (mounted read-only) — the raw
@@ -6040,14 +6084,9 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # is the right trade.
     touch "$stamp"
     # Host-side re-derivation of the target: the latest tag according to GitHub, not the request.
-    local prefix socks rel tag
-    prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
-    [ -n "$prefix" ] || prefix="172.28.0"
-    socks="${prefix}.25:9050"
-    if ! rel=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
-        -H 'Accept: application/vnd.github+json' \
-        "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest" 2>/dev/null); then
-        _upg_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+    local rel tag
+    if ! rel=$(gh_release_fetch p2pool-starter-stack/pithead); then
+        _upg_reject "$GH_RELEASE_HINT"
         return 0
     fi
     tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
@@ -6552,14 +6591,9 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
             return 0
         fi
         touch "$stampf"
-        local prefix socks rel
-        prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
-        [ -n "$prefix" ] || prefix="172.28.0"
-        socks="${prefix}.25:9050"
-        if ! rel=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
-            -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/p2pool-starter-stack/rigforge/releases/latest" 2>/dev/null); then
-            _wu_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        local rel
+        if ! rel=$(gh_release_fetch p2pool-starter-stack/rigforge); then
+            _wu_reject "$GH_RELEASE_HINT"
             return 0
         fi
         tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)

@@ -6303,6 +6303,68 @@ out="$(run_pending)"
 assert_contains "next run drains the remainder" "$out" "Processed 10 control request(s)"
 assert_eq "spool empty after the second run" "$(ls "$REQS" | wc -l | tr -d ' ')" "0"
 
+echo "== unit: a spent GitHub rate limit is not a dead Tor circuit (#1081) =="
+# The one-click upgrade was rejected on a healthy box with "could not reach the GitHub release API
+# over Tor". Tor was fine and the dial succeeded; GitHub answered 403 because the unauthenticated
+# limit is 60 requests an hour PER IP and a Tor exit is shared with everyone else using it, so the
+# budget had been spent by strangers. `curl -f` collapses every non-2xx into one exit code, so the
+# only thing the operator was told pointed at 'doctor' — which correctly reports Tor healthy.
+#
+# The remedy is a different one entirely: pick a new exit. The fetch is now ONE function both the
+# pithead and the RigForge lookups go through, so neither can drift back.
+#
+# MUTATION PROOF: make the 403 branch fall through to the generic hint (or restore `curl -fsS`) and
+# the rate-limit assertion goes red; the transport-failure assertion holds it honest in the other
+# direction, so "always blame the rate limit" does not pass either.
+GHR="$SANDBOX/gh-release"
+mkdir -p "$GHR/bin"
+cat >"$GHR/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+# Answers with $GH_STUB_CODE and $GH_STUB_BODY, in the shape `-w '\n%{http_code}'` produces.
+[ "${GH_STUB_TRANSPORT_FAIL:-0}" = "1" ] && exit 7
+printf '%s\n%s' "${GH_STUB_BODY:-}" "${GH_STUB_CODE:-200}"
+EOF
+chmod +x "$GHR/bin/curl"
+gh_fetch() { # <code> <body> [transport-fail] -> "<rc>|<stdout>|<hint>"
+    (
+        cd "$GHR" && source "$STACK" 2>/dev/null
+        set +e
+        export PATH="$GHR/bin:$PATH" GH_STUB_CODE="$1" GH_STUB_BODY="$2" GH_STUB_TRANSPORT_FAIL="${3:-0}"
+        out=$(gh_release_fetch p2pool-starter-stack/pithead)
+        printf '%s|%s|%s' "$?" "$out" "$GH_RELEASE_HINT"
+    )
+}
+gh_ok=$(gh_fetch 200 '{"tag_name":"v1.2.3"}')
+assert_eq "a 200 returns the release JSON" "${gh_ok%%|*}" "0"
+assert_contains "and the JSON is what the caller gets" "$gh_ok" '"tag_name":"v1.2.3"'
+
+gh_rl=$(gh_fetch 403 '{"message":"API rate limit exceeded for 203.0.113.9."}')
+assert_eq "a spent rate limit is a failure" "${gh_rl%%|*}" "1"
+assert_contains "and names the remedy that actually works" "$gh_rl" "restart tor"
+case "$gh_rl" in
+*"could not reach the GitHub release API"*) bad "a spent rate limit is not reported as unreachable" "the hint still blames the dial: $gh_rl" ;;
+*) ok "a spent rate limit is not reported as unreachable" ;;
+esac
+
+gh_tf=$(gh_fetch 000 '' 1)
+assert_eq "a transport failure is still a failure" "${gh_tf%%|*}" "1"
+assert_contains "and still reads as a dial that did not land" "$gh_tf" "could not reach the GitHub release API"
+case "$gh_tf" in
+*"restart tor"*) bad "a dial failure is not blamed on the rate limit" "the hint sends them to restart tor: $gh_tf" ;;
+*) ok "a dial failure is not blamed on the rate limit" ;;
+esac
+
+gh_500=$(gh_fetch 500 'upstream is unwell')
+assert_eq "a server error is a failure" "${gh_500%%|*}" "1"
+assert_contains "and says which status came back" "$gh_500" "HTTP 500"
+
+# Both lookups go through the one function — a second copy is how the two messages drifted apart in
+# the first place, and the RigForge one would have kept the old wrong hint.
+assert_eq "both release lookups use the shared fetch" \
+    "$(grep -c 'gh_release_fetch p2pool-starter-stack/' "$STACK")" "2"
+assert_eq "no release lookup dials the API directly any more" \
+    "$(grep -c 'api.github.com/repos/.*/releases/latest' "$STACK")" "1"
+
 echo "== black-box: control upgrade verb (#59) =="
 # A RELEASE install (no build/*/Dockerfile → is_source_checkout false) with the control channel
 # on. The runner's upgrade verb runs against a stub curl (GitHub release API + bundle download)
