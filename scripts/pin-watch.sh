@@ -59,7 +59,7 @@ upstream_for() {
 # comparison calls the first two stale every week for ever, and a watcher that cries wolf weekly
 # gets ignored — exactly as useless as one that never runs.
 #
-# Strips, in order: an image name up to the last colon, a digest suffix, a leading `v`, and a
+# Strips, in order: a digest suffix, an image name up to the last colon, a leading `v`, and a
 # `-mainnet`/`-testnet` network suffix.
 norm() {
     local v="$1"
@@ -74,21 +74,7 @@ norm() {
     printf '%s' "$v"
 }
 
-# The digest half of a `tag@sha256:...` image pin; empty for a plain version string.
-pinned_digest() {
-    case "$1" in
-    *@sha256:*) printf '%s' "${1##*@}" ;;
-    esac
-}
-
-# The full image reference minus the digest, e.g. quay.io/tarilabs/minotari_node:v5.3.1-mainnet.
-image_ref() {
-    case "$1" in
-    *@sha256:*) printf '%s' "${1%%@*}" ;;
-    esac
-}
-
-# --- the two lookups. Both are wrapped so a failure is a COUNTED failure, never a quiet "current".
+# The one lookup, wrapped so a failure is a COUNTED failure and never a quiet "current".
 
 latest_release() { # <owner/repo> -> tag on stdout, rc 1 on any failure
     local tag
@@ -99,10 +85,9 @@ latest_release() { # <owner/repo> -> tag on stdout, rc 1 on any failure
     printf '%s' "$tag"
 }
 
-
 # --- self-test -----------------------------------------------------------------------------------
-# The comparison logic is the whole product here; the two lookups are one `gh api` and one
-# `docker` call each. Drives norm() over the real pin spellings and the failure paths over stubs.
+# The comparison logic is the whole product here; the lookup itself is one `gh api` call. Drives
+# norm() over the real pin spellings, and both of the lookup's refusal paths over a stubbed `gh`.
 if [ "${1:-}" = "--self-test" ]; then
     st_fail=0
     st() { # <label> <got> <want>
@@ -123,15 +108,17 @@ if [ "${1:-}" = "--self-test" ]; then
     # And the comparison must still SEE a real gap.
     st "a real gap survives normalisation" \
         "$([ "$(norm 'v5.3.1-mainnet')" = "$(norm 'v5.6.0')" ] && echo same || echo differs)" "differs"
-    # The two halves of an image pin.
-    st "the digest half is extracted" "$(pinned_digest 'caddy:2.11.4@sha256:beef')" "sha256:beef"
-    st "the tag half is extracted" "$(image_ref 'caddy:2.11.4@sha256:beef')" "caddy:2.11.4"
-    st "a plain version pin has no digest half" "$(pinned_digest 'v4.16')" ""
     # UNREACHABLE MUST NOT READ AS CURRENT — the defect this whole script is aimed at.
     st "a release lookup that cannot run fails" \
-        "$(gh() { return 1; }; latest_release foo/bar >/dev/null 2>&1 && echo ok || echo failed)" "failed"
+        "$(
+            gh() { return 1; }
+            latest_release foo/bar >/dev/null 2>&1 && echo ok || echo failed
+        )" "failed"
     st "a non-version tag is refused, not compared" \
-        "$(gh() { printf 'nightly'; }; latest_release foo/bar >/dev/null 2>&1 && echo ok || echo failed)" "failed"
+        "$(
+            gh() { printf 'nightly'; }
+            latest_release foo/bar >/dev/null 2>&1 && echo ok || echo failed
+        )" "failed"
     [ "$st_fail" = 0 ] && echo "pin-watch self-test OK"
     exit "$st_fail"
 fi
