@@ -207,8 +207,13 @@ sudo tests/os/run.sh --phase boot --image os/rauc/build/system.img
 ```
 
 `--phase update` and `--phase fault` build their own v1/v2 images and need no `--image`.
-`--phase all` runs everything. Expect roughly 25 minutes per phase, most of it image
-builds.
+`--phase all` runs all eight — boot, update, install, provision, rig, media, fault and reset.
+Expect roughly 25 minutes per phase, most of it image builds, so budget an evening rather
+than a coffee break. It ran five of the eight until #1064, which meant a cut that followed
+this page ran none of the destructive phases: the power cuts, the corrupt-bundle refusal, the
+factory reset, the wedged-`/data` recovery and the whole media channel. Record the dated
+per-phase pass count in the release issue for the tip actually being cut — an old green
+standing in for a new one is the same defect wearing a different hat.
 
 Two harness rules worth knowing before you lose an afternoon to them:
 

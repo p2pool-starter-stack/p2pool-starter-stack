@@ -2794,6 +2794,51 @@ assert_rc "missing tool -> preflight fails fast (rc 1)" "$tc_rc" "1"
 assert_contains "the missing tool is named" "$tc_out" "shfmt"
 assert_contains "error points at the provisioning doc" "$tc_out" "release-server.md"
 
+echo "== unit: release-smoke resolves the upgraded install at ASSERT time (#1068) =="
+# The #59 upgrade never rewrites the old install in place — it extracts a fresh pithead-v<new> and
+# repoints `current`, which is what makes rollback possible. So asserting on the directory the run
+# was POINTED at could only pass if the upgrade had overwritten the previous install: a correct
+# upgrade reported as a failure, on the documented final gate of a release. MUTATION PROOF: return
+# the given path unresolved and both "lands on" assertions go red.
+SMK="$SANDBOX/smoke1068"
+SMOKE_SH="$ROOT/scripts/release-smoke.sh"
+mkdir -p "$SMK/pithead-v1.18.1" "$SMK/pithead-v1.19.0"
+printf '1.18.1\n' >"$SMK/pithead-v1.18.1/VERSION"
+printf '1.19.0\n' >"$SMK/pithead-v1.19.0/VERSION"
+ln -sfn "$SMK/pithead-v1.19.0" "$SMK/current"
+smoke_resolve() { # <dir-as-given>
+    (
+        _arg="$1"          # saved before `set --`, which release-smoke's own arg parser needs empty
+        cd "$ROOT" || exit # its top level insists on a git repo, like the real invocation
+        set --
+        # Sourced through a variable, never a literal path: shellcheck follows a literal that names
+        # another file in the same invocation, and release-smoke pulls in release.sh, whose
+        # `local tool missing=()` then collides with this file's own scalar `missing` (SC2178).
+        # shellcheck disable=SC1090
+        source "$SMOKE_SH" 2>/dev/null
+        set +eu
+        upgraded_install_dir "$_arg"
+    )
+}
+# Handed the previous VERSIONED dir — the shape that produced the false red. It is unchanged by
+# design, so the answer has to come from the `current` beside it.
+assert_eq "a versioned dir resolves to where the upgrade actually landed" \
+    "$(tr -d '[:space:]' <"$(smoke_resolve "$SMK/pithead-v1.18.1")/VERSION")" "1.19.0"
+# Handed the SYMLINK — resolved now, after the upgrade moved it. This is why the v1.19.2 cut did
+# not hit the false red, and it must keep working.
+assert_eq "the current symlink resolves to the new install" \
+    "$(tr -d '[:space:]' <"$(smoke_resolve "$SMK/current")/VERSION")" "1.19.0"
+# Nothing moved: a box that is already on the target must resolve to itself, not wander off.
+ln -sfn "$SMK/pithead-v1.18.1" "$SMK/current"
+assert_eq "with current pointing at it, the same dir resolves to itself" \
+    "$(smoke_resolve "$SMK/pithead-v1.18.1")" "$SMK/pithead-v1.18.1"
+# NOTE, measured rather than assumed: replacing the `readlink -f` with the raw argument leaves all
+# three assertions above GREEN. The sibling lookup is what fixes the false red; the readlink only
+# normalises the path that lands in the pass and failure messages. Recorded here so the next reader
+# does not mistake it for a covered behaviour.
+rm -rf "$SMK"
+unset SMK SMOKE_SH
+
 echo "== unit: release.sh signs the promoted digests (#376) =="
 # sign_images must sign the recorded manifest-LIST digest (repo@sha256:… — never the mutable tag,
 # never a per-arch child) with the box's key and no Rekor upload; the password never reaches argv.
@@ -11260,6 +11305,36 @@ rm -f "$BG"/rebooted.*
 BOOTSCRIPT="$ROOT/os/overlay/pithead-boot"
 bg_bare=$(grep -cE '^[[:space:]]*(\./pithead (render|up)|timeout 1800 \./pithead local-miner).*\|\| exit 1' "$BOOTSCRIPT" || true)
 assert_eq "no boot-failure path exits without arming the fallback" "$bg_bare" "0"
+echo "== unit: the appliance battery's release gate does not lie about what it ran (#1064) =="
+# Harness wiring, asserted here because the harness itself only runs on the KVM bench. Both halves
+# are the same defect: a gate that reports success without having run. `--phase all` executed five
+# of eight phases while the release checklist said it ran everything, so every cut skipped the
+# power cuts, the corrupt-bundle refusal, the factory reset, the wedged-/data recovery and the
+# media channel; and verify-image's stale-artifact comparison was switched off in the ONE caller
+# that is not a human typing a command. MUTATION PROOF: drop a phase from the `all` arm, or drop
+# the PITHEAD_EXPECT_COMMIT prefix, and the matching assertion goes red.
+OSH="$(cat "$ROOT/tests/os/run.sh")"
+osh_all="$(printf '%s' "$OSH" | sed -n '/^all)/,/^    ;;/p')"
+for ph in boot update install provision rig media fault reset; do
+    assert_contains "--phase all runs phase_$ph" "$osh_all" "phase_$ph"
+done
+assert_contains "the battery's own build pins the commit verify-image checks against" "$OSH" \
+    'PITHEAD_EXPECT_COMMIT="$expect" tests/os/verify-image.sh'
+VIS="$(cat "$ROOT/tests/os/verify-image.sh")"
+# Wiring the guard on is only half of it: the two ends have to speak the same shape. build-image.sh
+# stamps `git rev-parse HEAD` — the FULL sha — and the harness first handed over `--short`, so the
+# equality check failed EVERY harness build. A guard that refuses everything is the same lie as one
+# that refuses nothing, pointed the other way. Bench-proven on the KVM image; asserted here because
+# verify-image needs a loop device and root, which tier-1 has neither of.
+assert_contains "the harness hands over the full sha build-image.sh stamps" "$OSH" \
+    'expect="$(git rev-parse HEAD 2>/dev/null || true)"'
+assert_not_contains "the harness does not hand over a short sha the stamp never equals" "$OSH" \
+    'rev-parse --short HEAD'
+assert_contains "the expected-commit check matches on a prefix, so a short sha still verifies" "$VIS" \
+    'case "$BUILT" in "$PITHEAD_EXPECT_COMMIT"*)'
+assert_contains "a skipped check is counted, not silent" "$VIS" "SKIP=\$((SKIP + 1))"
+assert_contains "skipped checks refuse to report a verified image" "$VIS" "were SKIPPED, so this is not a verified image"
+unset OSH osh_all VIS
 
 echo "== unit: pithead-data-reset decides reformat-vs-skip fail-safe (wedged-/data recovery) =="
 # Source the boot script (functions only — its main is guarded) and drive data_reset_decision with
