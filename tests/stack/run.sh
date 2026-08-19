@@ -6407,7 +6407,16 @@ assert_eq "no release lookup dials the API directly any more" \
 # defect this whole change exists to remove, reintroduced by the refactor that removes it. Neither
 # caller may wrap the fetch in a command substitution.
 assert_eq "neither caller swallows the hint in a subshell" \
-    "$(grep -c '=\$(gh_release_fetch' "$STACK")" "0"
+    "$(grep -cF '=$(gh_release_fetch' "$STACK")" "0"
+# And the other half of the same mistake: folding the lookup into a function DELETED the caller's own
+# `local prefix socks` derivation, while two later downloads in that same function still said
+# "$socks". Under `set -u` the runner died at its first download — the upgrade result sat at
+# "running" for ever with a single dial in the log and nothing extracted, and 60 assertions went red
+# together. The fetch publishes the address it used; every dial on that path reads the same one.
+assert_eq "every dial on the upgrade path uses the address the lookup derived" \
+    "$(grep -cF -- '--socks5-hostname "$GH_SOCKS"' "$STACK")" "3"
+assert_eq "no dial refers to a socks variable nobody declares" \
+    "$(grep -cF -- '--socks5-hostname "$socks"' "$STACK")" "0"
 
 echo "== black-box: control upgrade verb (#59) =="
 # A RELEASE install (no build/*/Dockerfile → is_source_checkout false) with the control channel

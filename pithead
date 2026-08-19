@@ -3356,18 +3356,23 @@ readonly CURL_CAP_BUNDLE=16777216 # 16 MiB — the pithead.tar.gz release bundle
 # empty message. Two globals, one call, no subshell.
 GH_RELEASE_HINT=""
 GH_RELEASE_JSON=""
+# The SOCKS address this fetch used, published so a caller that goes on to download the release over
+# the same Tor path derives it ONCE rather than twice. Folding the lookup into a function deleted the
+# caller's own derivation, and `set -u` then killed the runner at its first download — the upgrade
+# result sat at "running" for ever with a single dial in the log. One derivation, one truth.
+GH_SOCKS=""
 gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure
-    local repo="$1" prefix socks out code
+    local repo="$1" prefix out code
     prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
     [ -n "$prefix" ] || prefix="172.28.0"
-    socks="${prefix}.25:9050"
+    GH_SOCKS="${prefix}.25:9050"
     GH_RELEASE_HINT=""
     GH_RELEASE_JSON=""
     # -w appends the status on its own line, so a non-2xx keeps its BODY — which is where GitHub
     # says the limit was exceeded. Without -f, curl's own non-zero exit now means only a transport
     # failure, which is exactly the distinction that was missing.
     if ! out=$(curl -sS --max-time 60 --max-filesize "$CURL_CAP_SMALL" -w '\n%{http_code}' \
-        --socks5-hostname "$socks" -H 'Accept: application/vnd.github+json' \
+        --socks5-hostname "$GH_SOCKS" -H 'Accept: application/vnd.github+json' \
         "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null); then
         GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
         return 1
@@ -6141,7 +6146,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "started"
     # Bundle URL built from the HOST-derived tag only; fetched over the same Tor SOCKS.
     local bundle="$cdir/staged/.$id.tar.gz" logf="$cdir/staged/.$id.log"
-    if ! curl -fsSL --max-time 900 --max-filesize "$CURL_CAP_BUNDLE" --socks5-hostname "$socks" -o "$bundle" \
+    if ! curl -fsSL --max-time 900 --max-filesize "$CURL_CAP_BUNDLE" --socks5-hostname "$GH_SOCKS" -o "$bundle" \
         "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz" 2>/dev/null; then
         rm -f "$bundle"
         _upg_fail "could not download the $tag release bundle over Tor — the stack keeps running v$PITHEAD_VERSION."
@@ -6154,7 +6159,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # TLS to GitHub plus tag pinning — with one loud line in the journal.
     if [ -f cosign.pub ]; then
         local sig="$cdir/staged/.$id.tar.gz.sig"
-        if ! curl -fsSL --max-time 120 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" -o "$sig" \
+        if ! curl -fsSL --max-time 120 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$GH_SOCKS" -o "$sig" \
             "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz.sig" 2>/dev/null; then
             rm -f "$bundle" "$sig"
             _upg_fail "the $tag release carries no bundle signature (pithead.tar.gz.sig) — refusing to install it unverified (#376); the stack keeps running v$PITHEAD_VERSION."
