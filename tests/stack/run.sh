@@ -11237,6 +11237,37 @@ out=$(cd "$FR" && PITHEAD_APPLIANCE=1 PITHEAD_PRESEED_DIR="$FR/no-such-esp" PITH
 assert_contains "factory-reset refuses when the ESP marker cannot be written" "$out" "Could not arm"
 assert_eq "unarmable factory-reset does not reboot" "$([ -f "$rebooted" ] || echo no)" "no"
 
+echo "== unit: the appliance battery's release gate does not lie about what it ran (#1064) =="
+# Harness wiring, asserted here because the harness itself only runs on the KVM bench. Both halves
+# are the same defect: a gate that reports success without having run. `--phase all` executed five
+# of eight phases while the release checklist said it ran everything, so every cut skipped the
+# power cuts, the corrupt-bundle refusal, the factory reset, the wedged-/data recovery and the
+# media channel; and verify-image's stale-artifact comparison was switched off in the ONE caller
+# that is not a human typing a command. MUTATION PROOF: drop a phase from the `all` arm, or drop
+# the PITHEAD_EXPECT_COMMIT prefix, and the matching assertion goes red.
+OSH="$(cat "$ROOT/tests/os/run.sh")"
+osh_all="$(printf '%s' "$OSH" | sed -n '/^all)/,/^    ;;/p')"
+for ph in boot update install provision rig media fault reset; do
+    assert_contains "--phase all runs phase_$ph" "$osh_all" "phase_$ph"
+done
+assert_contains "the battery's own build pins the commit verify-image checks against" "$OSH" \
+    'PITHEAD_EXPECT_COMMIT="$expect" tests/os/verify-image.sh'
+VIS="$(cat "$ROOT/tests/os/verify-image.sh")"
+# Wiring the guard on is only half of it: the two ends have to speak the same shape. build-image.sh
+# stamps `git rev-parse HEAD` — the FULL sha — and the harness first handed over `--short`, so the
+# equality check failed EVERY harness build. A guard that refuses everything is the same lie as one
+# that refuses nothing, pointed the other way. Bench-proven on the KVM image; asserted here because
+# verify-image needs a loop device and root, which tier-1 has neither of.
+assert_contains "the harness hands over the full sha build-image.sh stamps" "$OSH" \
+    'expect="$(git rev-parse HEAD 2>/dev/null || true)"'
+assert_not_contains "the harness does not hand over a short sha the stamp never equals" "$OSH" \
+    'rev-parse --short HEAD'
+assert_contains "the expected-commit check matches on a prefix, so a short sha still verifies" "$VIS" \
+    'case "$BUILT" in "$PITHEAD_EXPECT_COMMIT"*)'
+assert_contains "a skipped check is counted, not silent" "$VIS" "SKIP=\$((SKIP + 1))"
+assert_contains "skipped checks refuse to report a verified image" "$VIS" "were SKIPPED, so this is not a verified image"
+unset OSH osh_all VIS
+
 echo "== unit: pithead-data-reset decides reformat-vs-skip fail-safe (wedged-/data recovery) =="
 # Source the boot script (functions only — its main is guarded) and drive data_reset_decision with
 # stubbed repair tools, in a subshell so its set -u / defs never leak into the suite.

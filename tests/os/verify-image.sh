@@ -44,6 +44,16 @@ chk() { # <label> <shell-condition>
     if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi
 }
 
+# A check that did not run is not a check that passed (#1064). Both of the strongest blocks below
+# are conditional, and their skips were silent — so the summary printed "0 failed" for a verifier
+# that had declined to compare the artifact against the tree at all, which is exactly the failure
+# the RC3 stale-dashboard incident produced.
+SKIP=0
+skip() { # <label> <why>
+    SKIP=$((SKIP + 1))
+    printf '  \033[1;33m-\033[0m %s (SKIPPED: %s)\n' "$1" "$2"
+}
+
 LOOP=$(losetup -Pf --show "$IMAGE")
 ROOT=$(mktemp -d)
 ESP=$(mktemp -d)
@@ -211,8 +221,14 @@ chk "carries a build stamp" '[ "$BUILT" != "missing" ] && [ -n "$BUILT" ]'
 # The check that would have caught shipping a two-commits-stale dashboard: compare against what
 # the caller believes it built. PITHEAD_EXPECT_COMMIT is set by the release procedure.
 if [ -n "${PITHEAD_EXPECT_COMMIT:-}" ]; then
-    chk "built from the expected commit ($PITHEAD_EXPECT_COMMIT)" '[ "$BUILT" = "$PITHEAD_EXPECT_COMMIT" ]'
+    # Prefix, not equality: the stamp is the full sha with an optional "-dirty" suffix, while the
+    # commit anyone types is the short one every log line prints. Equality failed both callers.
+    # Dirtiness is the next check's job, not this one's.
+    chk "built from the expected commit ($PITHEAD_EXPECT_COMMIT)" 'case "$BUILT" in "$PITHEAD_EXPECT_COMMIT"*) true ;; *) false ;; esac'
     chk "built from a clean tree" 'case "$BUILT" in *-dirty) false ;; *) true ;; esac'
+else
+    skip "built from the expected commit" "PITHEAD_EXPECT_COMMIT is unset"
+    skip "built from a clean tree" "PITHEAD_EXPECT_COMMIT is unset"
 fi
 
 # The RC3 failure in full: an image shipped a dashboard two commits stale, passed every check
@@ -245,6 +261,8 @@ if [ -f ./pithead ] && [ -f build/dashboard/mining_dashboard/wizard.py ]; then
     chk "the baked wizard image contains the tree's wizard.py" \
         '[ -n "$WIZ_SHIPPED" ] && cmp -s "$WIZ_SHIPPED" build/dashboard/mining_dashboard/wizard.py'
     rm -rf "$WIZ_TMP"
+else
+    skip "the artifact matches the tree it was built from" "not run from the repo root"
 fi
 
 echo "==> host identity never ships baked (#894/#895)"
@@ -314,7 +332,19 @@ fi
 echo ""
 printf 'verify-image: \033[1;32m%d passed\033[0m, ' "$PASS"
 if [ "$FAIL" -gt 0 ]; then
-    printf '\033[1;31m%d failed\033[0m\n' "$FAIL"
+    printf '\033[1;31m%d failed\033[0m' "$FAIL"
+    [ "$SKIP" -gt 0 ] && printf ', \033[1;33m%d skipped\033[0m' "$SKIP"
+    printf '\n'
     exit 1
 fi
-printf '0 failed\n'
+printf '0 failed'
+[ "$SKIP" -gt 0 ] && printf ', \033[1;33m%d skipped\033[0m' "$SKIP"
+printf '\n'
+# Release mode is the one run whose job is to catch a stale artifact. Skipping the checks that do
+# that and exiting 0 is how an image with a two-commits-stale dashboard passed everything (#1064).
+# --test builds come from the harness, which pins the commit itself, so a skip there is a defect
+# in the harness rather than the operator's invocation — refuse in both.
+if [ "$SKIP" -gt 0 ]; then
+    printf '\033[1;31m[FAIL]\033[0m %d check(s) were SKIPPED, so this is not a verified image. Run from the repo root with PITHEAD_EXPECT_COMMIT set to the commit you believe you built.\n' "$SKIP" >&2
+    exit 1
+fi
