@@ -6366,7 +6366,9 @@ EOF
 chmod +x "$GHR/bin/curl"
 gh_fetch() { # <code> <body> [transport-fail] -> "<rc>|<stdout>|<hint>"
     (
-        cd "$GHR" && source "$STACK" 2>/dev/null
+        cd "$GHR" || exit 1
+        # shellcheck disable=SC1090  # STACK path is dynamic by design
+        source "$STACK" 2>/dev/null
         set +e
         export PATH="$GHR/bin:$PATH" GH_STUB_CODE="$1" GH_STUB_BODY="$2" GH_STUB_TRANSPORT_FAIL="${3:-0}"
         gh_release_fetch p2pool-starter-stack/pithead
@@ -6397,7 +6399,9 @@ esac
 # ("answered HTTP {"message":"Not Found"}"): unreadable, and a way for a remote body to reach the
 # dashboard verbatim. GH_STUB_NOCODE makes the stub answer the way that produced it.
 gh_nocode=$(
-    cd "$GHR" && source "$STACK" 2>/dev/null
+    cd "$GHR" || exit 1
+    # shellcheck disable=SC1090  # STACK path is dynamic by design
+    source "$STACK" 2>/dev/null
     set +e
     export PATH="$GHR/bin:$PATH" GH_STUB_BODY='{"message":"Not Found"}' GH_STUB_NOCODE=1
     gh_release_fetch p2pool-starter-stack/pithead
