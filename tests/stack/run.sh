@@ -6410,7 +6410,13 @@ for a in "$@"; do
     prev="$a"
 done
 case "$url" in
-*api.github.com*) cat "${CURL_API_RESPONSE:?}" ;;
+# The release lookup reads the body AND the status now (#1081), so the stub has to answer in the
+# shape `-w '\n%{http_code}'` produces. GH_STUB_CODE lets a test drive a non-2xx through the real
+# control path; unset means the ordinary 200.
+*api.github.com*)
+    cat "${CURL_API_RESPONSE:?}"
+    printf '\n%s' "${GH_STUB_CODE:-200}"
+    ;;
 *releases/download/*.sig) cp "${CURL_SIG:?}" "$out" ;;
 *releases/download/*) cp "${CURL_BUNDLE:?}" "$out" ;;
 *) exit 22 ;;
