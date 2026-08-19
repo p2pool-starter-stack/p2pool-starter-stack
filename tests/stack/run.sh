@@ -1844,8 +1844,11 @@ caddy_onion_https="$(
         generate_caddyfile >/dev/null 2>&1
     cat Caddyfile
 )"
-assert_eq "secure+onion+provisioned: the HTTPS onion vhost renders (3 site blocks)" \
-    "$(_site_count "$caddy_onion_https")" "3"
+# Five blocks since #1123 took :80 over: the two LAN vhosts (the known-host :80 redirect and the
+# HTTPS one), the :80 catch-all, and the two onion vhosts. The number is worth pinning rather than
+# deriving — it is what caught the redirect blocks arriving without anyone re-counting.
+assert_eq "secure+onion+provisioned: the HTTPS onion vhost renders (5 site blocks)" \
+    "$(_site_count "$caddy_onion_https")" "5"
 assert_eq "secure+onion+provisioned: every site block binds — no unbound wildcard on :443" \
     "$(_bind_count "$caddy_onion_https")" "$(_site_count "$caddy_onion_https")"
 
