@@ -837,8 +837,9 @@ _os_step() { # <json-body> [<deadline-s>]
 # expected the release JSON, `curl -fsS` reported it the same as a dead circuit, and leg 4 blamed
 # Tor for three sessions.
 #
-# The custom handler below 404s on a directory, so the probe must name a real file.
-_serve_update_dir() { # <dir> <port> [probe-file]
+# The custom handler below 404s on a directory, so the probe names a real file — the one the
+# caller has already written before starting the server.
+_serve_update_dir() { # <dir> <port>
     python3 - "$1" "$2" <<'PYEOF' >/dev/null 2>&1 &
 import http.server, os, re, sys
 os.chdir(sys.argv[1])
@@ -875,9 +876,9 @@ class H(http.server.SimpleHTTPRequestHandler):
                     break
 http.server.ThreadingHTTPServer(("0.0.0.0", int(sys.argv[2])), H).serve_forever()
 PYEOF
-    local pid=$! probe="${3:-releases-latest.json}" i
+    local pid=$! i
     for i in $(seq 40); do
-        if curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$2/$probe" 2>/dev/null; then
+        if curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$2/releases-latest.json" 2>/dev/null; then
             printf '%s' "$pid"
             return 0
         fi
