@@ -286,7 +286,8 @@ Expected: the stack provisions and the dashboard comes up.
 `pithead os-update BUNDLE` (the test image carries SSH for exactly this; the command wraps
 `rauc install` and compares the variant stamps first — a debug box taking a release bundle
 must warn before removing its own SSH). Expected: installs, reboots into the new version,
-and an uncommitted update reverts on the next reboot. The dashboard-driven OS update rides
+and an uncommitted update reverts on the next reboot, which `pithead-boot` now triggers itself
+after a failed health gate (#1065). The dashboard-driven OS update rides
 the same mechanism from the header's OS-update control
 ([Dashboard › Updating the appliance OS](../dashboard.md#updating-the-appliance-os)); the
 KVM update phase's leg 4 drives it end-to-end, so this manual step stays about what KVM
@@ -375,8 +376,11 @@ the thing you will want at 3am:
 
 - **It does not boot** — the machine reverts itself. An uncommitted update never survives
   a reboot; this is the case the A/B design exists for and it needs no operator.
-- **It boots but fails its health check** — `pithead` does not commit, and the next reboot
-  reverts. Publish a fixed version; the fleet takes it on the next update.
+- **It boots but fails its health check** — `pithead-boot` does not commit and reboots the
+  machine itself, so the fallback happens with nobody present (#1065). Exactly once: if the
+  slot it falls back to fails the same way the fault is on `/data`, not in the slot, and the
+  machine stays up with the reason in the journal instead of looping. Publish a fixed
+  version; the fleet takes it on the next update.
 - **It boots, passes its checks, and is still wrong** — this one is on us, not the
   updater. Publish `v+1` with the fix. Operators who already committed roll back with
   `rauc status mark-bad booted && reboot`, which the dashboard exposes as a button.

@@ -20,6 +20,47 @@
 #   box commits while a genuinely broken one does not. A slot that boots but is not healthy is left
 #   UNCOMMITTED on purpose: that is precisely the state A/B fallback exists for.
 set -uo pipefail
+
+# A boot that fails is what A/B fallback exists for — but the fallback is a GRUB decision, and GRUB
+# only gets to make it at the NEXT boot. Leaving the slot uncommitted and exiting is therefore only
+# half of the promise docs/appliance.md makes: without a reboot the machine sits on the broken slot
+# with the stack down until somebody walks over and pulls the power (#1065). A kernel panic and a
+# wedged PID 1 already self-heal; a clean boot with a dead stack — a bad render, a bad image, a
+# crashed node, exactly what this gate is written to catch — did not.
+#
+# BOUNDED, because the fault is not always in the slot. A wedged /data survives the rollback, so
+# both slots fail the same way, and a box that reboots forever is worse than one that stops with a
+# console line an operator can read: it never holds still long enough to be diagnosed. One
+# automatic reboot per failure run — the next boot is the other slot, and if that fails too the
+# counter is spent and the machine stays up and says so.
+#
+# The counter lives on /data on purpose: it has to survive both the reboot and the slot switch,
+# which is the whole point of bounding. If it cannot be written, this refuses to reboot at all —
+# an unbounded reboot loop is the one outcome worse than a stranded box.
+BOOT_FAIL_COUNT=.boot-gate-failures
+boot_gate_passed() { rm -f "$BOOT_FAIL_COUNT"; }
+fail_boot() { # <what went wrong>
+    echo "pithead-boot: $1 — slot left uncommitted so A/B fallback stays armed" >&2
+    local n=0
+    [ -f "$BOOT_FAIL_COUNT" ] && n=$(tr -cd '0-9' <"$BOOT_FAIL_COUNT" 2>/dev/null)
+    n=$((${n:-0} + 1))
+    if ! echo "$n" >"$BOOT_FAIL_COUNT" 2>/dev/null; then
+        echo "pithead-boot: could not record this failed boot on /data, so it will NOT reboot — a reboot it cannot count is a reboot loop. Power-cycle to fall back to the other slot." >&2
+        exit 1
+    fi
+    if [ "$n" -ge 2 ]; then
+        echo "pithead-boot: this is failure $n — the bootloader already fell back and the other slot failed the same way, so the fault is not the slot. The machine stays up for diagnosis; the dashboard is down, see the journal (journalctl -u pithead-boot)." >&2
+        exit 1
+    fi
+    echo "pithead-boot: rebooting now so the bootloader falls back to the previous slot" >&2
+    ${PITHEAD_REBOOT_CMD:-systemctl reboot}
+    exit 1
+}
+
+# Sourceable for the test suite: everything above is definitions, so a `source` stops here and the
+# suite can drive fail_boot in a sandbox. Executed directly — every real boot — this is a no-op.
+[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
+
 cd /data/pithead || exit 1
 
 # Role fork (#797): a rig is not a small coordinator, it is a different machine. No compose
@@ -39,17 +80,17 @@ if [ -f machine-role ] && [ "$(tr -d '[:space:]' <machine-role)" = "rig" ]; then
     # Same bounded clock as the coordinator's miner leg, for the same reason: the boot unit runs
     # with TimeoutStartSec=infinity, so a stalled native rebuild would leave it activating
     # forever. The prebuilt path finishes in seconds.
-    timeout 1800 ./pithead local-miner || exit 1
+    timeout 1800 ./pithead local-miner || fail_boot "the rig's miner setup failed"
     for _ in $(seq 12); do
         if systemctl is-active --quiet xmrig.service; then
             command -v rauc >/dev/null 2>&1 && rauc status mark-good
+            boot_gate_passed
             echo "pithead-boot: the rig's miner is running — booted slot committed"
             exit 0
         fi
         sleep 5
     done
-    echo "pithead-boot: the rig's miner never came up — slot left uncommitted so A/B fallback stays armed" >&2
-    exit 1
+    fail_boot "the rig's miner never came up"
 fi
 
 # OS-update verdict, rollback half: a dashboard-driven install leaves an in-flight flag naming
@@ -86,7 +127,7 @@ fi
 # stick, a rejected file, or an operator-cancelled change all fall through to the normal path.
 /usr/local/sbin/pithead-media-config
 
-./pithead render || exit 1
+./pithead render || fail_boot "the derived config could not be rendered"
 
 # The migration hold (#851): os-update leaves a marker when the installed bundle declares a
 # forward-only /data migration, stamped with that bundle's version. A marker matching THIS
@@ -104,9 +145,9 @@ if [ -f .os-migration-pending ] &&
 fi
 
 if [ "$hold_chain" = 1 ]; then
-    PITHEAD_HOLD_CHAIN=1 ./pithead up || exit 1
+    PITHEAD_HOLD_CHAIN=1 ./pithead up || fail_boot "the stack could not be brought up"
 else
-    ./pithead up || exit 1
+    ./pithead up || fail_boot "the stack could not be brought up"
 fi
 
 for _ in $(seq 90); do
@@ -123,6 +164,7 @@ for _ in $(seq 90); do
     # undiagnosable (the battery hit exactly that).
     if [ "${code:-000}" != "000" ] && ./pithead doctor --json >/run/pithead-boot-doctor.json 2>/dev/null; then
         command -v rauc >/dev/null 2>&1 && rauc status mark-good
+        boot_gate_passed
         echo "pithead-boot: stack is serving (HTTP $code) and doctor reports healthy — booted slot committed"
         # OS-update verdict, success half: this slot just committed while an in-flight flag names
         # exactly this version — the dashboard-driven update landed and can no longer fall back.
@@ -164,5 +206,4 @@ for _ in $(seq 90); do
     fi
     sleep 10
 done
-echo "pithead-boot: stack never became healthy (serving + doctor) — slot left uncommitted so A/B fallback stays armed" >&2
-exit 1
+fail_boot "the stack never became healthy (serving + doctor)"

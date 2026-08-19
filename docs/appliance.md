@@ -297,8 +297,14 @@ The appliance keeps **two copies of the system**, and only one runs at a time. A
 is written to the copy that is idle, so the running system is never modified in place.
 The machine installs an update, reboots into the new version, and checks that the stack
 came up. If it did not — it fails to boot, or the stack does not start — **the machine
-goes back to the previous version on its own**, with nobody present. That is the entire
-point of keeping two copies.
+goes back to the previous version on its own**, with nobody present: it restarts itself
+once, and that restart lands on the copy that was working. That is the entire point of
+keeping two copies.
+
+It restarts itself **once**, not repeatedly. If the previous version fails the same way,
+the fault is not in the system copy — something on the data partition is wrong — and the
+machine stays powered on with its reason in the logs rather than looping. In that state
+the dashboard is down; see [If something goes wrong](#if-something-goes-wrong).
 
 Updates are applied from the dashboard: an **OS updates** control in the header checks
 for a new release, downloads its signed image to the data partition (over Tor, resumable
@@ -486,8 +492,14 @@ partial copy fails the same way) and typed the passphrase exactly as it was set 
 `pithead backup`. Nothing is written until this check passes — retry from the same page.
 
 **It came back on the old version after an update.** That is the safety mechanism working:
-the new version did not come up healthy, so the machine reverted. Nothing is lost. Check
-the dashboard logs, and expect a fixed version.
+the new version did not come up healthy, so the machine restarted itself and went back.
+Nothing is lost. Check the dashboard logs, and expect a fixed version.
+
+**It restarted once and the dashboard is still down.** Then both copies failed the same
+check, which points at the data partition rather than at the update — most often a disk
+that has gone bad. The machine deliberately stops restarting at that point so it stays
+still long enough to be looked at. Attach a screen and keyboard: the console prints the
+reason on every boot.
 
 **Nothing responds after I pulled the USB stick out.** The machine was running from it. Hold
 the power button until it switches off, leave the stick out, and power it on: it boots the
