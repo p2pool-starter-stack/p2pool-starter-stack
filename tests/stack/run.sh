@@ -1966,9 +1966,61 @@ caddy_port_default="$(
 )"
 assert_contains "explicit default port keeps the bare site address" "$caddy_port_default" "https://box.lan {"
 case "$caddy_port_default" in
-*"disable_redirects"*) bad "default port emits no redirect global" "'disable_redirects' present at the scheme default" ;;
 *":443"*) bad "default port emits no explicit suffix" "':443' suffix present at the scheme default" ;;
 *) ok "default port renders the bare site address" ;;
+esac
+
+echo "== unit: the :80 redirect cannot be steered by the Host header (#1123) =="
+# Caddy's built-in HTTP->HTTPS redirect is a CATCH-ALL whose target is the request's own Host
+# header, so the provisioned appliance answered `Host: evil.example` on :80 with
+# `308 -> https://evil.example` — measured against the real hardware. That is #1118's open
+# redirector again, in the state the machine spends its life in, landing on the screen where the
+# operator types the dashboard password. The render now owns :80 itself.
+#
+# Two blocks, not one: the KNOWN hosts keep the address the operator typed (browsing by mDNS name
+# and by IP each stay on the name they used, which is also the name the certificate covers), and a
+# trailing catch-all answers everything else with THIS box's canonical address.
+#
+# MUTATION PROOF: point the catch-all at {host}, and the two "not from the request" assertions go
+# red; drop $(_bind_line) from either block and the bind assertion goes red; drop the
+# disable_redirects and the takeover assertion goes red.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_redir="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    is_appliance() { return 0; }
+    hostname() { printf '192.168.1.10 172.28.0.1 fd00::1\n'; }
+    DASHBOARD_SECURE=true HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 DASHBOARD_AUTH_HASH_B64="" \
+        generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "the default secure render takes :80 over from auto_https" "$caddy_redir" "auto_https disable_redirects"
+assert_contains "the known hosts get their own :80 site" "$caddy_redir" "http://pithead.local, http://192.168.1.10"
+assert_contains "and keep the address the operator actually used" "$caddy_redir" "redir https://{host}{uri} 308"
+assert_contains "everything else lands on this box, by name" "$caddy_redir" "redir https://pithead.local{uri} 308"
+# The defect itself: the CATCH-ALL — the block a forged Host reaches — must never build its target
+# from the request. The known-host block may, because it only matches names this box answers to.
+caddy_catchall="$(printf '%s\n' "$caddy_redir" | sed -n '/^http:\/\/ {/,/^}/p')"
+assert_contains "the catch-all exists" "$caddy_catchall" "redir https://"
+case "$caddy_catchall" in
+*"{host}"* | *"{http.request.host}"*) bad "the catch-all target never comes from the request" "it interpolates the request host: $caddy_catchall" ;;
+*) ok "the catch-all target never comes from the request" ;;
+esac
+# #1021: a site block with NO bind asks Caddy for a WILDCARD listener, which reopens every address
+# the bound blocks exclude — the globally-routable one included. Both new blocks are site blocks.
+# Three site blocks in this render — the two new :80 ones and the HTTPS LAN vhost — so three binds.
+assert_eq "every site block carries the bind, including both new :80 ones" \
+    "$(printf '%s\n' "$caddy_redir" | grep -c 'bind 192.168.1.10 172.28.0.1 fd00::1 127.0.0.1 ::1')" "3"
+# A custom port means a fronting proxy owns :80 (#740). Claiming it there breaks the co-hosting the
+# option exists for.
+case "$caddy_port_https" in
+*"http:// {"*) bad "a custom port leaves :80 to the fronting proxy" "the render claimed :80 anyway" ;;
+*) ok "a custom port leaves :80 to the fronting proxy" ;;
+esac
+# Plain-HTTP mode has no redirect to steer: :80 IS the dashboard there.
+case "$caddy_http" in
+*"redir"*) bad "plain-HTTP mode renders no redirect at all" "a redir line appeared on a plain-HTTP site" ;;
+*) ok "plain-HTTP mode renders no redirect at all" ;;
 esac
 # Onion + custom LAN port together (#740 × #343): the LAN vhost moves to the custom port and the
 # `disable_redirects` global is emitted, but the onion vhost MUST stay on the bridge gateway's bare
