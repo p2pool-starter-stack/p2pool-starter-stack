@@ -6360,6 +6360,7 @@ cat >"$GHR/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 # Answers with $GH_STUB_CODE and $GH_STUB_BODY, in the shape `-w '\n%{http_code}'` produces.
 [ "${GH_STUB_TRANSPORT_FAIL:-0}" = "1" ] && exit 7
+[ "${GH_STUB_NOCODE:-0}" = "1" ] && { printf '%s' "${GH_STUB_BODY:-}"; exit 0; }
 printf '%s\n%s' "${GH_STUB_BODY:-}" "${GH_STUB_CODE:-200}"
 EOF
 chmod +x "$GHR/bin/curl"
@@ -6390,6 +6391,22 @@ assert_contains "and still reads as a dial that did not land" "$gh_tf" "could no
 case "$gh_tf" in
 *"restart tor"*) bad "a dial failure is not blamed on the rate limit" "the hint sends them to restart tor: $gh_tf" ;;
 *) ok "a dial failure is not blamed on the rate limit" ;;
+esac
+
+# No status line at all — `code` is then the WHOLE BODY, and it went into an operator-facing string
+# ("answered HTTP {"message":"Not Found"}"): unreadable, and a way for a remote body to reach the
+# dashboard verbatim. GH_STUB_NOCODE makes the stub answer the way that produced it.
+gh_nocode=$(
+    cd "$GHR" && source "$STACK" 2>/dev/null
+    set +e
+    export PATH="$GHR/bin:$PATH" GH_STUB_BODY='{"message":"Not Found"}' GH_STUB_NOCODE=1
+    gh_release_fetch p2pool-starter-stack/pithead
+    printf '%s|%s' "$?" "$GH_RELEASE_HINT"
+)
+assert_eq "a response with no status line is a failure" "${gh_nocode%%|*}" "1"
+case "$gh_nocode" in
+*'{"message"'* | *'Not Found'*) bad "the body never reaches the operator" "the hint quotes the response body: $gh_nocode" ;;
+*) ok "the body never reaches the operator" ;;
 esac
 
 gh_500=$(gh_fetch 500 'upstream is unwell')
