@@ -6054,6 +6054,71 @@ readonly CURL_CAP_BUNDLE=16777216 # 16 MiB — the pithead.tar.gz release bundle
 # grown release still downloads while a runaway stream is still cut off.
 readonly CURL_CAP_OS_BUNDLE=3221225472 # 3 GiB — the pithead-os .raucb A/B update bundle
 
+# The latest-release JSON for a GitHub repo, over the stack's own Tor SOCKS like every other
+# stack egress. Prints the JSON and returns 0; on failure prints nothing, returns 1, and leaves
+# GH_RELEASE_HINT holding the sentence the operator should actually be told.
+#
+# The reason this is a function and not two `curl -fsS` calls: `-f` collapses every non-2xx into
+# one exit code, so a 403 came out as "could not reach GitHub over Tor" and sent the operator to a
+# doctor run that correctly reports Tor healthy. GitHub's unauthenticated limit is 60 requests an
+# hour PER IP, and a Tor exit is shared with everyone else using it, so a spent budget is a normal
+# condition with nothing wrong with this machine — and a different remedy (pick a new exit) from a
+# dial that genuinely failed.
+# NOT stdout, deliberately: the JSON lands in GH_RELEASE_JSON and the caller runs this as a plain
+# command. Assigning it through a command substitution reads naturally and is WRONG — that is a
+# subshell, so the hint set here would never reach the caller and every rejection would carry an
+# empty message. Two globals, one call, no subshell.
+GH_RELEASE_HINT=""
+GH_RELEASE_JSON=""
+# The SOCKS address this fetch used, published so a caller that goes on to download the release over
+# the same Tor path derives it ONCE rather than twice. Folding the lookup into a function deleted the
+# caller's own derivation, and `set -u` then killed the runner at its first download — the upgrade
+# result sat at "running" for ever with a single dial in the log. One derivation, one truth.
+GH_SOCKS=""
+gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure
+    local repo="$1" prefix out code
+    prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
+    [ -n "$prefix" ] || prefix="172.28.0"
+    GH_SOCKS="${prefix}.25:9050"
+    GH_RELEASE_HINT=""
+    GH_RELEASE_JSON=""
+    # -w appends the status on its own line, so a non-2xx keeps its BODY — which is where GitHub
+    # says the limit was exceeded. Without -f, curl's own non-zero exit now means only a transport
+    # failure, which is exactly the distinction that was missing.
+    if ! out=$(curl -sS --max-time 60 --max-filesize "$CURL_CAP_SMALL" -w '\n%{http_code}' \
+        --socks5-hostname "$GH_SOCKS" -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null); then
+        GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        return 1
+    fi
+    code=${out##*$'\n'}
+    out=${out%$'\n'*}
+    # No status line at all means the response is not one we can reason about — and without this the
+    # WHOLE BODY becomes "$code" and gets echoed into an operator-facing message, which is both
+    # nonsense to read and a way for a remote body to land verbatim in the dashboard.
+    case "$code" in
+    [0-9][0-9][0-9]) ;;
+    *)
+        GH_RELEASE_HINT="the GitHub release API answered in a shape this cannot read — nothing was changed. Check './pithead doctor' and retry."
+        return 1
+        ;;
+    esac
+    case "$code" in
+    2*)
+        GH_RELEASE_JSON="$out"
+        return 0
+        ;;
+    403 | 429)
+        if printf '%s' "$out" | grep -qi 'rate limit'; then
+            GH_RELEASE_HINT="the Tor exit this machine is currently using has spent GitHub's shared hourly request budget — nothing is wrong with this box, and 'doctor' will say so. Run './pithead restart tor' to pick a new exit, then retry."
+            return 1
+        fi
+        ;;
+    esac
+    GH_RELEASE_HINT="the GitHub release API answered HTTP $code — nothing was changed. Retry in a few minutes."
+    return 1
+}
+
 # Render the pre-masked prefill copy (#440): the live config with every SET secret leaf replaced
 # by the {"__secret__":true} sentinel, written atomically to <control-dir>/masked/config.json.
 # The dashboard serves the Configuration form from THIS file (mounted read-only) — the raw
@@ -9488,16 +9553,12 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # is the right trade.
     touch "$stamp"
     # Host-side re-derivation of the target: the latest tag according to GitHub, not the request.
-    local prefix socks rel tag
-    prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
-    [ -n "$prefix" ] || prefix="172.28.0"
-    socks="${prefix}.25:9050"
-    if ! rel=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
-        -H 'Accept: application/vnd.github+json' \
-        "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest" 2>/dev/null); then
-        _upg_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+    local rel tag
+    if ! gh_release_fetch p2pool-starter-stack/pithead; then
+        _upg_reject "$GH_RELEASE_HINT"
         return 0
     fi
+    rel=$GH_RELEASE_JSON
     tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
     if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
         _upg_reject "the GitHub release API returned no usable release tag — nothing was changed."
@@ -9515,7 +9576,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "started"
     # Bundle URL built from the HOST-derived tag only; fetched over the same Tor SOCKS.
     local bundle="$cdir/staged/.$id.tar.gz" logf="$cdir/staged/.$id.log"
-    if ! curl -fsSL --max-time 900 --max-filesize "$CURL_CAP_BUNDLE" --socks5-hostname "$socks" -o "$bundle" \
+    if ! curl -fsSL --max-time 900 --max-filesize "$CURL_CAP_BUNDLE" --socks5-hostname "$GH_SOCKS" -o "$bundle" \
         "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz" 2>/dev/null; then
         rm -f "$bundle"
         _upg_fail "could not download the $tag release bundle over Tor — the stack keeps running v$PITHEAD_VERSION."
@@ -9528,7 +9589,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # TLS to GitHub plus tag pinning — with one loud line in the journal.
     if [ -f cosign.pub ]; then
         local sig="$cdir/staged/.$id.tar.gz.sig"
-        if ! curl -fsSL --max-time 120 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" -o "$sig" \
+        if ! curl -fsSL --max-time 120 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$GH_SOCKS" -o "$sig" \
             "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz.sig" 2>/dev/null; then
             rm -f "$bundle" "$sig"
             _upg_fail "the $tag release carries no bundle signature (pithead.tar.gz.sig) — refusing to install it unverified (#376); the stack keeps running v$PITHEAD_VERSION."
@@ -10120,16 +10181,12 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
             return 0
         fi
         touch "$stampf"
-        local prefix socks rel
-        prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
-        [ -n "$prefix" ] || prefix="172.28.0"
-        socks="${prefix}.25:9050"
-        if ! rel=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
-            -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/p2pool-starter-stack/rigforge/releases/latest" 2>/dev/null); then
-            _wu_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        local rel
+        if ! gh_release_fetch p2pool-starter-stack/rigforge; then
+            _wu_reject "$GH_RELEASE_HINT"
             return 0
         fi
+        rel=$GH_RELEASE_JSON
         tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
         if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             _wu_reject "the GitHub release API returned no usable RigForge release tag — nothing was changed."
