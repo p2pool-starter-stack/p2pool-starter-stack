@@ -6368,8 +6368,8 @@ gh_fetch() { # <code> <body> [transport-fail] -> "<rc>|<stdout>|<hint>"
         cd "$GHR" && source "$STACK" 2>/dev/null
         set +e
         export PATH="$GHR/bin:$PATH" GH_STUB_CODE="$1" GH_STUB_BODY="$2" GH_STUB_TRANSPORT_FAIL="${3:-0}"
-        out=$(gh_release_fetch p2pool-starter-stack/pithead)
-        printf '%s|%s|%s' "$?" "$out" "$GH_RELEASE_HINT"
+        gh_release_fetch p2pool-starter-stack/pithead
+        printf '%s|%s|%s' "$?" "$GH_RELEASE_JSON" "$GH_RELEASE_HINT"
     )
 }
 gh_ok=$(gh_fetch 200 '{"tag_name":"v1.2.3"}')
@@ -6402,6 +6402,12 @@ assert_eq "both release lookups use the shared fetch" \
     "$(grep -c 'gh_release_fetch p2pool-starter-stack/' "$STACK")" "2"
 assert_eq "no release lookup dials the API directly any more" \
     "$(grep -c 'api.github.com/repos/.*/releases/latest' "$STACK")" "1"
+# The hint has to reach the CALLER. `rel=$(gh_release_fetch ...)` reads naturally and is a subshell,
+# so the hint would be set and discarded and every rejection would carry an empty message — the
+# defect this whole change exists to remove, reintroduced by the refactor that removes it. Neither
+# caller may wrap the fetch in a command substitution.
+assert_eq "neither caller swallows the hint in a subshell" \
+    "$(grep -c '=\$(gh_release_fetch' "$STACK")" "0"
 
 echo "== black-box: control upgrade verb (#59) =="
 # A RELEASE install (no build/*/Dockerfile → is_source_checkout false) with the control channel

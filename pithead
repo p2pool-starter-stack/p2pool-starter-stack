@@ -3350,13 +3350,19 @@ readonly CURL_CAP_BUNDLE=16777216 # 16 MiB — the pithead.tar.gz release bundle
 # hour PER IP, and a Tor exit is shared with everyone else using it, so a spent budget is a normal
 # condition with nothing wrong with this machine — and a different remedy (pick a new exit) from a
 # dial that genuinely failed.
+# NOT stdout, deliberately: the JSON lands in GH_RELEASE_JSON and the caller runs this as a plain
+# command. `rel=$(gh_release_fetch ...)` reads naturally and is WRONG — command substitution is a
+# subshell, so the hint set here would never reach the caller and every rejection would carry an
+# empty message. Two globals, one call, no subshell.
 GH_RELEASE_HINT=""
-gh_release_fetch() { # <owner/repo> -> release JSON on stdout
+GH_RELEASE_JSON=""
+gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure
     local repo="$1" prefix socks out code
     prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
     [ -n "$prefix" ] || prefix="172.28.0"
     socks="${prefix}.25:9050"
     GH_RELEASE_HINT=""
+    GH_RELEASE_JSON=""
     # -w appends the status on its own line, so a non-2xx keeps its BODY — which is where GitHub
     # says the limit was exceeded. Without -f, curl's own non-zero exit now means only a transport
     # failure, which is exactly the distinction that was missing.
@@ -3370,7 +3376,7 @@ gh_release_fetch() { # <owner/repo> -> release JSON on stdout
     out=${out%$'\n'*}
     case "$code" in
     2*)
-        printf '%s' "$out"
+        GH_RELEASE_JSON="$out"
         return 0
         ;;
     403 | 429)
@@ -6113,10 +6119,11 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     touch "$stamp"
     # Host-side re-derivation of the target: the latest tag according to GitHub, not the request.
     local rel tag
-    if ! rel=$(gh_release_fetch p2pool-starter-stack/pithead); then
+    if ! gh_release_fetch p2pool-starter-stack/pithead; then
         _upg_reject "$GH_RELEASE_HINT"
         return 0
     fi
+    rel=$GH_RELEASE_JSON
     tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
     if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
         _upg_reject "the GitHub release API returned no usable release tag — nothing was changed."
@@ -6620,10 +6627,11 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
         fi
         touch "$stampf"
         local rel
-        if ! rel=$(gh_release_fetch p2pool-starter-stack/rigforge); then
+        if ! gh_release_fetch p2pool-starter-stack/rigforge; then
             _wu_reject "$GH_RELEASE_HINT"
             return 0
         fi
+        rel=$GH_RELEASE_JSON
         tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
         if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             _wu_reject "the GitHub release API returned no usable RigForge release tag — nothing was changed."
