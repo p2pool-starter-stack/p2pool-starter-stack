@@ -10316,19 +10316,28 @@ os_update_test_base() {
 }
 
 # The latest-release JSON, over the stack's own Tor SOCKS like every other stack egress.
+#
+# The real lookup is gh_release_fetch's, not a third copy of it. This one used `curl -fsS`, and
+# `-f` collapses every non-2xx into one exit code — so a spent GitHub rate limit came out of
+# os-check as "could not reach the release API over Tor" and sent the operator to a doctor run
+# that correctly reports Tor healthy (#1081, which fixed the two DIY lookups and never saw this
+# one). Only the bench seam keeps its own dial: it points at a local URL with no Tor in the path.
+# Sets GH_RELEASE_JSON on success and GH_RELEASE_HINT on failure, like the shared fetch, so the
+# caller must run it as a plain command — a command substitution is a subshell and would discard
+# both.
 os_release_fetch() {
     local base
     if base=$(os_update_test_base); then
-        curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" "$base/releases-latest.json" 2>/dev/null
-        return
+        GH_RELEASE_HINT=""
+        GH_RELEASE_JSON=""
+        if ! GH_RELEASE_JSON=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" \
+            "$base/releases-latest.json" 2>/dev/null); then
+            GH_RELEASE_HINT="could not reach the release API — nothing was changed."
+            return 1
+        fi
+        return 0
     fi
-    local prefix socks
-    prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
-    [ -n "$prefix" ] || prefix="172.28.0"
-    socks="${prefix}.25:9050"
-    curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
-        -H 'Accept: application/vnd.github+json' \
-        "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest" 2>/dev/null
+    gh_release_fetch p2pool-starter-stack/pithead
 }
 
 # One shared refusal writer for the os-* verbs (they share one result/audit shape).
@@ -10439,10 +10448,11 @@ control_os_check() { # <claimed-file> <id> <actor> <control-dir>
             return 0
         fi
         touch "$stampf"
-        if ! rel=$(os_release_fetch); then
-            control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "could not reach the release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        if ! os_release_fetch; then
+            control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "$GH_RELEASE_HINT"
             return 0
         fi
+        rel=$GH_RELEASE_JSON
         tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
         if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "the release API returned no usable release tag — nothing was changed."

@@ -7477,10 +7477,12 @@ gh_500=$(gh_fetch 500 'upstream is unwell')
 assert_eq "a server error is a failure" "${gh_500%%|*}" "1"
 assert_contains "and says which status came back" "$gh_500" "HTTP 500"
 
-# Both lookups go through the one function — a second copy is how the two messages drifted apart in
-# the first place, and the RigForge one would have kept the old wrong hint.
-assert_eq "both release lookups use the shared fetch" \
-    "$(grep -c 'gh_release_fetch p2pool-starter-stack/' "$STACK")" "2"
+# Every lookup goes through the one function — a second copy is how the two messages drifted apart
+# in the first place, and the RigForge one would have kept the old wrong hint. Three on this lane:
+# the one-click upgrade, the RigForge worker upgrade, and the appliance's os-check, which carried
+# its own `curl -fsS` (and so its own collapsed 403) until the sync that brought #1081 over.
+assert_eq "every release lookup uses the shared fetch" \
+    "$(grep -c 'gh_release_fetch p2pool-starter-stack/' "$STACK")" "3"
 assert_eq "no release lookup dials the API directly any more" \
     "$(grep -c 'api.github.com/repos/.*/releases/latest' "$STACK")" "1"
 # The hint has to reach the CALLER. `rel=$(gh_release_fetch ...)` reads naturally and is a subshell,
@@ -7489,6 +7491,11 @@ assert_eq "no release lookup dials the API directly any more" \
 # caller may wrap the fetch in a command substitution.
 assert_eq "neither caller swallows the hint in a subshell" \
     "$(grep -cF '=$(gh_release_fetch' "$STACK")" "0"
+# os_release_fetch wraps the shared fetch for the appliance and publishes the same two globals, so
+# it inherits the same rule. It was `rel=$(os_release_fetch)` before — the exact swallowing form,
+# which is why this one is asserted rather than trusted.
+assert_eq "the appliance os-check does not swallow the hint either" \
+    "$(grep -cF '=$(os_release_fetch' "$STACK")" "0"
 # And the other half of the same mistake: folding the lookup into a function DELETED the caller's own
 # `local prefix socks` derivation, while two later downloads in that same function still said
 # "$socks". Under `set -u` the runner died at its first download — the upgrade result sat at
@@ -7496,8 +7503,16 @@ assert_eq "neither caller swallows the hint in a subshell" \
 # together. The fetch publishes the address it used; every dial on that path reads the same one.
 assert_eq "every dial on the upgrade path uses the address the lookup derived" \
     "$(grep -cF -- '--socks5-hostname "$GH_SOCKS"' "$STACK")" "3"
-assert_eq "no dial refers to a socks variable nobody declares" \
-    "$(grep -cF -- '--socks5-hostname "$socks"' "$STACK")" "0"
+# A whole-file count of `"$socks"` cannot tell a declared one from an undeclared one — the
+# appliance's OS-bundle download legitimately derives its own, because its bench seam has to leave
+# the address EMPTY, and a plain count reads that as the bug. So ask the question the defect
+# actually poses: is every `"$socks"` dial inside a function that declares socks?
+undeclared_socks="$(awk '
+    /^[A-Za-z_][A-Za-z0-9_]*\(\)/ { fn = $1; declared = 0 }
+    fn && /^ *local .*socks/ { declared = 1 }
+    /--socks5-hostname "\$socks"/ && !declared { print FNR " in " fn }
+' "$STACK")"
+assert_eq "no dial refers to a socks variable its own function never declares" "$undeclared_socks" ""
 
 echo "== black-box: control upgrade verb (#59) =="
 # A RELEASE install (no build/*/Dockerfile → is_source_checkout false) with the control channel
@@ -10840,7 +10855,13 @@ for a in "$@"; do
     prev="$a"
 done
 case "$url" in
-*api.github.com*) cat "${CURL_API_RESPONSE:?}" ;;
+# os-check reads the body AND the status now that it goes through the shared release fetch
+# (#1081), so the stub has to answer in the shape `-w '\n%{http_code}'` produces. GH_STUB_CODE
+# lets a test drive a non-2xx through the real control path; unset means the ordinary 200.
+*api.github.com*)
+    cat "${CURL_API_RESPONSE:?}"
+    printf '\n%s' "${GH_STUB_CODE:-200}"
+    ;;
 *releases/download/*)
     if [ "${CURL_RC:-0}" = "28" ]; then
         head -c "${CURL_PARTIAL_BYTES:-300}" "${CURL_BUNDLE:?}" >"$out"
@@ -11152,6 +11173,37 @@ os_intent "$UOS" os-check
 osrun >/dev/null
 assert_contains "the test seam redirects the release lookup" "$(cat "$OSC/curl.log")" "bench.invalid/updates/releases-latest.json"
 rm -f "$OSC/os-update-test-base" "$OSRES/$UOS.json"
+
+# #1081 reached only the two DIY lookups. The appliance's os-check kept its own `curl -fsS`, and
+# `-f` collapses every non-2xx into one exit code — so a spent GitHub budget came out of the
+# dashboard as "could not reach the release API over Tor", pointing at a doctor run that reports
+# Tor healthy, on a box with no shell to run it from. It goes through the shared fetch now.
+echo "== black-box: a rate-limited os-check names the remedy that works (#1081) =="
+printf '%s' '{"message":"API rate limit exceeded for this IP.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}' >"$OSC/api-403.json"
+rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp"
+os_reset
+os_intent "$UOS" os-check
+osrun CURL_API_RESPONSE="$OSC/api-403.json" GH_STUB_CODE=403 >/dev/null
+os_403=$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)
+assert_eq "a rate-limited os-check is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "and names the remedy that actually works" "$os_403" "restart tor"
+# The defect itself, as the operator read it: the old refusal blamed the transport and sent them to
+# a doctor run that reports Tor healthy. Both halves of that sentence are barred. (The replacement
+# does say the word "doctor" — "nothing is wrong with this box, and 'doctor' will say so" — so this
+# matches the two OLD phrasings, not the word.)
+case "$os_403" in
+*"could not reach the release API"* | *"Check './pithead doctor' and retry"*)
+    bad "a rate limit is not reported as a dead Tor circuit" "the refusal still says: $os_403"
+    ;;
+*) ok "a rate limit is not reported as a dead Tor circuit" ;;
+esac
+# The 10-minute throttle stays HELD on a rate-limit refusal: that request did reach GitHub, so
+# releasing it restores exactly the unthrottled beacon the throttle exists to stop (#1081's fix 2,
+# deliberately not taken).
+assert_eq "the throttle is still held after a rate-limit refusal" \
+    "$([ -f "$OSDIR/.check-stamp" ] && echo held || echo released)" "held"
+os_reset
+rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp"
 
 unset -f osrun os_intent os_reset os_restage
 rm -rf "$OSC"
