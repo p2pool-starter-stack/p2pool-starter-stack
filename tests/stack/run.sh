@@ -7620,7 +7620,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "$url" in
-*/releases/latest) printf '{"tag_name":"v9.9.9"}' ;;
+*/releases/latest) printf '{"tag_name":"v9.9.9"}\n200' ;;
 */upgrade) printf '{"change_id":"chg-9"}' >"$out"; printf '202' ;;
 */status) printf '{"change_id":"chg-9","status":"applied"}' >"$out"; printf '200' ;;
 *) printf '000' ;;

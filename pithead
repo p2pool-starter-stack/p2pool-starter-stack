@@ -3351,7 +3351,7 @@ readonly CURL_CAP_BUNDLE=16777216 # 16 MiB — the pithead.tar.gz release bundle
 # condition with nothing wrong with this machine — and a different remedy (pick a new exit) from a
 # dial that genuinely failed.
 # NOT stdout, deliberately: the JSON lands in GH_RELEASE_JSON and the caller runs this as a plain
-# command. `rel=$(gh_release_fetch ...)` reads naturally and is WRONG — command substitution is a
+# command. Assigning it through a command substitution reads naturally and is WRONG — that is a
 # subshell, so the hint set here would never reach the caller and every rejection would carry an
 # empty message. Two globals, one call, no subshell.
 GH_RELEASE_HINT=""
