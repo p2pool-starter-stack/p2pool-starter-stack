@@ -3379,6 +3379,16 @@ gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE
     fi
     code=${out##*$'\n'}
     out=${out%$'\n'*}
+    # No status line at all means the response is not one we can reason about — and without this the
+    # WHOLE BODY becomes "$code" and gets echoed into an operator-facing message, which is both
+    # nonsense to read and a way for a remote body to land verbatim in the dashboard.
+    case "$code" in
+    [0-9][0-9][0-9]) ;;
+    *)
+        GH_RELEASE_HINT="the GitHub release API answered in a shape this cannot read — nothing was changed. Check './pithead doctor' and retry."
+        return 1
+        ;;
+    esac
     case "$code" in
     2*)
         GH_RELEASE_JSON="$out"

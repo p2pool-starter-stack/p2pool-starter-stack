@@ -7655,7 +7655,7 @@ mkdir -p "$ghjunk_dir/staged" "$ghjunk_dir/results" "$ghjunk_dir/audit" "$ghjunk
 cp "$WU/config.json" "$ghjunk_dir/config.json"
 cat >"$ghjunk_dir/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-printf '{"message":"Not Found"}'
+printf '{"message":"Not Found"}\n200'
 exit 0
 EOF
 chmod +x "$ghjunk_dir/bin/curl"
