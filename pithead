@@ -4464,7 +4464,7 @@ generate_caddyfile() {
     # host can keep 80/443 (co-hosting, #181). In HTTPS mode a custom port also disables Caddy's
     # automatic :80 -> HTTPS redirect (a global option emitted once at the top of the file) so port
     # 80 is left free for that proxy; the fronting proxy owns any http->https bounce instead.
-    local dport="${HOST_PORT:-}" port_suffix="" global_block=""
+    local dport="${HOST_PORT:-}" port_suffix="" global_block="" redirect_block=""
     if [ "$DASHBOARD_SECURE" == "true" ]; then
         [ "$dport" == "443" ] && dport=""
         if [ -n "$dport" ]; then
@@ -4474,6 +4474,33 @@ generate_caddyfile() {
 }
 
 '
+        else
+            # Caddy's own HTTP->HTTPS redirect is a CATCH-ALL, and its target is the Host header
+            # the request carried: :80 answered `Host: evil.example` with `308 -> https://evil.example`
+            # (#1123, measured against a running box, not read off the config). That is the same
+            # open redirector #1118 closed in the setup wizard, except this one is the state the
+            # machine spends its life in, and it lands the operator on a page that looks like the
+            # dashboard login — the screen where they type the dashboard password.
+            #
+            # So take :80 over rather than leaving it to auto_https: disable the built-in redirects
+            # and serve one site whose target is fixed to the address this box answers to. The Host
+            # header stops being able to steer anything, and every legitimate :80 request — bare
+            # name, bare IP, whatever the operator typed — still lands on the dashboard, which a
+            # site block matching only $HOST_IP would not do (Caddy answers an unmatched host with
+            # an empty 200, so a plain refusal here reads as a dead machine).
+            global_block='{
+    auto_https disable_redirects
+}
+
+'
+            # A literal, NOT $(printf ...): command substitution strips the trailing newlines and
+            # the next site block lands on the same line as this one's closing brace, which Caddy
+            # refuses — the same trap the $auth line documents from the other direction.
+            redirect_block="http:// {
+    redir https://$HOST_IP{uri} 308
+}
+
+"
         fi
     else
         [ "$dport" == "80" ] && dport=""
@@ -4482,6 +4509,7 @@ generate_caddyfile() {
 
     : >"Caddyfile"
     [ -n "$global_block" ] && printf '%s' "$global_block" >>"Caddyfile"
+    [ -n "$redirect_block" ] && printf '%s' "$redirect_block" >>"Caddyfile"
     if [ "$DASHBOARD_SECURE" == "true" ]; then
         log "Generating Caddyfile for automatic HTTPS ($HOST_IP$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >>"Caddyfile"
