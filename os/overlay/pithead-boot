@@ -53,7 +53,13 @@ fail_boot() { # <what went wrong>
         exit 1
     fi
     echo "pithead-boot: rebooting now so the bootloader falls back to the previous slot" >&2
-    ${PITHEAD_REBOOT_CMD:-systemctl reboot}
+    # --no-block, because this runs INSIDE the unit being asked to stop. Where systemctl reaches
+    # logind the request is asynchronous and the flag changes nothing; where it does not (no
+    # logind), systemctl starts reboot.target and WAITS for that job — a job whose completion needs
+    # this very ExecStart terminated. The unit carries TimeoutStartSec=infinity, so that wait has
+    # no escape: the box would hang in `activating` forever, which is worse than the stranded state
+    # this is fixing. Not a deadlock I reproduced — a tail risk the flag costs nothing to remove.
+    ${PITHEAD_REBOOT_CMD:-systemctl --no-block reboot}
     exit 1
 }
 
