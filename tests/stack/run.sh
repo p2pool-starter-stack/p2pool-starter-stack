@@ -1505,8 +1505,9 @@ case "$caddy_port_http" in
 *"disable_redirects"*) bad "plain-HTTP custom port has no redirect global" "'disable_redirects' present on a plain-HTTP site" ;;
 *) ok "plain-HTTP custom port has no redirect global" ;;
 esac
-# A port that equals the scheme default (443 secure / unset) renders today's Caddyfile verbatim —
-# no port suffix, no redirect global. Guards the byte-identical default path.
+# A port that equals the scheme default (443 secure / unset) renders the same site address as an
+# unset one — no port suffix. It still takes :80 over from auto_https (see #1123 below), which is
+# what separates it from the custom-port case: there, :80 is deliberately left to a fronting proxy.
 # shellcheck disable=SC1090  # STACK path is dynamic by design
 caddy_port_default="$(
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
@@ -1516,9 +1517,46 @@ caddy_port_default="$(
 )"
 assert_contains "explicit default port keeps the bare site address" "$caddy_port_default" "https://box.lan {"
 case "$caddy_port_default" in
-*"disable_redirects"*) bad "default port emits no redirect global" "'disable_redirects' present at the scheme default" ;;
 *":443"*) bad "default port emits no explicit suffix" "':443' suffix present at the scheme default" ;;
 *) ok "default port renders the bare site address" ;;
+esac
+
+echo "== unit: the :80 redirect cannot be steered by the Host header (#1123) =="
+# Caddy's built-in HTTP->HTTPS redirect is a CATCH-ALL whose target is the request's own Host
+# header, so a provisioned box answered `Host: evil.example` on :80 with `308 -> https://evil.example`
+# — measured on a running machine. That is #1118's open redirector again, in the state the machine
+# spends its life in, and it lands on the screen where the operator types the dashboard password.
+# The render now disables the built-in redirects and serves :80 itself with a FIXED target.
+# MUTATION PROOF: render `redir https://{host}{uri}` instead of the literal host, or drop the
+# `auto_https disable_redirects`, and the two assertions below go red.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_redir="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "the default secure render takes :80 over from auto_https" "$caddy_redir" "auto_https disable_redirects"
+assert_contains "it serves :80 itself" "$caddy_redir" "http:// {"
+assert_contains "and redirects to the box, by name, not to whatever was asked for" "$caddy_redir" \
+    "redir https://box.lan{uri} 308"
+# The whole defect in one assertion: no redirect target may be built from the request. Caddy spells
+# the request's host `{host}` (and `{http.request.host}`), so neither may appear in a redir line.
+caddy_redir_lines="$(printf '%s\n' "$caddy_redir" | grep -a "redir" || true)"
+case "$caddy_redir_lines" in
+*"{host}"* | *"{http.request.host}"*) bad "no redirect target comes from the request" "a redir line interpolates the request host: $caddy_redir_lines" ;;
+*) ok "no redirect target comes from the request" ;;
+esac
+# A custom port means a fronting proxy owns :80 (#740). Taking it over there would break exactly the
+# co-hosting the option exists for, so the catch-all is the default path's alone.
+case "$caddy_port_https" in
+*"http:// {"*) bad "a custom port leaves :80 to the fronting proxy" "the render claimed :80 anyway" ;;
+*) ok "a custom port leaves :80 to the fronting proxy" ;;
+esac
+# Plain-HTTP mode has no redirect to steer: :80 IS the dashboard there.
+case "$caddy_http" in
+*"redir"*) bad "plain-HTTP mode renders no redirect at all" "a redir line appeared on a plain-HTTP site" ;;
+*) ok "plain-HTTP mode renders no redirect at all" ;;
 esac
 # Onion + custom LAN port together (#740 × #343): the LAN vhost moves to the custom port and the
 # `disable_redirects` global is emitted, but the onion vhost MUST stay on the bridge gateway's bare
