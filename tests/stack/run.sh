@@ -11292,6 +11292,74 @@ out=$(cd "$FR" && PITHEAD_APPLIANCE=1 PITHEAD_PRESEED_DIR="$FR/no-such-esp" PITH
 assert_contains "factory-reset refuses when the ESP marker cannot be written" "$out" "Could not arm"
 assert_eq "unarmable factory-reset does not reboot" "$([ -f "$rebooted" ] || echo no)" "no"
 
+echo "== unit: a boot that fails its health gate reboots itself, once (#1065) =="
+# The A/B design's headline promise is that a bad update reverts itself, and for the likeliest bad
+# update — one that boots cleanly with a dead stack — it did not: pithead-boot left the slot
+# uncommitted and exited, and the fallback is a GRUB decision GRUB does not get to make until
+# something reboots. So the box sat on the broken slot with the stack down until a human pulled the
+# power, while two operator docs promised otherwise.
+#
+# Bounded is the load-bearing half. A fault on /data survives the fallback, so both slots fail the
+# same way; a machine that reboot-loops can never be looked at. And if the counter cannot be
+# written the machine must NOT reboot — an unbounded loop is the one outcome worse than a stranded
+# box, so the failure to persist has to fail SAFE, not open.
+#
+# MUTATION PROOF: drop the `[ "$n" -ge 2 ]` bound and the second-failure assertion goes red; make
+# the unwritable-counter branch reboot anyway and the fail-safe assertion goes red; drop the
+# rm in boot_gate_passed and the cleared-on-success assertion goes red.
+BG="$SANDBOX/boot-gate"
+mkdir -p "$BG"
+# shellcheck disable=SC1090  # overlay path is dynamic by design
+bg_run() { # <cwd> — one fail_boot in a sandbox, printing "<reboots> <counter> <stderr>"
+    (
+        cd "$1" 2>/dev/null || exit 1
+        source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+        PITHEAD_REBOOT_CMD="touch $BG/rebooted.$$" fail_boot "the stack never became healthy (serving + doctor)" 2>&1
+    )
+}
+rm -f "$BG"/rebooted.*
+bg_out1=$(bg_run "$BG")
+bg_rebooted1=$(ls "$BG"/rebooted.* 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "the first failed health gate reboots the machine" "$bg_rebooted1" "1"
+assert_eq "and records the attempt on /data" "$(cat "$BG/.boot-gate-failures" 2>/dev/null)" "1"
+assert_contains "saying why, on the console" "$bg_out1" "falls back to the previous slot"
+
+rm -f "$BG"/rebooted.*
+bg_out2=$(bg_run "$BG")
+bg_rebooted2=$(ls "$BG"/rebooted.* 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "the fallback slot failing the same way does NOT reboot again" "$bg_rebooted2" "0"
+assert_eq "the attempt is still counted" "$(cat "$BG/.boot-gate-failures" 2>/dev/null)" "2"
+assert_contains "and the console says the fault is not the slot" "$bg_out2" "the fault is not the slot"
+
+# A healthy boot clears the counter, or one transient failure months ago would spend the machine's
+# single rollback attempt on the update that actually needs it.
+(
+    cd "$BG" || exit 1
+    source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+    boot_gate_passed
+)
+assert_eq "a boot that commits clears the counter" "$([ -f "$BG/.boot-gate-failures" ] && echo present || echo gone)" "gone"
+
+# Unwritable counter: the cwd is deleted out from under it, which makes the relative write fail for
+# root too — a chmod would not, and this suite runs as both.
+BGX="$SANDBOX/boot-gate-unwritable"
+mkdir -p "$BGX"
+rm -f "$BG"/rebooted.*
+bg_out3=$(
+    cd "$BGX" && rmdir "$BGX"
+    source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+    PITHEAD_REBOOT_CMD="touch $BG/rebooted.$$" fail_boot "the stack never became healthy (serving + doctor)" 2>&1
+)
+assert_eq "a counter it cannot write means it does NOT reboot" "$(ls "$BG"/rebooted.* 2>/dev/null | wc -l | tr -d ' ')" "0"
+assert_contains "and it says a reboot it cannot count is a reboot loop" "$bg_out3" "a reboot it cannot count is a reboot loop"
+rm -f "$BG"/rebooted.*
+
+# Every exit that leaves the slot uncommitted goes through the helper — a bare `exit 1` on any of
+# them is the original defect back on that path alone. The rig leg's two and the coordinator's
+# render, up and health gate are all of them.
+BOOTSCRIPT="$ROOT/os/overlay/pithead-boot"
+bg_bare=$(grep -cE '^[[:space:]]*(\./pithead (render|up)|timeout 1800 \./pithead local-miner).*\|\| exit 1' "$BOOTSCRIPT" || true)
+assert_eq "no boot-failure path exits without arming the fallback" "$bg_bare" "0"
 echo "== unit: the appliance battery's release gate does not lie about what it ran (#1064) =="
 # Harness wiring, asserted here because the harness itself only runs on the KVM bench. Both halves
 # are the same defect: a gate that reports success without having run. `--phase all` executed five

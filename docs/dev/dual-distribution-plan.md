@@ -702,8 +702,14 @@ fault-inject on the bench before every release.
 ### Case 2 — it boots but fails its health check
 
 Also self-healing. The commit gate is `pithead doctor --json`: if the stack does not
-come up healthy, the update is never committed and the next reboot falls back. The
-important design rule is what the gate checks — services up and progressing, never
+come up healthy, the update is never committed and the next reboot falls back — and
+`pithead-boot` triggers that reboot itself, because the fallback is a bootloader decision
+and the bootloader does not get another turn until something reboots (#1065). Bounded to
+one attempt, recorded on `/data`: a fault that lives on the data partition survives the
+fallback, and a box that reboot-loops can never be diagnosed. If the counter cannot be
+written the machine does not reboot at all — an unbounded loop is the worse failure.
+
+The important design rule is what the gate checks — services up and progressing, never
 "chain synced", because a fresh box legitimately takes days to sync and a gate that
 waits for it would never commit anything.
 
