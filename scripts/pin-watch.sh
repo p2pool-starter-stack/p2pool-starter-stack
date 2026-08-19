@@ -127,7 +127,6 @@ fi
 
 # Sourcing only defines the functions; release.sh guards its main() behind a BASH_SOURCE check.
 # shellcheck source=/dev/null
-(return 0 2>/dev/null) || true
 set -- # release.sh's arg parser must not see ours
 # shellcheck disable=SC1091
 source "$ROOT/scripts/release.sh"

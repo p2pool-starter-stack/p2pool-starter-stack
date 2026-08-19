@@ -51,6 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TITLE: "Upstream pin currency (weekly report)"
+          RC: ${{ steps.report.outputs.rc }}
         run: |
           set -Eeuo pipefail
           body=$(cat report.md)
@@ -59,6 +60,21 @@ jobs:
           # next run and then keeps both stale.
           n=$(gh issue list --state open --limit 200 --json number,title \
             --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          # A run that could not do its job replaces the report with a failure notice, which would
+          # otherwise DELETE the "last fully successful check" date — and that date is the only
+          # thing separating "failed once this morning" from "has been dead for six weeks". Carry
+          # the previous one forward. A watcher whose own silence is invisible is the exact defect
+          # this watcher exists to catch, so it must not have it.
+          if [ "$RC" != "0" ] && [ -n "$n" ]; then
+            prev=$(gh issue view "$n" --json body --jq .body | grep -a "^_Last fully successful check:" || true)
+            # A real `if`, not `[ -n "$prev" ] && body=...`. The && form is safe HERE (set -e is
+            # ignored for a non-final command in an AND-OR list, checked rather than assumed), but
+            # it evaluates to 1 when $prev is empty — so it only stays safe while something else
+            # follows it. That is a reordering hazard for one saved line.
+            if [ -n "$prev" ]; then
+              body="$body"$'\n\n'"$prev (this run could not complete)"
+            fi
+          fi
           if [ -n "$n" ]; then
             gh issue edit "$n" --body "$body"
             echo "updated #$n"
