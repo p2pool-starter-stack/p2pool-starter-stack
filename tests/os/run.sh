@@ -216,13 +216,13 @@ _wait_setup_page() {
 # Build a bootable image carrying $1 as its slot marker, for the selected updater.
 _build_image() {
     [ -f "$KEY" ] || ssh-keygen -t ed25519 -N "" -f "$KEY" -q
-    # What this harness believes it is building, in the same shape BUILD_COMMIT records — so
-    # verify-image's stale-artifact guard runs here too. It used to be unset in the only automated
-    # caller, which left the check that exists BECAUSE an image shipped a two-commits-stale
-    # dashboard switched off in every battery run (#1064).
+    # What this harness believes it is building, so verify-image's stale-artifact guard runs here
+    # too. It used to be unset in the only automated caller, which left the check that exists
+    # BECAUSE an image shipped a two-commits-stale dashboard switched off in every battery run
+    # (#1064). build-image.sh stamps the FULL sha, so that is the shape to hand over: a short one
+    # never matched, and wiring the guard on with it would have failed every build the harness made.
     local expect
-    expect="$(git rev-parse --short HEAD 2>/dev/null || true)"
-    [ -n "$(git status --porcelain 2>/dev/null)" ] && expect="${expect}-dirty"
+    expect="$(git rev-parse HEAD 2>/dev/null || true)"
     PITHEAD_UPDATER=rauc PITHEAD_TEST_SSH_PUBKEY="$(cat "$KEY.pub")" PITHEAD_TEST_MARKER="$1" \
         os/build-image.sh >/tmp/os-fault-build.log 2>&1 || return 1
     os/rauc/mkimage.sh --dev >>/tmp/os-fault-build.log 2>&1 || return 1

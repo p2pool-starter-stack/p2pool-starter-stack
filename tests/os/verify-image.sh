@@ -221,7 +221,10 @@ chk "carries a build stamp" '[ "$BUILT" != "missing" ] && [ -n "$BUILT" ]'
 # The check that would have caught shipping a two-commits-stale dashboard: compare against what
 # the caller believes it built. PITHEAD_EXPECT_COMMIT is set by the release procedure.
 if [ -n "${PITHEAD_EXPECT_COMMIT:-}" ]; then
-    chk "built from the expected commit ($PITHEAD_EXPECT_COMMIT)" '[ "$BUILT" = "$PITHEAD_EXPECT_COMMIT" ]'
+    # Prefix, not equality: the stamp is the full sha with an optional "-dirty" suffix, while the
+    # commit anyone types is the short one every log line prints. Equality failed both callers.
+    # Dirtiness is the next check's job, not this one's.
+    chk "built from the expected commit ($PITHEAD_EXPECT_COMMIT)" 'case "$BUILT" in "$PITHEAD_EXPECT_COMMIT"*) true ;; *) false ;; esac'
     chk "built from a clean tree" 'case "$BUILT" in *-dirty) false ;; *) true ;; esac'
 else
     skip "built from the expected commit" "PITHEAD_EXPECT_COMMIT is unset"
