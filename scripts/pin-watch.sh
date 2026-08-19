@@ -182,7 +182,16 @@ done
 printf '%s\n\n' "Upstream currency, checked weekly by \`scripts/pin-watch.sh\`. This never bumps anything."
 printf '| component | pinned | upstream latest | |\n|---|---|---|---|\n%s\n' "$rows"
 printf '%s\n' "Not watched here, because they publish no GitHub release feed: the alpine base image, \`ubuntu:24.04\`, \`python:3.11-slim\`. Dependabot's docker ecosystem reads those \`FROM\` lines and does cover them."
-[ -f "$ROOT/os/rootfs/Dockerfile" ] || printf '%s\n' "The appliance lane's own pins (the rootfs docker-compose and cosign) are NOT in this table: a scheduled workflow only ever reads the default branch, and this script is not on \`develop-v2\` yet."
+if [ -f "$ROOT/os/rootfs/Dockerfile" ]; then
+    # The rootfs COMPILES these two from source on a pinned Go toolchain rather than downloading a
+    # release binary, so each carries a paired _COMMIT ARG and the VERSION alone decides nothing.
+    # Bumping the version and leaving the commit still builds the old code — the same half-done bump
+    # #1137 describes for image digests. (This warning came from the appliance-lane watcher this
+    # script replaced; the fact outlived the file.)
+    printf '%s\n' "\`compose\` and \`cosign\` are compiled from source in \`os/rootfs/Dockerfile\`, so each bump is TWO ARGs — the version AND its paired \`_COMMIT\`. Resolve the commit with \`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha\`; bumping the version alone still builds the old code."
+else
+    printf '%s\n' "The appliance lane's own pins (the rootfs docker-compose and cosign) are NOT in this table: a scheduled workflow only ever reads the default branch, and this script is not on \`develop-v2\` yet."
+fi
 printf '%s\n' "Also NOT checked: whether each image pin's digest still corresponds to its tag. The digest is what actually runs, so a half-done bump is invisible to the table above."
 if [ "$failed" -gt 0 ]; then
     printf '\n%s\n' "**$failed lookup(s) could not run — those rows are unchecked, not current.**"
