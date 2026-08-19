@@ -136,16 +136,6 @@ expect_min "log rotation on every service" "max-size:" 9
 expect_present "tecnativa socket-proxy pinned by digest" "tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476"
 expect_present "caddy pinned by digest" "caddy:2.11.4@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
 expect_present "tari node pinned by digest" "minotari_node:v5.3.1-mainnet@sha256:824fd6ec21d618805317d7eede374d6782906eeae17d2fc8aaad4df6205f94e0"
-# The two Tari images are one component and are bumped together, so a tag that moves on one and not
-# the other is a silent split-brain: the node speaks one protocol version and the wallet another.
-# Nothing else in the repo compares them — `scripts/release.sh pin tari` reads the NODE only (#1138),
-# so a wallet left behind is invisible in the release notes too.
-tari_tags=$(grep -oE 'quay\.io/tarilabs/minotari_(node|console_wallet):[^@]+' "$ROOT/docker-compose.yml" |
-    sed 's/.*://' | sort -u | wc -l | tr -d ' ')
-if [ "$tari_tags" = "1" ]; then echo "  ✓ both Tari images carry the same tag"; else
-    echo "  ✗ both Tari images carry the same tag: found $tari_tags distinct tags"
-    fails=$((fails + 1))
-fi
 
 # Per-service precision checks via the JSON render (cleaner than grepping the flat YAML): the
 # Docker socket proxies must stay least-privilege, and the Tari probe must self-match safely.
@@ -320,6 +310,12 @@ jq_assert "tari-wallet healthcheck pattern survives ps CMD truncation (#777)" \
 # is. Whole reference, not the `tag@sha256:` prefix, for the reason given at the other three.
 jq_assert "tari console wallet pinned by digest (#1137)" \
     '.services["tari-wallet"].image == "quay.io/tarilabs/minotari_console_wallet:v5.3.1-mainnet@sha256:31b3cd7b2b390da33c279fd1a5cd457eb254aeea17a5a230ff4c7bfea79a47eb"'
+# The two Tari images are one component, bumped together, so a tag that moves on one and not the
+# other is a silent split-brain — the node speaking one protocol version and the wallet another.
+# Nothing compared them, and `scripts/release.sh pin tari` reads the NODE only (#1138), so a wallet
+# left behind is invisible in the release notes as well.
+jq_assert "both Tari images carry the same tag (#1137)" \
+    '[.services["tari"].image, .services["tari-wallet"].image] | map(split("@")[0] | split(":")[-1]) | unique | length == 1'
 # Compose healthchecks close the #904 gap. `pithead status` and the dashboard's container-health
 # alert (#337) read these states, and a service without a check reports Up even when dead inside —
 # so with every profile active (this render), no service may lack one, and each of the five late
