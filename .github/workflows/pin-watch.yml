@@ -6,13 +6,21 @@ name: Upstream pin watch
 # shape, different output, because XMRig is a drop-in binary and its build gate proves the
 # candidate.
 #
-# ONE tracking issue, edited in place. An issue persists, is assignable and milestonable, and lets
-# a human write "held until the bench is free, here's why" in a comment — which a report artifact
-# nobody opens cannot do, and which is the failure mode #1128 was filed about.
+# ONE tracking issue per lane, edited in place. An issue persists, is assignable and milestonable,
+# and lets a human write "held until the bench is free, here's why" in a comment — which a report
+# artifact nobody opens cannot do, and which is the failure mode #1128 was filed about. Two lanes
+# rather than one table because the two trees have different pins and different owners; merging
+# them would mean one lane's rows silently vanishing whenever the other lane could not be read.
 #
 # This file lives on the DEFAULT branch on purpose. The previous pin-watch.yml lived on
 # `develop-v2`, where a `schedule:` can never fire, and so ran exactly zero times — the appliance
 # pins it watched were never checked once. That is the same defect class as #1048 and #1064.
+#
+# Living on the default branch means only `develop`'s tree gets read, and `develop` has no `os/` —
+# so the appliance's own two pins were invisible in a run that looked complete (#1146). The `lane`
+# matrix below fixes that by checking out `develop-v2` explicitly for a second report. It is the
+# same defect as the paragraph above, one level in: the previous watcher never ran, this one ran
+# with a lane missing. Both look identical from the Actions tab.
 on:
   schedule:
     - cron: "30 6 * * 1" # Mondays 06:30 UTC, after the image sweeps
@@ -25,12 +33,30 @@ permissions:
 
 jobs:
   pin-watch:
-    name: Compare upstream component pins against their latest releases
+    name: Compare upstream component pins against their latest releases (${{ matrix.lane }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      # fail-fast: false so a lane that cannot report does not cancel the lane that can — a missing
+      # report is the thing this watcher exists to make loud, not a reason to lose the other one.
+      fail-fast: false
+      matrix:
+        include:
+          # `ref: ""` is checkout's own default: the ref that triggered the run. On the weekly
+          # schedule that is the default branch, which is what this lane has always read.
+          - lane: product
+            ref: ""
+            title: "Upstream pin currency (weekly report)"
+          # The appliance rootfs COMPILES docker-compose and cosign from `ARG` values, so nothing
+          # else can see them: dependabot's docker ecosystem reads `FROM` lines, and `cosign` is the
+          # verifier the whole signed-update chain rests on. They exist on this lane only.
+          - lane: appliance
+            ref: develop-v2
+            title: "Upstream pin currency — appliance rootfs (weekly report)"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ matrix.ref }}
           persist-credentials: false
       - name: Build the currency report
         id: report
@@ -47,10 +73,10 @@ jobs:
           # An empty report is itself a failure to report — never publish silence.
           [ -s report.md ] || { echo "The pin watcher produced no report at all — see the run log." >report.md; rc=1; }
           echo "rc=$rc" >>"$GITHUB_OUTPUT"
-      - name: Publish it to the one tracking issue
+      - name: Publish it to this lane's tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
-          TITLE: "Upstream pin currency (weekly report)"
+          TITLE: ${{ matrix.title }}
           RC: ${{ steps.report.outputs.rc }}
         run: |
           set -Eeuo pipefail
