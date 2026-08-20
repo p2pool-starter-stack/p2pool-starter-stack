@@ -41,10 +41,23 @@ CVE-2026-34040
 # COMPILES docker-compose and cosign itself on a pinned, patched toolchain (os/rootfs/Dockerfile,
 # the gobuild stage), so stdlib findings are fixed at the source instead of accepted. If a stdlib
 # CVE appears here again, the answer is to bump the builder image, not to add a line below.
-# util-linux family (bsdutils, libmount1, libuuid1, login, mount, util-linux): the fix is a
-# base-distro point release, 2.41.5-0+deb13u1, and no published python:3.11-slim carries it yet —
-# the newest digest still ships 2.41-5. Same shape as CVE-2026-45447 above: `--ignore-unfixed` hid
-# this until Debian published a fix, at which point it reddened every branch at once without any
-# change on our side. Cleared when a base bump brings 2.41.5-0+deb13u1 in; the weekly CVE sweep
-# (#833) re-surfaces it regardless, so this cannot rot silently.
+# util-linux family (bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login,
+# mount, util-linux) — FOUR advisories now, all with the same fix and the same clearing condition.
+# The fix is a base-distro point release, 2.41.5-0+deb13u1, and no published python:3.11-slim
+# carries it: `docker pull python:3.11-slim` returns the very digest build/dashboard/Dockerfile
+# already pins, and it still ships 2.41-5. So this cannot be closed by dependabot or by a manual
+# base bump — only by upstream rebuilding the image on the fixed Debian packages. Verified by
+# pulling the tag and reading dpkg, not from the release notes (#1156).
+#
+# Same shape as CVE-2026-45447 above: `--ignore-unfixed` hid these until Debian published a fix, at
+# which point they reddened every branch at once with no change on our side. 53615 arrived that way
+# on 2026-08-19 and the other three on 2026-08-20, between one CI run and the next on a branch
+# nobody had touched.
+#
+# Cleared when a base bump brings 2.41.5-0+deb13u1 in — `docker run --rm python:3.11-slim
+# dpkg-query -W util-linux` is the one-line check, and all four go together. The weekly CVE sweep
+# (#833) re-surfaces them regardless, so this cannot rot silently.
+CVE-2026-53612
+CVE-2026-53613
+CVE-2026-53614
 CVE-2026-53615
