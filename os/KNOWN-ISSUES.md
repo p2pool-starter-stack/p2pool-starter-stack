@@ -183,6 +183,21 @@ starts. Host identity survives A/B updates and reboots by construction (it never
 system slot to begin with); the reset tiers classify it like everything else on `/data` — a
 keep-everything reinstall keeps it, a fresh-start or full wipe deletes it.
 
+**Fixed — `doctor` looked for the control units in `/etc`, and the appliance puts them in
+`/run` (#1151).** `provision_control_runner` knew the read-only root cannot take that write (#791);
+`check_control_units` and `control_units_owner_dir` did not, and each kept its own `/etc` default.
+On a provisioned box `doctor` therefore reported "no runner units are installed" about units that
+were installed and running. That verdict is the `doctor` half of `pithead-boot`'s health gate, so
+the gate never passed, the A/B slot was never committed, and the dashboard sat on "reboot pending"
+after an update that had in fact succeeded. #1065 makes the first such boot reboot the box; the
+counter is bounded and only a passing gate clears it, so from the second failure on the machine
+deliberately stays up — a healthy, correctly updated appliance parked on an uncommitted slot with
+no way to clear it but a power cycle. Legs 1-3 of the battery cannot see this: they never provision
+the guest, so `pithead-boot` is condition-skipped and the gate never runs at all, and they commit
+with the harness's own `rauc status mark-good`. Leg 4 is the only leg that provisions and then lets
+the boot gate do the committing, and it found this the first time it ran to completion. The
+directory is now one rule, `control_unit_dir`, read by the writer and both readers.
+
 **Fixed — a provisioning failure now surfaces its own reason on the reopened wizard.**
 Setup failures move the config aside as `config.json.failed` and re-mint a token; the
 reopened page used to make an operator dig the reason out of the console. It no longer

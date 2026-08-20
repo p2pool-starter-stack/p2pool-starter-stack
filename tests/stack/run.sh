@@ -12492,7 +12492,71 @@ assert_contains "superseded rollback dir -> says which dir is live" "$out" "$CCU
 out="$(ccu_run "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control" true \
     "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control")"
 assert_contains "the live install still gets a verdict" "$out" "target this install"
-unset CCU ccu_run out
+unset -f ccu_run
+
+echo "== unit: doctor looks for the control units where apply writes them (#1151) =="
+# The appliance renders host units into /run/systemd/system — its root is read-only, so /etc cannot
+# take the write (#791). `provision_control_runner` knew that; `check_control_units` and
+# `control_units_owner_dir` did not, and hard-coded /etc. On a PROVISIONED appliance doctor
+# therefore reported "no runner units are installed" about units that were installed and running.
+# That is the doctor half of the boot health gate: it never passed, the slot never committed, the
+# dashboard sat on "reboot pending" for ever. Legs 1-3 of the KVM battery cannot see it: they never
+# provision the guest, so pithead-boot.service is condition-skipped and the gate never runs at all
+# (those legs commit with the harness's own `rauc status mark-good`). Leg 4 is the only leg that
+# provisions AND lets the boot gate do the committing.
+#
+# The defect was TWO rules, not a wrong constant, so this asserts the rule has exactly one home.
+assert_eq "appliance -> /run/systemd/system (read-only root, #791)" \
+    "$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" control_unit_dir)" "/run/systemd/system"
+assert_eq "DIY host -> /etc/systemd/system" \
+    "$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" control_unit_dir)" "/etc/systemd/system"
+assert_eq "an explicit PITHEAD_UNIT_DIR wins on the appliance" \
+    "$(PITHEAD_APPLIANCE=1 PITHEAD_UNIT_DIR=/tmp/u run_sourced "$SANDBOX" control_unit_dir)" "/tmp/u"
+assert_eq "an explicit PITHEAD_UNIT_DIR wins on a DIY host" \
+    "$(PITHEAD_APPLIANCE=0 PITHEAD_UNIT_DIR=/tmp/u run_sourced "$SANDBOX" control_unit_dir)" "/tmp/u"
+
+# A SECOND copy of the default is how the two rules drifted apart in the first place, and no runtime
+# test can see a copy that does not exist yet — so this one is static. Every consumer being bound to
+# the rule is covered behaviourally instead: the two readers below, and provision_control_runner by
+# the #791 writer assertion further up. (-F: the pattern carries no regex intent.)
+# Mutation run: put `unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"` back in check_control_units
+# -> this goes 0 -> 1 and red.
+assert_eq "no second copy of the /etc default survives outside control_unit_dir" \
+    "$(grep -cF 'PITHEAD_UNIT_DIR:-/etc/systemd/system' "$STACK")" "0"
+
+# The behavioural half: the readers must actually USE what control_unit_dir returns. /run/systemd/
+# system is root-owned, so no tier-1 test can plant a unit in the real appliance directory — the
+# path is proven as two links instead:
+#   link 1 (above) — control_unit_dir answers /run/systemd/system when is_appliance is true;
+#   link 2 (here)  — the readers read whatever it answers, with PITHEAD_UNIT_DIR deliberately
+#                    UNSET, so neither can reach the units by the override arm instead.
+# check_control_units calls control_units_owner_dir, so one run covers both readers: a reader that
+# ignores the helper looks in /etc, finds nothing, and the verdict flips to the "no runner units"
+# FAIL — which is #1151 itself.
+# Mutation run: `[ -n "${PITHEAD_UNIT_DIR:-}" ] || unit_dir=/etc/systemd/system` inserted after the
+# helper call in check_control_units, in control_units_owner_dir, and in both. Each spelling leaves
+# every other assertion in the suite green and goes red only here.
+ccu_bind() { # <install-dir> -> output. Reuses $CCU's stubs and unit dir; PITHEAD_UNIT_DIR never set.
+    printf '[Service]\nExecStart=%s/pithead control-run-pending\n' "$1" >"$CCU/units/pithead-control.service"
+    printf '[Path]\nPathExistsGlob=%s/data/control/requests/*.json\n' "$1" >"$CCU/units/pithead-control.path"
+    printf 'DASHBOARD_CONTROL_ENABLED=true\nCONTROL_DIR=%s/data/control\n' "$1" >"$1/.env"
+    (
+        cd "$1" || exit
+        PATH="$CCU/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        unset PITHEAD_UNIT_DIR
+        # Stands in for the appliance's /run/systemd/system, which this tier cannot write to.
+        control_unit_dir() { printf '%s' "$CCU/units"; }
+        check_control_units 2>&1
+    )
+}
+out="$(ccu_bind "$CCU/install")"
+assert_contains "the readers find units only control_unit_dir knows the directory of" "$out" "target this install"
+assert_not_contains "...and report no fault for units that are correctly installed" "$out" "FAIL"
+unset -f ccu_bind
+unset CCU out
 
 echo "== unit: apply converges the control units even when nothing changed (#33) =="
 # doctor's fix instruction is "run './pithead apply' from this directory". A box whose units point
