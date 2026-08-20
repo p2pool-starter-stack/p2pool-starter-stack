@@ -183,6 +183,19 @@ starts. Host identity survives A/B updates and reboots by construction (it never
 system slot to begin with); the reset tiers classify it like everything else on `/data` — a
 keep-everything reinstall keeps it, a fresh-start or full wipe deletes it.
 
+**Fixed — the boot health gate's other half was accepting Caddy's empty default vhost
+(#1140).** The probe dialled `https://localhost/` and took any status but `000` as proof the
+dashboard was serving, on the stated belief that localhost is always a listed site. It is one only
+while `dashboard.host` is unset: `generate_caddyfile` adds it inside `is_appliance && [ -z
+"$DASHBOARD_HOST" ]`. Pin the host — a documented, supported choice — and the probe reached the
+default vhost, which answers 200 with no body, so "Caddy is running" passed as "the dashboard
+serves" on the gate that decides whether an A/B update lives. Both halves are fixed together,
+because tightening the check alone would have turned the false pass into a permanent failure on
+exactly those machines: the probe now asks for the site the render itself chose, read as `HOST_IP`
+from the `.env` of that same boot and dialled over loopback with `--resolve`, and it accepts only an
+answer the default vhost cannot give — a body, or the `401` a locked dashboard sends. Not a `401`
+check: an empty dashboard password is the documented default, and that machine answers `200`.
+
 **Fixed — `doctor` looked for the control units in `/etc`, and the appliance puts them in
 `/run` (#1151).** `provision_control_runner` knew the read-only root cannot take that write (#791);
 `check_control_units` and `control_units_owner_dir` did not, and each kept its own `/etc` default.

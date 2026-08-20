@@ -10372,15 +10372,132 @@ echo "== unit: the A/B commit gate consumes doctor --json, not just the curl (#8
 # The gate that used to be a bare curl to https://localhost/ committed any slot whose dashboard
 # answered — even one whose mining services had crashed. The fix pairs the curl with doctor's
 # exit code. Assert the wiring: both signals gate the same mark-good, curl first (cheap).
-BOOTSCRIPT="$ROOT/os/overlay/pithead-boot"
-# The curl fills $code from https://localhost/; the commit condition then requires BOTH a non-000
-# code AND a clean 'doctor --json' before mark-good runs.
-grep -qE 'curl.*https://localhost/' "$BOOTSCRIPT" &&
-    grep -qE '\$\{?code[:}].*!=.*000.*&&.*pithead doctor --json' "$BOOTSCRIPT" &&
-    ok "pithead-boot gates mark-good on the localhost curl AND 'pithead doctor --json'" ||
-    bad "pithead-boot gates mark-good on the localhost curl AND 'pithead doctor --json'" \
-        "the commit condition does not pair the curl result with 'doctor --json'"
-unset BOOTSCRIPT
+# BOTH signals must gate mark-good (#852): a slot whose dashboard answers but whose mining
+# containers have crashed must NOT commit. This was a grep of the boot script until #1140, and the
+# doctor half of that grep matched the file's own HEADER COMMENT — it stayed green with the doctor
+# call deleted from the commit condition outright. The pairing now lives in gate_ready and is
+# driven here with a stubbed `pithead`, so deleting either half goes red.
+# Mutation run: drop the doctor call from gate_ready -> "a crashed stack does not commit" goes red;
+# drop the gate_answer_is_dashboard call -> "the default vhost does not commit" goes red.
+GR="$SANDBOX/gate-ready"
+mkdir -p "$GR"
+gr_run() { # <doctor-exit> <code> <size> -> ready|held
+    printf '#!/usr/bin/env bash\nexit %s\n' "$1" >"$GR/pithead"
+    chmod +x "$GR/pithead"
+    (
+        cd "$GR" || exit 1
+        # shellcheck disable=SC1090
+        source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+        BOOT_DOCTOR_JSON="$GR/doctor.json"
+        gate_ready "$2" "$3" && echo ready || echo held
+    )
+}
+assert_eq "dashboard serving AND doctor clean -> commit" "$(gr_run 0 200 4096)" "ready"
+# #852 itself: the mining-dead-but-serving slot a curl-only gate used to mark-good.
+assert_eq "a crashed stack does not commit, however well the dashboard answers" "$(gr_run 1 200 4096)" "held"
+# #1140 itself: Caddy's empty default vhost must not open the door to the doctor run either.
+assert_eq "the default vhost does not commit, even with doctor clean" "$(gr_run 0 200 0)" "held"
+assert_eq "nothing answering does not commit" "$(gr_run 0 000 0)" "held"
+assert_eq "a locked dashboard (401) with doctor clean -> commit" "$(gr_run 0 401 0)" "ready"
+unset -f gr_run
+unset GR
+
+echo "== unit: the boot health probe asks the dashboard's own site, and can tell it apart (#1140) =="
+# The probe used to dial https://localhost/ and accept any status but 000, on the stated belief
+# that localhost is always a listed site. generate_caddyfile only adds localhost while
+# dashboard.host is UNSET — pin the host and the probe reached Caddy's EMPTY DEFAULT VHOST, which
+# answers 200 with no body. On the gate that decides whether an A/B update lives, and that #1065
+# reboots on, "Caddy is running" was passing as "the dashboard serves".
+# Two halves, both driven here: ask the right site, and recognise the right answer.
+GU="$SANDBOX/gateurl"
+mkdir -p "$GU"
+gu_run() { # <env-body> -> "scheme|host|port"
+    printf '%s\n' "$1" >"$GU/.env"
+    (
+        cd "$GU" || exit 1
+        # shellcheck disable=SC1090
+        source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+        gate_url
+    )
+}
+# THE #1140 CASE: a pinned dashboard.host. The site list holds that name and NOT localhost, so the
+# probe has to carry it or it is talking to the default vhost.
+assert_eq "a pinned host is what the probe asks for" \
+    "$(gu_run 'HOST_IP=panel.example
+DASHBOARD_SECURE=true')" "https|panel.example|443"
+# Unpinned: HOST_IP is whatever resolve_dashboard_host chose, and it is still the first site.
+assert_eq "an unpinned host still comes from the render, not a literal" \
+    "$(gu_run 'HOST_IP=pithead.local
+DASHBOARD_SECURE=true')" "https|pithead.local|443"
+assert_eq "dashboard.secure:false -> the site is http, so the probe is too" \
+    "$(gu_run 'HOST_IP=panel.example
+DASHBOARD_SECURE=false')" "http|panel.example|80"
+assert_eq "a custom host port is honoured" \
+    "$(gu_run 'HOST_IP=panel.example
+DASHBOARD_SECURE=true
+HOST_PORT=8443')" "https|panel.example|8443"
+# Fail SAFE, not closed: an unreadable .env must not make this gate a permanent RED, because after
+# #1065 a gate that never passes reboots a healthy box. Falling back to localhost is the old
+# behaviour, and gate_answer_is_dashboard below still refuses to call the default vhost a success.
+assert_eq "an .env with no HOST_IP falls back rather than dialling nothing" \
+    "$(gu_run 'DASHBOARD_SECURE=true')" "https|localhost|443"
+unset -f gu_run
+unset GU
+
+gad() { # <code> <size> -> accept|reject
+    (
+        cd "$SANDBOX" || exit 1
+        # shellcheck disable=SC1090
+        source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+        gate_answer_is_dashboard "$1" "$2" && echo accept || echo reject
+    )
+}
+# The whole point: Caddy's empty default vhost answers 200 with a zero-length body. That is the
+# answer #1140 was accepting as a healthy dashboard.
+assert_eq "200 with an empty body is the default vhost -> REJECT" "$(gad 200 0)" "reject"
+assert_eq "200 with a real page is the dashboard -> accept" "$(gad 200 4096)" "accept"
+# Auth on: the login's 401 has no body of its own, so size alone would reject a healthy locked box.
+assert_eq "401 (a healthy, locked dashboard) -> accept" "$(gad 401 0)" "accept"
+# Auth OFF is supported — an empty dashboard password is the documented default — so the box that
+# answers 200 with a page must pass. That is why this is not a 401 check.
+assert_eq "no connection at all -> reject" "$(gad 000 0)" "reject"
+assert_eq "an empty code -> reject" "$(gad '' 0)" "reject"
+assert_eq "a 502 from a dead upstream -> reject" "$(gad 502 0)" "reject"
+assert_eq "a redirect carrying a body -> accept" "$(gad 308 120)" "accept"
+unset -f gad
+
+# dashboard.host is validated as "a hostname or IP address" and explicitly allows colons, so HOST_IP
+# can be an IPv6 literal. curl will not take one in --resolve — it rejects the WHOLE option with
+# "Couldn't parse CURLOPT_RESOLVE entry" — and an unbracketed literal in the URL reads the port as
+# part of the address. Either way the request fails, the gate never passes, and #1065 reboots a
+# healthy box: a false RED on this gate is as bad as the false GREEN this issue is about. Measured
+# against curl 8.7 before writing these.
+# Mutation run: drop the *:* arm of gate_target_url -> the bracketing assertion goes red; make
+# gate_resolve_spec answer for every host -> the two literal assertions go red.
+# NOT run_sourced: that sources `pithead`, and these live in the boot overlay. (An assert_eq
+# expecting "" would pass vacuously against a function that was never defined, so the non-empty
+# assertions below are what prove the source landed.)
+boot_fn() { # <function> <args...>
+    (
+        cd "$SANDBOX" || exit 1
+        # shellcheck disable=SC1090
+        source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+        "$@"
+    )
+}
+gtu() { boot_fn gate_target_url "$@"; }
+grs() { boot_fn gate_resolve_spec "$@"; }
+assert_eq "a name goes in the URL as-is" "$(gtu https panel.example 443)" "https://panel.example:443/"
+assert_eq "an IPv6 literal is bracketed, or the port joins the address" \
+    "$(gtu https 2001:db8::1 443)" "https://[2001:db8::1]:443/"
+assert_eq "an IPv4 literal needs no brackets" "$(gtu http 192.0.2.5 80)" "http://192.0.2.5:80/"
+# --resolve is for names only. It is what keeps a name's dial on loopback without the box having to
+# resolve its own mDNS name; a literal is already an address and needs no lookup.
+assert_eq "a name gets a --resolve spec pointing at loopback" \
+    "$(grs panel.example 443)" "panel.example:443:127.0.0.1"
+assert_eq "an IPv6 literal gets NO --resolve (curl cannot parse one)" "$(grs 2001:db8::1 443)" ""
+assert_eq "an IPv4 literal gets no --resolve either" "$(grs 192.0.2.5 80)" ""
+unset -f gtu grs boot_fn
 
 echo "== unit: revenue_container_verdict — commit-gate honesty, syncing vs crashed (#852) =="
 # The pure classifier behind check_revenue_containers, so the commit gate's central judgement is

@@ -38,6 +38,10 @@ set -uo pipefail
 # which is the whole point of bounding. If it cannot be written, this refuses to reboot at all —
 # an unbounded reboot loop is the one outcome worse than a stranded box.
 BOOT_FAIL_COUNT=.boot-gate-failures
+# Where doctor's verdicts land while this gate is looping: /run, so a gate that never passes leaves
+# the last failing run's exact blocking check behind without wearing /data. A plain variable for the
+# same reason BOOT_FAIL_COUNT is one — the suite points it somewhere writable.
+BOOT_DOCTOR_JSON=/run/pithead-boot-doctor.json
 boot_gate_passed() { rm -f "$BOOT_FAIL_COUNT"; }
 fail_boot() { # <what went wrong>
     echo "pithead-boot: $1 — slot left uncommitted so A/B fallback stays armed" >&2
@@ -61,6 +65,79 @@ fail_boot() { # <what went wrong>
     # this is fixing. Not a deadlock I reproduced — a tail risk the flag costs nothing to remove.
     ${PITHEAD_REBOOT_CMD:-systemctl --no-block reboot}
     exit 1
+}
+
+# The dashboard's own site address, read from the .env this boot has just rendered (#1140).
+#
+# This probe used to dial https://localhost/, and said in a comment that localhost is a listed site
+# so the answer traverses the real dashboard vhost. That is only true while `dashboard.host` is
+# UNSET: generate_caddyfile adds localhost to the site list inside `is_appliance && [ -z
+# "$DASHBOARD_HOST" ]`. Pin the host — a documented, supported choice — and localhost drops out, the
+# probe reaches Caddy's EMPTY DEFAULT VHOST, and that answers 200 with no body. On the gate that
+# decides whether an A/B update lives, "Caddy is running" was passing as "the dashboard serves".
+#
+# HOST_IP is the value the render itself uses as the first site address, so reading it here means
+# the probe and the site list cannot disagree — one rule, not a second copy of the expansion logic.
+# Falls back to localhost rather than to nothing: an unreadable .env must not turn this gate into a
+# permanent RED, which after #1065 reboots a healthy box.
+gate_env_val() { # <key> — last assignment of KEY in ./.env, empty when absent
+    sed -n "s/^$1=//p" .env 2>/dev/null | tail -n 1
+}
+gate_url() { # -> scheme://host:port/ for the dashboard's own site
+    local host port scheme
+    host=$(gate_env_val HOST_IP)
+    [ -n "$host" ] || host=localhost
+    if [ "$(gate_env_val DASHBOARD_SECURE)" = "false" ]; then scheme=http; else scheme=https; fi
+    port=$(gate_env_val HOST_PORT)
+    if [ -z "$port" ]; then [ "$scheme" = https ] && port=443 || port=80; fi
+    printf '%s|%s|%s' "$scheme" "$host" "$port"
+}
+# dashboard.host is validated as "a hostname or IP address — letters, digits, dots, hyphens, and
+# colons", so HOST_IP can be an IPv6 literal, and these two exist because of what curl does with one:
+#   - a URL needs it bracketed, or the port reads as part of the address;
+#   - `--resolve` cannot take one at all — curl rejects the whole option with "Couldn't parse
+#     CURLOPT_RESOLVE entry", which fails the request, which on this gate means a healthy box never
+#     commits and #1065 reboots it. Measured against curl 8.7, bracketed and unbracketed alike.
+# A literal needs no resolution anyway: the box owns the address. So --resolve is for NAMES, where
+# it is what keeps the dial on loopback instead of depending on the machine resolving its own mDNS
+# name — the one lookup a boot-time health probe must not be hostage to.
+gate_target_url() { # <scheme> <host> <port>
+    case "$2" in
+    *:*) printf '%s://[%s]:%s/' "$1" "$2" "$3" ;;
+    *) printf '%s://%s:%s/' "$1" "$2" "$3" ;;
+    esac
+}
+gate_resolve_spec() { # <host> <port> -> a --resolve spec, or empty when the host needs no lookup
+    case "$1" in
+    *:*) ;;                                           # IPv6 literal
+    *[!0-9.]*) printf '%s:%s:127.0.0.1' "$1" "$2" ;;  # a name
+    *) ;;                                             # IPv4 literal
+    esac
+}
+
+# Did that answer come from the DASHBOARD, or from Caddy answering for a Host it has no site for?
+# The default vhost's reply is 200 with a zero-length body. Everything the dashboard vhost produces
+# is either the 401 its login sends or a real page, so require one of those — `!= 000` cannot tell
+# them apart, and that is what let the wrong Host read as success. Belt and braces with gate_url:
+# if the site list and this probe ever disagree again, the gate FAILS instead of lying.
+gate_answer_is_dashboard() { # <http_code> <size_download>
+    [ -n "${1:-}" ] && [ "${1}" != "000" ] || return 1
+    [ "$1" = "401" ] || [ "${2:-0}" -gt 0 ]
+}
+
+# BOTH signals, in the one place they are paired (#852). This lives above the boundary on purpose:
+# while the pairing was a bare `&&` in the commit condition below, the only thing asserting it was a
+# grep of this file — and the doctor half of that grep matched the header COMMENT on line 15, so it
+# stayed green with the doctor call deleted outright. A gate that lies, inside the gate-honesty
+# machinery. As a function it is driven at tier 1 with a stubbed `pithead`, and deleting either half
+# turns an assertion red.
+#
+# doctor's verdicts land in /run (volatile, no /data wear): when this gate never passes, the LAST
+# failing run names the exact blocking check — without it a deadlock here was undiagnosable (the
+# battery hit exactly that).
+gate_ready() { # <http_code> <size_download>
+    gate_answer_is_dashboard "$1" "$2" || return 1
+    ./pithead doctor --json >"$BOOT_DOCTOR_JSON" 2>/dev/null
 }
 
 # Sourceable for the test suite: everything above is definitions, so a `source` stops here and the
@@ -156,19 +233,23 @@ else
     ./pithead up || fail_boot "the stack could not be brought up"
 fi
 
+IFS='|' read -r gate_scheme gate_host gate_port <<<"$(gate_url)"
+gate_target=$(gate_target_url "$gate_scheme" "$gate_host" "$gate_port")
+gate_resolve_args=()
+gate_rs=$(gate_resolve_spec "$gate_host" "$gate_port")
+[ -n "$gate_rs" ] && gate_resolve_args=(--resolve "$gate_rs")
 for _ in $(seq 90); do
-    # localhost, not 127.0.0.1: the bare IP is not in the Caddyfile's site list, so it hits
-    # Caddy's empty default vhost — an empty 200 that proves only that Caddy runs. localhost IS
-    # a listed site, so this answer traverses the real dashboard vhost (TLS + auth + proxy).
-    code=$(curl -kso /dev/null -w '%{http_code}' --max-time 5 https://localhost/ 2>/dev/null) || code=000
-    # Both gates, cheapest first: the curl is fast and gates entry to the slow doctor run, so an
-    # unhealthy or still-booting stack just loops here without paying for a full diagnostic. doctor
-    # only has to pass ONCE — a chain node that is still 'starting' fails a pass and the loop retries
-    # it, so the gate waits out a slow start without ever committing on partial evidence.
-    # doctor's verdicts land in /run (volatile, no /data wear): when this gate never passes, the
-    # LAST failing run names the exact blocking check — without it a deadlock here was
-    # undiagnosable (the battery hit exactly that).
-    if [ "${code:-000}" != "000" ] && ./pithead doctor --json >/run/pithead-boot-doctor.json 2>/dev/null; then
+    # SNI and the Host header carry the site's real name, so Caddy vhost-matches it; for a name the
+    # --resolve above sends the connection to loopback, which the appliance binds unconditionally.
+    # `read` clears both when curl prints nothing, so a silent curl cannot leave the previous
+    # round's success standing.
+    read -r code size <<<"$(curl -kso /dev/null -w '%{http_code} %{size_download}' --max-time 5 \
+        "${gate_resolve_args[@]}" "$gate_target" 2>/dev/null)"
+    # Cheapest first, inside gate_ready: the probe is fast and gates entry to the slow doctor run, so
+    # an unhealthy or still-booting stack just loops here without paying for a full diagnostic.
+    # doctor only has to pass ONCE — a chain node that is still 'starting' fails a pass and the loop
+    # retries it, so the gate waits out a slow start without ever committing on partial evidence.
+    if gate_ready "${code:-000}" "${size:-0}"; then
         command -v rauc >/dev/null 2>&1 && rauc status mark-good
         boot_gate_passed
         echo "pithead-boot: stack is serving (HTTP $code) and doctor reports healthy — booted slot committed"
