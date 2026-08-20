@@ -4070,7 +4070,7 @@ check_control_units() {
     echo ""
     echo "Dashboard control channel:"
     local unit_dir owner here spool
-    unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"
+    unit_dir=$(control_unit_dir)
     if [ "$(normalize_bool "$(env_get DASHBOARD_CONTROL_ENABLED)")" != "true" ]; then
         dr_info "Disabled for this install — the dashboard cannot apply config changes or upgrade."
         return 0
@@ -10864,6 +10864,24 @@ control_run_pending() {
     log "Processed $n control request(s)."
 }
 
+# The directory the dashboard control units live in — ONE rule, shared by the writer and both
+# readers. The appliance's root is read-only by design, so /etc/systemd/system cannot take the unit
+# (#791); /run/systemd/system is a first-class unit path, writable, and cleared every boot, which is
+# fine because these units are derived and the boot path re-renders them. A DIY host keeps /etc.
+# This was two rules until #1151: `provision_control_runner` knew about /run and `doctor` did not,
+# so on a PROVISIONED appliance doctor reported "no runner units are installed" about units that
+# were installed and running. That is the half of the boot health gate that never passed, so the
+# slot never committed — and after #1065 the box reboots a healthy, correctly-updated appliance.
+control_unit_dir() {
+    if [ -n "${PITHEAD_UNIT_DIR:-}" ]; then
+        printf '%s' "$PITHEAD_UNIT_DIR"
+    elif is_appliance; then
+        printf '%s' /run/systemd/system
+    else
+        printf '%s' /etc/systemd/system
+    fi
+}
+
 # Physical directory the installed control units name, or "" when there is no service unit or its
 # ExecStart is unparseable. One checkout has two spellings — the `current` symlink and the versioned
 # dir it points at (production units carry the versioned spelling) — so this resolves to a PHYSICAL
@@ -10871,7 +10889,8 @@ control_run_pending() {
 # a directory that no longer exists, so resolve the deepest existing ancestor and keep the rest
 # verbatim: the caller still gets a comparable, printable path instead of an empty answer.
 control_units_owner_dir() {
-    local unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}" owner_dir dir tail
+    local unit_dir owner_dir dir tail
+    unit_dir=$(control_unit_dir)
     owner_dir=$(sed -n 's|^ExecStart=\(/.*\)/pithead control-run-pending$|\1|p' \
         "$unit_dir/pithead-control.service" 2>/dev/null | head -n 1)
     [ -n "$owner_dir" ] || return 0
@@ -10891,14 +10910,11 @@ control_units_owner_dir() {
 provision_control_runner() {
     [ "$OS_TYPE" == "Linux" ] || return 0
     command -v systemctl >/dev/null 2>&1 || return 0
-    local unit_dir="${PITHEAD_UNIT_DIR:-/etc/systemd/system}"
-    # The appliance's root is read-only by design, so /etc/systemd/system cannot take the unit
-    # (#791). /run/systemd/system is a first-class unit path, writable, and cleared every boot —
-    # which is fine, because the appliance re-renders derived files on every boot and these
-    # units are derived. Enablement must be --runtime for the same reason: symlinks under /etc
-    # cannot be written either.
+    local unit_dir
+    unit_dir=$(control_unit_dir)
+    # Enablement must be --runtime wherever the units are runtime units: on the appliance's
+    # read-only root, systemd cannot write the /etc symlink a persistent enable needs.
     local -a enable_args=(enable --now)
-    if [ -z "${PITHEAD_UNIT_DIR:-}" ] && is_appliance; then unit_dir=/run/systemd/system; fi
     case "$unit_dir" in /run/*) enable_args=(enable --runtime --now) ;; esac
     if [ "${DASHBOARD_CONTROL_ENABLED:-false}" != "true" ]; then
         if [ -e "$unit_dir/pithead-control.path" ] || [ -e "$unit_dir/pithead-control.service" ]; then
