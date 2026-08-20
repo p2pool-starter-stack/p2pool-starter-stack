@@ -826,6 +826,19 @@ _os_step() { # <json-body> [<deadline-s>]
 # Serve a directory over HTTP with byte-range support (curl -C - needs 206; python's stock
 # SimpleHTTPRequestHandler answers 200-only, which would silently break the resume leg).
 # Echoes the server PID; caller kills it.
+# <dir> <port> [probe-file] -> prints the pid; rc 1 if the port never actually answered.
+#
+# The probe is the point (#1149). This used to background python with `>/dev/null 2>&1` and print
+# `$!` unconditionally, so a FAILED BIND reported a running server: the error went to /dev/null and
+# `$!` is a pid whether or not the process survived. A leaked server from an aborted run is the
+# normal case on a bench — every failure path below kills `$srv_pid`, which is already dead when
+# the bind failed, and `--keep` skips the kill entirely — and that corpse is serving a directory
+# the previous run has since `rm -rf`'d, so every request 404s. The guest then got a 404 where it
+# expected the release JSON, `curl -fsS` reported it the same as a dead circuit, and leg 4 blamed
+# Tor for three sessions.
+#
+# The custom handler below 404s on a directory, so the probe names a real file — the one the
+# caller has already written before starting the server.
 _serve_update_dir() { # <dir> <port>
     python3 - "$1" "$2" <<'PYEOF' >/dev/null 2>&1 &
 import http.server, os, re, sys
@@ -863,7 +876,22 @@ class H(http.server.SimpleHTTPRequestHandler):
                     break
 http.server.ThreadingHTTPServer(("0.0.0.0", int(sys.argv[2])), H).serve_forever()
 PYEOF
-    printf '%s' "$!"
+    local pid=$! i
+    for i in $(seq 40); do
+        if curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$2/releases-latest.json" 2>/dev/null; then
+            printf '%s' "$pid"
+            return 0
+        fi
+        sleep 0.25
+    done
+    # It never answered. Say WHO holds the port — a leftover from an earlier run is the usual
+    # answer, and without this line the next person debugs the guest instead of the bench.
+    # STDERR, not stdout: this function's stdout IS the pid, so the caller reads it through a
+    # command substitution — an `info` here would be captured into the variable and never seen.
+    # Same shape as the swallowed hint in #1081; the diagnostic has to step outside the capture.
+    info "bench update server never answered on :$2 — port holder: $(ss -ltnp "sport = :$2" 2>/dev/null | tail -n +2 | tr -s ' ' | cut -c1-160)" >&2
+    kill "$pid" 2>/dev/null
+    return 1
 }
 
 # Leg 4 — the dashboard OS-update action end-to-end: the user-reachable path over the SAME A/B
@@ -929,7 +957,11 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
         "$tag" "$tag" "$size" >"$srv/releases-latest.json"
     host_addr=$(ip -4 -o addr show virbr0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
     [ -n "$host_addr" ] || host_addr="192.168.122.1"
-    srv_pid=$(_serve_update_dir "$srv" "$port")
+    if ! srv_pid=$(_serve_update_dir "$srv" "$port"); then
+        bad "leg 4: the bench release server never answered on :$port — nothing was checked, and this is the harness, not the product (#1149)"
+        rm -rf "$srv"
+        return
+    fi
     _ssh "printf 'http://$host_addr:$port' > /data/pithead/os-update-test-base" || {
         bad "leg 4: could not plant the update-server seam on the guest"
         kill "$srv_pid" 2>/dev/null
