@@ -29,11 +29,11 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # Base-image digests across every build/* Dockerfile (incl. the uv build image) and the
-  # appliance rootfs (#833). This is the mechanism that clears base-distro CVEs — e.g. the
-  # openssl point-release accepted in .trivyignore. For the appliance the stakes are higher:
-  # its Debian userland has no apt at runtime, so the digest bump + rebake IS its patch channel.
-  # Dependabot reads this file on the default branch only, so os/rootfs coverage starts when
-  # the appliance tree merges; until then os-rootfs.yml's scan on os/** PRs is the eye on it.
+  # build/* Dockerfiles (#833). This is the mechanism that clears base-distro CVEs — e.g. the
+  # openssl point-release accepted in .trivyignore. The appliance rootfs is NOT in this list: it
+  # lives on this branch only, which Dependabot never reads, so the entry here did nothing for as
+  # long as it existed (#1163). It is covered by the `target-branch` entry further down, which is
+  # on `develop` where Dependabot will actually see it.
   - package-ecosystem: "docker"
     directories:
       - "/build/dashboard"
@@ -41,7 +41,6 @@ updates:
       - "/build/p2pool"
       - "/build/tor"
       - "/build/xmrig-proxy"
-      - "/os/rootfs"
     schedule:
       interval: "weekly"
     groups:
@@ -50,6 +49,34 @@ updates:
     ignore:
       # Major/minor base bumps (e.g. python 3.11->3.14, ubuntu 24.04->26.04) are deliberate
       # migrations, not security updates — keep Dependabot to digest + patch within the pinned tag.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  # The appliance rootfs base images (#833, #1163). Deliberately asymmetric, and it has to be:
+  # Dependabot reads this file from the DEFAULT branch only, so the entry lives here on `develop`,
+  # while the path it names exists only on `develop-v2`. `target-branch` is the mechanism for
+  # exactly that — Dependabot resolves `directory` against it and opens the PR there. Anyone
+  # applying "the twins are level" mechanically will read this as wrong; moving it to develop-v2
+  # is what makes it stop running, which is how it went unnoticed (CONTRIBUTING.md § The two lanes).
+  #
+  # The stakes here are higher than for build/* above: the appliance's Debian userland has no apt
+  # at runtime, so a base digest bump plus a rebake IS its patch channel. There is no other way for
+  # a fixed openssl or kernel package to reach a flashed box between releases.
+  - package-ecosystem: "docker"
+    directory: "/os/rootfs"
+    target-branch: "develop-v2"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker-appliance:
+        patterns: ["*"]
+    ignore:
+      # Same policy as the docker entry above, and it binds the golang builder tag: a 1.26 -> 1.27
+      # move is a deliberate rebake, not a security update. It does NOT constrain
+      # `debian:trixie-slim` — a single-segment codename tag yields no semver comparison for these
+      # conditions to act on, so what holds the appliance to trixie is the tag written into the
+      # FROM line, not this block. Digest-only bumps, which are the whole point here, carry no
+      # semver change and so pass both entries untouched (see PRs #729 and #1116).
       - dependency-name: "*"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
