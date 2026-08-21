@@ -112,6 +112,16 @@ jobs:
       - name: Scan image for CVEs (Trivy)
         # Gate on actionable (fixable) HIGH/CRITICAL only; accepted findings live in .trivyignore.
         # Must stay green before v1.1 images publish (#282).
+        #
+        # cache: false is load-bearing (#1159). The action caches the vulnerability database under
+        # `cache-trivy-$(date +%F)`, and Actions caches are immutable and scoped per ref — so the
+        # first run of the calendar day on a branch freezes that branch's database until midnight.
+        # On 2026-08-20 the identical dashboard image passed on one branch and failed on another 40
+        # seconds apart, because one restored a snapshot written at 00:15 and the other one written
+        # at 13:33. A gate whose answer depends on when its branch last started a run is not a gate.
+        # Measured cost of downloading it every time: 108.49 MiB from mirror.gcr.io/aquasec/trivy-db
+        # in 3.3s, against the 13.9s the ~997 MB cache restore was taking. It also returns ~7.5 GB of
+        # the repo's 10 GB Actions cache budget, which was 92% near-duplicate copies of this one DB.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: pithead-${{ matrix.service }}:ci
@@ -120,6 +130,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           trivyignores: .trivyignore
+          cache: "false"
 
   hadolint:
     name: Dockerfile lint (hadolint)
