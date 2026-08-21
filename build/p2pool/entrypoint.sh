@@ -8,15 +8,18 @@ set -euo pipefail
 # routing — e.g. "--mini --socks5 172.28.0.25:9050 --socks5-proxy-type tor"). We word-split it HERE
 # because Docker Compose passes a `- ${VAR}` command item as ONE argument (no word-splitting), which
 # would hand p2pool a single mangled flag. An empty value expands to nothing (no stray empty arg).
-# #278: p2pool's --socks5 (#165 Tor sidechain routing) ALSO proxies the monerod RPC/ZMQ connection —
-# unless the node address is LOOPBACK. p2pool exempts only 127.0.0.1/::1/localhost from the SOCKS5
-# proxy (verified vs p2pool v4.16: json_rpc_request.cpp / util.cpp is_localhost), so a private Docker
-# node IP (e.g. 172.28.0.26) gets dialled THROUGH Tor — which can't reach a private IP → "get_info ...
-# empty response", no block template, no mining. There is no per-host proxy-bypass flag. So when the
+# #278: p2pool's --socks5 (#165 Tor sidechain routing) ALSO proxies the monerod RPC/ZMQ connection
+# unless the node address is exempt. Up to v4.16 only LOOPBACK was exempt (json_rpc_request.cpp /
+# util.cpp is_localhost), so a private Docker node IP (e.g. 172.28.0.26) got dialled THROUGH Tor —
+# which can't reach a private IP → "get_info ... empty response", no block template, no mining.
+# v4.18 widened the RPC-leg exemption to any private address (json_rpc_request.cpp:250
+# is_private_address, verified vs p2pool v4.18), which makes this bridge belt-and-braces for the
+# node RPC/ZMQ — kept because the merge-mine leg below still needs its twin, and loopback stays
+# exempt in every version, so the bridge costs nothing and survives an upstream narrowing. When the
 # Tor proxy is on, bridge 127.0.0.1 -> the real node with socat and repoint --host at loopback: the
-# node RPC/ZMQ then stay DIRECT (socat is a plain TCP forward, not p2pool's proxy) while the sidechain
-# P2P still rides --socks5 over Tor. The socat hops (loopback -> node) are intra-stack, allowed by the
-# #270 firewall (subnet -> 172.16/12).
+# node RPC/ZMQ then stay DIRECT (socat is a plain TCP forward, not p2pool's proxy) while the
+# sidechain P2P still rides --socks5 over Tor. The socat hops (loopback -> node) are intra-stack,
+# allowed by the #270 firewall (subnet -> 172.16/12).
 if printf '%s' "${P2POOL_FLAGS:-}" | grep -q -- '--socks5'; then
     _node="" _rpc="18081" _zmq="18083" _prev=""
     for _a in "$@"; do
@@ -45,9 +48,10 @@ if printf '%s' "${P2POOL_FLAGS:-}" | grep -q -- '--socks5'; then
     esac
 
     # Same trap, one leg further (#278 covered monerod only): p2pool's MergeMiningClientTari reaches
-    # the Tari base node via TCPServer::connect_to_peer, which — like the node RPC — only skips the
-    # SOCKS5 proxy for a LOOPBACK IP literal (no_proxy = m_addressType != DomainName && is_localhost();
-    # verified vs p2pool v4.16 src/tcp_server.cpp). So `--merge-mine tari://<private-docker-ip>:18142`
+    # the Tari base node via TCPServer::connect_to_peer, which only skips the SOCKS5 proxy for a
+    # LOOPBACK IP literal (no_proxy = m_addressType != DomainName && is_localhost(); verified vs
+    # p2pool v4.18 src/tcp_server.cpp:425 — v4.18's private-address exemption covers the node RPC
+    # leg only, NOT this one). So `--merge-mine tari://<private-docker-ip>:18142`
     # is dialled THROUGH Tor, which rejects RFC1918 ("Rejecting SOCKS request ... to private address")
     # → the gRPC channel_state sticks at TRANSIENT_FAILURE and no Tari is merge-mined. Same remedy:
     # bridge 127.0.0.1 -> the real node and rewrite the URL host to the 127.0.0.1 IP literal (NOT

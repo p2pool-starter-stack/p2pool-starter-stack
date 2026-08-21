@@ -24,7 +24,7 @@ public-node=1
 # ZeroMQ publisher for block notifications (Required for P2Pool)
 zmq-pub=tcp://0.0.0.0:18083
 
-# Peer Management. P2Pool v4.16 recommends out-peers=32 / in-peers=64 for a clearnet node, where
+# Peer Management. P2Pool v4.18 recommends out-peers=32 / in-peers=64 for a clearnet node, where
 # in-peers=64 is the one that matters: it caps INBOUND connections so they can't grow past ~1000 and
 # hit Linux's open-files limit — we honor it exactly. out-peers defaults to 48 (monero.out_peers)
 # because each peer is roughly one bandwidth-capped Tor circuit, so more peers = more aggregate

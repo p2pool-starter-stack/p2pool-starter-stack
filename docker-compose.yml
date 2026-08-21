@@ -810,7 +810,7 @@ services:
   # POST stays off, so this proxy can never write — container control goes through the
   # separate, tightly-scoped docker-control proxy below.
   docker-proxy:
-    image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     container_name: docker-proxy
     # Memory ceiling (#132 — see monerod). A tiny socket proxy (~13 MiB observed).
     mem_limit: 128m
@@ -857,12 +857,13 @@ services:
   # A second, minimal proxy used ONLY to stop/start p2pool + xmrig-proxy — node-down worker
   # failover (Issue #31), holding the miner until the nodes finish syncing (Issue #35) — plus
   # tor (#424) and monerod after a tor heal (#972).
-  # With POST=1 but every section (CONTAINERS, EXEC, IMAGES, …) left off, the v0.4.2 ruleset
+  # With POST=1 but every section (CONTAINERS, EXEC, IMAGES, …) left off, the v0.5.0 ruleset
   # allows exactly `POST /containers/<id>/{start,stop}` and denies everything else
-  # (create/kill/exec/reads). Kept separate from the read-only proxy above so opening POST
-  # here can't widen that proxy's container access.
+  # (create/kill/exec/reads — and the pause/unpause routes v0.5.0 added, which sit behind their
+  # own ALLOW_PAUSE/ALLOW_UNPAUSE opt-ins, left off here). Kept separate from the read-only
+  # proxy above so opening POST here can't widen that proxy's container access.
   docker-control:
-    image: tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
     container_name: docker-control
     # Memory ceiling (#132 — see monerod). A tiny socket proxy (~13 MiB observed).
     mem_limit: 128m
