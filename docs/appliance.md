@@ -80,8 +80,10 @@ longer from a USB stick** — prints the address and a one-time token:
 ```
 
 **Your browser will warn you once, and that is expected.** The machine makes its own
-certificate — the *same* one it keeps using for the dashboard afterwards, so you accept it a
-single time and the warning does not return. The machine —
+certificate — the *same* one it keeps using for the dashboard afterwards, so you accept it once
+and the warning does not return, unless the set of names the machine answers to actually
+changes later (its network address moves, or you pin a custom hostname) — then it mints a new
+certificate for the new names and you accept the warning again, once. The machine —
 there is no authority that could vouch for a box on your network. The warning means "nobody
 else vouched for this", not "something is wrong". Compare the fingerprint on the console with
 the one your browser shows under the warning's details, then continue. The setup page is

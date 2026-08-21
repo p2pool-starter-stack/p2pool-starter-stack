@@ -150,29 +150,47 @@ which the wizard's pre-provisioning trust level does not assume.
 (`/data/pithead/data/tls`), presented by the wizard *and* by Caddy afterwards.
 
 ```
-first boot ──> appliance_mint_cert()      idempotent; reuses a cert that still covers the names
-                    │
+first boot ──> appliance_mint_cert()      compares, doesn't date-guess: keeps a cert whose SANs
+                    │                      still match, re-mints when they don't
         ┌───────────┴───────────┐
-   wizard serves           generate_caddyfile() emits
+   wizard serves           generate_caddyfile() calls it on every render, then emits
    (copy in spool)         tls /pithead-tls/wizard.crt
 ```
 
-Three properties, each earned:
+Both the certificate's SAN list and Caddy's site list come from one shared builder,
+`appliance_site_names()`: a name is either served and certified, or neither. `dashboard.host`
+pinned collapses both to that one name; unpinned, both expand to every address the machine
+answers on (mDNS name, LAN IPs, `localhost`).
+
+Four properties, each earned:
 
 1. **One cert, not two.** Caddy used to mint its own via `tls internal`, replacing the
    wizard's at the moment provisioning succeeded. A second, different self-signed certificate
    for one hostname is not a second warning — Safari refuses outright, Chrome throws
    `ERR_SSL_PROTOCOL_ERROR`. The setup page appeared to die exactly when it had worked.
-2. **Minted wherever it is named.** `generate_caddyfile` mints on demand if the pair is
-   missing. It was previously created only by the wizard, so any machine that *skips* the
-   wizard — a pre-seeded config, or a reinstall whose preserved `/data` already held
-   `config.json` — got a Caddyfile pointing at a file that did not exist. Caddy then answered
-   `:443` with no usable certificate, forever, and the console was silent because
-   `pithead-firstboot.service`'s `ConditionPathExists=!…/config.json` had skipped the unit.
-   Rebooting could not clear it; only reflashing or minting could.
-3. **Never replaced once trusted.** The mint reuses an existing certificate whose SANs still
-   cover the machine's names. Swapping a certificate an operator has accepted is
-   indistinguishable from an attack — and the browser treats it that way.
+2. **Minted wherever it is named, on every render.** `generate_caddyfile` calls
+   `appliance_mint_cert` unconditionally now, not only when the pair is missing — the mint
+   decides idempotency itself (property 3), so calling it every time is what lets a stale
+   certificate get caught instead of surviving forever. It was previously created only by the
+   wizard, so any machine that *skips* the wizard — a pre-seeded config, or a reinstall whose
+   preserved `/data` already held `config.json` — got a Caddyfile pointing at a file that did
+   not exist. Caddy then answered `:443` with no usable certificate, forever, and the console
+   was silent because `pithead-firstboot.service`'s `ConditionPathExists=!…/config.json` had
+   skipped the unit. Rebooting could not clear it; only reflashing or minting could.
+3. **Re-minted only when the name list it covers actually changed.** The mint reads the SANs
+   already on the certificate back with `openssl x509 -ext subjectAltName` — never guessed
+   from a mint date — and set-compares them against `appliance_site_names()`'s current answer.
+   Unchanged, the existing pair is kept: swapping a certificate that still names the machine
+   correctly is indistinguishable from an attack, and the browser treats it that way. Changed —
+   a DHCP lease moved, `dashboard.host` was just pinned — it re-mints and says so on the
+   console, because an operator who pinned the old fingerprint needs to know it just moved.
+4. **Checked, not just trusted.** `doctor`'s appliance lane reads the served certificate
+   (`openssl x509 -ext subjectAltName -enddate`, no network) and FAILs if a name Caddy serves
+   is missing from its SANs, or if it is within 30 days of expiry. With property 3 in place a
+   coverage gap should not occur on a healthy render, so this is belt-and-braces there; expiry
+   is the check nothing else derives. An unreadable certificate file WARNs instead — `doctor`
+   is the second half of `pithead-boot`'s health gate, and a FAIL there reboots the box, so a
+   read failure that doesn't prove the certificate is actually broken must not cause one.
 
 The SHA-256 fingerprint is printed on the console beside the token so the browser warning can
 actually be verified. A warning nobody can check is theatre.
