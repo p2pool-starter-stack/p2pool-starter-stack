@@ -1263,12 +1263,14 @@ function DashboardView({
   // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
   // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
   // context as reference at the bottom — "mine" first, "the world" last.
-  // Within "Your Stack" (#991), the advanced-only cards are ordered tall-with-tall / short-with-short:
-  // the auto-fit grid's rows are as tall as their tallest card, so pairing similarly-sized neighbours
-  // (XvBStats+EarningsCard, then NodeStats+ExpectedVsActualCard, then TariCard+CadenceCard) cuts the
-  // blank space shorter cards used to trail. Overview is Simple-view-only (display:none in Advanced,
-  // so its position never affects the Advanced grid) and ExpectedVsActualCard shows in both views —
-  // neither constrains this ordering.
+  // Within "Your Stack" (#991, reopened): the section packs into CSS columns now, not CSS grid
+  // rows, so a card's height no longer forces blank space under a shorter neighbour regardless of
+  // which cards a given render state actually shows (XvB disabled, no earnings yet, ...) — the
+  // tall-with-tall/short-with-short pairing this comment used to describe was a workaround for
+  // grid's row-stretch behaviour and is moot under column packing. Order here still sets the
+  // column-major reading order, so it stays "mine" first, "the world" last, same as above.
+  // Overview is Simple-view-only (display:none in Advanced) and ExpectedVsActualCard shows in
+  // both views — neither is constrained by this ordering.
   return html`
     <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
@@ -1301,8 +1303,8 @@ function DashboardView({
             <${WorkersTable} workers=${state.workers} summary=${state.proxy_summary} ui=${ui} onSort=${onSort} hostIp=${state.host_ip} stratumPort=${state.stratum_port}
                              onInspect=${state.control_enabled ? onInspect : null} />
         </div>
-        <div class="grid">
-            <div class="grid-section-label">Your Stack</div>
+        <div class="grid-section-label">Your Stack</div>
+        <div class="grid grid-columns">
             <${Overview} state=${state} />
             <${XvBStats} state=${state} />
             <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} energy=${state.energy} />
@@ -1310,7 +1312,9 @@ function DashboardView({
             <${ExpectedVsActualCard} summary=${state.earnings_summary} />
             <${TariCard} tari=${state.tari} />
             <${CadenceCard} cadence=${state.cadence} />
-            <div class="grid-section-label">The Wider Pool</div>
+        </div>
+        <div class="grid-section-label">The Wider Pool</div>
+        <div class="grid grid-columns">
             <${GlobalStats} state=${state} />
             <${NetworkCard} state=${state} />
             <${ComponentHealth} topology=${state.topology} egress=${state.egress} />
