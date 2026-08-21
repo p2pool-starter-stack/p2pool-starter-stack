@@ -80,12 +80,29 @@ every gate is green.
 
 ### Branch mechanics
 
-Releases are cut from `main`. Merge `develop` into `main` with a real merge commit — never a
-squash, so the released commits keep their history — and run the pipeline from `main`. After
-publishing, merge `main` back into `develop`: the release's merge commit and tag must be an
-ancestor of `develop`, or the next cut diverges. `release.sh` warns (it does not abort) when the
-working tree is on any other branch. The branch model itself is in
+Releases are cut from `develop`. Land the release-prep commit (`VERSION`, `pyproject.toml`, the
+`CHANGELOG.md` entry) as a normal PR, run the pipeline with that commit checked out, and publish:
+the tag lands on it, and `release.sh` then moves `main` to the tagged commit with a fast-forward
+push. `main` keeps its meaning — the last released commit — and stays an ancestor of `develop` by
+construction, so there is no back-merge and no post-release repair step ([#1076]; releases through
+v1.19.3 instead merged `develop` into `main` and back, and the back-merge was missed on v1.19.0).
+Commits that land on `develop` after the prep commit sit ahead of `main`, the normal state
+between releases — cut with the prep commit checked out, not whatever `develop` has moved on to.
+`release.sh` warns (it does not abort) when the working tree is on any branch other than
+`develop`.
+
+The fast-forward push cannot ride a PR: GitHub merges a PR by merge commit, squash, or rebase,
+each of which mints a new commit, and the point is that `main` gains no object the tag does not
+already name. The Main Branch ruleset requires PRs from everyone except organization admins, so
+`release.sh` relies on the same admin bypass the release's protected tag push already uses. If
+the push is refused, the script says so and prints the command to run by hand; the release
+itself is unaffected — `main` merely lags until an admin runs it.
+
+Release-note prose that once lived in the `main` merge commit's body belongs in the GitHub
+Release notes, where operators actually read it. The branch model itself is in
 [CONTRIBUTING.md](../../CONTRIBUTING.md#development-workflow).
+
+[#1076]: https://github.com/p2pool-starter-stack/pithead/issues/1076
 
 ### Pipeline: stage → smoke-test → promote
 
@@ -117,8 +134,9 @@ working tree is on any other branch. The branch model itself is in
 7. Sign ([#376](https://github.com/p2pool-starter-stack/pithead/issues/376)): cosign-sign each
    promoted manifest-list digest and the install bundle with the key on the release server. See
    [Signed releases](#signed-releases).
-8. Publish GitHub Release: create the git tag `vX.Y.Z`, write the `CHANGELOG.md` entry / release
-   notes, and attach release assets: a pinned `docker-compose.yml` / config bundle referencing
+8. Publish GitHub Release: create the git tag `vX.Y.Z`, fast-forward `main` to the tagged commit
+   (see [Branch mechanics](#branch-mechanics)), write the release notes from the `CHANGELOG.md`
+   entry, and attach release assets: a pinned `docker-compose.yml` / config bundle referencing
    `${STACK_VERSION}=vX.Y.Z`, its detached signature (`pithead.tar.gz.sig`), plus the ingredients
    manifest (exact component versions + promoted image digests).
 
@@ -185,7 +203,7 @@ tolerated-known-failure habit the flag exists to end.
 
 ### Which gates are automated, and which are not
 
-Every gate below runs at cut time or is run by hand. **Nothing gates a merge to `main`**, and no
+Every gate below runs at cut time or is run by hand. **Nothing gates an update of `main`**, and no
 workflow claims to ([#1048](https://github.com/p2pool-starter-stack/pithead/issues/1048)):
 `release-gate.yml` is dispatch-only, because a self-hosted runner on a key-holding box is not
 registered. It previously carried a `push: [main]` trigger behind a repo variable nobody set, so
