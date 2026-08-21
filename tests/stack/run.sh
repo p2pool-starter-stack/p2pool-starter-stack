@@ -121,6 +121,13 @@ echo "== unit: pin-watch self-test (#1128) =="
 bash "$ROOT/scripts/pin-watch.sh" --self-test >/dev/null 2>&1
 assert_rc "pin-watch self-test passes" "$?" "0"
 
+echo "== unit: resolve-pins self-test (#1137) =="
+# pin-watch.sh above compares VERSIONS; it does not ask whether a pinned tag@sha256 digest still
+# matches what its registry serves for that tag. This is the check that does, and its --self-test
+# drives the exact half-done bump #1137 is about (tag moved, old digest left in the file) red.
+bash "$ROOT/scripts/resolve-pins.sh" --self-test >/dev/null 2>&1
+assert_rc "resolve-pins self-test passes" "$?" "0"
+
 echo "== unit: patch-coverage overlap self-test (#1000) =="
 # diff-cover exits 0 on "No lines with coverage information" — a vacuous pass. The wrapper's
 # overlap check is what turns that into a loud not-applicable pass or a real failure; its
@@ -1431,11 +1438,11 @@ case "$(grep -E '^proxy=' "$MONT" || true)" in
 *) bad "monero clearnet: P2P proxy= line stripped (#183)" "still present" ;;
 esac
 assert_contains "monero clearnet: tx-proxy stays on Tor (#183)" "$(cat "$MONT")" "tx-proxy=tor"
-# P2Pool v4.16 clearnet recommendation: out-peers 32 + the recommended priority nodes (added only in
+# P2Pool v4.18 clearnet recommendation: out-peers 32 + the recommended priority nodes (added only in
 # the clearnet window; the Tor template has neither — the #161 check below guards that).
-assert_contains "monero clearnet: out-peers=32 (p2pool v4.16 rec)" "$(cat "$MONT")" "out-peers=32"
-assert_contains "monero clearnet: xmrvsbeast priority node (v4.16)" "$(cat "$MONT")" "add-priority-node=p2pmd.xmrvsbeast.com:18080"
-assert_contains "monero clearnet: hashvault priority node (v4.16)" "$(cat "$MONT")" "add-priority-node=nodes.hashvault.pro:18080"
+assert_contains "monero clearnet: out-peers=32 (p2pool v4.18 rec)" "$(cat "$MONT")" "out-peers=32"
+assert_contains "monero clearnet: xmrvsbeast priority node (v4.18)" "$(cat "$MONT")" "add-priority-node=p2pmd.xmrvsbeast.com:18080"
+assert_contains "monero clearnet: hashvault priority node (v4.18)" "$(cat "$MONT")" "add-priority-node=nodes.hashvault.pro:18080"
 # The committed template (the Tor-only default) keeps the proxy line + the Tor-tuned out-peers.
 assert_contains "monero default: Tor P2P proxy present (#183)" "$(cat "$ROOT/build/monero/bitmonero.conf.template")" 'proxy=${NETWORK_PREFIX}.25:9050'
 # #595: the template's out-peers is now config-driven (monero.out_peers, default 48 in the render).

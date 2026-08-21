@@ -137,7 +137,7 @@ expect_min "log rotation on every service" "max-size:" 9
 # docker-control — and expect_present is a grep -q, so it matches either line: bumping one proxy and
 # leaving the other was green. The two would then run different socket-proxy builds, which is exactly
 # the split the separate-proxy design exists to prevent.
-expect_min "tecnativa socket-proxy pinned by digest (both proxies)" "tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476" 2
+expect_min "tecnativa socket-proxy pinned by digest (both proxies)" "tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459" 2
 expect_present "caddy pinned by digest" "caddy:2.11.4@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
 expect_present "tari node pinned by digest" "minotari_node:v5.3.1-mainnet@sha256:824fd6ec21d618805317d7eede374d6782906eeae17d2fc8aaad4df6205f94e0"
 
@@ -153,7 +153,7 @@ jq_assert() { # <label> <filter>
 # The read proxy must never gain write (POST) access; the control proxy is start/stop ONLY.
 jq_assert "docker-proxy cannot POST (read-only API)" '(.services["docker-proxy"].environment.POST // "0") != "1"'
 jq_assert "docker-control is start/stop only (no exec/image ops)" \
-    '.services["docker-control"].environment | (.POST=="1" and .ALLOW_START=="1" and .ALLOW_STOP=="1" and ((.EXEC // "0") != "1") and ((.IMAGES // "0") != "1"))'
+    '.services["docker-control"].environment | (.POST=="1" and .ALLOW_START=="1" and .ALLOW_STOP=="1" and ((.EXEC // "0") != "1") and ((.IMAGES // "0") != "1") and ((.ALLOW_PAUSE // "0") != "1") and ((.ALLOW_UNPAUSE // "0") != "1"))'
 # Both proxies mount the Docker socket read-only.
 jq_assert "docker socket mounted read-only in both proxies" \
     '[.services["docker-proxy"], .services["docker-control"]] | all((.volumes // []) | any((.source == "/var/run/docker.sock") and (.read_only == true)))'

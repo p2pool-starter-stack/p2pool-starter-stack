@@ -233,7 +233,7 @@ switch, or the exposure banner keeps warning about a sync that isn't happening.
 
 | | Tor-only (default) | Clearnet initial sync (opt-in) |
 |---|---|---|
-| **Monero** P2P | over Tor (`proxy=172.28.0.25:9050`) | **direct to clearnet seed nodes** (proxy line dropped), `out-peers` 48 → **32** + P2Pool v4.16's recommended **priority nodes** (`p2pmd.xmrvsbeast.com`, `nodes.hashvault.pro`) for fast, reliable sync |
+| **Monero** P2P | over Tor (`proxy=172.28.0.25:9050`) | **direct to clearnet seed nodes** (proxy line dropped), `out-peers` 48 → **32** + P2Pool v4.18's recommended **priority nodes** (`p2pmd.xmrvsbeast.com`, `nodes.hashvault.pro`) for fast, reliable sync |
 | **Monero** tx broadcast | over Tor (`tx-proxy=`) | **still over Tor** — unchanged |
 | **Tari** transport | Tor (`type = "tor"`) | **TCP** (`type = "tcp"`) |
 | **Tari** seeds | onion `peer_seeds`, `dns_seeds = []` | **`dns_seeds = ["seeds.tari.com"]`** (onion seeds are unreachable without Tor), onion `public_addresses` dropped |

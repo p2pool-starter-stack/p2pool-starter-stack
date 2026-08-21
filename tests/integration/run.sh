@@ -690,7 +690,7 @@ assert_running_state() {
         # 'ubuntu' user or an explicit useradd, are uid 1000) and tari pins 1000 via the compose
         # override (the pulled image ships no non-root user of its own). Caddy and the two Docker
         # socket proxies are the audited exception — verified against the upstream images
-        # (caddy:2.11.4, tecnativa/docker-socket-proxy:v0.4.2): neither ships a non-root user, so
+        # (caddy:2.11.4, tecnativa/docker-socket-proxy:v0.5.0): neither ships a non-root user, so
         # they run as root, mitigated by cap_drop: ALL + read_only rootfs and (the proxies) sitting
         # off mining_net on host-loopback-only ports (#345) rather than by uid. Pin ALL 9 so a
         # silent drift either way — a hardened image reverting to root, or an accepted-root service

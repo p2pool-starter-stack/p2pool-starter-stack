@@ -13,7 +13,7 @@ class DockerControl:
 
     Goes through a dedicated `docker-control` socket proxy whose ruleset allows exactly
     `POST /containers/<id>/{start,stop}` and nothing else — not the read-only `docker-proxy`
-    the dashboard uses for stats/logs. (tecnativa/docker-socket-proxy v0.4.2 denies all POST
+    the dashboard uses for stats/logs. (tecnativa/docker-socket-proxy v0.5.0 denies all POST
     unless POST=1, and POST=1 on the read proxy would also open create/kill/exec via its
     CONTAINERS grant — so container control lives on its own minimal proxy instead.)
 
