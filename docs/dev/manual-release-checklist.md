@@ -87,8 +87,9 @@ health-gated commit, the migration hold). They have never been proven on real ha
 
 - Post-publish smoke against the published tag, including the upgrade path from the previous
   release on a box that actually runs it.
-- Back-merge `main` → `develop`, then sync `develop` → the integration branch, so the next cut
-  does not diverge.
+- Confirm `main` fast-forwarded to the tag — `release.sh` does this at publish. If the push was
+  refused, run the command it printed by hand.
+- Sync `develop` → the integration branch, so the next cut does not diverge.
 - Record the per-rig performance baselines you actually re-tagged (see
   [RELEASING.md in RigForge](https://github.com/p2pool-starter-stack/rigforge/blob/main/RELEASING.md)),
   and reset the rigs' checkouts afterwards — a dirty checkout aborts the next tag deploy.
