@@ -4181,9 +4181,9 @@ check_egress_firewall_nft() {
     fi
     ruleset=$(sudo -n nft list table inet "$TOR_EGRESS_NFT_TABLE" 2>/dev/null) || ruleset=""
     if printf '%s\n' "$ruleset" | grep -q 'hook forward' && printf '%s\n' "$ruleset" | grep -qw drop; then
-        dr_ok "Tor-only egress firewall is installed (#270) — clearnet dials from the stack are fail-closed via nftables (inet $TOR_EGRESS_NFT_TABLE)."
+        dr_ok "Tor-only egress firewall is installed — clearnet dials from the stack are fail-closed via nftables (inet $TOR_EGRESS_NFT_TABLE)."
     else
-        dr_fail "Tor-only egress firewall is MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them (#270)."
+        dr_fail "Tor-only egress firewall is MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them."
     fi
 }
 
