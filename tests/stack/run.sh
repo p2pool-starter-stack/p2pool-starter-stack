@@ -8188,14 +8188,15 @@ echo "== unit: provision_control_runner refuses to overwrite a foreign install's
 # Mutation proof (each ran red against its assertion with the guard intact elsewhere):
 #   - drop the `[ -d "$install_owner" ]` conjunct  -> "owner directory gone -> adopted" goes red
 #   - flip the `!=` ownership compare to `=`       -> "foreign existing owner -> refused" goes red
-#   - drop the PITHEAD_STEAL_CONTROL_UNITS gate    -> "steal escape -> overwritten" goes red
+#   - drop the PITHEAD_STEAL_CONTROL_UNITS conjunct -> "steal escape -> overwritten" goes red
+#   - drop the `steal` argument conjunct           -> "upgrade repoint (steal arg)" goes red
 PCI="$SANDBOX/pci"
 mkdir -p "$PCI/units" "$PCI/bin" "$PCI/mine" "$PCI/other"
 printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$PCI/bin/uname"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$PCI/bin/systemctl"
 chmod +x "$PCI/bin/uname" "$PCI/bin/systemctl"
 
-pci_run() { # <owner-dir|-|garbage> <run-dir> [steal] — seed a service unit, run the INSTALL branch, echo warns + recorded sudo calls
+pci_run() { # <owner-dir|-|garbage> <run-dir> [steal-env] [fn-arg] — seed a service unit, run the INSTALL branch, echo warns + recorded sudo calls
     rm -f "$PCI/units/pithead-control.service" "$PCI/units/pithead-control.path" "$PCI/calls"
     case "$1" in
     -) ;; # no pre-existing units
@@ -8214,7 +8215,7 @@ pci_run() { # <owner-dir|-|garbage> <run-dir> [steal] — seed a service unit, r
         sudo() { echo "sudo:$*" >>"$PCI/calls"; }
         PITHEAD_UNIT_DIR="$PCI/units" DASHBOARD_CONTROL_ENABLED=true \
             CONTROL_DIR="$2/data/control" PITHEAD_STEAL_CONTROL_UNITS="${3:-0}" \
-            provision_control_runner 2>&1
+            provision_control_runner ${4:+"$4"} 2>&1
         cat "$PCI/calls" 2>/dev/null
     )
 }
@@ -8224,6 +8225,11 @@ assert_contains "install: foreign existing owner -> refused, names the owner" "$
 assert_not_contains "install: foreign existing owner -> unit not overwritten" "$out" "sudo:tee"
 assert_contains "install: foreign existing owner + steal escape -> overwritten" \
     "$(pci_run "$PCI/other" "$PCI/mine" 1)" "sudo:tee $PCI/units/pithead-control.service"
+# The upgrade callsite's spelling: after a successful upgrade the OLD versioned dir still exists
+# (it is the rollback), so the converge MUST take the units over — via the `steal` argument, not
+# the operator env var. Without it every one-click upgrade would refuse and strand the channel.
+assert_contains "install: foreign existing owner + upgrade repoint (steal arg) -> overwritten" \
+    "$(pci_run "$PCI/other" "$PCI/mine" 0 steal)" "sudo:tee $PCI/units/pithead-control.service"
 assert_contains "install: foreign owner whose directory is gone -> adopted" \
     "$(pci_run "$PCI/long-gone" "$PCI/mine")" "sudo:tee $PCI/units/pithead-control.service"
 out="$(pci_run garbage "$PCI/mine")"

@@ -168,10 +168,12 @@ Installation is ownership-checked the same way: when the units already name a di
 that still exists on disk, `apply` refuses to overwrite them and names the owning directory — a
 sibling checkout turning the flag on can no longer repoint the live stack's runner at itself,
 which would leave the live dashboard's requests sitting unread with no error on either side.
-Units whose install directory is gone are adopted (how a new version takes over from a removed
-one), a unit this tool did not write is left untouched, and setting
-`PITHEAD_STEAL_CONTROL_UNITS=1` forces the takeover when it is deliberate — migrating an install
-by hand, or repairing after a failed upgrade.
+Units whose install directory is gone are adopted, a unit this tool did not write is left
+untouched, and a successful one-click upgrade takes the units over as part of moving `current`
+(the previous version's directory stays on disk as the rollback, so the upgrade is the one
+takeover that must not be refused). For the remaining deliberate cases — migrating an install by
+hand, or repairing after a failed upgrade — setting `PITHEAD_STEAL_CONTROL_UNITS=1` forces the
+takeover.
 
 The runner dispatches a fixed set of actions and rejects everything else: `apply --dry-run
 --porcelain` (preview), `apply -y` (commit), a release upgrade — the dashboard's

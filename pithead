@@ -571,7 +571,10 @@ stack_upgrade() {
     # units are host-global and name an absolute path, so the only safe moment to repoint them is
     # after this dir IS `current`. A failure before here now leaves the old install's units intact
     # and still serving. Do not move this back above the pull.
-    provision_control_runner
+    # `steal`: this dir just became `current`, so repointing the units here is the definition of a
+    # legitimate takeover — the old versioned dir still exists (it is the rollback), and without
+    # the escape the ownership guard would refuse and leave the units on the previous install.
+    provision_control_runner steal
     log "Stack upgraded."
 }
 
@@ -6919,8 +6922,12 @@ provision_control_runner() {
     # disk is someone's live runner: refuse. A unit whose directory is gone is adoptable (the
     # failed-upgrade repair), our own unit converges (the post-restore proof depends on it), and an
     # unparseable ExecStart is left alone, fail-safe, like the removal branch. Deliberate takeover
-    # (upgrade repoint, operator migration) is PITHEAD_STEAL_CONTROL_UNITS=1.
-    if [ -e "$unit_dir/pithead-control.service" ] && [ "${PITHEAD_STEAL_CONTROL_UNITS:-0}" != "1" ]; then
+    # has two spellings: the upgrade callsite passes the `steal` argument (after a successful
+    # upgrade the units MUST repoint here — the old versioned dir still exists as the rollback, so
+    # without the escape every one-click upgrade would refuse and strand the control channel), and
+    # PITHEAD_STEAL_CONTROL_UNITS=1 is the operator's escape (manual migration, repair).
+    if [ -e "$unit_dir/pithead-control.service" ] && [ "${1:-}" != "steal" ] &&
+        [ "${PITHEAD_STEAL_CONTROL_UNITS:-0}" != "1" ]; then
         local install_owner
         install_owner=$(control_units_owner_dir)
         if [ -z "$install_owner" ]; then
