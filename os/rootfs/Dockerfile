@@ -69,8 +69,18 @@ ARG COSIGN_GO_RAISES="golang.org/x/mod@v0.40.0 google.golang.org/grpc@v1.82.1"
 ENV CGO_ENABLED=0
 
 # Blobless clone then detach to the commit: the tag is only a convenience for the version string.
+#
+# The `describe --exact-match` line is what makes the pin a PAIR rather than two values that happen
+# to sit next to each other. `${COMPOSE_VERSION}` is only an ldflag, `${COMPOSE_COMMIT}` is what is
+# actually built, so bumping the version alone rebuilds the OLD code and stamps the NEW version on
+# it — and every downstream check agrees it worked: the build succeeds, `docker-compose version`
+# prints the new number, and scripts/pin-watch.sh reads the VERSION ARG and reports the component
+# current for ever. Nothing else in the tree reads `${COMPOSE_COMMIT}` at all. The clone is blobless
+# but not shallow, so the tag objects are present and this costs nothing.
 RUN git clone --filter=blob:none --no-checkout https://github.com/docker/compose /src/compose \
     && git -C /src/compose checkout --detach "${COMPOSE_COMMIT}" \
+    && { [ "$(git -C /src/compose describe --tags --exact-match "${COMPOSE_COMMIT}")" = "${COMPOSE_VERSION}" ] \
+        || { echo "COMPOSE_COMMIT ${COMPOSE_COMMIT} is not tag ${COMPOSE_VERSION} — a compose bump is TWO ARGs; resolve the pair with: gh api repos/docker/compose/commits/${COMPOSE_VERSION} --jq .sha" >&2; exit 1; }; } \
     && go -C /src/compose get ${COMPOSE_GO_RAISES} \
     && go build -C /src/compose -trimpath -tags e2e \
         -ldflags "-w -X github.com/docker/compose/v5/internal.Version=${COMPOSE_VERSION}" \
@@ -78,6 +88,8 @@ RUN git clone --filter=blob:none --no-checkout https://github.com/docker/compose
 
 RUN git clone --filter=blob:none --no-checkout https://github.com/sigstore/cosign /src/cosign \
     && git -C /src/cosign checkout --detach "${COSIGN_COMMIT}" \
+    && { [ "$(git -C /src/cosign describe --tags --exact-match "${COSIGN_COMMIT}")" = "${COSIGN_VERSION}" ] \
+        || { echo "COSIGN_COMMIT ${COSIGN_COMMIT} is not tag ${COSIGN_VERSION} — a cosign bump is TWO ARGs; resolve the pair with: gh api repos/sigstore/cosign/commits/${COSIGN_VERSION} --jq .sha" >&2; exit 1; }; } \
     && go -C /src/cosign get ${COSIGN_GO_RAISES} \
     && go build -C /src/cosign -trimpath \
         -ldflags "-buildid= -X sigs.k8s.io/release-utils/version.gitVersion=${COSIGN_VERSION} \
@@ -85,10 +97,19 @@ RUN git clone --filter=blob:none --no-checkout https://github.com/sigstore/cosig
             -X sigs.k8s.io/release-utils/version.gitTreeState=dirty" \
         -o /out/cosign ./cmd/cosign
 
-# Fail the build here rather than shipping a binary that cannot run: a wrong build path or a
-# broken ldflag produces a file that exists and does nothing useful, which every later stage
-# would happily copy.
-RUN /out/docker-compose version && /out/cosign version
+# Fail the build here rather than shipping a binary that cannot run: a wrong build path produces a
+# file that exists and does nothing useful, which every later stage would happily copy.
+#
+# The version has to be ASSERTED, not merely printed. `go build -ldflags "-X pkg.Var=value"` for a
+# symbol that no longer exists is silently ignored by the linker — no warning, no non-zero exit — so
+# if upstream renames the variable or the module path gains a /v6, the binary builds, reports its
+# built-in default (`dev`), and passes a bare `version` call. Measured on a mimic module built with
+# these exact flags: renaming the symbol changed the output to `dev` and left the exit code 0. That
+# string is a provenance guarantee this file makes further up, so a run that prints it is not the
+# same as a run that checks it. Printed first so the build log still shows the real output.
+RUN /out/docker-compose version && /out/cosign version \
+    && /out/docker-compose version | grep -qF "${COMPOSE_VERSION}" \
+    && /out/cosign version | grep -qF "${COSIGN_VERSION}"
 
 # ---------------------------------------------------------------------------------------------
 # Pinned by digest (#135) so the debian:trixie-slim tag can't be silently re-pointed. The digest
