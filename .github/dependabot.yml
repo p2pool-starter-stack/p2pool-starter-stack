@@ -48,6 +48,30 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
+  # The appliance rootfs base images (#833, #1163). Deliberately asymmetric, and it has to be:
+  # Dependabot reads this file from the DEFAULT branch only, so the entry lives here on `develop`,
+  # while the path it names exists only on `develop-v2`. `target-branch` is the mechanism for
+  # exactly that — Dependabot resolves `directory` against it and opens the PR there. Anyone
+  # applying "the twins are level" mechanically will read this as wrong; moving it to develop-v2
+  # is what makes it stop running, which is how it went unnoticed (CONTRIBUTING.md § The two lanes).
+  #
+  # The stakes here are higher than for build/* above: the appliance's Debian userland has no apt
+  # at runtime, so a base digest bump plus a rebake IS its patch channel. There is no other way for
+  # a fixed openssl or kernel package to reach a flashed box between releases.
+  - package-ecosystem: "docker"
+    directory: "/os/rootfs"
+    target-branch: "develop-v2"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker-appliance:
+        patterns: ["*"]
+    ignore:
+      # Same policy as the docker entry above: digest + patch within the pinned tag. A trixie ->
+      # forky move or a golang minor is a deliberate rebake, not a security update.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
   # Third-party image digests pinned directly in docker-compose.yml (Tari node + wallet,
   # docker-socket-proxy, caddy) — outside build/*, so the `docker` entry above never sees them,
   # and they feed both channels: pulled on the DIY stack, baked into the appliance image (#833).
