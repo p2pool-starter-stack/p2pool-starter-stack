@@ -9590,14 +9590,17 @@ SWS=$(mktemp -d)
 export PITHEAD_TLS_DIR="$SWS/tls"
 sws_fp=$(run_sourced "$ROOT" stage_wizard_spool "$SWS/spool" 2>/dev/null)
 assert_contains "staging prints the certificate fingerprint the console advertises" "$sws_fp" ":"
-for f in wizard.crt wizard.key config.reference.json rig-defaults.json; do
+# data-wiped.json is checked for EXISTENCE only here (present/absent) — its content is always
+# "{}" off the appliance (PITHEAD_PRESEED_DIR unset), so that assertion belongs with the
+# data_wipe_note/publish_data_wipe_note tests below, not this staging-plumbing check.
+for f in wizard.crt wizard.key config.reference.json rig-defaults.json data-wiped.json; do
     assert_eq "staged: $f" "$([ -s "$SWS/spool/$f" ] && echo present || echo absent)" "present"
 done
 # The accept path's teardown, exactly as it happens, then the retry the outer loop drives.
 rm -rf "$SWS/spool"
 sws_fp2=$(run_sourced "$ROOT" stage_wizard_spool "$SWS/spool" 2>/dev/null)
 sws_missing=""
-for f in wizard.crt wizard.key config.reference.json rig-defaults.json; do
+for f in wizard.crt wizard.key config.reference.json rig-defaults.json data-wiped.json; do
     [ -s "$SWS/spool/$f" ] || sws_missing="$sws_missing $f"
 done
 assert_eq "a wiped spool is fully re-armed" "${sws_missing:-none}" "none"
@@ -9873,6 +9876,74 @@ else
     bad "the medium is left byte-for-byte unchanged" "it was rewritten"
 fi
 unset PITHEAD_PRESEED_DIR PSD
+
+echo "== unit: data_wipe_note / publish_data_wipe_note — the wipe note reader + spool carrier (#1121) =="
+# pithead-data-reset's own record_wipe format ("<UTC when> <reason>\n", appended to the ESP's
+# pithead-data-wiped) is the contract; this only reads it, never guesses it. "recovery"
+# discriminates a deliberate factory-reset (the operator asked for it, nothing to warn about)
+# from the wedged-/data case, where the wizard's next-move advice differs: restore a backup,
+# don't set up as if this were a fresh machine.
+DWN=$(mktemp -d)
+mkdir -p "$DWN/esp" "$DWN/spool"
+export PITHEAD_PRESEED_DIR="$DWN/esp"
+
+run_sourced "$SANDBOX" data_wipe_note >/dev/null 2>&1
+assert_rc "no note file -> rc 1" "$?" "1"
+
+printf '2026-08-21T09:00:00Z unrecoverable /data reinitialized — everything on it was lost\n' >"$DWN/esp/pithead-data-wiped"
+note=$(run_sourced "$SANDBOX" data_wipe_note)
+assert_eq "the wedged-partition wipe -> recovery true" "$(printf '%s' "$note" | jq -r '.recovery')" "true"
+assert_eq "the last line's timestamp is carried through" "$(printf '%s' "$note" | jq -r '.when')" "2026-08-21T09:00:00Z"
+assert_eq "the last line's reason is carried through" "$(printf '%s' "$note" | jq -r '.reason')" \
+    "unrecoverable /data reinitialized — everything on it was lost"
+
+printf '2026-08-20T08:00:00Z factory-reset requested\n2026-08-21T09:00:00Z factory-reset requested\n' >"$DWN/esp/pithead-data-wiped"
+note=$(run_sourced "$SANDBOX" data_wipe_note)
+assert_eq "a deliberate factory-reset -> recovery false" "$(printf '%s' "$note" | jq -r '.recovery')" "false"
+assert_eq "append-only log: only the LAST line is read" "$(printf '%s' "$note" | jq -r '.when')" "2026-08-21T09:00:00Z"
+
+printf 'garbage\n' >"$DWN/esp/pithead-data-wiped"
+run_sourced "$SANDBOX" data_wipe_note >/dev/null 2>&1
+assert_rc "a line with no '<when> <reason>' shape -> rc 1, never a made-up note" "$?" "1"
+
+# publish_data_wipe_note carries the note to the wizard's spool — the wizard container's ONLY
+# mount, so it cannot read PRESEED_DIR itself.
+rm -f "$DWN/esp/pithead-data-wiped"
+run_sourced "$SANDBOX" publish_data_wipe_note "$DWN/spool" >/dev/null 2>&1
+assert_eq "no note -> the spool gets an empty object, not a missing file" "$(cat "$DWN/spool/data-wiped.json")" "{}"
+assert_eq "no temp file left beside the atomic target" \
+    "$(find "$DWN/spool" -name '.data-wiped.json.*' | wc -l | tr -d ' ')" "0"
+
+printf '2026-08-21T09:00:00Z unrecoverable /data reinitialized — everything on it was lost\n' >"$DWN/esp/pithead-data-wiped"
+run_sourced "$SANDBOX" publish_data_wipe_note "$DWN/spool" >/dev/null 2>&1
+assert_eq "a real note reaches the spool" "$(jq -r '.recovery' "$DWN/spool/data-wiped.json")" "true"
+
+# The fleet-stick rule (same as publish_rig_defaults, #797 R3): a MISSING note must overwrite a
+# PREVIOUS machine's note, never leave it standing — the spool survives on /data between
+# machines. MUTATION PROOF: an early return in the publisher (`note=$(data_wipe_note) || return
+# 0`) leaves the previous machine's note in place; this assertion catches it (see the table in
+# the PR description for the actual red run).
+rm -f "$DWN/esp/pithead-data-wiped"
+run_sourced "$SANDBOX" publish_data_wipe_note "$DWN/spool" >/dev/null 2>&1
+assert_eq "a stale note from a previous machine does not survive an absent one" "$(cat "$DWN/spool/data-wiped.json")" "{}"
+
+# Removable boot media: PRESEED_DIR is the STICK's own ESP there, describing the stick, never
+# THIS machine — the publisher must not carry it across even when the stick's ESP holds a note.
+printf '2026-08-21T09:00:00Z unrecoverable /data reinitialized — everything on it was lost\n' >"$DWN/esp/pithead-data-wiped"
+(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    boot_is_removable() { return 0; }
+    publish_data_wipe_note "$DWN/spool"
+) >/dev/null 2>&1
+assert_eq "booting from removable media never carries the STICK's own note across" \
+    "$(cat "$DWN/spool/data-wiped.json")" "{}"
+
+unset PITHEAD_PRESEED_DIR
+rm -rf "$DWN"
+unset DWN note
 
 echo "== unit: is_appliance gates the tarball upgrade =="
 # The appliance's program tree is resynced from the system slot every boot, so a DIY tarball
@@ -12042,6 +12113,39 @@ assert_eq "a record above the budget is capped at the budget" \
     "$(PITHEAD_HUGEPAGES_MARKER="$HG/marker" run_sourced "$SANDBOX" hugepages_decision_pages)" "3072"
 assert_eq "no marker reads as the full budget" \
     "$(PITHEAD_HUGEPAGES_MARKER="$HG/absent-marker" run_sourced "$SANDBOX" hugepages_decision_pages)" "3072"
+
+echo "== unit: check_data_wipe_note — doctor surfaces the wipe note, a support conversation gets the fact (#1121) =="
+# Same shape as the pre-seeding block: PITHEAD_PRESEED_DIR stands in for the ESP. Appliance-only
+# (the note only ever exists on that channel), so PITHEAD_APPLIANCE has to be forced on here —
+# tests run off the appliance.
+CDW=$(mktemp -d)
+mkdir -p "$CDW/esp"
+export PITHEAD_PRESEED_DIR="$CDW/esp"
+
+out=$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_eq "off the appliance -> silent regardless of the note" "$out" ""
+
+out=$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_eq "no note file -> doctor says nothing (not even a section header)" "$out" ""
+
+printf '2026-08-21T09:00:00Z unrecoverable /data reinitialized — everything on it was lost\n' >"$CDW/esp/pithead-data-wiped"
+out=$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_eq "off the appliance -> silent EVEN WITH a note present (a DIY host cannot have one)" "$out" ""
+
+out=$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_contains "a recovery wipe -> WARN" "$out" "WARN"
+assert_contains "the WARN names the date" "$out" "2026-08-21T09:00:00Z"
+assert_contains "the WARN points at restoring a backup" "$out" "restore from backup"
+assert_not_contains "a recovery wipe is a WARN, never a FAIL (must not fail the boot health gate)" "$out" "FAIL"
+
+printf '2026-08-19T07:30:00Z factory-reset requested\n' >"$CDW/esp/pithead-data-wiped"
+out=$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_not_contains "a deliberate factory-reset -> no WARN (the operator asked for it)" "$out" "WARN"
+assert_contains "a deliberate factory-reset -> still named, informationally" "$out" "2026-08-19T07:30:00Z"
+
+unset PITHEAD_PRESEED_DIR
+rm -rf "$CDW"
+unset CDW out
 
 echo "== unit: pithead-media-config — physical-presence media channel (#786 sub-issue D) =="
 # Source the boot leg (functions only — its main is guarded) and drive its pieces with stubbed

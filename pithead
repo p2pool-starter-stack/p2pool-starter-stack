@@ -1379,6 +1379,8 @@ doctor() {
         check_monerod_synchronized
     fi
 
+    check_data_wipe_note
+
     # --- Summary ---
     echo ""
     log "Diagnostics summary: ${DR_OK} OK, ${DR_WARN} warning(s), ${DR_FAIL} failure(s)."
@@ -1839,6 +1841,43 @@ preseed_token() {
     printf '%s' "$t"
 }
 
+# The note pithead-data-reset leaves on the ESP when it reinitializes /data (#1062, #1121): an
+# append-only log, one "<UTC timestamp> <reason>" line per wipe. Reads only the LAST line — the
+# most recent event is the one an operator needs — and prints one JSON object on success:
+# {when, reason, recovery}. "recovery" is false for a deliberate factory-reset (nothing to warn
+# about, the operator asked for it) and true for the wedged-/data case, where the next move is
+# restoring a backup rather than walking through setup as if this were a fresh machine. rc 1:
+# absent, unreadable, or a line with no "<when> <reason>" shape to parse.
+data_wipe_note() {
+    local f="$PRESEED_DIR/pithead-data-wiped" line when reason
+    [ -f "$f" ] || return 1
+    line=$(tail -n 1 "$f" 2>/dev/null) || return 1
+    case "$line" in *' '*) ;; *) return 1 ;; esac
+    when="${line%% *}"
+    reason="${line#* }"
+    [ -n "$when" ] && [ -n "$reason" ] || return 1
+    jq -cn --arg when "$when" --arg reason "$reason" \
+        '{when: $when, reason: $reason, recovery: ($reason != "factory-reset requested")}'
+}
+
+# Carries the wipe note to the wizard's spool (#1121): the wizard runs in a container whose only
+# mount is the spool (`-v "$spool":/wizard-spool`), so it cannot reach $PRESEED_DIR itself —
+# unlike doctor, which runs on the host. Same shape as publish_rig_defaults: derive fresh, write
+# atomically, always write SOMETHING (an empty object when there is no note) so a fleet stick's
+# spool never hands machine 2 machine 1's note. Skipped on removable boot media, where
+# PRESEED_DIR is the STICK's own ESP and would describe the stick, not this machine.
+publish_data_wipe_note() { # <spool-dir>
+    local tmp="$1/.data-wiped.json.$$" note
+    if boot_is_removable; then
+        note="{}"
+    else
+        note=$(data_wipe_note) || note="{}"
+    fi
+    printf '%s' "$note" >"$tmp" 2>/dev/null || : >"$tmp"
+    chown 1000:1000 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$1/data-wiped.json"
+}
+
 # The restore pre-seed (#909): an installer boot that accepted a backup archive stages it —
 # still encrypted, passphrase beside it — on the target's ESP, and the installed machine's
 # first boot lands here to restore ITSELF: config, Tor onion keys, dashboard database, the
@@ -2175,6 +2214,9 @@ stage_wizard_spool() { # <spool-dir> -> fingerprint on stdout
     # The rig role's pre-fill rides beside the reference — derived fresh each boot, like the
     # disk inventory, so machine 2 on a fleet stick never opens on machine 1's discovery.
     publish_rig_defaults "$spool"
+    # The data-wipe note (#1121): same "derived fresh every boot" rule, for the same fleet-stick
+    # reason — see publish_data_wipe_note.
+    publish_data_wipe_note "$spool"
     # Installer mode reads the disk list from here too; a retry with no list is the same dead end
     # in a different shape.
     installer_mode_available && publish_disk_inventory "$spool"
@@ -4101,6 +4143,26 @@ check_control_units() {
         dr_fail "The control runner watches a different spool than this install writes to ($spool) — requests are never picked up, with no error shown. Fix: run './pithead apply' from this directory."
     else
         dr_ok "Control runner units target this install."
+    fi
+}
+
+# Doctor check (#1121): the wipe note pithead-data-reset leaves on the ESP when it reinitializes
+# /data (#1062) — a support conversation on a box with a shell gets the fact without knowing
+# where to look. Appliance-only: PRESEED_DIR only carries this note on that channel; absent is
+# silent, matching every other doctor check that has nothing to report.
+check_data_wipe_note() {
+    is_appliance || return 0
+    local note
+    note=$(data_wipe_note) || return 0
+    local when reason
+    when=$(printf '%s' "$note" | jq -r '.when')
+    reason=$(printf '%s' "$note" | jq -r '.reason')
+    echo ""
+    echo "Data reset:"
+    if printf '%s' "$note" | jq -e '.recovery' >/dev/null 2>&1; then
+        dr_warn "/data was reinitialized on $when ($reason) — if this was not a deliberate factory reset, restore from backup rather than reprovisioning from scratch."
+    else
+        dr_info "/data was reformatted on $when ($reason)."
     fi
 }
 
