@@ -854,9 +854,9 @@ cpu_has_avx2() {
 # upgrade" BEFORE one is attempted rather than during it (#1108). Read-only: nothing is pulled.
 check_release_verification() {
     if is_source_checkout; then
-        dr_info "Source checkout — images build locally and are not signature-verified (#376), and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'."
+        dr_info "Source checkout — images build locally and are not signature-verified, and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'."
     elif [ ! -f cosign.pub ]; then
-        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
+        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified. Release bundles ship the key from the first signed release."
     elif ! cosign_available; then
         dr_warn "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon."
     elif docker image inspect "$COSIGN_IMAGE" >/dev/null 2>&1; then
@@ -1011,9 +1011,9 @@ doctor() {
         local _cn=""
         monero_clearnet_exposed && _cn="Monero"
         tari_clearnet_exposed && _cn="${_cn:+$_cn + }Tari"
-        dr_warn "CLEARNET initial sync is ON for $_cn (#183) — P2P runs over clearnet and this host's IP is exposed to that network (Monero tx-broadcast still on Tor). The dashboard switches each node back to Tor automatically once it's synced (#234); this WARN clears when the transition completes."
+        dr_warn "CLEARNET initial sync is ON for $_cn — P2P runs over clearnet and this host's IP is exposed to that network (Monero tx-broadcast still on Tor). See $DOCS_URL/docs/privacy.md#optional-clearnet-initial-sync-off-by-default. The dashboard switches each node back to Tor automatically once it's synced; this WARN clears when the transition completes."
     else
-        dr_ok "No clearnet initial sync active — all node P2P is Tor-only (#183)."
+        dr_ok "No clearnet initial sync active — all node P2P is Tor-only."
     fi
 
     # p2pool Tor-routing fail-safe (#273): with clearnet off, P2POOL_FLAGS carries the #165 --socks5;
@@ -2072,9 +2072,9 @@ check_egress_firewall_installed() {
         return 0
     fi
     if printf '%s\n' "$rules" | grep -qF -- "$TOR_EGRESS_TAG"; then
-        dr_ok "Tor-only egress firewall rules are installed (#270) — clearnet dials from the stack are fail-closed."
+        dr_ok "Tor-only egress firewall rules are installed — clearnet dials from the stack are fail-closed."
     else
-        dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them (#270)."
+        dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them."
     fi
     return 0
 }
@@ -2085,7 +2085,7 @@ check_egress_firewall_installed() {
 # check never fires against an intentional hold.
 check_stratum_listening() {
     if ! container_is_running xmrig-proxy; then
-        dr_info "Stratum listen check skipped — xmrig-proxy isn't running (normal during a sync hold, #35)."
+        dr_info "Stratum listen check skipped — xmrig-proxy isn't running (normal during a sync hold)."
         return 0
     fi
     if ! command -v ss >/dev/null 2>&1; then
@@ -2155,7 +2155,7 @@ check_tor_clearnet_egress() {
         "https://www.google.com/generate_204" 2>/dev/null; then
         dr_ok "Tor clearnet egress works — Healthchecks, Telegram, and XvB can reach their services."
     else
-        dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this, #424). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself."
+        dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself."
     fi
     return 0
 }
@@ -6172,7 +6172,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         if ! curl -fsSL --max-time 120 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$GH_SOCKS" -o "$sig" \
             "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz.sig" 2>/dev/null; then
             rm -f "$bundle" "$sig"
-            _upg_fail "the $tag release carries no bundle signature (pithead.tar.gz.sig) — refusing to install it unverified (#376); the stack keeps running v$PITHEAD_VERSION."
+            _upg_fail "the $tag release carries no bundle signature (pithead.tar.gz.sig) — refusing to install it unverified; the stack keeps running v$PITHEAD_VERSION."
             return 0
         fi
         # The verifier is a container that sees the install dir at /w (#1072), so it needs the two
@@ -6188,7 +6188,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         fi
         if ! cosign_run verify-blob --key cosign.pub --signature "$csig" --insecure-ignore-tlog=true "$cbundle" >/dev/null 2>&1; then
             rm -f "$bundle" "$sig"
-            _upg_fail "bundle signature verification FAILED for $tag — the download does not match the release key; refusing to extract it (#376). The stack keeps running v$PITHEAD_VERSION."
+            _upg_fail "bundle signature verification FAILED for $tag — the download does not match the release key; refusing to extract it. The stack keeps running v$PITHEAD_VERSION."
             return 0
         fi
         rm -f "$sig"
@@ -6214,7 +6214,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     fi
     if [ "v$bundle_version" != "$tag" ]; then
         rm -f "$bundle"
-        _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release (#376). The stack keeps running v$PITHEAD_VERSION."
+        _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release. The stack keeps running v$PITHEAD_VERSION."
         return 0
     fi
     # #629: pick the extraction target. A versioned install (pithead-vX.Y.Z dir) whose data dirs

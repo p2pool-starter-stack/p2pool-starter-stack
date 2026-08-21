@@ -39,10 +39,12 @@ heredoc_body_lines() { # <file>
     ' "$1"
 }
 
-# Two rules, two widths. The issue-number rule stays on the original call shapes; the doctor's
-# dr_* reporters and the control runner's _upg_* result strings carry a dozen #NNN references that
-# predate this linter and want their own cleanup (issue #1026), so widening it here would fail the
-# build on unrelated debt. The docs-path rule is new and starts clean, so it runs at full width.
+# Both rules run at the same width: log/warn/error/info/echo, plus the doctor's dr_* reporters and
+# the control runner's _upg_* result strings — doctor output goes on screen and _upg_* errors
+# render in the dashboard's upgrade panel, so both are operator-facing same as the rest. The
+# issue-number rule used to stay on the narrower original call shapes because those dr_*/_upg_*
+# sites carried a dozen #NNN references that predated this linter (issue #1026); now that they're
+# clean, there's nothing left for the wider match to catch them on.
 NARROW='log|warn|error|info|echo'
 WIDE="$NARROW|dr_ok|dr_warn|dr_fail|dr_info|_upg_reject|_upg_fail"
 
@@ -50,7 +52,7 @@ WIDE="$NARROW|dr_ok|dr_warn|dr_fail|dr_info|_upg_reject|_upg_fail"
 # a heading link, and GitHub numbers those from numbered headings ("## 1. Prerequisites" ->
 # "#1-prerequisites"), which reads as an issue reference to the pattern below and is not one.
 scan_pithead() {
-    msg_lines "$1" "$NARROW" | sed 's|\$DOCS_URL/[^ "]*||g' | grep -E '#[0-9]+' || true
+    msg_lines "$1" "$WIDE" | sed 's|\$DOCS_URL/[^ "]*||g' | grep -E '#[0-9]+' || true
 }
 
 # Rule 2: no bare repo doc path in operator text (issue #1024). Release bundles ship the CLI, the
@@ -126,6 +128,10 @@ if [ "${1:-}" = "--self-test" ]; then
     expect "clean pithead + a #NNN comment is not flagged" clean "$(scan_pithead "$tmp/clean.sh")"
     printf '%s\n' '    error "install it ($DOCS_URL/docs/getting-started.md#1-prerequisites)."' >"$tmp/anchor.sh"
     expect "a numbered heading anchor in a \$DOCS_URL pointer is not an issue reference" clean "$(scan_pithead "$tmp/anchor.sh")"
+    printf '%s\n' '        dr_warn "cosign.pub missing (#376)."' >"$tmp/dr.sh"
+    expect "a dr_* call carrying #NNN is flagged by the issue-number rule" hit "$(scan_pithead "$tmp/dr.sh")"
+    printf '%s\n' '            _upg_fail "signature verification FAILED (#376)."' >"$tmp/upg.sh"
+    expect "an _upg_* call carrying #NNN is flagged by the issue-number rule" hit "$(scan_pithead "$tmp/upg.sh")"
 
     printf '%s\n' '    error "set it — see docs/configuration.md."' >"$tmp/docs.sh"
     expect "operator text naming a bare repo doc path is flagged" hit "$(scan_pithead_docs "$tmp/docs.sh")"
