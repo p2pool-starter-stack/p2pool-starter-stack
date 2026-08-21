@@ -1195,13 +1195,13 @@ button.upgrade-btn {
 }
 
 /* ---- Responsive / mobile (Issue #83) --------------------------------------------------
- * The desktop layout above is fluid down to tablet widths via the card grid's auto-fit, but a
- * few fixed sizes break or overflow on phones: the 350px card-track minimum forces a column
- * wider than the screen, the header is a fixed two-up row, the disk bar is a hard 150px, and
- * the body padding is a roomy 20px. These overrides take over at phone widths — tighter
- * padding, a stacked header, a single-column card grid, and a full-width disk bar. The workers
- * table is handled separately by .table-scroll above. One breakpoint is enough: above it the
- * grid's auto-fit already reflows cleanly. */
+ * The desktop layout above is fluid down to tablet widths via the sections' column packing, but
+ * a few fixed sizes break or overflow on phones: the header is a fixed two-up row, the disk bar
+ * is a hard 150px, and the body padding is a roomy 20px. These overrides take over at phone
+ * widths — tighter padding, a stacked header, and a full-width disk bar. Card stacking needs no
+ * override: a phone viewport fits exactly one ~350px column, so the packed sections are already
+ * single-column. The workers table is handled separately by .table-scroll above. One breakpoint
+ * is enough: above it the column packing already reflows cleanly. */
 @media (max-width: 640px) {
   body {
     padding: 12px;
@@ -1220,12 +1220,6 @@ button.upgrade-btn {
     flex-wrap: wrap;
   }
 
-  /* One card per row — the 350px minmax floor overflows a phone, so collapse to a single
-       fluid column. */
-  .grid {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
   .card {
     padding: 16px;
   }
