@@ -301,8 +301,12 @@ The escape path, once per box:
 
 1. Install the pinned cosign **v2.6.3** binary on the host — the snippet in
    [Release / Validation Server › The release signing key](release-server.md#the-release-signing-key).
-   Take that version, not the newest: cosign v3 removed the `--tlog-upload` / `--insecure-ignore-tlog`
-   flags these releases pass, so a v3 binary satisfies `command -v cosign` and then fails the verify.
+   v2.6.3 is the version this project pins and tests. A current cosign **v3 also works for this
+   verify** — proven with v3.1.3 against real bundles: it accepts the flags these releases pass
+   (`--signature` with a deprecation warning, `--insecure-ignore-tlog=true` unchanged) and still
+   refuses a tampered bundle. The v3 breakage that motivated the original "not the newest" warning
+   is in the release box's *signing* flags (`--tlog-upload`), not the operator's verify — so a box
+   that already has a v3 binary needs nothing done.
 2. Retry the upgrade from the dashboard. It now passes the old guard, verifies the bundle, and lands
    on a release whose verifier is the container.
 3. From the next upgrade on the host binary is unused and can be removed.
@@ -311,9 +315,17 @@ The escape path, once per box:
 reports whether the pinned verifier image is present, and names the pre-fetch command if it is not.
 On the older versions `doctor` cannot report it, which is why it is written here.
 
-> **Not yet proven on a live install.** The guards above were read from the released `pithead` at
-> each tag; the escape path has not been driven end to end on a box actually running v1.18.1 or
-> v1.19.0. Do that on the bench before the next release notes repeat this claim.
+> **Proven on the bench, 2026-08-21.** Driven end to end on disposable installs actually running
+> each tag. With no cosign on `PATH`, v1.19.0 rejected with its exact message above before any
+> network dial; v1.18.1 dialled the release API first (over the stack's own Tor) and then rejected
+> with its own message — a Tor failure on that leg reads as *"could not reach the GitHub release
+> API"* instead, so retry rather than reinstalling anything. With cosign v2.6.3 back on `PATH`,
+> both installs completed the one-click upgrade onto v1.19.3, and each upgraded install then ran a
+> full `down`/`up` cycle with **no host cosign visible** — all five images verified by the pinned
+> container. Two behaviours worth knowing before reading them as new walls: the request must name
+> the *current latest* tag (the runner re-derives it host-side and refuses anything else), and a
+> ten-minute throttle stamp is claimed by some attempts that end rejected — a retry inside that
+> window reports *"attempted less than 10 minutes ago"* until the stamp ages out.
 
 ## Post-publish smoke test (#459)
 
