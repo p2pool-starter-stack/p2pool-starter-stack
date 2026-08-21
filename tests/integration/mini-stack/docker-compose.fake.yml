@@ -127,7 +127,7 @@ services:
 
   # Read-only socket proxy (stats/logs) — mirrors the production docker-proxy.
   docker-proxy:
-    image: tecnativa/docker-socket-proxy:v0.4.2
+    image: tecnativa/docker-socket-proxy:v0.5.0
     container_name: itest-docker-proxy
     networks: [itestnet]
     environment: ["CONTAINERS=1", "LOGS=1"]
@@ -135,7 +135,7 @@ services:
 
   # Write proxy scoped to start/stop only — mirrors the production docker-control.
   docker-control:
-    image: tecnativa/docker-socket-proxy:v0.4.2
+    image: tecnativa/docker-socket-proxy:v0.5.0
     container_name: itest-docker-control
     networks: [itestnet]
     environment: ["POST=1", "ALLOW_START=1", "ALLOW_STOP=1"]
