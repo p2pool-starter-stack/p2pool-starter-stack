@@ -59,9 +59,10 @@ resolve_digest() { # <tag-ref> -> sha256:<64 hex> on stdout, rc 1 if never resol
 # Every pin, resolved and verdicted. Prints one line per pin as it goes (so a hang on pin 2 of 4
 # does not hide the first result) and returns non-zero if anything failed OR mismatched.
 run_check() { # <compose-file>
-    local compose_file="$1" pin tagref pinned live failed=0 mismatched=0
+    local compose_file="$1" pin tagref pinned live failed=0 mismatched=0 seen=0
     while IFS= read -r pin; do
         [ -n "$pin" ] || continue
+        seen=$((seen + 1))
         tagref="${pin%@*}"
         pinned="${pin##*@}"
         if ! live="$(resolve_digest "$tagref")"; then
@@ -77,6 +78,14 @@ run_check() { # <compose-file>
             mismatched=$((mismatched + 1))
         fi
     done < <(extract_pins "$compose_file")
+    # Zero pins found is a broken extraction, not a clean bill: this file has carried digest pins
+    # since #135, so an empty result means the pattern no longer matches the compose file (or every
+    # pin was deliberately removed — which also deserves a human). Passing here would be the exact
+    # green-while-checking-nothing failure this script exists to kill.
+    if [ "$seen" -eq 0 ]; then
+        printf 'NO PINS FOUND: %s yielded no tag@sha256 image references. The extraction no longer matches the file, so nothing was checked — this is a broken gate, not a clean one.\n' "$compose_file"
+        return 1
+    fi
     if [ "$((failed + mismatched))" -gt 0 ]; then
         printf '\n%s\n' "$failed lookup(s) unchecked, $mismatched pin(s) mismatched. Fix before cutting."
         return 1
@@ -133,6 +142,14 @@ EOF
     if out="$(run_check "$fx2" 2>&1)"; then rc=0; else rc=$?; fi
     st "non-sha256 resolver output is refused" "$rc" "1"
     st "garbage output is never compared as a mismatch" "$(printf '%s' "$out" | grep -c MISMATCH)" "0"
+
+    # A fixture with NO digest pins at all: the extraction finding nothing means the gate checked
+    # nothing, and a gate that checked nothing must not pass (#1069's whole genus).
+    printf 'image: ${PITHEAD_REGISTRY:-ghcr.io/x}/pithead-dashboard:${STACK_VERSION:-dev}\n' >"$fx2"
+    docker() { printf 'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\n'; }
+    if out="$(run_check "$fx2" 2>&1)"; then rc=0; else rc=$?; fi
+    st "zero pins found fails loudly, never passes vacuously" "$rc" "1"
+    st "the empty extraction is named" "$(printf '%s' "$out" | grep -c 'NO PINS FOUND')" "1"
 
     unset -f docker
 
