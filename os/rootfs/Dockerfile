@@ -18,11 +18,11 @@
 # Both projects publish release binaries built on whatever Go toolchain they happened to use, and
 # that toolchain's stdlib CVEs become ours — baked into a read-only appliance image that cannot be
 # patched in place. In August 2026 that was nine fixable HIGH findings the scan gated on, and no
-# pin bump could clear them: cosign v3.1.3 (the newest release) ships built with go1.26.4, the
-# same toolchain as v3.1.2, and docker-compose v5.4.0 ships go1.26.5 — both below the go1.26.6
-# that carries the fixes. Verified by reading the build stamps out of the published binaries, not
-# from release notes. Waiting for upstream to rebuild is not a schedule we control, so we compile
-# them ourselves on a patched toolchain and the findings go away at the source.
+# pin bump could clear them: cosign v3.1.3 (the newest release) ships built with go1.26.4, the same
+# toolchain as v3.1.2, and docker-compose v5.4.0 (the pin then) shipped go1.26.5 — both below the
+# go1.26.6 that carries the fixes. Verified by reading the build stamps out of the published
+# binaries, not from release notes. Waiting for upstream to rebuild is not a schedule we control,
+# so we compile them ourselves on a patched toolchain and the findings go away at the source.
 #
 # Provenance is not weakened by this, it moves: the old pin was a sha256 of a downloaded binary,
 # this one is an exact upstream COMMIT (never a tag — a tag can be re-pointed, the same reason
@@ -35,8 +35,8 @@
 # claimed otherwise would be lying about the provenance this paragraph exists to describe.
 FROM golang:1.26.6-trixie@sha256:b75d466dd608587fd66cca705a307ba65b889827d06ad61d6a75f0482b51b7c7 AS gobuild
 
-ARG COMPOSE_VERSION=v5.4.0
-ARG COMPOSE_COMMIT=ef61d7410a0c816a71705026e638ec256a591d69
+ARG COMPOSE_VERSION=v5.5.0
+ARG COMPOSE_COMMIT=870908cc8f07f5e90acdf5d34dd1b96a4fe51d16
 ARG COSIGN_VERSION=v3.1.3
 ARG COSIGN_COMMIT=11926fa5bbbbde47e88fc006b625a17769b743b2
 # Modules raised above what each project's own go.sum asks for, because upstream has not cut a
