@@ -852,7 +852,11 @@ class EarningsCard extends Component {
     return html`
         <div class="card card-advanced" id="card-earnings">
             <h3>P2Pool Earnings (estimated)</h3>
-            <p class="text-muted text-xs earnings-subtitle">Estimated XMR from P2Pool mining plus the Tari merge-mined alongside it — excludes XvB donations.</p>
+            <details class="earnings-details">
+                <summary>About this estimate</summary>
+                <p class="text-muted text-xs earnings-subtitle">Estimated XMR from P2Pool mining plus the Tari merge-mined alongside it — excludes XvB donations.</p>
+                <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
+            </details>
             <div class="earnings-input">
                 <label for="whatif-hr">Your P2Pool Hashrate</label>
                 <input id="whatif-hr" type="text" inputmode="decimal" spellcheck="false"
@@ -925,7 +929,6 @@ class EarningsCard extends Component {
                 </p>`
                 : null
             }
-            <p class="earnings-disclaimer text-muted text-xs mt-2">${e.disclaimer}</p>
         </div>`;
   }
 }
@@ -1260,6 +1263,12 @@ function DashboardView({
   // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
   // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
   // context as reference at the bottom — "mine" first, "the world" last.
+  // Within "Your Stack" (#991), the advanced-only cards are ordered tall-with-tall / short-with-short:
+  // the auto-fit grid's rows are as tall as their tallest card, so pairing similarly-sized neighbours
+  // (XvBStats+EarningsCard, then NodeStats+ExpectedVsActualCard, then TariCard+CadenceCard) cuts the
+  // blank space shorter cards used to trail. Overview is Simple-view-only (display:none in Advanced,
+  // so its position never affects the Advanced grid) and ExpectedVsActualCard shows in both views —
+  // neither constrains this ordering.
   return html`
     <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
@@ -1295,12 +1304,12 @@ function DashboardView({
         <div class="grid">
             <div class="grid-section-label">Your Stack</div>
             <${Overview} state=${state} />
-            <${ExpectedVsActualCard} summary=${state.earnings_summary} />
-            <${NodeStats} state=${state} />
             <${XvBStats} state=${state} />
             <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} energy=${state.energy} />
-            <${CadenceCard} cadence=${state.cadence} />
+            <${NodeStats} state=${state} />
+            <${ExpectedVsActualCard} summary=${state.earnings_summary} />
             <${TariCard} tari=${state.tari} />
+            <${CadenceCard} cadence=${state.cadence} />
             <div class="grid-section-label">The Wider Pool</div>
             <${GlobalStats} state=${state} />
             <${NetworkCard} state=${state} />

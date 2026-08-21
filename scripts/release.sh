@@ -195,7 +195,14 @@ pin() {
     monero) grep -oE '^ARG MONERO_VERSION=.*' build/monero/Dockerfile | cut -d= -f2 ;;
     xmrig-proxy) grep -oE '^ARG XMRIG_PROXY_VERSION=.*' build/xmrig-proxy/Dockerfile | cut -d= -f2 ;;
     tor-base) grep -oE '^FROM [^ ]+' build/tor/Dockerfile | head -1 | awk '{print $2}' ;;
+    # `tari` is the NODE, deliberately, because scripts/pin-watch.sh reads this arm for upstream
+    # currency and both Tari images come from one upstream repo — a second row there would say the
+    # same thing twice. The stack pins two images though (node + view-only console wallet), they are
+    # bumped together, and the release notes have to name both or a wallet-only move reads as
+    # unchanged (#1138). tests/stack/test_compose.sh asserts the two carry the same tag, so the
+    # lockstep this relies on is guarded rather than assumed.
     tari) grep -oE 'quay.io/tarilabs/minotari_node:[^ ]+' docker-compose.yml | head -1 ;;
+    tari-wallet) grep -oE 'quay.io/tarilabs/minotari_console_wallet:[^ ]+' docker-compose.yml | head -1 ;;
     caddy) grep -oE 'caddy:[0-9.]+@sha256:[a-f0-9]+' docker-compose.yml | head -1 ;;
     socket-proxy) grep -oE 'tecnativa/docker-socket-proxy:[^ ]+' docker-compose.yml | head -1 ;;
     esac
@@ -349,6 +356,9 @@ preflight() {
     fi
     resolve_signing
     check_verifier_image
+
+    bash "$REPO_ROOT/scripts/resolve-pins.sh" ||
+        die "A third-party image pin does not match what its registry serves for that tag — see above. The digest is what actually runs, so cutting now would announce a version the stack is not running."
 
     STACK_VERSION="$(tr -d ' \t\r\n' <VERSION)"
     is_semver "$STACK_VERSION" || die "VERSION ('$STACK_VERSION') is not SemVer (expected X.Y.Z)."
@@ -659,7 +669,8 @@ write_manifest() {
         printf -- '- monerod: `%s`\n' "$(pin monero)"
         printf -- '- xmrig-proxy: `%s`\n' "$(pin xmrig-proxy)"
         printf -- '- tor base: `%s`\n' "$(pin tor-base)"
-        printf -- '- tari: `%s`\n' "$(pin tari)"
+        printf -- '- tari node: `%s`\n' "$(pin tari)"
+        printf -- '- tari console wallet: `%s`\n' "$(pin tari-wallet)"
         printf -- '- caddy: `%s`\n' "$(pin caddy)"
         printf -- '- docker-socket-proxy: `%s`\n' "$(pin socket-proxy)"
     } >"$out"

@@ -854,9 +854,9 @@ cpu_has_avx2() {
 # upgrade" BEFORE one is attempted rather than during it (#1108). Read-only: nothing is pulled.
 check_release_verification() {
     if is_source_checkout; then
-        dr_info "Source checkout — images build locally and are not signature-verified (#376), and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'."
+        dr_info "Source checkout — images build locally and are not signature-verified, and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'."
     elif [ ! -f cosign.pub ]; then
-        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified (#376). Release bundles ship the key from the first signed release."
+        dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified. Release bundles ship the key from the first signed release."
     elif ! cosign_available; then
         dr_warn "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon."
     elif docker image inspect "$COSIGN_IMAGE" >/dev/null 2>&1; then
@@ -1011,9 +1011,9 @@ doctor() {
         local _cn=""
         monero_clearnet_exposed && _cn="Monero"
         tari_clearnet_exposed && _cn="${_cn:+$_cn + }Tari"
-        dr_warn "CLEARNET initial sync is ON for $_cn (#183) — P2P runs over clearnet and this host's IP is exposed to that network (Monero tx-broadcast still on Tor). The dashboard switches each node back to Tor automatically once it's synced (#234); this WARN clears when the transition completes."
+        dr_warn "CLEARNET initial sync is ON for $_cn — P2P runs over clearnet and this host's IP is exposed to that network (Monero tx-broadcast still on Tor). See $DOCS_URL/docs/privacy.md#optional-clearnet-initial-sync-off-by-default. The dashboard switches each node back to Tor automatically once it's synced; this WARN clears when the transition completes."
     else
-        dr_ok "No clearnet initial sync active — all node P2P is Tor-only (#183)."
+        dr_ok "No clearnet initial sync active — all node P2P is Tor-only."
     fi
 
     # p2pool Tor-routing fail-safe (#273): with clearnet off, P2POOL_FLAGS carries the #165 --socks5;
@@ -2072,9 +2072,9 @@ check_egress_firewall_installed() {
         return 0
     fi
     if printf '%s\n' "$rules" | grep -qF -- "$TOR_EGRESS_TAG"; then
-        dr_ok "Tor-only egress firewall rules are installed (#270) — clearnet dials from the stack are fail-closed."
+        dr_ok "Tor-only egress firewall rules are installed — clearnet dials from the stack are fail-closed."
     else
-        dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them (#270)."
+        dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them."
     fi
     return 0
 }
@@ -2085,7 +2085,7 @@ check_egress_firewall_installed() {
 # check never fires against an intentional hold.
 check_stratum_listening() {
     if ! container_is_running xmrig-proxy; then
-        dr_info "Stratum listen check skipped — xmrig-proxy isn't running (normal during a sync hold, #35)."
+        dr_info "Stratum listen check skipped — xmrig-proxy isn't running (normal during a sync hold)."
         return 0
     fi
     if ! command -v ss >/dev/null 2>&1; then
@@ -2155,7 +2155,7 @@ check_tor_clearnet_egress() {
         "https://www.google.com/generate_204" 2>/dev/null; then
         dr_ok "Tor clearnet egress works — Healthchecks, Telegram, and XvB can reach their services."
     else
-        dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this, #424). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself."
+        dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself."
     fi
     return 0
 }
@@ -3340,6 +3340,71 @@ readonly CURL_CAP_SMALL=1048576 # 1 MiB — GitHub release JSON, rig control res
 # cap-hit surfaces as _upg_fail's "could not download over Tor", loud but network-flavoured).
 readonly CURL_CAP_BUNDLE=16777216 # 16 MiB — the pithead.tar.gz release bundle (code + configs)
 
+# The latest-release JSON for a GitHub repo, over the stack's own Tor SOCKS like every other
+# stack egress. Prints the JSON and returns 0; on failure prints nothing, returns 1, and leaves
+# GH_RELEASE_HINT holding the sentence the operator should actually be told.
+#
+# The reason this is a function and not two `curl -fsS` calls: `-f` collapses every non-2xx into
+# one exit code, so a 403 came out as "could not reach GitHub over Tor" and sent the operator to a
+# doctor run that correctly reports Tor healthy. GitHub's unauthenticated limit is 60 requests an
+# hour PER IP, and a Tor exit is shared with everyone else using it, so a spent budget is a normal
+# condition with nothing wrong with this machine — and a different remedy (pick a new exit) from a
+# dial that genuinely failed.
+# NOT stdout, deliberately: the JSON lands in GH_RELEASE_JSON and the caller runs this as a plain
+# command. Assigning it through a command substitution reads naturally and is WRONG — that is a
+# subshell, so the hint set here would never reach the caller and every rejection would carry an
+# empty message. Two globals, one call, no subshell.
+GH_RELEASE_HINT=""
+GH_RELEASE_JSON=""
+# The SOCKS address this fetch used, published so a caller that goes on to download the release over
+# the same Tor path derives it ONCE rather than twice. Folding the lookup into a function deleted the
+# caller's own derivation, and `set -u` then killed the runner at its first download — the upgrade
+# result sat at "running" for ever with a single dial in the log. One derivation, one truth.
+GH_SOCKS=""
+gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure
+    local repo="$1" prefix out code
+    prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
+    [ -n "$prefix" ] || prefix="172.28.0"
+    GH_SOCKS="${prefix}.25:9050"
+    GH_RELEASE_HINT=""
+    GH_RELEASE_JSON=""
+    # -w appends the status on its own line, so a non-2xx keeps its BODY — which is where GitHub
+    # says the limit was exceeded. Without -f, curl's own non-zero exit now means only a transport
+    # failure, which is exactly the distinction that was missing.
+    if ! out=$(curl -sS --max-time 60 --max-filesize "$CURL_CAP_SMALL" -w '\n%{http_code}' \
+        --socks5-hostname "$GH_SOCKS" -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null); then
+        GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        return 1
+    fi
+    code=${out##*$'\n'}
+    out=${out%$'\n'*}
+    # No status line at all means the response is not one we can reason about — and without this the
+    # WHOLE BODY becomes "$code" and gets echoed into an operator-facing message, which is both
+    # nonsense to read and a way for a remote body to land verbatim in the dashboard.
+    case "$code" in
+    [0-9][0-9][0-9]) ;;
+    *)
+        GH_RELEASE_HINT="the GitHub release API answered in a shape this cannot read — nothing was changed. Check './pithead doctor' and retry."
+        return 1
+        ;;
+    esac
+    case "$code" in
+    2*)
+        GH_RELEASE_JSON="$out"
+        return 0
+        ;;
+    403 | 429)
+        if printf '%s' "$out" | grep -qi 'rate limit'; then
+            GH_RELEASE_HINT="the Tor exit this machine is currently using has spent GitHub's shared hourly request budget — nothing is wrong with this box, and 'doctor' will say so. Run './pithead restart tor' to pick a new exit, then retry."
+            return 1
+        fi
+        ;;
+    esac
+    GH_RELEASE_HINT="the GitHub release API answered HTTP $code — nothing was changed. Retry in a few minutes."
+    return 1
+}
+
 # Render the pre-masked prefill copy (#440): the live config with every SET secret leaf replaced
 # by the {"__secret__":true} sentinel, written atomically to <control-dir>/masked/config.json.
 # The dashboard serves the Configuration form from THIS file (mounted read-only) — the raw
@@ -4464,7 +4529,7 @@ generate_caddyfile() {
     # host can keep 80/443 (co-hosting, #181). In HTTPS mode a custom port also disables Caddy's
     # automatic :80 -> HTTPS redirect (a global option emitted once at the top of the file) so port
     # 80 is left free for that proxy; the fronting proxy owns any http->https bounce instead.
-    local dport="${HOST_PORT:-}" port_suffix="" global_block=""
+    local dport="${HOST_PORT:-}" port_suffix="" global_block="" redirect_block=""
     if [ "$DASHBOARD_SECURE" == "true" ]; then
         [ "$dport" == "443" ] && dport=""
         if [ -n "$dport" ]; then
@@ -4474,6 +4539,33 @@ generate_caddyfile() {
 }
 
 '
+        else
+            # Caddy's own HTTP->HTTPS redirect is a CATCH-ALL, and its target is the Host header
+            # the request carried: :80 answered `Host: evil.example` with `308 -> https://evil.example`
+            # (#1123, measured against a running box, not read off the config). That is the same
+            # open redirector #1118 closed in the setup wizard, except this one is the state the
+            # machine spends its life in, and it lands the operator on a page that looks like the
+            # dashboard login — the screen where they type the dashboard password.
+            #
+            # So take :80 over rather than leaving it to auto_https: disable the built-in redirects
+            # and serve one site whose target is fixed to the address this box answers to. The Host
+            # header stops being able to steer anything, and every legitimate :80 request — bare
+            # name, bare IP, whatever the operator typed — still lands on the dashboard, which a
+            # site block matching only $HOST_IP would not do (Caddy answers an unmatched host with
+            # an empty 200, so a plain refusal here reads as a dead machine).
+            global_block='{
+    auto_https disable_redirects
+}
+
+'
+            # A literal, NOT $(printf ...): command substitution strips the trailing newlines and
+            # the next site block lands on the same line as this one's closing brace, which Caddy
+            # refuses — the same trap the $auth line documents from the other direction.
+            redirect_block="http:// {
+    redir https://$HOST_IP{uri} 308
+}
+
+"
         fi
     else
         [ "$dport" == "80" ] && dport=""
@@ -4482,6 +4574,7 @@ generate_caddyfile() {
 
     : >"Caddyfile"
     [ -n "$global_block" ] && printf '%s' "$global_block" >>"Caddyfile"
+    [ -n "$redirect_block" ] && printf '%s' "$redirect_block" >>"Caddyfile"
     if [ "$DASHBOARD_SECURE" == "true" ]; then
         log "Generating Caddyfile for automatic HTTPS ($HOST_IP$port_suffix)$([ -n "$auth" ] && echo ' with login')..."
         cat <<EOF >>"Caddyfile"
@@ -6040,16 +6133,12 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # is the right trade.
     touch "$stamp"
     # Host-side re-derivation of the target: the latest tag according to GitHub, not the request.
-    local prefix socks rel tag
-    prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
-    [ -n "$prefix" ] || prefix="172.28.0"
-    socks="${prefix}.25:9050"
-    if ! rel=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
-        -H 'Accept: application/vnd.github+json' \
-        "https://api.github.com/repos/p2pool-starter-stack/pithead/releases/latest" 2>/dev/null); then
-        _upg_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+    local rel tag
+    if ! gh_release_fetch p2pool-starter-stack/pithead; then
+        _upg_reject "$GH_RELEASE_HINT"
         return 0
     fi
+    rel=$GH_RELEASE_JSON
     tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
     if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
         _upg_reject "the GitHub release API returned no usable release tag — nothing was changed."
@@ -6067,7 +6156,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "started"
     # Bundle URL built from the HOST-derived tag only; fetched over the same Tor SOCKS.
     local bundle="$cdir/staged/.$id.tar.gz" logf="$cdir/staged/.$id.log"
-    if ! curl -fsSL --max-time 900 --max-filesize "$CURL_CAP_BUNDLE" --socks5-hostname "$socks" -o "$bundle" \
+    if ! curl -fsSL --max-time 900 --max-filesize "$CURL_CAP_BUNDLE" --socks5-hostname "$GH_SOCKS" -o "$bundle" \
         "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz" 2>/dev/null; then
         rm -f "$bundle"
         _upg_fail "could not download the $tag release bundle over Tor — the stack keeps running v$PITHEAD_VERSION."
@@ -6080,10 +6169,10 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # TLS to GitHub plus tag pinning — with one loud line in the journal.
     if [ -f cosign.pub ]; then
         local sig="$cdir/staged/.$id.tar.gz.sig"
-        if ! curl -fsSL --max-time 120 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" -o "$sig" \
+        if ! curl -fsSL --max-time 120 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$GH_SOCKS" -o "$sig" \
             "https://github.com/p2pool-starter-stack/pithead/releases/download/$tag/pithead.tar.gz.sig" 2>/dev/null; then
             rm -f "$bundle" "$sig"
-            _upg_fail "the $tag release carries no bundle signature (pithead.tar.gz.sig) — refusing to install it unverified (#376); the stack keeps running v$PITHEAD_VERSION."
+            _upg_fail "the $tag release carries no bundle signature (pithead.tar.gz.sig) — refusing to install it unverified; the stack keeps running v$PITHEAD_VERSION."
             return 0
         fi
         # The verifier is a container that sees the install dir at /w (#1072), so it needs the two
@@ -6099,7 +6188,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         fi
         if ! cosign_run verify-blob --key cosign.pub --signature "$csig" --insecure-ignore-tlog=true "$cbundle" >/dev/null 2>&1; then
             rm -f "$bundle" "$sig"
-            _upg_fail "bundle signature verification FAILED for $tag — the download does not match the release key; refusing to extract it (#376). The stack keeps running v$PITHEAD_VERSION."
+            _upg_fail "bundle signature verification FAILED for $tag — the download does not match the release key; refusing to extract it. The stack keeps running v$PITHEAD_VERSION."
             return 0
         fi
         rm -f "$sig"
@@ -6125,7 +6214,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     fi
     if [ "v$bundle_version" != "$tag" ]; then
         rm -f "$bundle"
-        _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release (#376). The stack keeps running v$PITHEAD_VERSION."
+        _upg_fail "the $tag download actually contains version ${bundle_version:-unknown} — refusing a version-mismatched (possible rollback) release. The stack keeps running v$PITHEAD_VERSION."
         return 0
     fi
     # #629: pick the extraction target. A versioned install (pithead-vX.Y.Z dir) whose data dirs
@@ -6552,16 +6641,12 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
             return 0
         fi
         touch "$stampf"
-        local prefix socks rel
-        prefix=$(env_get NETWORK_PREFIX 2>/dev/null)
-        [ -n "$prefix" ] || prefix="172.28.0"
-        socks="${prefix}.25:9050"
-        if ! rel=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" --socks5-hostname "$socks" \
-            -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/repos/p2pool-starter-stack/rigforge/releases/latest" 2>/dev/null); then
-            _wu_reject "could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        local rel
+        if ! gh_release_fetch p2pool-starter-stack/rigforge; then
+            _wu_reject "$GH_RELEASE_HINT"
             return 0
         fi
+        rel=$GH_RELEASE_JSON
         tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
         if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             _wu_reject "the GitHub release API returned no usable RigForge release tag — nothing was changed."

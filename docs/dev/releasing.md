@@ -44,6 +44,17 @@ of each product release, not independent releases:
   release: bump the pin → cut a stack patch → re-run the integration gate → ship. The bundle
   ships re-tested.
 
+Noticing that a bump is available is a separate job from making one, and nothing did it until
+`scripts/pin-watch.sh`. It runs weekly from `.github/workflows/pin-watch.yml`, compares each pin
+against the component's latest upstream release, and keeps one tracking issue up to date. It
+reports and never bumps: a Tari or `monerod` minor can carry a one-time data migration, which is
+work to schedule rather than a pull request to merge. Dependabot covers the base images it can see
+and is set to ignore minor and major bumps on the component pins for the same reason.
+
+A lookup that could not be made is reported as unchecked, never as current, and the run fails. The
+report carries the date of the last fully successful check, so a watcher that has stopped looks
+different from one with nothing to say.
+
 ## Published images: GHCR, single-tag model
 
 Images are published to GitHub Container Registry (`ghcr.io/p2pool-starter-stack/*`). Public
@@ -264,7 +275,9 @@ curl -fsSLO https://github.com/p2pool-starter-stack/pithead/releases/download/vX
 cosign verify-blob --key cosign.pub --signature pithead.tar.gz.sig --insecure-ignore-tlog=true pithead.tar.gz
 ```
 
-Releases up to v1.3.x are unsigned; verification gates every release from the first signed one.
+Releases before **v1.18.1** are unsigned — that is the first cut whose bundle shipped a
+`pithead.tar.gz.sig`, because it is the first tag containing the committed `cosign.pub`;
+verification gates every release from it on.
 If an upgrade sent you here saying cosign is not installed, read the next section — that box needs
 the host binary once, not a manual verify.
 
@@ -322,8 +335,12 @@ It runs two phases:
   `:vX.Y.Z` images and verifies them against the committed `cosign.pub`. A good signature must pass;
   a byte-changed bundle must be refused (this is what proves the check is real, not the pre-merge
   fake); the bundle's own `VERSION` must equal the tag (the #376 rollback guard); and an unrelated
-  key must be refused. If the release is **unsigned** — releases up to v1.3.x predate signing, and a
-  `--unsigned` cut ships without one — that is reported plainly and the phase is skipped. It never reports a signed pass for an unsigned release. This phase needs only
+  key must be refused. If the release is **unsigned** — every release before v1.18.1 predates the
+  committed key, and a deliberate `--unsigned` cut ships without a signature (an unconfigured box
+  aborts the cut instead; see
+  [Release / Validation Server › The release signing key](release-server.md#the-release-signing-key))
+  — that is reported plainly and the phase is skipped. It never reports a signed pass for an
+  unsigned release. This phase needs only
   `gh` auth and network; run it anywhere.
 - **Real #59 upgrade** (`--upgrade DIR`). On a box still running the *previous* release, it enqueues
   the exact upgrade intent the dashboard writes into the #33 control spool, runs the host control

@@ -126,9 +126,20 @@ expect_absent "no get_info (creds) in compose healthcheck" "get_info"
 expect_min "log rotation on every service" "max-size:" 9
 # Image digest pinning (#135): the externally-pulled images must reference an immutable @sha256
 # digest, not just a mutable tag, so a re-pushed tag can't silently change the running image.
-expect_present "tecnativa socket-proxy pinned by digest" "tecnativa/docker-socket-proxy:v0.4.2@sha256:"
-expect_present "caddy pinned by digest" "caddy:2.11.4@sha256:"
-expect_present "tari node pinned by digest" "minotari_node:v5.3.1-mainnet@sha256:"
+#
+# The WHOLE reference, not the `tag@sha256:` prefix (#1137). In a `tag@digest` reference the digest
+# is authoritative and the tag is decoration — that is the point of the pin, per the comment on
+# these images in docker-compose.yml. A prefix match therefore passes on the half-done bump that
+# matters: move the tag here and in the compose file, leave the digest, and the stack keeps pulling
+# the old image while the file, this test, the release notes and the docs all announce the new
+# version. Spelling the digest out makes the value a reviewable part of the diff at bump time.
+# A COUNT, not a presence check (#1137's residual). This image runs TWICE — docker-proxy and
+# docker-control — and expect_present is a grep -q, so it matches either line: bumping one proxy and
+# leaving the other was green. The two would then run different socket-proxy builds, which is exactly
+# the split the separate-proxy design exists to prevent.
+expect_min "tecnativa socket-proxy pinned by digest (both proxies)" "tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459" 2
+expect_present "caddy pinned by digest" "caddy:2.11.4@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
+expect_present "tari node pinned by digest" "minotari_node:v5.3.1-mainnet@sha256:824fd6ec21d618805317d7eede374d6782906eeae17d2fc8aaad4df6205f94e0"
 
 # Per-service precision checks via the JSON render (cleaner than grepping the flat YAML): the
 # Docker socket proxies must stay least-privilege, and the Tari probe must self-match safely.
@@ -142,7 +153,7 @@ jq_assert() { # <label> <filter>
 # The read proxy must never gain write (POST) access; the control proxy is start/stop ONLY.
 jq_assert "docker-proxy cannot POST (read-only API)" '(.services["docker-proxy"].environment.POST // "0") != "1"'
 jq_assert "docker-control is start/stop only (no exec/image ops)" \
-    '.services["docker-control"].environment | (.POST=="1" and .ALLOW_START=="1" and .ALLOW_STOP=="1" and ((.EXEC // "0") != "1") and ((.IMAGES // "0") != "1"))'
+    '.services["docker-control"].environment | (.POST=="1" and .ALLOW_START=="1" and .ALLOW_STOP=="1" and ((.EXEC // "0") != "1") and ((.IMAGES // "0") != "1") and ((.ALLOW_PAUSE // "0") != "1") and ((.ALLOW_UNPAUSE // "0") != "1"))'
 # Both proxies mount the Docker socket read-only.
 jq_assert "docker socket mounted read-only in both proxies" \
     '[.services["docker-proxy"], .services["docker-control"]] | all((.volumes // []) | any((.source == "/var/run/docker.sock") and (.read_only == true)))'
@@ -296,6 +307,19 @@ jq_assert "exactly 5 depends_on edges total (#565)" \
 # runs fine (#777). Asserted here because tari-wallet only renders under tari_payout_confirm.
 jq_assert "tari-wallet healthcheck pattern survives ps CMD truncation (#777)" \
     '(.services["tari-wallet"].healthcheck.test | tostring) | contains("[m]inotari_consol") and (contains("[m]inotari_console_wallet") | not)'
+# The console wallet's digest pin had NO assertion anywhere (#1137). It cannot have one where the
+# other three live: $RENDERED is built with COMPOSE_PROFILES=local_node,local_tari and tari-wallet
+# is profiles: ["tari_payout_confirm"], so an expect_present there would pass and fail identically —
+# it is not in that render at all. Here it is, for the same reason the healthcheck assertion above
+# is. Whole reference, not the `tag@sha256:` prefix, for the reason given at the other three.
+jq_assert "tari console wallet pinned by digest (#1137)" \
+    '.services["tari-wallet"].image == "quay.io/tarilabs/minotari_console_wallet:v5.3.1-mainnet@sha256:31b3cd7b2b390da33c279fd1a5cd457eb254aeea17a5a230ff4c7bfea79a47eb"'
+# The two Tari images are one component, bumped together, so a tag that moves on one and not the
+# other is a silent split-brain — the node speaking one protocol version and the wallet another.
+# Nothing compared them, and `scripts/release.sh pin tari` reads the NODE only (#1138), so a wallet
+# left behind is invisible in the release notes as well.
+jq_assert "both Tari images carry the same tag (#1137)" \
+    '[.services["tari"].image, .services["tari-wallet"].image] | map(split("@")[0] | split(":")[-1]) | unique | length == 1'
 # Compose healthchecks close the #904 gap. `pithead status` and the dashboard's container-health
 # alert (#337) read these states, and a service without a check reports Up even when dead inside —
 # so with every profile active (this render), no service may lack one, and each of the five late

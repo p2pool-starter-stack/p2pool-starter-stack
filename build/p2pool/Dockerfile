@@ -1,8 +1,8 @@
 # Pinned by digest (#135) so the ubuntu:24.04 tag can't be silently re-pointed.
-FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
 
-ARG P2POOL_VERSION=v4.16
-ARG P2POOL_HASH=1b03b2e4d4adfe488b2867eb85b57366fbaf8594a7f84cdbf13a3c8519159280
+ARG P2POOL_VERSION=v4.18
+ARG P2POOL_HASH=893691726b0218fe1883a7a326e2c69db4eb228fc72ba00c8adfa6be85b8a415
 
 # Install runtime dependencies. socat (#278): the entrypoint bridges 127.0.0.1 -> the real monerod
 # (node RPC/ZMQ) and the Tari base node (merge-mine gRPC) so those intra-stack legs stay DIRECT while

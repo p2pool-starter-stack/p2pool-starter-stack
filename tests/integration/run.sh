@@ -690,7 +690,7 @@ assert_running_state() {
         # 'ubuntu' user or an explicit useradd, are uid 1000) and tari pins 1000 via the compose
         # override (the pulled image ships no non-root user of its own). Caddy and the two Docker
         # socket proxies are the audited exception — verified against the upstream images
-        # (caddy:2.11.4, tecnativa/docker-socket-proxy:v0.4.2): neither ships a non-root user, so
+        # (caddy:2.11.4, tecnativa/docker-socket-proxy:v0.5.0): neither ships a non-root user, so
         # they run as root, mitigated by cap_drop: ALL + read_only rootfs and (the proxies) sitting
         # off mining_net on host-loopback-only ports (#345) rather than by uid. Pin ALL 9 so a
         # silent drift either way — a hardened image reverting to root, or an accepted-root service
@@ -793,10 +793,18 @@ assert_running_state() {
         assert_eq "dashboard confirms Tari payout tracking is live (#462/#942)" "$(jq_get "$st" '.earnings.tari_confirmed.enabled')" "true"
     fi
 
-    # 9. Caddy scheme matches dashboard.secure.
-    local scheme
-    [ "$secure" = "false" ] && scheme="http://" || scheme="https://"
-    assert_contains "Caddyfile uses correct scheme" "$(rx 'head -n1 Caddyfile 2>/dev/null')" "$scheme"
+    # 9. Caddy scheme matches dashboard.secure — read from the DASHBOARD's site block, which is
+    #    neither line 1 nor the first scheme in the file. #1123 put a global options block
+    #    (`{ auto_https disable_redirects }`) at the top, and in HTTPS mode an `http:// {` redirect
+    #    block ABOVE the dashboard's own block. So `head -n1` sees `{`, and "the first scheme in the
+    #    file" sees `http://` on a box that is correctly serving HTTPS — both spellings report a
+    #    false RED on a healthy stack, which is how this assertion failed 8 times in one green run.
+    #    The dashboard's block is the one whose address carries a HOST after the scheme; the bare
+    #    redirect is `http:// {`, with a space where the host would be, so `[^ ]` separates them.
+    local want_scheme
+    [ "$secure" = "false" ] && want_scheme='^http://[^ ]' || want_scheme='^https://[^ ]'
+    assert_eq "Caddyfile's dashboard site block uses the correct scheme (#1123)" \
+        "$(rx "grep -qE '$want_scheme' Caddyfile && echo yes || echo no")" "yes"
 
     # 10. Secrets intact (proxy token + onions unchanged vs the baseline we captured).
     assert_eq "secrets intact (token + onions)" "$(secret_fingerprint)" "$BASELINE_SECRET_FP"
@@ -1653,6 +1661,15 @@ run_hardening() {
     else
         it_fail "pithead-control.path installed + enabled by apply (#33)" "unit not enabled"
     fi
+    # The unit names are box-global, so on a bench that also hosts a live stack the assertion above
+    # was already true before this phase ran — the LIVE install's units satisfy it, and it stays
+    # green even if our apply installed nothing at all. That is why #1085 went unnoticed for two
+    # releases. Bind it to the ExecStart instead: after our apply the units must name THIS checkout,
+    # in the exact line provision_control_runner writes. Physical path on both sides (pithead cd -P's
+    # to SCRIPT_DIR, rx runs in the checkout), so `current` vs a versioned dir cannot cry wolf.
+    assert_contains "the enabled control units name THIS checkout, not another install (#1085)" \
+        "$(rx "grep -m1 '^ExecStart=' /etc/systemd/system/pithead-control.service 2>/dev/null" || true)" \
+        "ExecStart=$(rx 'pwd -P')/pithead control-run-pending"
 
     local cdir
     cdir="$(env_on_box CONTROL_DIR)"

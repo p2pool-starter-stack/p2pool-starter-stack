@@ -111,6 +111,23 @@ echo "== unit: lint-operator-strings self-test (#755) =="
 bash "$ROOT/scripts/lint-operator-strings.sh" --self-test >/dev/null 2>&1
 assert_rc "operator-strings guard self-test passes" "$?" "0"
 
+echo "== unit: pin-watch self-test (#1128) =="
+# The watcher's whole product is the COMPARISON: our pins do not spell versions the way upstream
+# tags them (`caddy:2.11.4` vs `v2.11.4`, `minotari_node:v5.3.1-mainnet` vs `v5.6.0`), so a plain
+# string compare reports two components stale every week for ever and the report gets muted — as
+# useless as the scheduled workflow that lived on a non-default branch and never ran at all. Its
+# --self-test drives the normalisation over the real pin spellings and drives both lookup failure
+# paths, because an upstream lookup that could not run must never read as "current".
+bash "$ROOT/scripts/pin-watch.sh" --self-test >/dev/null 2>&1
+assert_rc "pin-watch self-test passes" "$?" "0"
+
+echo "== unit: resolve-pins self-test (#1137) =="
+# pin-watch.sh above compares VERSIONS; it does not ask whether a pinned tag@sha256 digest still
+# matches what its registry serves for that tag. This is the check that does, and its --self-test
+# drives the exact half-done bump #1137 is about (tag moved, old digest left in the file) red.
+bash "$ROOT/scripts/resolve-pins.sh" --self-test >/dev/null 2>&1
+assert_rc "resolve-pins self-test passes" "$?" "0"
+
 echo "== unit: patch-coverage overlap self-test (#1000) =="
 # diff-cover exits 0 on "No lines with coverage information" — a vacuous pass. The wrapper's
 # overlap check is what turns that into a loud not-applicable pass or a real failure; its
@@ -1257,11 +1274,11 @@ case "$(grep -E '^proxy=' "$MONT" || true)" in
 *) bad "monero clearnet: P2P proxy= line stripped (#183)" "still present" ;;
 esac
 assert_contains "monero clearnet: tx-proxy stays on Tor (#183)" "$(cat "$MONT")" "tx-proxy=tor"
-# P2Pool v4.16 clearnet recommendation: out-peers 32 + the recommended priority nodes (added only in
+# P2Pool v4.18 clearnet recommendation: out-peers 32 + the recommended priority nodes (added only in
 # the clearnet window; the Tor template has neither — the #161 check below guards that).
-assert_contains "monero clearnet: out-peers=32 (p2pool v4.16 rec)" "$(cat "$MONT")" "out-peers=32"
-assert_contains "monero clearnet: xmrvsbeast priority node (v4.16)" "$(cat "$MONT")" "add-priority-node=p2pmd.xmrvsbeast.com:18080"
-assert_contains "monero clearnet: hashvault priority node (v4.16)" "$(cat "$MONT")" "add-priority-node=nodes.hashvault.pro:18080"
+assert_contains "monero clearnet: out-peers=32 (p2pool v4.18 rec)" "$(cat "$MONT")" "out-peers=32"
+assert_contains "monero clearnet: xmrvsbeast priority node (v4.18)" "$(cat "$MONT")" "add-priority-node=p2pmd.xmrvsbeast.com:18080"
+assert_contains "monero clearnet: hashvault priority node (v4.18)" "$(cat "$MONT")" "add-priority-node=nodes.hashvault.pro:18080"
 # The committed template (the Tor-only default) keeps the proxy line + the Tor-tuned out-peers.
 assert_contains "monero default: Tor P2P proxy present (#183)" "$(cat "$ROOT/build/monero/bitmonero.conf.template")" 'proxy=${NETWORK_PREFIX}.25:9050'
 # #595: the template's out-peers is now config-driven (monero.out_peers, default 48 in the render).
@@ -1505,8 +1522,9 @@ case "$caddy_port_http" in
 *"disable_redirects"*) bad "plain-HTTP custom port has no redirect global" "'disable_redirects' present on a plain-HTTP site" ;;
 *) ok "plain-HTTP custom port has no redirect global" ;;
 esac
-# A port that equals the scheme default (443 secure / unset) renders today's Caddyfile verbatim —
-# no port suffix, no redirect global. Guards the byte-identical default path.
+# A port that equals the scheme default (443 secure / unset) renders the same site address as an
+# unset one — no port suffix. It still takes :80 over from auto_https (see #1123 below), which is
+# what separates it from the custom-port case: there, :80 is deliberately left to a fronting proxy.
 # shellcheck disable=SC1090  # STACK path is dynamic by design
 caddy_port_default="$(
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
@@ -1516,9 +1534,46 @@ caddy_port_default="$(
 )"
 assert_contains "explicit default port keeps the bare site address" "$caddy_port_default" "https://box.lan {"
 case "$caddy_port_default" in
-*"disable_redirects"*) bad "default port emits no redirect global" "'disable_redirects' present at the scheme default" ;;
 *":443"*) bad "default port emits no explicit suffix" "':443' suffix present at the scheme default" ;;
 *) ok "default port renders the bare site address" ;;
+esac
+
+echo "== unit: the :80 redirect cannot be steered by the Host header (#1123) =="
+# Caddy's built-in HTTP->HTTPS redirect is a CATCH-ALL whose target is the request's own Host
+# header, so a provisioned box answered `Host: evil.example` on :80 with `308 -> https://evil.example`
+# — measured on a running machine. That is #1118's open redirector again, in the state the machine
+# spends its life in, and it lands on the screen where the operator types the dashboard password.
+# The render now disables the built-in redirects and serves :80 itself with a FIXED target.
+# MUTATION PROOF: render `redir https://{host}{uri}` instead of the literal host, or drop the
+# `auto_https disable_redirects`, and the two assertions below go red.
+# shellcheck disable=SC1090  # STACK path is dynamic by design
+caddy_redir="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
+assert_contains "the default secure render takes :80 over from auto_https" "$caddy_redir" "auto_https disable_redirects"
+assert_contains "it serves :80 itself" "$caddy_redir" "http:// {"
+assert_contains "and redirects to the box, by name, not to whatever was asked for" "$caddy_redir" \
+    "redir https://box.lan{uri} 308"
+# The whole defect in one assertion: no redirect target may be built from the request. Caddy spells
+# the request's host `{host}` (and `{http.request.host}`), so neither may appear in a redir line.
+caddy_redir_lines="$(printf '%s\n' "$caddy_redir" | grep -a "redir" || true)"
+case "$caddy_redir_lines" in
+*"{host}"* | *"{http.request.host}"*) bad "no redirect target comes from the request" "a redir line interpolates the request host: $caddy_redir_lines" ;;
+*) ok "no redirect target comes from the request" ;;
+esac
+# A custom port means a fronting proxy owns :80 (#740). Taking it over there would break exactly the
+# co-hosting the option exists for, so the catch-all is the default path's alone.
+case "$caddy_port_https" in
+*"http:// {"*) bad "a custom port leaves :80 to the fronting proxy" "the render claimed :80 anyway" ;;
+*) ok "a custom port leaves :80 to the fronting proxy" ;;
+esac
+# Plain-HTTP mode has no redirect to steer: :80 IS the dashboard there.
+case "$caddy_http" in
+*"redir"*) bad "plain-HTTP mode renders no redirect at all" "a redir line appeared on a plain-HTTP site" ;;
+*) ok "plain-HTTP mode renders no redirect at all" ;;
 esac
 # Onion + custom LAN port together (#740 × #343): the LAN vhost moves to the custom port and the
 # `disable_redirects` global is emitted, but the onion vhost MUST stay on the bridge gateway's bare
@@ -2170,6 +2225,14 @@ man_out="$SANDBOX/manifest.md"
     write_manifest "$man_out"
 ) 2>/dev/null
 assert_contains "manifest renders the leading-dash Version line (printf --)" "$(cat "$man_out" 2>/dev/null)" "- **Version:** 9.9.9"
+# #1138's actual deliverable is that the ingredient list names BOTH Tari images. The drift guard
+# below tests pin(), which is a different function — deleting either printf leaves it green while
+# the notes regress to naming one of the two. Assert the rendered manifest, which is the artefact an
+# operator reads. A twin-sync conflict on release.sh is a realistic way to lose one of these lines.
+assert_contains "manifest names the tari NODE pin (#1138)" "$(cat "$man_out" 2>/dev/null)" \
+    "- tari node: \`quay.io/tarilabs/minotari_node:"
+assert_contains "manifest names the tari CONSOLE WALLET pin (#1138)" "$(cat "$man_out" 2>/dev/null)" \
+    "- tari console wallet: \`quay.io/tarilabs/minotari_console_wallet:"
 # The ingredients manifest's component pins must resolve to a real value present in each Dockerfile —
 # a drift guard so a renamed ARG can't silently emit an empty pin in the release notes.
 for svc in p2pool monero xmrig-proxy; do
@@ -2185,6 +2248,49 @@ for svc in p2pool monero xmrig-proxy; do
         ok "pin $svc resolves to a value in its Dockerfile"
     else
         bad "pin $svc resolves to a value in its Dockerfile" "got '$pv'"
+    fi
+done
+# The same drift guard for the pins read out of docker-compose.yml and build/tor, which had none
+# (#1138). pin() emits the EMPTY string when its grep stops matching — a renamed image, a moved tag
+# format — and the release notes then print "- caddy: " with nothing after it. The ingredient list's
+# whole job, silently not done, on the exact surface an operator uses to check what they installed.
+#
+# Each row also names the identifier the pin MUST contain, and that half is the one that matters.
+# "is $pv present in the file it came from" is a TAUTOLOGY for every arm here — pin() extracts a
+# substring of that same file, so any non-empty answer is present by construction, and the check
+# would only ever have caught the empty case. It would NOT have caught the mistake this issue is
+# about: an arm that greps a SIBLING's image (a copy-paste slip when adding tari-wallet next to
+# tari, or a later edit "de-duplicating" two near-identical regexes) resolves fine, matches the
+# file, and reports ok while the release notes name the same image twice.
+# grep -F throughout: these values carry '/' and '.', and a regex match would accept a value that is
+# merely similar to one in the file.
+for row in \
+    "tari|docker-compose.yml|quay.io/tarilabs/minotari_node:" \
+    "tari-wallet|docker-compose.yml|quay.io/tarilabs/minotari_console_wallet:" \
+    "caddy|docker-compose.yml|caddy:" \
+    "socket-proxy|docker-compose.yml|tecnativa/docker-socket-proxy:" \
+    "tor-base|build/tor/Dockerfile|:"; do
+    comp="${row%%|*}"
+    rest="${row#*|}"
+    pin_rel="${rest%%|*}"
+    pin_want="${rest#*|}"
+    pin_src="$ROOT/$pin_rel"
+    # shellcheck disable=SC1090
+    pv="$(
+        cd "$ROOT" || exit
+        set --
+        source "$REL" 2>/dev/null
+        set +eu
+        pin "$comp"
+    )"
+    pin_ok=0
+    if [ -n "$pv" ] && grep -qF -- "$pv" "$pin_src"; then
+        case "$pv" in *"$pin_want"*) pin_ok=1 ;; esac
+    fi
+    if [ "$pin_ok" = 1 ]; then
+        ok "pin $comp resolves to its own image in $pin_rel"
+    else
+        bad "pin $comp resolves to its own image in $pin_rel" "got '$pv', expected to contain '$pin_want'"
     fi
 done
 # The top-level VERSION file is the single source of truth (#44); the dashboard's Python package
@@ -2343,6 +2449,51 @@ tc_rc=$?
 assert_rc "missing tool -> preflight fails fast (rc 1)" "$tc_rc" "1"
 assert_contains "the missing tool is named" "$tc_out" "shfmt"
 assert_contains "error points at the provisioning doc" "$tc_out" "release-server.md"
+
+echo "== unit: release-smoke resolves the upgraded install at ASSERT time (#1068) =="
+# The #59 upgrade never rewrites the old install in place — it extracts a fresh pithead-v<new> and
+# repoints `current`, which is what makes rollback possible. So asserting on the directory the run
+# was POINTED at could only pass if the upgrade had overwritten the previous install: a correct
+# upgrade reported as a failure, on the documented final gate of a release. MUTATION PROOF: return
+# the given path unresolved and both "lands on" assertions go red.
+SMK="$SANDBOX/smoke1068"
+SMOKE_SH="$ROOT/scripts/release-smoke.sh"
+mkdir -p "$SMK/pithead-v1.18.1" "$SMK/pithead-v1.19.0"
+printf '1.18.1\n' >"$SMK/pithead-v1.18.1/VERSION"
+printf '1.19.0\n' >"$SMK/pithead-v1.19.0/VERSION"
+ln -sfn "$SMK/pithead-v1.19.0" "$SMK/current"
+smoke_resolve() { # <dir-as-given>
+    (
+        _arg="$1"          # saved before `set --`, which release-smoke's own arg parser needs empty
+        cd "$ROOT" || exit # its top level insists on a git repo, like the real invocation
+        set --
+        # Sourced through a variable, never a literal path: shellcheck follows a literal that names
+        # another file in the same invocation, and release-smoke pulls in release.sh, whose
+        # `local tool missing=()` then collides with this file's own scalar `missing` (SC2178).
+        # shellcheck disable=SC1090
+        source "$SMOKE_SH" 2>/dev/null
+        set +eu
+        upgraded_install_dir "$_arg"
+    )
+}
+# Handed the previous VERSIONED dir — the shape that produced the false red. It is unchanged by
+# design, so the answer has to come from the `current` beside it.
+assert_eq "a versioned dir resolves to where the upgrade actually landed" \
+    "$(tr -d '[:space:]' <"$(smoke_resolve "$SMK/pithead-v1.18.1")/VERSION")" "1.19.0"
+# Handed the SYMLINK — resolved now, after the upgrade moved it. This is why the v1.19.2 cut did
+# not hit the false red, and it must keep working.
+assert_eq "the current symlink resolves to the new install" \
+    "$(tr -d '[:space:]' <"$(smoke_resolve "$SMK/current")/VERSION")" "1.19.0"
+# Nothing moved: a box that is already on the target must resolve to itself, not wander off.
+ln -sfn "$SMK/pithead-v1.18.1" "$SMK/current"
+assert_eq "with current pointing at it, the same dir resolves to itself" \
+    "$(smoke_resolve "$SMK/pithead-v1.18.1")" "$SMK/pithead-v1.18.1"
+# NOTE, measured rather than assumed: replacing the `readlink -f` with the raw argument leaves all
+# three assertions above GREEN. The sibling lookup is what fixes the false red; the readlink only
+# normalises the path that lands in the pass and failure messages. Recorded here so the next reader
+# does not mistake it for a covered behaviour.
+rm -rf "$SMK"
+unset SMK SMOKE_SH
 
 echo "== unit: release.sh signs the promoted digests (#376) =="
 # sign_images must sign the recorded manifest-LIST digest (repo@sha256:… — never the mutable tag,
@@ -5090,12 +5241,24 @@ TOR_ENTRY="$ROOT/build/tor/entrypoint.sh"
 tor_torrc() { # <DASHBOARD_ONION_ENABLED> [COMPOSE_PROFILES] -> the torrc the entrypoint would hand to `tor -f`
     local d
     d="$(mktemp -d)"
-    printf '#!/bin/sh\ncat /tmp/torrc\n' >"$d/tor" # stub tor: ignore -f, just print the rendered file
+    # The stub cats the SANDBOX path, not /tmp/torrc (#1104). That is what makes the TORRC_OUT seam
+    # load-bearing: if the entrypoint ignored it and wrote the host-global file, this prints nothing
+    # and every assertion below goes red. Catting /tmp/torrc instead would keep passing off a stale
+    # file left by an earlier run — the vacuous version of this check.
+    printf '#!/bin/sh\ncat "%s"\n' "$d/torrc" >"$d/tor" # stub tor: ignore -f, print the rendered file
     chmod +x "$d/tor"
     PATH="$d:$PATH" DASHBOARD_ONION_ENABLED="$1" COMPOSE_PROFILES="${2-local_node,local_tari}" NETWORK_PREFIX=10.9.0 \
-        TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" sh "$TOR_ENTRY"
+        TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" TORRC_OUT="$d/torrc" sh "$TOR_ENTRY"
     rm -rf "$d"
 }
+# The suite's only host-global fixture path, now sandboxed: two concurrent runs used to race on one
+# /tmp/torrc and redden the hidden-service assertions, and the natural remedy for that flake is
+# "re-run until green" — the habit this repo has been removing. The container default is unchanged
+# and MUST stay /tmp/torrc, because tier-3 assertions read that path inside the running container.
+assert_eq "tor entrypoint keeps /tmp/torrc as its container default (#1104)" \
+    "$(grep -c '^: "${TORRC_OUT:=/tmp/torrc}"$' "$TOR_ENTRY")" "1"
+assert_eq "tor entrypoint writes NO bare /tmp/torrc outside that default (#1104)" \
+    "$(grep -vE '^\s*#' "$TOR_ENTRY" | grep -cF '/tmp/torrc')" "1"
 tor_onion_on="$(tor_torrc true)"
 assert_contains "tor entrypoint: dashboard HiddenService appended when enabled (#343)" \
     "$tor_onion_on" "HiddenServiceDir /var/lib/tor/dashboard/"
@@ -6258,6 +6421,104 @@ out="$(run_pending)"
 assert_contains "next run drains the remainder" "$out" "Processed 10 control request(s)"
 assert_eq "spool empty after the second run" "$(ls "$REQS" | wc -l | tr -d ' ')" "0"
 
+echo "== unit: a spent GitHub rate limit is not a dead Tor circuit (#1081) =="
+# The one-click upgrade was rejected on a healthy box with "could not reach the GitHub release API
+# over Tor". Tor was fine and the dial succeeded; GitHub answered 403 because the unauthenticated
+# limit is 60 requests an hour PER IP and a Tor exit is shared with everyone else using it, so the
+# budget had been spent by strangers. `curl -f` collapses every non-2xx into one exit code, so the
+# only thing the operator was told pointed at 'doctor' — which correctly reports Tor healthy.
+#
+# The remedy is a different one entirely: pick a new exit. The fetch is now ONE function both the
+# pithead and the RigForge lookups go through, so neither can drift back.
+#
+# MUTATION PROOF: make the 403 branch fall through to the generic hint (or restore `curl -fsS`) and
+# the rate-limit assertion goes red; the transport-failure assertion holds it honest in the other
+# direction, so "always blame the rate limit" does not pass either.
+GHR="$SANDBOX/gh-release"
+mkdir -p "$GHR/bin"
+cat >"$GHR/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+# Answers with $GH_STUB_CODE and $GH_STUB_BODY, in the shape `-w '\n%{http_code}'` produces.
+[ "${GH_STUB_TRANSPORT_FAIL:-0}" = "1" ] && exit 7
+[ "${GH_STUB_NOCODE:-0}" = "1" ] && { printf '%s' "${GH_STUB_BODY:-}"; exit 0; }
+printf '%s\n%s' "${GH_STUB_BODY:-}" "${GH_STUB_CODE:-200}"
+EOF
+chmod +x "$GHR/bin/curl"
+gh_fetch() { # <code> <body> [transport-fail] -> "<rc>|<stdout>|<hint>"
+    (
+        cd "$GHR" || exit 1
+        # shellcheck disable=SC1090  # STACK path is dynamic by design
+        source "$STACK" 2>/dev/null
+        set +e
+        export PATH="$GHR/bin:$PATH" GH_STUB_CODE="$1" GH_STUB_BODY="$2" GH_STUB_TRANSPORT_FAIL="${3:-0}"
+        gh_release_fetch p2pool-starter-stack/pithead
+        printf '%s|%s|%s' "$?" "$GH_RELEASE_JSON" "$GH_RELEASE_HINT"
+    )
+}
+gh_ok=$(gh_fetch 200 '{"tag_name":"v1.2.3"}')
+assert_eq "a 200 returns the release JSON" "${gh_ok%%|*}" "0"
+assert_contains "and the JSON is what the caller gets" "$gh_ok" '"tag_name":"v1.2.3"'
+
+gh_rl=$(gh_fetch 403 '{"message":"API rate limit exceeded for 203.0.113.9."}')
+assert_eq "a spent rate limit is a failure" "${gh_rl%%|*}" "1"
+assert_contains "and names the remedy that actually works" "$gh_rl" "restart tor"
+case "$gh_rl" in
+*"could not reach the GitHub release API"*) bad "a spent rate limit is not reported as unreachable" "the hint still blames the dial: $gh_rl" ;;
+*) ok "a spent rate limit is not reported as unreachable" ;;
+esac
+
+gh_tf=$(gh_fetch 000 '' 1)
+assert_eq "a transport failure is still a failure" "${gh_tf%%|*}" "1"
+assert_contains "and still reads as a dial that did not land" "$gh_tf" "could not reach the GitHub release API"
+case "$gh_tf" in
+*"restart tor"*) bad "a dial failure is not blamed on the rate limit" "the hint sends them to restart tor: $gh_tf" ;;
+*) ok "a dial failure is not blamed on the rate limit" ;;
+esac
+
+# No status line at all — `code` is then the WHOLE BODY, and it went into an operator-facing string
+# ("answered HTTP {"message":"Not Found"}"): unreadable, and a way for a remote body to reach the
+# dashboard verbatim. GH_STUB_NOCODE makes the stub answer the way that produced it.
+gh_nocode=$(
+    cd "$GHR" || exit 1
+    # shellcheck disable=SC1090  # STACK path is dynamic by design
+    source "$STACK" 2>/dev/null
+    set +e
+    export PATH="$GHR/bin:$PATH" GH_STUB_BODY='{"message":"Not Found"}' GH_STUB_NOCODE=1
+    gh_release_fetch p2pool-starter-stack/pithead
+    printf '%s|%s' "$?" "$GH_RELEASE_HINT"
+)
+assert_eq "a response with no status line is a failure" "${gh_nocode%%|*}" "1"
+case "$gh_nocode" in
+*'{"message"'* | *'Not Found'*) bad "the body never reaches the operator" "the hint quotes the response body: $gh_nocode" ;;
+*) ok "the body never reaches the operator" ;;
+esac
+
+gh_500=$(gh_fetch 500 'upstream is unwell')
+assert_eq "a server error is a failure" "${gh_500%%|*}" "1"
+assert_contains "and says which status came back" "$gh_500" "HTTP 500"
+
+# Both lookups go through the one function — a second copy is how the two messages drifted apart in
+# the first place, and the RigForge one would have kept the old wrong hint.
+assert_eq "both release lookups use the shared fetch" \
+    "$(grep -c 'gh_release_fetch p2pool-starter-stack/' "$STACK")" "2"
+assert_eq "no release lookup dials the API directly any more" \
+    "$(grep -c 'api.github.com/repos/.*/releases/latest' "$STACK")" "1"
+# The hint has to reach the CALLER. `rel=$(gh_release_fetch ...)` reads naturally and is a subshell,
+# so the hint would be set and discarded and every rejection would carry an empty message — the
+# defect this whole change exists to remove, reintroduced by the refactor that removes it. Neither
+# caller may wrap the fetch in a command substitution.
+assert_eq "neither caller swallows the hint in a subshell" \
+    "$(grep -cF '=$(gh_release_fetch' "$STACK")" "0"
+# And the other half of the same mistake: folding the lookup into a function DELETED the caller's own
+# `local prefix socks` derivation, while two later downloads in that same function still said
+# "$socks". Under `set -u` the runner died at its first download — the upgrade result sat at
+# "running" for ever with a single dial in the log and nothing extracted, and 60 assertions went red
+# together. The fetch publishes the address it used; every dial on that path reads the same one.
+assert_eq "every dial on the upgrade path uses the address the lookup derived" \
+    "$(grep -cF -- '--socks5-hostname "$GH_SOCKS"' "$STACK")" "3"
+assert_eq "no dial refers to a socks variable nobody declares" \
+    "$(grep -cF -- '--socks5-hostname "$socks"' "$STACK")" "0"
+
 echo "== black-box: control upgrade verb (#59) =="
 # A RELEASE install (no build/*/Dockerfile → is_source_checkout false) with the control channel
 # on. The runner's upgrade verb runs against a stub curl (GitHub release API + bundle download)
@@ -6303,7 +6564,13 @@ for a in "$@"; do
     prev="$a"
 done
 case "$url" in
-*api.github.com*) cat "${CURL_API_RESPONSE:?}" ;;
+# The release lookup reads the body AND the status now (#1081), so the stub has to answer in the
+# shape `-w '\n%{http_code}'` produces. GH_STUB_CODE lets a test drive a non-2xx through the real
+# control path; unset means the ordinary 200.
+*api.github.com*)
+    cat "${CURL_API_RESPONSE:?}"
+    printf '\n%s' "${GH_STUB_CODE:-200}"
+    ;;
 *releases/download/*.sig) cp "${CURL_SIG:?}" "$out" ;;
 *releases/download/*) cp "${CURL_BUNDLE:?}" "$out" ;;
 *) exit 22 ;;
@@ -7454,7 +7721,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "$url" in
-*/releases/latest) printf '{"tag_name":"v9.9.9"}' ;;
+*/releases/latest) printf '{"tag_name":"v9.9.9"}\n200' ;;
 */upgrade) printf '{"change_id":"chg-9"}' >"$out"; printf '202' ;;
 */status) printf '{"change_id":"chg-9","status":"applied"}' >"$out"; printf '200' ;;
 *) printf '000' ;;
@@ -7489,7 +7756,7 @@ mkdir -p "$ghjunk_dir/staged" "$ghjunk_dir/results" "$ghjunk_dir/audit" "$ghjunk
 cp "$WU/config.json" "$ghjunk_dir/config.json"
 cat >"$ghjunk_dir/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-printf '{"message":"Not Found"}'
+printf '{"message":"Not Found"}\n200'
 exit 0
 EOF
 chmod +x "$ghjunk_dir/bin/curl"
