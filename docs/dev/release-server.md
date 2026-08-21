@@ -51,9 +51,10 @@ The safe rule: the keyed server only ever runs code you trust. Concretely:
 
 - Do not trigger tier-4 on `pull_request` (and never on a fork PR). "Require approval" only
   gates starting the run; once it starts, the PR's code still executes on the box.
-- Trigger tier-4 only on trusted code: `workflow_dispatch` (a maintainer manually runs it on a
-  ref they've reviewed) and/or `push` to `main` (post-merge). To E2E a specific fork PR, a
-  maintainer reviews it first, then dispatches the workflow on that ref.
+- Trigger tier-4 only on trusted code: `workflow_dispatch`, on a ref a maintainer has reviewed.
+  A `push`-to-`main` trigger is no longer an alternative — `main` only moves when a release
+  fast-forwards it at publish time, after this gate should already have run. To E2E a specific
+  fork PR, a maintainer reviews it first, then dispatches the workflow on that ref.
 - Register the runner as ephemeral / just-in-time (one job, then auto-removed) in its own runner
   group, isolated from any private repos.
 - Keep the runner least-privilege: a dedicated unprivileged user, the box runs nothing else
