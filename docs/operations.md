@@ -164,6 +164,15 @@ off only removes units whose `ExecStart` points at itself, comparing physical pa
 checkout on the same box (an e2e harness, a bundle smoke test) therefore cannot delete the live
 stack's runner and strand its queued requests.
 
+Installation is ownership-checked the same way: when the units already name a different install
+that still exists on disk, `apply` refuses to overwrite them and names the owning directory — a
+sibling checkout turning the flag on can no longer repoint the live stack's runner at itself,
+which would leave the live dashboard's requests sitting unread with no error on either side.
+Units whose install directory is gone are adopted (how a new version takes over from a removed
+one), a unit this tool did not write is left untouched, and setting
+`PITHEAD_STEAL_CONTROL_UNITS=1` forces the takeover when it is deliberate — migrating an install
+by hand, or repairing after a failed upgrade.
+
 The runner dispatches a fixed set of actions and rejects everything else: `apply --dry-run
 --porcelain` (preview), `apply -y` (commit), a release upgrade — the dashboard's
 [Upgrade button](dashboard.md#upgrading-from-the-dashboard), for which the runner re-derives the

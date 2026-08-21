@@ -8176,6 +8176,65 @@ assert_contains "own unit under its versioned spelling, run via the current syml
     "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
 unset PCR pcr_run
 
+echo "== unit: provision_control_runner refuses to overwrite a foreign install's units (#1190) =="
+# The removal branch above got its ownership check when a disable-apply deleted the live stack's
+# units; the INSTALL branch had none — any sibling checkout's apply/up with control enabled
+# overwrote the box-global units and silently repointed dashboard control at itself (the
+# production-stranding mechanism, this time via install instead of a failed upgrade). The guard:
+# foreign owner that still exists on disk → refuse and name it; owner directory gone → adopt
+# (that is how a new version takes over from a removed one); own unit → converge; unparseable
+# ExecStart → leave alone, fail safe; PITHEAD_STEAL_CONTROL_UNITS=1 → deliberate takeover.
+#
+# Mutation proof (each ran red against its assertion with the guard intact elsewhere):
+#   - drop the `[ -d "$install_owner" ]` conjunct  -> "owner directory gone -> adopted" goes red
+#   - flip the `!=` ownership compare to `=`       -> "foreign existing owner -> refused" goes red
+#   - drop the PITHEAD_STEAL_CONTROL_UNITS gate    -> "steal escape -> overwritten" goes red
+PCI="$SANDBOX/pci"
+mkdir -p "$PCI/units" "$PCI/bin" "$PCI/mine" "$PCI/other"
+printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$PCI/bin/uname"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$PCI/bin/systemctl"
+chmod +x "$PCI/bin/uname" "$PCI/bin/systemctl"
+
+pci_run() { # <owner-dir|-|garbage> <run-dir> [steal] — seed a service unit, run the INSTALL branch, echo warns + recorded sudo calls
+    rm -f "$PCI/units/pithead-control.service" "$PCI/units/pithead-control.path" "$PCI/calls"
+    case "$1" in
+    -) ;; # no pre-existing units
+    garbage) printf '[Service]\nExecStart=/usr/bin/env not-ours\n' >"$PCI/units/pithead-control.service" ;;
+    *) printf '[Service]\nExecStart=%s/pithead control-run-pending\n' "$1" >"$PCI/units/pithead-control.service" ;;
+    esac
+    (
+        cd "$2" || exit
+        PATH="$PCI/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        log() { :; }
+        # Record instead of executing — into a side file, because the install branch redirects
+        # `sudo tee`'s stdout to /dev/null, so an echoing stub would be invisible there.
+        sudo() { echo "sudo:$*" >>"$PCI/calls"; }
+        PITHEAD_UNIT_DIR="$PCI/units" DASHBOARD_CONTROL_ENABLED=true \
+            CONTROL_DIR="$2/data/control" PITHEAD_STEAL_CONTROL_UNITS="${3:-0}" \
+            provision_control_runner 2>&1
+        cat "$PCI/calls" 2>/dev/null
+    )
+}
+
+out="$(pci_run "$PCI/other" "$PCI/mine")"
+assert_contains "install: foreign existing owner -> refused, names the owner" "$out" "belong to the install at $PCI/other"
+assert_not_contains "install: foreign existing owner -> unit not overwritten" "$out" "sudo:tee"
+assert_contains "install: foreign existing owner + steal escape -> overwritten" \
+    "$(pci_run "$PCI/other" "$PCI/mine" 1)" "sudo:tee $PCI/units/pithead-control.service"
+assert_contains "install: foreign owner whose directory is gone -> adopted" \
+    "$(pci_run "$PCI/long-gone" "$PCI/mine")" "sudo:tee $PCI/units/pithead-control.service"
+out="$(pci_run garbage "$PCI/mine")"
+assert_contains "install: unparseable ExecStart -> left alone, says so" "$out" "not one this tool wrote"
+assert_not_contains "install: unparseable ExecStart -> unit not overwritten" "$out" "sudo:tee"
+assert_contains "install: own drifted unit -> converged (rewritten in place)" \
+    "$(pci_run "$PCI/mine" "$PCI/mine")" "sudo:tee $PCI/units/pithead-control.service"
+assert_contains "install: no units at all -> fresh install unaffected by the guard" \
+    "$(pci_run - "$PCI/mine")" "sudo:tee $PCI/units/pithead-control.service"
+unset PCI pci_run out
+
 echo "== unit: doctor sees control units that do not point at this install (#33) =="
 # The failure this guards is silent by construction: the dashboard writes control requests into
 # its own install's spool, a box-global systemd unit watches some absolute path, and when the two

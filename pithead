@@ -6911,6 +6911,27 @@ provision_control_runner() {
         grep -qsF "ExecStart=$PWD/pithead control-run-pending" "$unit_dir/pithead-control.service"; then
         return 0
     fi
+    # The grep above is an idempotence skip, not an ownership check. The removal branch got its
+    # ownership guard when a disable-apply deleted the live stack's units; the install branch had
+    # none, so any sibling checkout's apply/up (e2e harness, bundle-smoke tmp dir, disposable
+    # install) silently repointed the box-global units at itself — the exact mechanism behind the
+    # production control-channel stranding. A unit naming a DIFFERENT install that still exists on
+    # disk is someone's live runner: refuse. A unit whose directory is gone is adoptable (the
+    # failed-upgrade repair), our own unit converges (the post-restore proof depends on it), and an
+    # unparseable ExecStart is left alone, fail-safe, like the removal branch. Deliberate takeover
+    # (upgrade repoint, operator migration) is PITHEAD_STEAL_CONTROL_UNITS=1.
+    if [ -e "$unit_dir/pithead-control.service" ] && [ "${PITHEAD_STEAL_CONTROL_UNITS:-0}" != "1" ]; then
+        local install_owner
+        install_owner=$(control_units_owner_dir)
+        if [ -z "$install_owner" ]; then
+            warn "Not installing the dashboard control runner: $unit_dir/pithead-control.service exists but its ExecStart is not one this tool wrote. Inspect it, or re-run with PITHEAD_STEAL_CONTROL_UNITS=1 to overwrite it; until a runner watches this install, dashboard config changes are not applied."
+            return 0
+        fi
+        if [ "$install_owner" != "$(pwd -P)" ] && [ -d "$install_owner" ]; then
+            warn "Not installing the dashboard control runner: the box-global units belong to the install at $install_owner. Run this from that checkout, or re-run with PITHEAD_STEAL_CONTROL_UNITS=1 to take the units over; until a runner watches this install, dashboard config changes are not applied."
+            return 0
+        fi
+    fi
     log "Installing the dashboard control runner (systemd path unit)..."
     sudo tee "$unit_dir/pithead-control.service" >/dev/null <<EOF
 [Unit]
