@@ -2686,6 +2686,14 @@ man_out="$SANDBOX/manifest.md"
     write_manifest "$man_out"
 ) 2>/dev/null
 assert_contains "manifest renders the leading-dash Version line (printf --)" "$(cat "$man_out" 2>/dev/null)" "- **Version:** 9.9.9"
+# #1138's actual deliverable is that the ingredient list names BOTH Tari images. The drift guard
+# below tests pin(), which is a different function — deleting either printf leaves it green while
+# the notes regress to naming one of the two. Assert the rendered manifest, which is the artefact an
+# operator reads. A twin-sync conflict on release.sh is a realistic way to lose one of these lines.
+assert_contains "manifest names the tari NODE pin (#1138)" "$(cat "$man_out" 2>/dev/null)" \
+    "- tari node: \`quay.io/tarilabs/minotari_node:"
+assert_contains "manifest names the tari CONSOLE WALLET pin (#1138)" "$(cat "$man_out" 2>/dev/null)" \
+    "- tari console wallet: \`quay.io/tarilabs/minotari_console_wallet:"
 # The ingredients manifest's component pins must resolve to a real value present in each Dockerfile —
 # a drift guard so a renamed ARG can't silently emit an empty pin in the release notes.
 for svc in p2pool monero xmrig-proxy; do
@@ -2701,6 +2709,49 @@ for svc in p2pool monero xmrig-proxy; do
         ok "pin $svc resolves to a value in its Dockerfile"
     else
         bad "pin $svc resolves to a value in its Dockerfile" "got '$pv'"
+    fi
+done
+# The same drift guard for the pins read out of docker-compose.yml and build/tor, which had none
+# (#1138). pin() emits the EMPTY string when its grep stops matching — a renamed image, a moved tag
+# format — and the release notes then print "- caddy: " with nothing after it. The ingredient list's
+# whole job, silently not done, on the exact surface an operator uses to check what they installed.
+#
+# Each row also names the identifier the pin MUST contain, and that half is the one that matters.
+# "is $pv present in the file it came from" is a TAUTOLOGY for every arm here — pin() extracts a
+# substring of that same file, so any non-empty answer is present by construction, and the check
+# would only ever have caught the empty case. It would NOT have caught the mistake this issue is
+# about: an arm that greps a SIBLING's image (a copy-paste slip when adding tari-wallet next to
+# tari, or a later edit "de-duplicating" two near-identical regexes) resolves fine, matches the
+# file, and reports ok while the release notes name the same image twice.
+# grep -F throughout: these values carry '/' and '.', and a regex match would accept a value that is
+# merely similar to one in the file.
+for row in \
+    "tari|docker-compose.yml|quay.io/tarilabs/minotari_node:" \
+    "tari-wallet|docker-compose.yml|quay.io/tarilabs/minotari_console_wallet:" \
+    "caddy|docker-compose.yml|caddy:" \
+    "socket-proxy|docker-compose.yml|tecnativa/docker-socket-proxy:" \
+    "tor-base|build/tor/Dockerfile|:"; do
+    comp="${row%%|*}"
+    rest="${row#*|}"
+    pin_rel="${rest%%|*}"
+    pin_want="${rest#*|}"
+    pin_src="$ROOT/$pin_rel"
+    # shellcheck disable=SC1090
+    pv="$(
+        cd "$ROOT" || exit
+        set --
+        source "$REL" 2>/dev/null
+        set +eu
+        pin "$comp"
+    )"
+    pin_ok=0
+    if [ -n "$pv" ] && grep -qF -- "$pv" "$pin_src"; then
+        case "$pv" in *"$pin_want"*) pin_ok=1 ;; esac
+    fi
+    if [ "$pin_ok" = 1 ]; then
+        ok "pin $comp resolves to its own image in $pin_rel"
+    else
+        bad "pin $comp resolves to its own image in $pin_rel" "got '$pv', expected to contain '$pin_want'"
     fi
 done
 # The top-level VERSION file is the single source of truth (#44); the dashboard's Python package
@@ -6221,12 +6272,24 @@ TOR_ENTRY="$ROOT/build/tor/entrypoint.sh"
 tor_torrc() { # <DASHBOARD_ONION_ENABLED> [COMPOSE_PROFILES] -> the torrc the entrypoint would hand to `tor -f`
     local d
     d="$(mktemp -d)"
-    printf '#!/bin/sh\ncat /tmp/torrc\n' >"$d/tor" # stub tor: ignore -f, just print the rendered file
+    # The stub cats the SANDBOX path, not /tmp/torrc (#1104). That is what makes the TORRC_OUT seam
+    # load-bearing: if the entrypoint ignored it and wrote the host-global file, this prints nothing
+    # and every assertion below goes red. Catting /tmp/torrc instead would keep passing off a stale
+    # file left by an earlier run — the vacuous version of this check.
+    printf '#!/bin/sh\ncat "%s"\n' "$d/torrc" >"$d/tor" # stub tor: ignore -f, print the rendered file
     chmod +x "$d/tor"
     PATH="$d:$PATH" DASHBOARD_ONION_ENABLED="$1" COMPOSE_PROFILES="${2-local_node,local_tari}" NETWORK_PREFIX=10.9.0 \
-        TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" sh "$TOR_ENTRY"
+        TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" TORRC_OUT="$d/torrc" sh "$TOR_ENTRY"
     rm -rf "$d"
 }
+# The suite's only host-global fixture path, now sandboxed: two concurrent runs used to race on one
+# /tmp/torrc and redden the hidden-service assertions, and the natural remedy for that flake is
+# "re-run until green" — the habit this repo has been removing. The container default is unchanged
+# and MUST stay /tmp/torrc, because tier-3 assertions read that path inside the running container.
+assert_eq "tor entrypoint keeps /tmp/torrc as its container default (#1104)" \
+    "$(grep -c '^: "${TORRC_OUT:=/tmp/torrc}"$' "$TOR_ENTRY")" "1"
+assert_eq "tor entrypoint writes NO bare /tmp/torrc outside that default (#1104)" \
+    "$(grep -vE '^\s*#' "$TOR_ENTRY" | grep -cF '/tmp/torrc')" "1"
 tor_onion_on="$(tor_torrc true)"
 assert_contains "tor entrypoint: dashboard HiddenService appended when enabled (#343)" \
     "$tor_onion_on" "HiddenServiceDir /var/lib/tor/dashboard/"

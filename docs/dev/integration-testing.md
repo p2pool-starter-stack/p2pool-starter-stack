@@ -214,7 +214,17 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
    harness-rendered creds while the on-disk `.env` kept the real ones: internally consistent, so
    the stack mined and looked healthy for a day while every host-side RPC probe 401ed. A failed
    proof exits non-zero and names the recovery (`docker compose up -d` from the install dir
-   re-bakes everything from disk).
+   re-bakes everything from disk). The same proof asks the restored install's own `doctor` whether
+   the box-global control-runner units still name it
+   ([#1085](https://github.com/p2pool-starter-stack/pithead/issues/1085)): deploying the branch
+   repoints those units at the e2e checkout, and the hardening phase's teardown removes them when it
+   owns them, so a run can end with the live dashboard's config edits and one-click upgrades queueing
+   into a spool nothing watches — enabled, active and silent. The verdict is read from the install's
+   own `pithead`, run from its own directory, because `pithead` works from the directory of the
+   binary you invoke: the branch's copy would compare the units against the e2e checkout and report
+   all-clear on exactly the stranded box. That needs the live install on v1.19.2 or newer, the
+   release whose `doctor` gained the check; an older one is reported as unproven rather than as a
+   pass.
 
 `--mode`: `targeted` (default, lean) validates the dashboard and the sync logic against the
 already-synced node: `check` + `--lifecycle` (one controlled restart exercises the sync gate /

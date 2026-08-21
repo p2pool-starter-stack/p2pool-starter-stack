@@ -606,6 +606,52 @@ case "$(env_bake_verdict MONERO_NODE_PASSWORD "$_disk" "$_baked_wrong")" in
 *) it_pass "verdict never carries a value" ;;
 esac
 
+echo "== control_units_verdict: the restore proof's control-channel oracle (#1085) =="
+# The #1085 shape: after an e2e the box-global control units name the harness checkout, so the live
+# dashboard writes control requests into a spool nothing watches — enabled, active, and silent.
+# doctor's own words are the oracle, so these fixtures are its literal verdict lines.
+_ccv_ok='Boot persistence:
+  OK   Docker is enabled to start at boot.
+
+Dashboard control channel:
+  OK   Control runner units target this install.
+
+CPU:'
+assert_eq "units on target -> on-target" "$(control_units_verdict "$_ccv_ok")" "on-target"
+
+_ccv_strand='Dashboard control channel:
+  FAIL The control runner units point at /srv/code/pithead-e2e, but this install is /srv/code/pithead-v1.19.2 - the dashboard writes its requests here and nothing reads them.'
+assert_eq "units name the harness checkout -> stranded (the #1085 incident)" \
+    "$(control_units_verdict "$_ccv_strand")" "stranded"
+
+# The QUIETER exit from a run: the teardown reaps the units it owns, and a path unit that does not
+# exist reports nothing at all. It must not classify the same as a healthy box.
+_ccv_gone='Dashboard control channel:
+  FAIL The control channel is enabled but no runner units are installed.'
+assert_eq "teardown deleted the units -> stranded" "$(control_units_verdict "$_ccv_gone")" "stranded"
+
+_ccv_off='Dashboard control channel:
+  INFO Disabled for this install - the dashboard cannot apply config changes or upgrade.'
+assert_eq "control channel off -> disabled, not a strand" "$(control_units_verdict "$_ccv_off")" "disabled"
+
+# doctor's fourth outcome, and folding it into `stranded` hard-fails a run on a FALSE claim: a
+# superseded version dir whose sibling `current` names another install. doctor grades this INFO and
+# tells you where to look, which is not the same as reporting a fault.
+_ccv_notlive='Dashboard control channel:
+  INFO This is not the live install - /srv/code/current points at /srv/code/pithead-v1.19.3. Run doctor there to check its control channel.'
+assert_eq "superseded version dir -> not-live, not a strand" "$(control_units_verdict "$_ccv_notlive")" "not-live"
+
+# The arm that stops this being another check that cannot fail: a pithead predating the check
+# (< v1.19.2), or a box with no systemd, prints NO control-channel section. Without this arm that
+# output falls through to a pass, and "never looked" reads exactly like "looked and it was fine".
+_ccv_old='Boot persistence:
+  OK   Docker is enabled to start at boot.
+
+CPU:
+  OK   8 cores.'
+assert_eq "no control-channel section -> no-check, not a pass" "$(control_units_verdict "$_ccv_old")" "no-check"
+assert_eq "empty doctor output -> no-check" "$(control_units_verdict "")" "no-check"
+
 # --- Tally ------------------------------------------------------------------
 echo ""
 echo "selftest: $IT_PASS passed, $IT_FAIL failed"
