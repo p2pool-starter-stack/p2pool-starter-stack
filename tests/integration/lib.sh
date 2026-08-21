@@ -328,6 +328,30 @@ env_bake_verdict() { # <var> <disk-env-lines> <container-env-lines>
     fi
 }
 
+# Restore-proof control-channel verdict (#1085): classify `pithead doctor`'s control-channel section
+# so "the check RAN and the units are on target" reads differently from "the check never ran".
+# Classify the TEXT, never doctor's exit code — it is 1 on ANY failed check, so an unrelated failure
+# would swamp this signal and a 0 would read as "units fine" on a pithead that never looked.
+#   on-target — the units name the install doctor was run from
+#   stranded  — the section is there and says anything else: units naming another directory, no
+#               units at all, a spool nobody writes to, or "this is not the live install"
+#   disabled  — the control channel is off for that install, so there is no channel to strand
+#   no-check  — no section at all: no systemd, or a pithead predating the check (v1.19.2)
+control_units_verdict() { # <doctor-output>
+    case "$1" in
+    *"Dashboard control channel:"*) ;;
+    *)
+        printf 'no-check'
+        return
+        ;;
+    esac
+    case "$1" in
+    *"Control runner units target this install."*) printf 'on-target' ;;
+    *"Disabled for this install"*) printf 'disabled' ;;
+    *) printf 'stranded' ;;
+    esac
+}
+
 # Authoritative "is Monero caught up?" — query monerod's own get_info on the box (creds stay
 # on the box) and trust its `synchronized` flag / target_height 0, exactly like the sync gate.
 # This is the readiness GATE (the source of truth, and it avoids waiting on a dashboard poll cycle).

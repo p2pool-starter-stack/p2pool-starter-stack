@@ -1653,6 +1653,15 @@ run_hardening() {
     else
         it_fail "pithead-control.path installed + enabled by apply (#33)" "unit not enabled"
     fi
+    # The unit names are box-global, so on a bench that also hosts a live stack the assertion above
+    # was already true before this phase ran — the LIVE install's units satisfy it, and it stays
+    # green even if our apply installed nothing at all. That is why #1085 went unnoticed for two
+    # releases. Bind it to the ExecStart instead: after our apply the units must name THIS checkout,
+    # in the exact line provision_control_runner writes. Physical path on both sides (pithead cd -P's
+    # to SCRIPT_DIR, rx runs in the checkout), so `current` vs a versioned dir cannot cry wolf.
+    assert_contains "the enabled control units name THIS checkout, not another install (#1085)" \
+        "$(rx "grep -m1 '^ExecStart=' /etc/systemd/system/pithead-control.service 2>/dev/null" || true)" \
+        "ExecStart=$(rx 'pwd -P')/pithead control-run-pending"
 
     local cdir
     cdir="$(env_on_box CONTROL_DIR)"

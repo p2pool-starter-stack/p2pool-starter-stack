@@ -193,8 +193,17 @@ restore_all() {
     # 1. Miner: put its original pool config back and nudge xmrig to reconnect.
     if [ -n "$MINER_CFG_BACKUP" ]; then
         step "restoring $MINER_HOST xmrig config from $MINER_CFG_BACKUP"
-        if on_miner "cp -a '$MINER_CFG_BACKUP' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG'"; then
-            miner_reload && ok "$MINER_HOST repointed to its original pool(s)" || warn "$MINER_HOST config restored; verify xmrig reconnected"
+        # cmp, then rm (#1067). Every borrowing run minted a timestamped .e2e-orig.<stamp> and
+        # nothing ever removed it, so the loaner accumulated them and recovery became a guess among
+        # candidates where the newest is not necessarily the true pre-borrow state. The backup is
+        # only safe to delete once the bytes are demonstrably back in place, and the proof runs in
+        # the SAME remote call so a dropped ssh cannot land between proving and deleting.
+        # Deliberately NOT gated on miner_reload: that function ends `|| true` and `return 0`, so it
+        # cannot fail — gating on it would delete the backup whatever happened, and it is also why
+        # the `warn` arm it used to guard was unreachable.
+        if on_miner "cp -a '$MINER_CFG_BACKUP' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG' && cmp -s '$MINER_CFG_BACKUP' '$MINER_XMRIG_CONFIG' && rm -f '$MINER_CFG_BACKUP'"; then
+            miner_reload
+            ok "$MINER_HOST repointed to its original pool(s); backup pruned"
         else
             warn "FAILED to restore $MINER_HOST config — backup kept at $MINER_CFG_BACKUP"
         fi
@@ -272,7 +281,17 @@ wait_synced() { # <timeout_s>
 #      broke. Only .status is required (sync may still be re-confirming); polled briefly because
 #      the containers were just recreated. The probe script travels over ssh stdin (bash -s), so
 #      the creds stay on the box and the remote command string carries no shell parens.
-# Returns 0 when both hold.
+#   3. The box-global control units still name RESTORE_DIR (#1085). deploy_branch's `pithead
+#      upgrade` repoints them at E2E_DIR, and the hardening phase's teardown deletes them outright
+#      when it owns them — either way the live dashboard's config edits and one-click upgrades
+#      queue into a spool nothing watches, while every other signal here still reads healthy.
+#      The verdict comes from RESTORE_DIR's OWN doctor, run from RESTORE_DIR. That is not a
+#      preference: check_control_units compares the installed units' ExecStart against $PWD, and
+#      `pithead` cd's to the directory of the binary you invoke (SCRIPT_DIR, pithead:100) — so the
+#      BRANCH's copy would compare against E2E_DIR and print the OK verdict on exactly the
+#      stranded box this check exists to catch. It needs RESTORE_DIR on v1.19.2+, the release that
+#      added the check; anything older classifies as no-check and FAILS rather than passing quietly.
+# Returns 0 when all three hold.
 RESTORE_PROOF_VAR="MONERO_NODE_PASSWORD"
 verify_restore_proof() {
     local prc=0 disk cid baked="" verdict
@@ -311,6 +330,30 @@ PROBE
         fi
         sleep 10
     done
+
+    # 3. The control units must still name RESTORE_DIR (#1085). Grep the verdict, never doctor's
+    #    exit code — it is 1 on ANY dr_fail, so an unrelated failure elsewhere would swamp this.
+    local doc verdict_line
+    doc="$(on_bench "cd '$RESTORE_DIR' && ./pithead doctor 2>/dev/null" || true)"
+    verdict_line="$(printf '%s\n' "$doc" | awk '/^Dashboard control channel:/{getline; print; exit}')"
+    case "$(control_units_verdict "$doc")" in
+    on-target)
+        ok "restore proof: the control runner units point at $RESTORE_DIR"
+        ;;
+    disabled)
+        warn "restore proof: the control channel is disabled in $RESTORE_DIR's config — no channel to strand."
+        ;;
+    no-check)
+        warn "restore proof: $RESTORE_DIR's doctor printed no control-channel verdict — that pithead predates the check (v1.19.2), or the box has no systemd. The units were NOT proven; check by hand: systemctl cat pithead-control.service"
+        prc=1
+        ;;
+    *)
+        warn "restore proof: the control runner units do NOT point at $RESTORE_DIR — the live dashboard's config changes and one-click upgrades queue into a spool nothing reads, with nothing reporting a fault."
+        warn "  doctor said: ${verdict_line:-<no verdict line>}"
+        warn "  Repair on the box: cd $RESTORE_DIR && ./pithead apply -y"
+        prc=1
+        ;;
+    esac
     return "$prc"
 }
 
@@ -478,6 +521,19 @@ borrow_miner() {
         return 0
     }
     log "Borrowing $MINER_HOST → pointing it at $BENCH_HOST"
+    # Say so BEFORE the backup is taken, because the backup is what "restore" means afterwards. The
+    # repoint below has an `if any(.pools[]?; .url | contains($b)) then .` arm — written for a rig
+    # that legitimately keeps a bench pool — and that arm also silently absorbs the other case: a
+    # previous run that repointed and never restored. The backup then records the borrowed config as
+    # the original, every later run restores to it, and the contamination is self-perpetuating with
+    # nothing reporting a fault. Observed live on a loaner: 32 backups, 3 distinct contents, and the
+    # two most recent already carried a bench pool (#1172-follow-up filed).
+    if [ "$(on_miner "jq -r --arg b '$BENCH_HOST' '[.pools[]? | select(.url | ascii_downcase | contains(\$b))] | length' '$MINER_XMRIG_CONFIG' 2>/dev/null" || echo 0)" != "0" ]; then
+        warn "$MINER_HOST's xmrig config ALREADY names $BENCH_HOST before this run borrowed it."
+        warn "  Either this rig keeps a permanent bench pool, or a previous e2e did not restore it."
+        warn "  The backup taken next records THAT state as the original, so a later restore returns to it."
+        warn "  Check by hand before trusting a restore: jq '.pools[].url' $MINER_XMRIG_CONFIG on $MINER_HOST"
+    fi
     MINER_CFG_BACKUP="$MINER_XMRIG_CONFIG.e2e-orig.$(on_miner 'date +%Y%m%d-%H%M%S')"
     on_miner "cp -a '$MINER_XMRIG_CONFIG' '$MINER_CFG_BACKUP'" || die "Failed to back up the miner config."
     step "miner config backed up → $MINER_CFG_BACKUP"
