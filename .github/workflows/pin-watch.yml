@@ -112,3 +112,9 @@ jobs:
         run: |
           echo "::error::one or more upstream lookups could not run — those pins are UNCHECKED, not current"
           exit 1
+      # Digest-level check (#1137): does this lane's own docker-compose.yml pins still match what
+      # each tag resolves to right now. Separate from the report above on purpose — a version can
+      # be current while its digest has drifted, and that half-done-bump case is this step's job,
+      # not the report's. A mismatch or failed lookup fails this step, which fails the run.
+      - name: Check third-party image pins against their registries
+        run: bash scripts/resolve-pins.sh

@@ -357,6 +357,9 @@ preflight() {
     resolve_signing
     check_verifier_image
 
+    bash "$REPO_ROOT/scripts/resolve-pins.sh" ||
+        die "A third-party image pin does not match what its registry serves for that tag — see above. The digest is what actually runs, so cutting now would announce a version the stack is not running."
+
     STACK_VERSION="$(tr -d ' \t\r\n' <VERSION)"
     is_semver "$STACK_VERSION" || die "VERSION ('$STACK_VERSION') is not SemVer (expected X.Y.Z)."
     TAG="v$STACK_VERSION"
