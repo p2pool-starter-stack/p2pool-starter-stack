@@ -438,6 +438,10 @@ def test_perimeter_env_keys_never_committable_from_either_copy():
     py_confirm = set(control_service.CONFIRM_ENV_KEY_PATHS.keys())
 
     for key in NEVER_COMMITTABLE_ENV_KEYS:
+        # A perimeter entry whose spelling no longer exists in the codebase guards nothing: the
+        # real (renamed) key could be added to every allowlist while this list stays green. Anchor
+        # each entry to the pithead text so a rename kills the test, not the protection.
+        assert key in pithead, f"{key} appears nowhere in pithead — dead perimeter entry (key renamed?)"
         assert key not in pithead_editable, f"{key} in pithead's CONTROL_DASHBOARD_EDITABLE_KEYS"
         assert key not in pithead_confirm, f"{key} in pithead's CONTROL_DASHBOARD_CONFIRM_KEYS"
         assert key not in py_editable, f"{key} in control_service.EDITABLE_ENV_KEY_PATHS"
