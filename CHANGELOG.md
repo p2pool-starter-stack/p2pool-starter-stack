@@ -9,6 +9,74 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.19.3] - 2026-08-21
+
+### Changed
+
+- **Bundled components brought current
+  ([#1144](https://github.com/p2pool-starter-stack/pithead/issues/1144) report rows):**
+  Monero **v0.18.5.1** (upstream bugfix point release), P2Pool **v4.16 → v4.18** (P2P DoS
+  hardening, Stratum performance; no merge-mining changes — the v4.18 SOCKS5 behaviour change was
+  audited against source and both intra-stack bridges remain correct), and the Docker socket proxy
+  **v0.4.2 → v0.5.0** on both proxies (additive upstream change only; the new pause/unpause routes
+  are opt-ins this stack does not enable, and the control-proxy hardening assertion now denies them
+  explicitly so a future new endpoint class is visible to the gate). Tari stays at v5.3.1
+  deliberately: v5.6.0 carries a one-way wallet-database migration and is scheduled bench-gated
+  work ([#1129](https://github.com/p2pool-starter-stack/pithead/issues/1129)), not a patch-day bump.
+- Base-image and Python dependency refreshes via Dependabot.
+
+### Fixed
+
+- **A release can no longer announce a version the stack is not running
+  ([#1137](https://github.com/p2pool-starter-stack/pithead/issues/1137)).** In a `tag@sha256`
+  image pin the digest is what actually runs and the tag is decoration, so a half-done bump — tag
+  moved, digest left behind — was green at every tier. The compose assertions now bind the whole
+  reference (both socket proxies counted, the console wallet included), and a new release-preflight
+  check asks each registry what the pinned tag resolves to right now and refuses the cut on any
+  mismatch or any failed lookup. The same check runs in the weekly pin watch.
+- **The pre-release gate could not go green on a healthy box
+  ([#1180](https://github.com/p2pool-starter-stack/pithead/issues/1180)).** The end-to-end suite
+  asserted the Caddy scheme by reading line 1 of the rendered Caddyfile, which stopped being the
+  site block when the global options block landed. A false RED on the one gate between a bad
+  release and the world — and because an exit-1 run stops at its first red, it also hid later
+  results. The assertion now finds the dashboard's site block wherever it is.
+- **The wizard and a provisioned box no longer reflect the request's Host header into redirects
+  ([#1123](https://github.com/p2pool-starter-stack/pithead/issues/1123)).** Caddy now disables
+  automatic HTTP→HTTPS redirects and serves an explicit redirect block bound to the configured
+  address.
+- **Upgrade-path proofs that could not fail, fixed at the harness tier:** the post-restore control
+  check ran downstream of its own repair
+  ([#1085](https://github.com/p2pool-starter-stack/pithead/issues/1085)); the release-smoke
+  `--upgrade` assertion read the old install directory, so a successful upgrade reported as a
+  failure ([#1068](https://github.com/p2pool-starter-stack/pithead/issues/1068)); the borrowed
+  bench rig's injected pool is now tagged so the harness can tell its own entry from the
+  operator's, ending a self-perpetuating config contamination
+  ([#1178](https://github.com/p2pool-starter-stack/pithead/issues/1178)); and the suite's one
+  host-global fixture path is sandboxed so two runs cannot collide
+  ([#1104](https://github.com/p2pool-starter-stack/pithead/issues/1104)).
+- **GitHub API reads in the one-click upgrade path are rate-limit aware
+  ([#1081](https://github.com/p2pool-starter-stack/pithead/issues/1081)).**
+- **The dashboard's "Your Stack" section no longer trails half its height in blank space
+  ([#991](https://github.com/p2pool-starter-stack/pithead/issues/991)).** A grid row is as tall as
+  its tallest card, and the tallest card's explainer prose anchored every row. That prose now sits
+  in a collapsed-by-default disclosure, and cards are ordered tall-with-tall — measured 27% shorter
+  at desktop width with no copy changes.
+- **The dashboard's editable-key security perimeter is pinned directly
+  ([#1094](https://github.com/p2pool-starter-stack/pithead/issues/1094)):** sixteen
+  never-committable keys (auth, bind address, onion exposure, the control channel itself, Tor
+  egress, wallet credentials) are asserted absent from every allowlist copy independently, so a
+  key added to all copies at once can no longer pass.
+
+### Security
+
+- The upgrade escape path for installs older than v1.19.1 was driven end to end on real installs
+  at v1.18.1 and v1.19.0 for the first time
+  ([#1111](https://github.com/p2pool-starter-stack/pithead/issues/1111)): both refuse exactly as
+  documented with no host cosign, and the pinned cosign **v2.6.3** clears the refusal. One
+  correction to the previous guidance: a current cosign **v3** (v3.1.3) also verifies these
+  bundles correctly — the v3 flag breakage applies to the release box's signing flags, not the
+  operator's verify path.
+
 ## [1.19.2] - 2026-08-18
 
 ### Fixed
