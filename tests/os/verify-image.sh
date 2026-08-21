@@ -154,6 +154,17 @@ chk "fstab carries no LABEL= mounts" '! grep -q "LABEL=" "$ROOT/etc/fstab"'
 chk "fstab still overlays /var" 'grep -q "overlay /var" "$ROOT/etc/fstab"'
 chk "repart declares 4 GiB slots" 'grep -q "SizeMaxBytes=4G" "$ROOT/usr/lib/repart.d/20-system-a.conf"'
 chk "repart declares the data partition" '[ -s "$ROOT/usr/lib/repart.d/40-data.conf" ]'
+# The seeding mechanism itself (#1092): systemd-repart's MakeDirectories= only runs the moment it
+# FORMATS the partition, so this is the one place that can actually observe a dropped seed — a
+# post-boot check on a running system cannot, because pithead-sync's own `mkdir -p /data/pithead`
+# recreates that directory every boot regardless of what repart seeded, and a missing overlay
+# upperdir fails local-fs.target on this read-only root, bricking the boot before any check runs.
+chk "repart seeds /overlay/var on first format" \
+    'grep -qxF "MakeDirectories=/overlay/var" "$ROOT/usr/lib/repart.d/40-data.conf"'
+chk "repart seeds /overlay/var-work on first format" \
+    'grep -qxF "MakeDirectories=/overlay/var-work" "$ROOT/usr/lib/repart.d/40-data.conf"'
+chk "repart seeds /pithead on first format" \
+    'grep -qxF "MakeDirectories=/pithead" "$ROOT/usr/lib/repart.d/40-data.conf"'
 
 echo "==> the appliance can run the product"
 chk "podman" '[ -e "$ROOT/usr/bin/podman" ]'
