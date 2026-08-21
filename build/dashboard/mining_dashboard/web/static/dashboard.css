@@ -112,19 +112,31 @@ body {
   margin-bottom: 20px;
 }
 .grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-  gap: 20px;
   margin-bottom: 20px;
-  /* Cards hug their content instead of stretching to the row's tallest neighbour (#817) — the
-   * default stretch rendered short cards as mostly-empty bordered boxes across the grid. */
-  align-items: start;
 }
-/* Section label inside the Advanced card grid (#159): the grid itself has no visual grouping, so
- * these mark the "mine" -> "the world" transition the layout comment describes. Spans the full
- * grid row; typography matches .est-heading (the other muted section marker in this stylesheet). */
+/* Column-based packing (#991, reopened): a static card order can't stay height-aware across every
+ * combination of conditionally-rendered cards (XvB disabled, no earnings yet, Tari off, ...) — a
+ * fixed sequence is only optimal for the subset of cards visible when it was tuned, and degrades
+ * back to row-shaped trailing gaps for every other subset. CSS multi-column packs whatever cards
+ * are actually visible tightly, for any subset. The trade the issue accepted: reading order is
+ * column-major within the section, not row-major. column-width (not column-count) mirrors the old
+ * auto-fit/minmax(350px, 1fr) responsiveness — the browser fits as many ~350px columns as the
+ * container allows. Only the Your-Stack/Wider-Pool grids get this (the plain `.grid` above still
+ * wraps the single-card Chart/Workers rows, which must stay full width, not column-width).
+ * Your Stack and Wider Pool are each their OWN `.grid-columns` container (#991: an earlier version
+ * shared one container and pulled the label between them out with `column-span: all` — Safari
+ * clips/slices the first card after a spanning element at the column boundary; Chromium doesn't
+ * reproduce it. Two independent containers sidestep the spanner entirely instead of chasing the
+ * engine bug), with the section label a plain heading in normal flow above each one. */
+.grid-columns {
+  columns: 350px;
+  column-gap: 20px;
+}
+/* Section label above a packed grid (#159): the grid itself has no visual grouping, so this marks
+ * the "mine" -> "the world" transition the layout comment describes. A plain block heading in
+ * normal flow (#991: was `column-span: all` inside a single shared container — see above).
+ * Typography matches .est-heading (the other muted section marker in this stylesheet). */
 .grid-section-label {
-  grid-column: 1 / -1;
   margin-top: 6px;
   font-size: 0.7rem;
   font-weight: 600;
@@ -140,6 +152,15 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+.grid-columns > .card {
+  /* No explicit width: .card is content-box (no box-sizing rule) and a block-level box (`display:
+   * flex`'s outer display is block) already fills its column at `width: auto` — the browser
+   * solves content-width = column-width - padding - border for auto, but a literal `100%` would
+   * set the CONTENT width to the full column and let padding/border add on top, overflowing the
+   * column by 2 * 20px padding + 2px border. */
+  break-inside: avoid;
+  margin-bottom: 20px;
 }
 
 /* Vertically-stacked cards that aren't in a .grid need their own gap (#505: the Configuration
@@ -578,9 +599,11 @@ tr:last-child td {
   text-align: center;
 }
 /* The wins log is capped at 20 rows of data, but even a dozen rows made the XvB card the tallest
- * thing in its grid row — and grid rows are as tall as their tallest card, so every neighbour
- * trailed white space (#817's align-items:start stops the stretch, not the row height). Cap the
- * list at roughly six rows and scroll the rest. */
+ * thing on the page. Under the CSS grid this section used before #991, that stretched every
+ * neighbour in its row with trailing white space (#817's align-items:start stopped the stretch,
+ * not the row height). Under the column packing #991 replaced it with, a card can't split across
+ * a column break (break-inside: avoid), so an uncapped log would instead set a floor under the
+ * whole section's height. Cap the list at roughly six rows and scroll the rest either way. */
 .raffle-wins-list {
   max-height: 120px;
   overflow-y: auto;
