@@ -637,9 +637,8 @@ publish() {
     # only fast-forward, so main gains no object the tag does not already name — which is what makes
     # the old post-release back-merge unnecessary (#1076). The Main Branch ruleset admits this via
     # the same admin bypass the protected tag push above already used.
-    if ! run git push origin "$GIT_COMMIT:refs/heads/main"; then
+    run git push origin "$GIT_COMMIT:refs/heads/main" ||
         warn "main was not fast-forwarded — run: git push origin $GIT_COMMIT:refs/heads/main  (the release is unaffected; main lags until this runs)."
-    fi
 
     local notes="$WORKDIR/notes.md"
     changelog_notes >"$notes"
