@@ -136,10 +136,18 @@ source "$ROOT/scripts/release.sh"
 # hence the guard: on `develop` this loop is simply shorter, not wrong.
 #
 # BOUNDARY, stated because a silent one is what this whole issue is about: GitHub runs `schedule:`
-# from the DEFAULT branch, so this only ever reads `develop`. The appliance lane's own pins stay
-# unwatched until this script reaches `develop-v2` at the next twin sync. The report says so.
+# from the DEFAULT branch, so a single-job workflow only ever reads `develop` and these two rows
+# are simply absent from a run that looks complete (#1146). pin-watch.yml therefore runs this
+# script TWICE — once on the triggering ref, once against an explicit `develop-v2` checkout — and
+# publishes the two reports to two separate tracking issues. The report below says which it is.
 components="monero p2pool xmrig-proxy tari caddy socket-proxy"
-[ -f "$ROOT/os/rootfs/Dockerfile" ] && components="$components compose cosign"
+lane="the product stack"
+# A real `if`, for the same reason the publish step in pin-watch.yml uses one: `[ -f X ] && var=…`
+# evaluates to 1 on the develop lane, which is only safe while nothing depends on the exit status.
+if [ -f "$ROOT/os/rootfs/Dockerfile" ]; then
+    components="$components compose cosign"
+    lane="the product stack and the appliance rootfs"
+fi
 
 # release.sh's pin() is the one place pins are read from the tree; the two rootfs binaries have no
 # case there because a release does not bundle them.
@@ -179,9 +187,13 @@ for component in $components; do
     row "$component" "\`$(norm "$raw")\`" "\`$(norm "$latest")\`" "$verdict"
 done
 
-printf '%s\n\n' "Upstream currency, checked weekly by \`scripts/pin-watch.sh\`. This never bumps anything."
+printf '%s\n\n' "Upstream currency for $lane, checked weekly by \`scripts/pin-watch.sh\`. This never bumps anything."
 printf '| component | pinned | upstream latest | |\n|---|---|---|---|\n%s\n' "$rows"
 printf '%s\n' "Not watched here, because they publish no GitHub release feed: the alpine base image, \`ubuntu:24.04\`, \`python:3.11-slim\`. Dependabot's docker ecosystem reads those \`FROM\` lines and does cover them."
+# Both arms, so this file stops being a twin-sync conflict: `develop-v2` had already turned this
+# line into an if/else to carry the _COMMIT warning below, and a competing one-line rewrite here
+# would collide with it on every sync. The appliance arm is dead code on `develop` and correct on
+# `develop-v2`, which is the point.
 if [ -f "$ROOT/os/rootfs/Dockerfile" ]; then
     # The rootfs COMPILES these two from source on a pinned Go toolchain rather than downloading a
     # release binary, so each carries a paired _COMMIT ARG and the VERSION alone decides nothing.
@@ -190,7 +202,7 @@ if [ -f "$ROOT/os/rootfs/Dockerfile" ]; then
     # script replaced; the fact outlived the file.)
     printf '%s\n' "\`compose\` and \`cosign\` are compiled from source in \`os/rootfs/Dockerfile\`, so each bump is TWO ARGs — the version AND its paired \`_COMMIT\`. Resolve the commit with \`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha\`; bumping the version alone still builds the old code."
 else
-    printf '%s\n' "The appliance lane's own pins (the rootfs docker-compose and cosign) are NOT in this table: a scheduled workflow only ever reads the default branch, and this script is not on \`develop-v2\` yet."
+    printf '%s\n' "The appliance rootfs's own pins (its docker-compose and cosign, compiled from \`ARG\` values that no dependabot ecosystem can read) are NOT in this table. They are in the appliance report, which the same workflow run produces from an explicit \`develop-v2\` checkout (#1146)."
 fi
 printf '%s\n' "Also NOT checked: whether each image pin's digest still corresponds to its tag. The digest is what actually runs, so a half-done bump is invisible to the table above."
 if [ "$failed" -gt 0 ]; then

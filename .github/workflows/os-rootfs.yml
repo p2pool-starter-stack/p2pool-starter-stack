@@ -60,6 +60,11 @@ jobs:
         if: steps.tree.outputs.present == 'true'
         # Same gate as ci.yml's image scan: actionable (fixable) HIGH/CRITICAL only; accepted
         # findings live in .trivyignore with a rationale and how they clear.
+        #
+        # cache: false for the reason spelled out over ci.yml's scan (#1159) — this is the repo's
+        # other trivy call site. It matters more here: the appliance's Debian userland is baked and
+        # has no apt at runtime, so this scan is the only eye on podman, netavark, openssl and the
+        # kernel between releases. (#1162: that eye is also shut, for a different reason.)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: pithead-os-rootfs:ci
@@ -68,3 +73,4 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           trivyignores: .trivyignore
+          cache: "false"
