@@ -805,7 +805,7 @@ wheels = [
 
 [[package]]
 name = "mining-dashboard"
-version = "1.19.2"
+version = "1.19.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
