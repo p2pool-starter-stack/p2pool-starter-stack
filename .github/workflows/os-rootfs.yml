@@ -17,6 +17,16 @@ name: OS rootfs scan
 # one-command check for it are in CONTRIBUTING.md § The two lanes.
 on:
   pull_request:
+    # A PR whose BASE has no os/ cannot be scanned, and a green check named "Build + scan the
+    # appliance rootfs" that scanned nothing is the same lie in a smaller font. `.trivyignore` is in
+    # the paths filter below and lives on both lanes, so without this a PR editing it on `develop` —
+    # #1156 added four mutes that way — would report the appliance clean under a mute it never
+    # applied. Excluding the two os/-less long-lived branches keeps the filter honest while leaving
+    # stacked appliance branches covered. The appliance-side sync PR is what scans a `.trivyignore`
+    # change for real.
+    branches-ignore:
+      - "develop"
+      - "main"
     paths:
       - "os/**"
       - ".github/workflows/os-rootfs.yml"

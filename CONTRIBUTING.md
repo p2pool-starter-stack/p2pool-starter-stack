@@ -86,7 +86,9 @@ appliance branch explicitly when it needs the appliance tree.** GitHub fires a w
 `schedule:` trigger from the default branch only, and Dependabot reads `.github/dependabot.yml`
 from the default branch only. A scheduled workflow or a Dependabot entry that lives on
 `develop-v2` never runs — and a job that never runs looks exactly like a job that ran and found
-nothing, which is why this went unnoticed four times (#1048, #1146, #1162, #1163).
+nothing, which is why this went unnoticed three times (#1146, #1162, #1163). #1048 is its sibling
+and worth knowing next to it: there the schedule did fire, and the job skipped itself behind an
+unset repository variable, so `main` showed green for a gate that had never run.
 
 Living on `develop` is only half of it. A workflow on `develop` still checks out `develop`, which
 has no `os/`, so the appliance lane is reached by an explicit ref
@@ -100,8 +102,16 @@ gh run list --workflow=<name>.yml --limit 200 --json event \
   --jq '[.[].event] | group_by(.) | map({event: .[0], n: length})'
 ```
 
-No `schedule` key in that breakdown means the schedule has never fired. The Dependabot equivalent
-is to group its PRs by `baseRefName`.
+No `schedule` key in that breakdown means the schedule has never fired. A `schedule` key is
+necessary but not sufficient — #1048's shape passes that test — so open the newest scheduled run and
+check its steps actually ran rather than skipping:
+
+```bash
+gh run view <run-id> --json jobs \
+  --jq '.jobs[].steps[] | "\(.conclusion)  \(.name)"'
+```
+
+The Dependabot equivalent of the first check is to group its PRs by `baseRefName`.
 
 ## Opening a pull request
 
