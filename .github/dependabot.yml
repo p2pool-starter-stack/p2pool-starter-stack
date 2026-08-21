@@ -67,8 +67,12 @@ updates:
       docker-appliance:
         patterns: ["*"]
     ignore:
-      # Same policy as the docker entry above: digest + patch within the pinned tag. A trixie ->
-      # forky move or a golang minor is a deliberate rebake, not a security update.
+      # Same policy as the docker entry above, and it binds the golang builder tag: a 1.26 -> 1.27
+      # move is a deliberate rebake, not a security update. It does NOT constrain
+      # `debian:trixie-slim` — a single-segment codename tag yields no semver comparison for these
+      # conditions to act on, so what holds the appliance to trixie is the tag written into the
+      # FROM line, not this block. Digest-only bumps, which are the whole point here, carry no
+      # semver change and so pass both entries untouched (see PRs #729 and #1116).
       - dependency-name: "*"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
