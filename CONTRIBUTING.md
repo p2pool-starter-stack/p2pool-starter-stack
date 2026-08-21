@@ -74,6 +74,35 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
    user-facing change. To see what the suites cover, `make test-inventory` writes a
    generated (git-ignored) inventory you can read locally.
 
+### The two lanes, and what that means for CI config
+
+The stack ships two ways from one repo. `develop` is the integration branch for the Docker Compose
+product and is the repo's **default branch**. `develop-v2` is its twin: everything on `develop`,
+plus the appliance OS tree under `os/`. Appliance work targets `develop-v2`; everything else
+targets `develop`, and `develop` is merged into `develop-v2` to keep the twins level.
+
+**Automation that GitHub reads from a fixed location must live on `develop`, and must name the
+appliance branch explicitly when it needs the appliance tree.** GitHub fires a workflow's
+`schedule:` trigger from the default branch only, and Dependabot reads `.github/dependabot.yml`
+from the default branch only. A scheduled workflow or a Dependabot entry that lives on
+`develop-v2` never runs — and a job that never runs looks exactly like a job that ran and found
+nothing, which is why this went unnoticed four times (#1048, #1146, #1162, #1163).
+
+Living on `develop` is only half of it. A workflow on `develop` still checks out `develop`, which
+has no `os/`, so the appliance lane is reached by an explicit ref
+(`.github/workflows/os-rootfs.yml`) or by `target-branch:` (`.github/dependabot.yml`). Both files
+carry a comment saying why they are deliberately asymmetric; do not "tidy" either onto `develop-v2`.
+
+Check this from run history, never from the file — the file always looks fine:
+
+```bash
+gh run list --workflow=<name>.yml --limit 200 --json event \
+  --jq '[.[].event] | group_by(.) | map({event: .[0], n: length})'
+```
+
+No `schedule` key in that breakdown means the schedule has never fired. The Dependabot equivalent
+is to group its PRs by `baseRefName`.
+
 ## Opening a pull request
 
 - Target the `develop` branch and fill out the PR template.
