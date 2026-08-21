@@ -4540,6 +4540,14 @@ for f in mining.network proxy.network tor.container p2pool.container xmrig-proxy
     assert_eq "quadlet parity: $f" "$(diff -u "$ROOT/os/quadlet/$f" "$QOUT/$f" 2>&1 | head -c 300)" ""
 done
 assert_eq "remote render emits no node units" "$(find "$QOUT" -name 'monerod.container' -o -name 'tari.container' | wc -l | tr -d ' ')" "0"
+# #1098: every OTHER quadlet unit with a compose healthcheck counterpart carries a matching
+# HealthCmd (tor/p2pool/monerod/tari/wallet-rpc) — xmrig-proxy's was the one omitted when #904
+# added its compose healthcheck, so the appliance's own render never wired it up. Asserted
+# straight from the renderer's OUTPUT (not just the fixture this test also edits), so a
+# regression that dropped the HealthCmd from render_quadlet_units() would fail HERE even if the
+# fixture happened to still carry it.
+assert_eq "xmrig-proxy quadlet unit carries a HealthCmd (#1098)" \
+    "$(grep -c '^HealthCmd=/usr/local/bin/xmrig-proxy-healthcheck.sh$' "$QOUT/xmrig-proxy.container")" "1"
 # The local-node variant (bench-proven 2026-07-24): profiles on, 11 files, node units included.
 QLOCAL="$SANDBOX/quadlet-local-out"
 run_sourced "$SANDBOX" render_quadlet_units "$ROOT/os/quadlet/local/fixture.env" "$QLOCAL" >/dev/null
