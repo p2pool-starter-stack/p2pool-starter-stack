@@ -121,6 +121,13 @@ echo "== unit: pin-watch self-test (#1128) =="
 bash "$ROOT/scripts/pin-watch.sh" --self-test >/dev/null 2>&1
 assert_rc "pin-watch self-test passes" "$?" "0"
 
+echo "== unit: resolve-pins self-test (#1137) =="
+# pin-watch.sh above compares VERSIONS; it does not ask whether a pinned tag@sha256 digest still
+# matches what its registry serves for that tag. This is the check that does, and its --self-test
+# drives the exact half-done bump #1137 is about (tag moved, old digest left in the file) red.
+bash "$ROOT/scripts/resolve-pins.sh" --self-test >/dev/null 2>&1
+assert_rc "resolve-pins self-test passes" "$?" "0"
+
 echo "== unit: patch-coverage overlap self-test (#1000) =="
 # diff-cover exits 0 on "No lines with coverage information" — a vacuous pass. The wrapper's
 # overlap check is what turns that into a loud not-applicable pass or a real failure; its
