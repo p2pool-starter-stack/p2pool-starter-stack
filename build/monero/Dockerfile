@@ -1,5 +1,5 @@
 # Pinned by digest (#135) so the ubuntu:24.04 tag can't be silently re-pointed.
-FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
 
 # Install system dependencies required for downloading, verifying, and configuring the node
 # 'gettext-base' provides 'envsubst' for template processing in entrypoint.sh
