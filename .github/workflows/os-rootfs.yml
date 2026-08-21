@@ -1,0 +1,104 @@
+name: OS rootfs scan
+
+# Build the appliance rootfs (os/rootfs/Dockerfile) and Trivy-scan it (#833). The appliance's
+# Debian userland — podman, netavark, openssl, the kernel — is frozen at bake time and has no
+# apt at runtime, so this scan is the eye on the base OS between releases. Runs on PRs that
+# touch os/ and weekly on a schedule; a red scheduled run in the Actions tab is the alert, the
+# lychee.yml posture. It is its own workflow (not a build-images matrix entry in ci.yml)
+# because the xmrig prebuild makes this the slowest image in the repo — the paths filter keeps
+# it off stack-only PRs.
+#
+# THIS FILE LIVES ON THE DEFAULT BRANCH (`develop`) AND MUST STAY THERE, even though everything it
+# scans is on `develop-v2` (#1162). GitHub fires `schedule:` from the default branch only, so while
+# this file was develop-v2-only its weekly sweep never ran once — 96 runs over 18 days, every one a
+# `pull_request`. Living on `develop` is only half of it: a job on `develop` still checks out
+# `develop`, which has no os/, so the checkout below names the appliance branch explicitly for every
+# trigger that is not a PR. Do not "fix" the asymmetry by moving the file back — the rule and the
+# one-command check for it are in CONTRIBUTING.md § The two lanes.
+on:
+  pull_request:
+    paths:
+      - "os/**"
+      - ".github/workflows/os-rootfs.yml"
+      - ".trivyignore"
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC, after ci.yml's 05:00 image sweep
+  workflow_dispatch:
+
+# Least privilege (#282): read-only, same as ci.yml.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rootfs-image:
+    name: Build + scan the appliance rootfs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A PR run scans the PR (the empty string is checkout's default: the triggering ref).
+          # Everything else — the weekly sweep and any manual dispatch — is asking about the
+          # appliance, which lives on develop-v2 whichever branch the trigger fired from. Naming it
+          # here is what makes the sweep real rather than a green skip (#1162). It also means a
+          # dispatch is a true rehearsal of the schedule instead of a different code path.
+          # Written negated on purpose: in an Actions expression `A && B || C` is not a
+          # ternary, it is real boolean logic, and '' is FALSY. `event == 'pull_request' && ''`
+          # would collapse to '' and fall through to 'develop-v2', so every PR would scan
+          # develop-v2 instead of the PR. The truthy value has to be the develop-v2 arm.
+          ref: ${{ github.event_name != 'pull_request' && 'develop-v2' || '' }}
+          persist-credentials: false
+      - name: Check the appliance tree exists
+        # Only a PR may legitimately miss the tree: a PR into `develop` can reach this workflow
+        # through the .trivyignore path filter, and `develop` has no os/. Every other trigger has
+        # just checked out develop-v2 by name, so a miss there means the checkout did not do what
+        # it was asked — and a quiet skip would report a green weekly sweep of nothing, which is
+        # the exact failure #1162 was filed for. Fail instead.
+        id: tree
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ -f os/rootfs/Dockerfile ]; then
+            echo "present=true" >>"$GITHUB_OUTPUT"
+          elif [ "$EVENT" = "pull_request" ]; then
+            echo "present=false" >>"$GITHUB_OUTPUT"
+            echo "os/rootfs/Dockerfile not on this branch; nothing to scan"
+            echo "The appliance rootfs was NOT scanned: os/rootfs/Dockerfile is not on this PR's branch." \
+              >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::checked out develop-v2 but os/rootfs/Dockerfile is missing — the appliance checkout did not do what it was asked, so this run cannot report a scan it did not do"
+            exit 1
+          fi
+      - name: docker build os/rootfs
+        if: steps.tree.outputs.present == 'true'
+        # BUILD_COMMIT is a build artifact (os/build-image.sh stamps it; the Dockerfile COPYs
+        # it), so stamp it here too. PITHEAD_UPDATER=rauc matches build-image.sh's default so
+        # the scan covers the updater packages; the test args stay empty — release variant.
+        # images/ holds only .keep here: the staged wizard image is a separate scan target
+        # (ci.yml builds and scans the dashboard image directly).
+        run: |
+          git rev-parse HEAD > os/rootfs/BUILD_COMMIT
+          docker build -f os/rootfs/Dockerfile -t pithead-os-rootfs:ci \
+            --build-arg PITHEAD_UPDATER=rauc .
+      - name: Scan rootfs for CVEs (Trivy)
+        if: steps.tree.outputs.present == 'true'
+        # Same gate as ci.yml's image scan: actionable (fixable) HIGH/CRITICAL only; accepted
+        # findings live in .trivyignore with a rationale and how they clear.
+        #
+        # cache: false for the reason spelled out over ci.yml's scan (#1159) — this is the repo's
+        # other trivy call site. It matters more here: the appliance's Debian userland is baked and
+        # has no apt at runtime, so this scan is the only eye on podman, netavark, openssl and the
+        # kernel between releases, and since #1162 that eye is finally open on a schedule.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: pithead-os-rootfs:ci
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore
+          cache: "false"
