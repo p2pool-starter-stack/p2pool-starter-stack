@@ -1827,6 +1827,7 @@ caddy_onion="$(
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
     set +e
     is_appliance() { return 0; }
+    appliance_mint_cert() { return 1; } # site blocks/binds are under test, not cert minting
     hostname() { printf '192.168.1.10 2001:db8::1\n'; }
     DASHBOARD_SECURE=false HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 \
         DASHBOARD_ONION_ENABLED=true DASHBOARD_AUTH_USER=admin \
@@ -1915,6 +1916,7 @@ caddy_insecure_onion_gw="$(
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
     set +e
     is_appliance() { return 0; }
+    appliance_mint_cert() { return 1; } # site blocks/dupes are under test, not cert minting
     # The physical appliance set: LAN address plus BOTH podman bridge gateways, as documented above.
     hostname() { printf '192.168.1.10 10.89.0.1 172.28.0.1\n'; }
     DASHBOARD_SECURE=false HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 \
@@ -2010,6 +2012,7 @@ caddy_redir="$(
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
     set +e
     is_appliance() { return 0; }
+    appliance_mint_cert() { return 1; } # the :80 redirect shape is under test, not cert minting
     hostname() { printf '192.168.1.10 172.28.0.1 fd00::1\n'; }
     DASHBOARD_SECURE=true HOST_IP=pithead.local NETWORK_PREFIX=172.28.0 DASHBOARD_AUTH_HASH_B64="" \
         generate_caddyfile >/dev/null 2>&1
@@ -9579,6 +9582,124 @@ unset PITHEAD_TLS_DIR
 rm -rf "$TLSSB"
 unset TLSSB fp1 fp2
 
+echo "== unit: the certificate SAN list and Caddy's site list agree, for a given identity (#1132) =="
+# Three named disagreements this closes, all one root cause (two independent copies of the same
+# expansion): (1) the cert always used `hostname` while site_hosts used dashboard.host when
+# pinned; (2) pinning dashboard.host collapsed the site list to one host while the cert kept every
+# address; (3) ".local" was unconditional in the cert, conditional in the site list. One shared
+# builder (appliance_site_names) now feeds both consumers, so a given identity cannot produce two
+# different name lists any more.
+# MUTATION PROOF: hardcode site_hosts back to "$HOST_IP" in generate_caddyfile, or the old
+# unconditional alt= string back into appliance_mint_cert, and every scenario below goes red.
+NL=$(mktemp -d)
+export PITHEAD_TLS_DIR="$NL/tls"
+nl_render() { # sets $NL/Caddyfile and mints $NL/tls/wizard.crt for the given identity; prints the
+    # canonical name list both consumers should agree on.
+    (
+        cd "$NL" || exit 1
+        # shellcheck disable=SC1090
+        source "$STACK" 2>/dev/null
+        set +e
+        is_appliance() { return 0; }
+        hostname() { if [ "${1:-}" = "-I" ]; then printf '%s' "$NL_IPS"; else printf '%s' "$NL_HOSTNAME"; fi; }
+        # Real (persistent) assignments, not command-prefix ones — appliance_site_names below
+        # must see the SAME HOST_IP/DASHBOARD_HOST generate_caddyfile just rendered with, and a
+        # prefix assignment scopes to one command only.
+        # shellcheck disable=SC2034  # read by the sourced generate_caddyfile, unseen here
+        DASHBOARD_SECURE=true
+        # shellcheck disable=SC2034
+        DASHBOARD_AUTH_HASH_B64=""
+        # shellcheck disable=SC2034  # read by generate_caddyfile AND appliance_site_names, unseen here
+        HOST_IP="$NL_HOST_IP"
+        # shellcheck disable=SC2034
+        DASHBOARD_HOST="${NL_DASHBOARD_HOST:-}"
+        generate_caddyfile >/dev/null 2>&1
+        appliance_site_names
+    )
+}
+nl_assert_agreement() { # <scenario-label> — every name appliance_site_names() prints must be BOTH
+    # served (in the Caddyfile) and certified (in the minted cert's SAN list).
+    local names n cf cert bad_name=""
+    names=$(nl_render)
+    cf=$(cat "$NL/Caddyfile" 2>/dev/null)
+    cert=$(openssl x509 -in "$NL/tls/wizard.crt" -noout -ext subjectAltName 2>/dev/null)
+    for n in $names; do
+        case "$cf" in
+        *"https://$n,"* | *"https://$n "*) ;;
+        *) bad_name="$n (not served)" ;;
+        esac
+        case ",$cert," in
+        *"DNS:$n"* | *"IP:$n"* | *"IP Address:$n"*) ;;
+        *) bad_name="${bad_name:+$bad_name, }$n (not certified)" ;;
+        esac
+    done
+    if [ -n "$bad_name" ]; then
+        bad "$1: every name is both served and certified" "$bad_name"
+    else
+        ok "$1: every name is both served and certified"
+    fi
+}
+
+# Disagreement #3: auto identity, HOST_IP already the .local form (resolve_dashboard_host's own
+# answer for an appliance on "auto") — both consumers must agree the .local name is IN.
+NL_HOSTNAME="rig1" NL_IPS="192.168.1.20" NL_HOST_IP="rig1.local" NL_DASHBOARD_HOST=""
+nl_assert_agreement "auto identity"
+
+# Disagreements #1 and #2: dashboard.host pinned to a name that is NOT this machine's hostname.
+NL_HOSTNAME="rig1" NL_IPS="192.168.1.20" NL_HOST_IP="panel.example" NL_DASHBOARD_HOST="panel.example"
+nl_assert_agreement "pinned dashboard.host"
+# And the negative proof that makes #1/#2 concrete: the OLD cert always carried the machine's
+# other names (hostname, .local, its IPs) regardless of the pin — assert neither consumer does
+# that any more, not just that the pinned name is present in both.
+pcf=$(cat "$NL/Caddyfile")
+pcert=$(openssl x509 -in "$NL/tls/wizard.crt" -noout -ext subjectAltName 2>/dev/null)
+case "$pcf$pcert" in
+*rig1*) bad "pinned dashboard.host: neither consumer names the machine's OTHER identity" "still present: $pcf | $pcert" ;;
+*) ok "pinned dashboard.host: neither consumer names the machine's OTHER identity" ;;
+esac
+
+unset -f nl_render nl_assert_agreement
+rm -rf "$NL"
+unset PITHEAD_TLS_DIR NL NL_HOSTNAME NL_IPS NL_HOST_IP NL_DASHBOARD_HOST pcf pcert
+
+echo "== unit: the certificate re-mints when the served name list changes, not otherwise (#1132) =="
+# Compare, don't date-guess: the minted SAN list is derived from the certificate itself (openssl)
+# and set-compared against the machine's current name list. An operator who has pinned this
+# fingerprint loses that trust on every unnecessary replacement, so a re-mint must be conservative.
+# MUTATION PROOF: drop the comparison (always re-mint) -> "an unchanged list does not re-mint"
+# goes red. Drop the re-mint branch (never re-mint) -> "a changed list re-mints" goes red.
+RM=$(mktemp -d)
+export PITHEAD_TLS_DIR="$RM/tls"
+RM_IPS="192.168.1.20"
+rm_run() {
+    (
+        cd "$RM" || exit 1
+        # shellcheck disable=SC1090
+        source "$STACK" 2>/dev/null
+        set +e
+        is_appliance() { return 0; }
+        hostname() { if [ "${1:-}" = "-I" ]; then printf '%s' "$RM_IPS"; else printf 'rig1'; fi; }
+        appliance_mint_cert
+    )
+}
+rm_fp1=$(rm_run 2>/dev/null)
+assert_contains "mints a certificate" "$rm_fp1" ":"
+rm_fp2=$(rm_run 2>/dev/null)
+assert_eq "an unchanged name list does not re-mint" "$rm_fp2" "$rm_fp1"
+RM_IPS="10.0.0.99" # the DHCP lease moved
+rm_out=$(rm_run 2>&1)
+assert_contains "a changed name list logs a re-mint" "$rm_out" "Re-minting the dashboard certificate"
+rm_fp3=$(rm_run 2>/dev/null)
+case "$rm_fp3" in
+"$rm_fp1") bad "a changed name list re-mints" "fingerprint unchanged after the lease moved: $rm_fp3" ;;
+*) ok "a changed name list re-mints" ;;
+esac
+rm_fp4=$(rm_run 2>/dev/null)
+assert_eq "the new certificate is then stable across repeat renders" "$rm_fp4" "$rm_fp3"
+unset -f rm_run
+rm -rf "$RM"
+unset PITHEAD_TLS_DIR RM RM_IPS rm_fp1 rm_fp2 rm_fp3 rm_fp4 rm_out
+
 echo "== unit: stage_wizard_spool re-arms a wiped spool, so a retry keeps its TLS (#1063) =="
 # The accept path removes the whole spool before provisioning. Staging used to run ONCE before the
 # loop, so a provisioning failure re-entered it with the certificate, the reference schema and the
@@ -12680,6 +12801,85 @@ out="$(ccu_run "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/c
     "$CCU/deploy/pithead-v1.19.1" "$CCU/deploy/pithead-v1.19.1/data/control")"
 assert_contains "the live install still gets a verdict" "$out" "target this install"
 unset -f ccu_run
+
+echo "== unit: doctor's certificate check — SAN coverage and expiry, appliance-only (#1141) =="
+# doctor is the second half of pithead-boot's health gate (#1065 reboots the box on a FAIL), so an
+# unreadable/corrupt certificate WARNs rather than FAILs — see check_appliance_cert's own header
+# comment for why. A real, openssl-parsed problem (an uncovered host, a genuine expiry date) still
+# FAILs. DIY gets no certificate section at all — it serves Caddy's own internal CA, out of scope.
+#
+# Mutation proof (each assertion below fails if the guard regresses):
+#   - drop the SAN-coverage loop entirely      -> "an uncovered name FAILs" goes green->red
+#   - drop the -checkend call (always dr_ok)   -> "near-expiry FAILs" goes red
+#   - drop the -enddate readability gate       -> "an unreadable cert WARNs, not FAILs" goes red
+#   - drop the `is_appliance || return 0` guard -> "DIY gets no certificate section" goes red
+DAC="$SANDBOX/dac"
+mkdir -p "$DAC/tls"
+printf '{"dashboard":{"host":"auto"}}' >"$DAC/config.json"
+dac_run() { # <appliance rc: 0|1> -> the doctor certificate section's output
+    local appliance_rc="$1"
+    (
+        cd "$DAC" || exit 1
+        # shellcheck disable=SC1090
+        source "$STACK" 2>/dev/null
+        set +e
+        is_appliance() { return "$appliance_rc"; }
+        appliance_tls_dir() { printf '%s' "$DAC/tls"; }
+        env_get() {
+            case "$1" in
+            HOST_IP) printf 'rig1.local' ;;
+            *) printf '' ;;
+            esac
+        }
+        hostname() { if [ "${1:-}" = "-I" ]; then printf '192.168.1.20'; else printf 'rig1'; fi; }
+        check_appliance_cert 2>&1
+    )
+}
+dac_mint() { # <days> <SANs...> -> writes $DAC/tls/wizard.crt+key
+    local days="$1"
+    shift
+    local alt=""
+    for s in "$@"; do alt="${alt:+$alt,}$s"; done
+    openssl req -x509 -newkey rsa:2048 -nodes -days "$days" \
+        -keyout "$DAC/tls/wizard.key" -out "$DAC/tls/wizard.crt" \
+        -subj "/CN=rig1.local" -addext "subjectAltName=$alt" \
+        -addext "basicConstraints=critical,CA:FALSE" >/dev/null 2>&1
+}
+
+rm -f "$DAC/tls/wizard.crt" "$DAC/tls/wizard.key"
+out="$(dac_run 0)"
+assert_contains "no certificate yet -> informational, not a verdict" "$out" "No dashboard certificate"
+assert_not_contains "no certificate yet -> no FAIL" "$out" "FAIL"
+assert_not_contains "no certificate yet -> no WARN" "$out" "WARN"
+
+dac_mint 3650 "DNS:rig1.local" "IP:192.168.1.20" "DNS:localhost"
+out="$(dac_run 0)"
+assert_contains "a matching certificate -> covers every name" "$out" "covers every name"
+assert_contains "a matching certificate -> not expiring" "$out" "does not expire within"
+assert_not_contains "a matching certificate -> no FAIL" "$out" "FAIL"
+
+dac_mint 3650 "DNS:rig1.local" "DNS:localhost" # 192.168.1.20 dropped — the mutation #1141 names
+out="$(dac_run 0)"
+assert_contains "an uncovered name -> FAIL" "$out" "FAIL"
+assert_contains "an uncovered name -> names it" "$out" "192.168.1.20"
+
+dac_mint 5 "DNS:rig1.local" "IP:192.168.1.20" "DNS:localhost"
+out="$(dac_run 0)"
+assert_contains "a certificate expiring within 30 days -> FAIL" "$out" "expires within 30 days"
+
+printf 'not a certificate' >"$DAC/tls/wizard.crt"
+printf 'not a key' >"$DAC/tls/wizard.key"
+out="$(dac_run 0)"
+assert_contains "an unreadable certificate -> WARN" "$out" "WARN"
+assert_not_contains "an unreadable certificate -> never FAIL (reboot-loop safety, #1065)" "$out" "FAIL"
+
+dac_mint 3650 "DNS:rig1.local" "IP:192.168.1.20" "DNS:localhost"
+out="$(dac_run 1)"
+assert_eq "DIY (not an appliance) -> no certificate section at all" "$out" ""
+
+unset -f dac_run dac_mint
+rm -rf "$DAC"
+unset DAC out
 
 echo "== unit: doctor looks for the control units where apply writes them (#1151) =="
 # The appliance renders host units into /run/systemd/system — its root is read-only, so /etc cannot

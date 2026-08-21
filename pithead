@@ -1356,6 +1356,8 @@ doctor() {
         fi
     fi
 
+    check_appliance_cert
+
     # --- Containers (best-effort) ---
     echo ""
     echo "Containers:"
@@ -4104,6 +4106,82 @@ check_control_units() {
     fi
 }
 
+# Doctor check (#1141): does the certificate Caddy is ACTUALLY serving still cover the machine's
+# name list, and is it still current? Appliance-only — DIY serves Caddy's own "tls internal" CA,
+# out of scope here. With #1132's shared appliance_site_names() behind both the mint and the
+# Caddyfile, a fresh render can no longer produce the two-different-rules mismatch by construction
+# — this check is belt-and-braces for that half (a re-mint that silently failed, a hand-installed
+# certificate, a stale one from before #1132) and the primary signal for expiry, which nothing
+# else here re-derives on its own.
+#
+# Conservative on purpose: doctor is the second half of pithead-boot's health gate, and after
+# #1065 a FAIL here reboots the box. An unreadable or truncated certificate file is a TOOLING
+# problem, not proof the certificate itself is broken (a mid-write snapshot, a filesystem hiccup),
+# so it WARNs; a FAIL is reserved for a certificate openssl actually parsed and found a concrete
+# problem with — a host it does not cover, or a real expiry date. No network: every read here is
+# local (openssl x509 against the file already on disk).
+check_appliance_cert() {
+    is_appliance || return 0
+    echo ""
+    echo "Certificate:"
+    local crt
+    crt="$(appliance_tls_dir)/wizard.crt"
+    if [ ! -s "$crt" ]; then
+        dr_info "No dashboard certificate at $crt yet — run './pithead apply' to mint one."
+        return 0
+    fi
+    if ! command -v openssl >/dev/null 2>&1; then
+        dr_warn "Could not check the dashboard certificate — openssl not found."
+        return 0
+    fi
+
+    # Rebuild the SAME name list generate_caddyfile/appliance_mint_cert build (#1132), so this
+    # asks the shared builder's own question rather than a second copy of the expansion rule.
+    # doctor() never renders, so the inputs appliance_site_names reads as globals are populated
+    # locally here — HOST_IP/NETWORK_PREFIX/DASHBOARD_EXPOSE_PUBLIC_IP from the already-rendered
+    # .env, DASHBOARD_HOST from config.json exactly like parse_and_validate_config does — never
+    # re-derived by prompting or guessing.
+    local HOST_IP NETWORK_PREFIX DASHBOARD_EXPOSE_PUBLIC_IP DASHBOARD_HOST
+    HOST_IP=$(env_get HOST_IP)
+    NETWORK_PREFIX=$(env_get NETWORK_PREFIX)
+    DASHBOARD_EXPOSE_PUBLIC_IP=$(env_get DASHBOARD_EXPOSE_PUBLIC_IP)
+    DASHBOARD_HOST=$(resolve_default "$(jq -r '.dashboard.host // empty' "$CONFIG_FILE" 2>/dev/null)" "")
+
+    # -enddate is the readability gate for BOTH checks below: an unreadable/truncated/corrupt cert
+    # prints nothing and exits non-zero, and that must WARN, never FAIL (see function header).
+    local enddate
+    enddate=$(openssl x509 -in "$crt" -noout -enddate 2>/dev/null | sed 's/^notAfter=//') || true
+    if [ -z "$enddate" ]; then
+        dr_warn "Could not read the dashboard certificate ($crt may be unreadable or truncated)."
+        return 0
+    fi
+
+    local san missing="" h
+    san=$(cert_san_string "$crt")
+    for h in $(appliance_site_names); do
+        case ",$san," in
+        *",DNS:$h,"* | *",IP:$h,"*) ;;
+        *) missing="${missing:+$missing }$h" ;;
+        esac
+    done
+    if [ -n "$missing" ]; then
+        dr_fail "The dashboard certificate does not cover: $missing — Caddy serves those names without a certificate for them. Run './pithead apply' to re-mint."
+    else
+        dr_ok "The dashboard certificate covers every name Caddy serves."
+    fi
+
+    # 30 days: generous next to the appliance's own 10-year mint — this exists to catch a
+    # hand-installed short-lived certificate, not the appliance's own, which will not near this
+    # window inside the life of a shipped box.
+    if openssl x509 -in "$crt" -noout -checkend 2592000 >/dev/null 2>&1; then
+        dr_ok "The dashboard certificate does not expire within 30 days ($enddate)."
+    elif openssl x509 -in "$crt" -noout -checkend 0 >/dev/null 2>&1; then
+        dr_fail "The dashboard certificate expires within 30 days ($enddate). Run './pithead apply' to re-mint."
+    else
+        dr_fail "The dashboard certificate has EXPIRED ($enddate) — browsers will refuse it. Run './pithead apply' to re-mint."
+    fi
+}
+
 # True if the named container is currently running. State only, no sudo — safe for doctor.
 container_is_running() { # <name>
     [ -n "$(docker ps -q --filter "name=^${1}$" --filter status=running 2>/dev/null)" ]
@@ -5187,6 +5265,85 @@ _console() { # $1... lines
 # A bench session hit exactly that: the setup page "died" at the moment provisioning succeeded.
 appliance_tls_dir() { printf '%s' "${PITHEAD_TLS_DIR:-$PWD/data/tls}"; }
 
+# The ONE list of names this appliance answers to — the shared builder behind BOTH Caddy's
+# site_hosts (generate_caddyfile) and the certificate's SAN list (appliance_mint_cert), so a name
+# is either served and certified or neither (#1132). Prints bare host/IP tokens, space-separated;
+# each caller formats them for its own consumer (a literal Host for Caddy, a DNS:/IP: SAN entry
+# for the certificate).
+#
+# The base name is $HOST_IP — resolve_dashboard_host's own answer, which already carries its
+# "dashboard.host wins, else this machine's name" rule — so an operator who pins dashboard.host
+# gets that exact name from both consumers, never a certificate for the machine's OTHER names
+# (the #1132 mismatch). Called before resolve_dashboard_host has run (the wizard's very first
+# mint, before CONFIG_FILE exists) $HOST_IP is empty; fall back to its own "auto" default rather
+# than duplicating that function's prompt/env logic here.
+#
+# "auto" (dashboard.host unset) expands to every address the appliance actually answers on — a
+# headless box reached by mDNS name, by IP, or from the console must have all three certified. An
+# explicit pin stays a single name on purpose: the site list collapsing was never the #1132 bug,
+# only the certificate not following suit was.
+appliance_site_names() {
+    local base="${HOST_IP:-}"
+    if [ -z "$base" ]; then
+        if is_appliance; then base="$(hostname).local"; else base="$(hostname)"; fi
+    fi
+    local names="$base"
+    if is_appliance && [ -z "${DASHBOARD_HOST:-}" ]; then
+        local extra
+        for extra in $(hostname -I 2>/dev/null) localhost; do
+            case " $names " in *" $extra "*) continue ;; esac
+            # `hostname -I` lists EVERY address on every interface, so on any network whose router
+            # passes IPv6 through, a SLAAC/DHCPv6 global unicast address lands here exactly like a
+            # LAN one — and this list is rebuilt every render. That published the control panel on
+            # a globally-routable address, with nothing but the operator's router between it and
+            # the internet; the product must not depend on that. The documented way to reach the
+            # dashboard off-LAN is the onion service, never a routable address, so nothing
+            # supported regresses. Opt back in with dashboard.expose_public_ip if a deployment
+            # really does want it.
+            if [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ] && is_public_ip "$extra"; then
+                continue
+            fi
+            # The container-bridge gateway belongs to the ONION vhost, which serves on exactly that
+            # address, and never to the LAN list — two site blocks naming the same scheme://address
+            # make Caddy refuse the whole file with "ambiguous site definition" (see
+            # generate_caddyfile). Excluding it here keeps the certificate honest too: it was never
+            # reachable at the bridge gateway by anything except the tor container.
+            if [ -n "${NETWORK_PREFIX:-}" ] && [ "$extra" = "${NETWORK_PREFIX}.1" ]; then
+                continue
+            fi
+            names="$names $extra"
+        done
+    fi
+    printf '%s' "$names"
+}
+
+# appliance_site_names(), formatted as a certificate SAN string ("DNS:a,DNS:b,IP:c,..."). Same
+# character-class rule the bind_addrs loop below uses: a colon is an IPv6 literal, any other
+# non-digit/non-dot character makes it a name, otherwise it's a dotted-quad IPv4 literal. Always
+# succeeds (appliance_site_names never fails) — safe to use in a bare assignment under `set -e`.
+appliance_cert_alt_string() {
+    local h out=""
+    for h in $(appliance_site_names); do
+        case "$h" in
+        *:*) out="${out:+$out,}IP:$h" ;;
+        *[!0-9.]*) out="${out:+$out,}DNS:$h" ;;
+        *) out="${out:+$out,}IP:$h" ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
+# The SAN list a certificate FILE actually carries, in the same "DNS:a,IP:b" form
+# appliance_cert_alt_string builds — so appliance_mint_cert and doctor can compare what a
+# certificate covers against what it should, instead of guessing from a mint date (#1132). Empty
+# on any read failure (missing file, corrupt cert, no SAN extension at all) — callers treat that
+# as "does not match". Deliberately always exits 0 (`|| true`): a corrupt certificate is data for
+# the caller to act on, not a reason for `pithead` itself to abort under `set -e`.
+cert_san_string() { # <cert-file>
+    openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null |
+        tr -d '[:space:]' | sed -e 's/^X509v3SubjectAlternativeName://' -e 's/IPAddress:/IP:/g' || true
+}
+
 # The console login mirrors the dashboard login (operator decision 2026-07-31): one secret per
 # machine. Anyone at the physical console with the dashboard password may log in as root —
 # consistent with the LAN/physical trust model (the console already shows the setup token, and
@@ -5259,21 +5416,33 @@ EOF
 
 # Mint (or keep) the machine's ONE certificate in appliance_tls_dir. Idempotent: an existing
 # certificate that still covers the machine's names is reused, because the operator has already
-# trusted it and replacing it is indistinguishable from an attack.
+# trusted it and replacing it is indistinguishable from an attack. Re-mints ONLY when the name
+# list it was minted for no longer matches (#1132) — compared, not date-guessed: the minted SAN
+# list is derived from the certificate itself with openssl (cert_san_string) and set-compared
+# against appliance_site_names' current answer, sorted on both sides so a re-ordered (but
+# unchanged) `hostname -I` never trips a needless re-mint. An operator who has pinned this
+# fingerprint loses that trust on every unnecessary replacement, so the comparison stays as
+# conservative as it can — and a real re-mint says so on the console, since the operator's browser
+# will need to trust the new certificate.
 appliance_mint_cert() { # -> prints the SHA-256 fingerprint
-    local d alt ip
+    local d alt need_mint=1 names primary
     d=$(appliance_tls_dir)
     mkdir -p "$d"
-    alt="DNS:$(hostname).local,DNS:$(hostname),DNS:localhost,IP:127.0.0.1"
-    for ip in $(hostname -I 2>/dev/null); do alt="$alt,IP:$ip"; done
+    alt=$(appliance_cert_alt_string)
     if [ -s "$d/wizard.crt" ] && [ -s "$d/wizard.key" ] &&
-        openssl x509 -in "$d/wizard.crt" -noout -text 2>/dev/null | tr -d ' ' | grep -q "$(printf '%s' "$alt" | tr -d ' ' | cut -d, -f1)"; then
-        : # keep it
-    elif ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout "$d/wizard.key" -out "$d/wizard.crt" \
-        -subj "/CN=$(hostname).local" -addext "subjectAltName=$alt" \
-        -addext "basicConstraints=critical,CA:FALSE" >/dev/null 2>&1; then
-        return 1
+        [ "$(cert_san_string "$d/wizard.crt" | tr ',' '\n' | sort | tr '\n' ',')" = \
+            "$(printf '%s' "$alt" | tr ',' '\n' | sort | tr '\n' ',')" ]; then
+        need_mint=0
+    fi
+    if [ "$need_mint" = 1 ]; then
+        [ -s "$d/wizard.crt" ] &&
+            log "Re-minting the dashboard certificate — the machine now answers to a different set of names than the one it was minted for. Your browser will need to trust the new certificate."
+        names=$(appliance_site_names)
+        primary="${names%% *}"
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+            -keyout "$d/wizard.key" -out "$d/wizard.crt" \
+            -subj "/CN=$primary" -addext "subjectAltName=$alt" \
+            -addext "basicConstraints=critical,CA:FALSE" >/dev/null 2>&1 || return 1
     fi
     openssl x509 -in "$d/wizard.crt" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//'
 }
@@ -7307,42 +7476,15 @@ generate_caddyfile() {
         [ -n "$dport" ] && port_suffix=":$dport"
     fi
 
-    # The site addresses. DIY serves the one host the operator reaches it by. The appliance is
-    # headless: the operator may browse by mDNS name, by IP (the wizard prints it), or from the
-    # console, and Caddy only answers addresses it was told about — a single-host site turns
-    # every other path into a TLS alert. dashboard.host set explicitly still wins and stays single.
-    local site_hosts="$HOST_IP"
-    if is_appliance && [ -z "${DASHBOARD_HOST:-}" ]; then
-        local extra_ip
-        for extra_ip in $(hostname -I 2>/dev/null) localhost; do
-            case " $site_hosts " in *" $extra_ip "*) continue ;; esac
-            # `hostname -I` lists EVERY address on every interface, so on any network whose router
-            # passes IPv6 through, a SLAAC/DHCPv6 global unicast address lands here exactly like a
-            # LAN one — and this list is rebuilt every boot by render_derived. That published the
-            # control panel on a globally-routable address, with nothing but the operator's router
-            # between it and the internet; the product must not depend on that. The documented way
-            # to reach the dashboard off-LAN is the onion service, never a routable address, so
-            # nothing supported regresses. Opt back in with dashboard.expose_public_ip if a
-            # deployment really does want it.
-            if [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ] && is_public_ip "$extra_ip"; then
-                continue
-            fi
-            # The container-bridge gateway belongs to the ONION vhost, which serves on exactly that
-            # address, and never to the LAN list. `hostname -I` reports it because it is a real host
-            # address, so without this it lands in both blocks — and two site blocks naming the same
-            # scheme://address make Caddy refuse the whole file with "ambiguous site definition".
-            # With dashboard.secure:false the schemes match and that is precisely what happened: an
-            # appliance with the onion enabled rendered a Caddyfile Caddy could not adapt, so Caddy
-            # crash-looped under Restart=always and took the dashboard AND the onion down together.
-            # (With secure:true the LAN block is https:// and the onion block http://, so the clash
-            # is invisible — which is why this survived.) Nothing is lost by excluding it: the LAN
-            # block was never reachable at the bridge gateway by anything except the tor container.
-            if [ -n "${NETWORK_PREFIX:-}" ] && [ "$extra_ip" = "${NETWORK_PREFIX}.1" ]; then
-                continue
-            fi
-            site_hosts="$site_hosts $extra_ip"
-        done
-    fi
+    # The site addresses — and the certificate's SAN list — now come from ONE shared builder
+    # (appliance_site_names, #1132): a name Caddy serves and a name the certificate covers can no
+    # longer drift apart the way they did when each kept its own copy of this expansion. DIY
+    # serves the one host the operator reaches it by; the appliance expands to every address it
+    # answers on unless dashboard.host is pinned, in which case it stays single on purpose — see
+    # appliance_site_names for the full rule, the SLAAC-leak guard, and the bridge-gateway
+    # exclusion (a stray site block on that address makes Caddy refuse the whole file).
+    local site_hosts
+    site_hosts=$(appliance_site_names)
     _site_addresses() { # $1 scheme — "https://a, https://b" from $site_hosts
         local h out=""
         for h in $site_hosts; do
@@ -7450,18 +7592,21 @@ $(_bind_line)
     # trusted the first one refuses the second: the setup page appears to die on success.
     local tls_line="    tls internal" tlsd
     if is_appliance; then
-        # MINT IT HERE if it is missing. The certificate was previously created only by the setup
-        # wizard, so any machine that skips the wizard — a pre-seeded config, or a reinstall whose
-        # preserved /data already held config.json — reached this point with the Caddyfile naming
-        # a file that did not exist. Caddy then answered :443 without a usable certificate and the
-        # dashboard failed the TLS handshake outright (ERR_SSL_PROTOCOL_ERROR): a bench machine
-        # looked hung when it was serving a broken listener. Generating on demand makes the
-        # directive true by construction, and the mint is idempotent — an existing certificate the
-        # operator has already trusted is reused, never replaced.
+        # MINT IT HERE, every render — never gated on "missing". The certificate was previously
+        # created only by the setup wizard, so any machine that skips the wizard (a pre-seeded
+        # config, or a reinstall whose preserved /data already held config.json) reached this point
+        # with the Caddyfile naming a file that did not exist; Caddy then answered :443 without a
+        # usable certificate and the dashboard failed the TLS handshake outright
+        # (ERR_SSL_PROTOCOL_ERROR), which covered the missing-file case. But site_hosts above is
+        # rebuilt fresh on every render while a file-exists gate would leave an EXISTING certificate
+        # untouched forever — so the moment the machine's addresses changed (a DHCP lease, a pinned
+        # host), Caddy would serve names the certificate never heard of (#1132). Calling
+        # unconditionally hands that decision to appliance_mint_cert itself, which is idempotent
+        # by comparison, not by "already have a file": it re-mints only when the name list it was
+        # minted for no longer matches, and reuses the operator's already-trusted certificate
+        # otherwise.
         tlsd=$(appliance_tls_dir)
-        if [ ! -s "$tlsd/wizard.crt" ] || [ ! -s "$tlsd/wizard.key" ]; then
-            appliance_mint_cert >/dev/null 2>&1 || true
-        fi
+        appliance_mint_cert >/dev/null 2>&1 || true
         if [ -s "$tlsd/wizard.crt" ] && [ -s "$tlsd/wizard.key" ]; then
             tls_line="    tls /pithead-tls/wizard.crt /pithead-tls/wizard.key"
         else
