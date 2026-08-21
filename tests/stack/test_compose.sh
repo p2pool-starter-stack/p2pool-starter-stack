@@ -133,7 +133,11 @@ expect_min "log rotation on every service" "max-size:" 9
 # matters: move the tag here and in the compose file, leave the digest, and the stack keeps pulling
 # the old image while the file, this test, the release notes and the docs all announce the new
 # version. Spelling the digest out makes the value a reviewable part of the diff at bump time.
-expect_present "tecnativa socket-proxy pinned by digest" "tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476"
+# A COUNT, not a presence check (#1137's residual). This image runs TWICE — docker-proxy and
+# docker-control — and expect_present is a grep -q, so it matches either line: bumping one proxy and
+# leaving the other was green. The two would then run different socket-proxy builds, which is exactly
+# the split the separate-proxy design exists to prevent.
+expect_min "tecnativa socket-proxy pinned by digest (both proxies)" "tecnativa/docker-socket-proxy:v0.4.2@sha256:1f3a6f303320723d199d2316a3e82b2e2685d86c275d5e3deeaf182573b47476" 2
 expect_present "caddy pinned by digest" "caddy:2.11.4@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d"
 expect_present "tari node pinned by digest" "minotari_node:v5.3.1-mainnet@sha256:824fd6ec21d618805317d7eede374d6782906eeae17d2fc8aaad4df6205f94e0"
 
