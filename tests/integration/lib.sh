@@ -333,9 +333,14 @@ env_bake_verdict() { # <var> <disk-env-lines> <container-env-lines>
 # Classify the TEXT, never doctor's exit code — it is 1 on ANY failed check, so an unrelated failure
 # would swamp this signal and a 0 would read as "units fine" on a pithead that never looked.
 #   on-target — the units name the install doctor was run from
-#   stranded  — the section is there and says anything else: units naming another directory, no
-#               units at all, a spool nobody writes to, or "this is not the live install"
-#   disabled  — the control channel is off for that install, so there is no channel to strand
+#   stranded  — the section is there and reports a fault: units naming another directory, no units
+#               at all, or a spool nobody writes to
+#   disabled  — the control channel is off for that install. NOT a pass on its own: `apply` leaves
+#               the units alone when control is disabled, so a strand SURVIVES the restore in
+#               exactly this state. The caller has to look for leftovers itself.
+#   not-live  — doctor declined to grade: this directory is a superseded version dir and `current`
+#               names another. An explicit "I did not evaluate", graded INFO by doctor and pointing
+#               at where to look. Folding it into `stranded` hard-fails a run with a false claim.
 #   no-check  — no section at all: no systemd, or a pithead predating the check (v1.19.2)
 control_units_verdict() { # <doctor-output>
     case "$1" in
@@ -348,6 +353,7 @@ control_units_verdict() { # <doctor-output>
     case "$1" in
     *"Control runner units target this install."*) printf 'on-target' ;;
     *"Disabled for this install"*) printf 'disabled' ;;
+    *"This is not the live install"*) printf 'not-live' ;;
     *) printf 'stranded' ;;
     esac
 }

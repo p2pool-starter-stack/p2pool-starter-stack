@@ -173,6 +173,14 @@ SAFETY_ARCHIVE=""
 MINER_CFG_BACKUP=""
 RESTORED=0
 RESTORE_PROOF_FAILED=0
+# Separate from RESTORE_PROOF_FAILED on purpose (#1085). That flag's message is the #971
+# credential-bake incident's, and its remediation — "re-bake from disk: docker compose up -d" —
+# does nothing whatsoever for a systemd unit. A control-channel fault needs its own words.
+CONTROL_PROOF_FAILED=0
+# What the control units looked like BEFORE the restore's converging apply, recorded so the run log
+# says whether THIS run stranded the box. The post-restore verdict cannot answer that: it runs after
+# the apply that repairs it.
+CONTROL_VERDICT_BEFORE=""
 # Where the LIVE stack actually runs from — resolved in preflight (#454). Defaults to CANONICAL_DIR
 # so the EXIT trap always has a target even if it fires before preflight refines it.
 RESTORE_DIR="$CANONICAL_DIR"
@@ -205,7 +213,7 @@ restore_all() {
             miner_reload
             ok "$MINER_HOST repointed to its original pool(s); backup pruned"
         else
-            warn "FAILED to restore $MINER_HOST config — backup kept at $MINER_CFG_BACKUP"
+            warn "FAILED to restore $MINER_HOST config — the backup should still be at $MINER_CFG_BACKUP, but check: if the connection dropped after the prune, it is already gone and the live config is the restored one."
         fi
     fi
 
@@ -215,6 +223,16 @@ restore_all() {
     #    project locally-built :dev images.
     step "bringing the baseline stack ($RESTORE_DIR) back up"
     on_bench "cd '$E2E_DIR' && ./pithead down >/dev/null 2>&1 || true"
+    # Look at the control units BEFORE the apply below converges them. Without this the run can
+    # never report that it stranded the box — the post-restore proof runs downstream of its own
+    # repair, so on the ordinary #1085 path it is green either way. Observation only: the strand is
+    # expected here, and the restore is what has to put it right.
+    CONTROL_VERDICT_BEFORE="$(control_units_verdict "$(on_bench "cd '$RESTORE_DIR' && ./pithead doctor 2>/dev/null" || true)")"
+    case "$CONTROL_VERDICT_BEFORE" in
+    on-target) step "control units before restore: already pointing at $RESTORE_DIR" ;;
+    stranded) step "control units before restore: STRANDED (expected — the branch deploy repoints them); the apply below must converge them" ;;
+    *) step "control units before restore: $CONTROL_VERDICT_BEFORE" ;;
+    esac
     if on_bench "cd '$RESTORE_DIR' && ./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"; then
         wait_bench_healthy 300 && ok "baseline stack healthy again" || warn "baseline stack came up but isn't reporting healthy yet — check 'pithead status' on $BENCH_HOST"
         # Proof, even when the health wait timed out: a stack running the WRONG creds looks
@@ -231,9 +249,18 @@ restore_all() {
     sync="$(on_bench "curl -fsS --max-time 8 http://127.0.0.1:8000/api/state 2>/dev/null | jq -r '\"\(.sync.monero.state)/\(.sync.tari.state)\"' 2>/dev/null" || true)"
     [ -n "$sync" ] && step "post-restore sync state (monero/tari): $sync"
 
-    if [ "$RESTORE_PROOF_FAILED" = "1" ]; then
-        warn "RESTORE NOT PROVEN: the live stack on $BENCH_HOST did not prove it matches $RESTORE_DIR's on-disk config (see above)."
-        warn "  Re-bake from disk by hand: cd $RESTORE_DIR && docker compose up -d — then verify with a host-side authed get_info."
+    if [ "$CONTROL_PROOF_FAILED" = "1" ]; then
+        warn "CONTROL CHANNEL NOT RESTORED on $BENCH_HOST: the live dashboard's config changes and"
+        warn "  one-click upgrades will queue into a spool nothing reads, with nothing reporting a fault."
+        warn "  This is separate from the credential proof above and needs a different repair — see the lines above."
+        [ "$CONTROL_VERDICT_BEFORE" = "stranded" ] &&
+            warn "  This run DID strand them (verdict before the restore: stranded), and the restore did not put them back."
+    fi
+    if [ "$RESTORE_PROOF_FAILED" = "1" ] || [ "$CONTROL_PROOF_FAILED" = "1" ]; then
+        if [ "$RESTORE_PROOF_FAILED" = "1" ]; then
+            warn "RESTORE NOT PROVEN: the live stack on $BENCH_HOST did not prove it matches $RESTORE_DIR's on-disk config (see above)."
+            warn "  Re-bake from disk by hand: cd $RESTORE_DIR && docker compose up -d — then verify with a host-side authed get_info."
+        fi
         exit 1
     fi
     if [ "$rc" -eq 0 ]; then ok "restore complete."; else warn "restore complete (the run itself failed — see above)."; fi
@@ -333,25 +360,54 @@ PROBE
 
     # 3. The control units must still name RESTORE_DIR (#1085). Grep the verdict, never doctor's
     #    exit code — it is 1 on ANY dr_fail, so an unrelated failure elsewhere would swamp this.
+    #
+    #    Note what this check can and cannot see. It runs AFTER restore_all's `apply -y`, and that
+    #    apply converges the units (v1.19.2+), so on the ordinary #1085 path the strand is already
+    #    repaired by the time we look — this arm is a proof that the box was LEFT working, not a
+    #    detector of the strand itself. The strand is caught upstream, by CONTROL_VERDICT_BEFORE
+    #    recorded in restore_all before that apply, and by run.sh's ExecStart assertion. What this
+    #    arm does catch on its own: a pithead too old to converge (no-check), a disabled channel
+    #    where apply leaves stray units alone, and strands this run did not cause.
     local doc verdict_line
     doc="$(on_bench "cd '$RESTORE_DIR' && ./pithead doctor 2>/dev/null" || true)"
     verdict_line="$(printf '%s\n' "$doc" | awk '/^Dashboard control channel:/{getline; print; exit}')"
     case "$(control_units_verdict "$doc")" in
     on-target)
-        ok "restore proof: the control runner units point at $RESTORE_DIR"
+        # The units name the right directory. That is text; `enabled` is behaviour, and
+        # provision_control_runner's `systemctl enable --now` is warn-only, so apply can return 0
+        # with correctly-named units that will never fire.
+        if on_bench "systemctl is-enabled pithead-control.path >/dev/null 2>&1"; then
+            ok "restore proof: the control runner units point at $RESTORE_DIR, and the path unit is enabled"
+        else
+            warn "restore proof: the control units name $RESTORE_DIR but pithead-control.path is NOT enabled — correctly addressed and never fired."
+            warn "  Repair on the box: sudo systemctl enable --now pithead-control.path"
+            CONTROL_PROOF_FAILED=1
+        fi
         ;;
     disabled)
-        warn "restore proof: the control channel is disabled in $RESTORE_DIR's config — no channel to strand."
+        # NOT a pass. `apply` leaves the units alone when control is disabled, so this is the one
+        # state in which a strand SURVIVES the restore. Look for the leftovers directly.
+        if on_bench "grep -qsF 'ExecStart=$E2E_DIR/pithead' /etc/systemd/system/pithead-control.service"; then
+            warn "restore proof: the control channel is disabled in $RESTORE_DIR's config, and the box-global units still name the e2e checkout ($E2E_DIR). A disabled apply does not clean them up."
+            warn "  Repair on the box: sudo rm -f /etc/systemd/system/pithead-control.{path,service} && sudo systemctl daemon-reload"
+            CONTROL_PROOF_FAILED=1
+        else
+            ok "restore proof: control channel disabled in $RESTORE_DIR, and no unit names the e2e checkout"
+        fi
+        ;;
+    not-live)
+        warn "restore proof: $RESTORE_DIR is not the live install by its own reckoning — doctor declined to grade its control channel. Units NOT proven."
+        warn "  doctor said: ${verdict_line:-<no verdict line>}"
         ;;
     no-check)
-        warn "restore proof: $RESTORE_DIR's doctor printed no control-channel verdict — that pithead predates the check (v1.19.2), or the box has no systemd. The units were NOT proven; check by hand: systemctl cat pithead-control.service"
-        prc=1
+        warn "restore proof: $RESTORE_DIR's doctor printed no control-channel verdict — that pithead predates the check (v1.19.2), or the box has no systemd. On a pre-v1.19.2 install the restore's own apply cannot converge the units either, so assume the box IS stranded."
+        warn "  Check by hand: systemctl cat pithead-control.service"
+        CONTROL_PROOF_FAILED=1
         ;;
     *)
         warn "restore proof: the control runner units do NOT point at $RESTORE_DIR — the live dashboard's config changes and one-click upgrades queue into a spool nothing reads, with nothing reporting a fault."
         warn "  doctor said: ${verdict_line:-<no verdict line>}"
-        warn "  Repair on the box: cd $RESTORE_DIR && ./pithead apply -y"
-        prc=1
+        CONTROL_PROOF_FAILED=1
         ;;
     esac
     return "$prc"
@@ -528,12 +584,29 @@ borrow_miner() {
     # the original, every later run restores to it, and the contamination is self-perpetuating with
     # nothing reporting a fault. Observed live on a loaner: 32 backups, 3 distinct contents, and the
     # two most recent already carried a bench pool (#1172-follow-up filed).
-    if [ "$(on_miner "jq -r --arg b '$BENCH_HOST' '[.pools[]? | select(.url | ascii_downcase | contains(\$b))] | length' '$MINER_XMRIG_CONFIG' 2>/dev/null" || echo 0)" != "0" ]; then
-        warn "$MINER_HOST's xmrig config ALREADY names $BENCH_HOST before this run borrowed it."
+    # `.url // ""` and a lowercased needle, because a pool entry with no .url makes `.url |
+    # ascii_downcase` raise and jq exits non-zero for the WHOLE expression — one malformed sibling
+    # entry and the probe reports nothing. And the answer is a three-way, not a boolean: "could not
+    # tell" must not read as "clean". The old spelling ended `2>/dev/null || echo 0`, which failed
+    # open on every error path — a truncated config, a dropped ssh — and those are correlated with
+    # the very fault this probe exists to find: a config left half-written by a run that died before
+    # restoring. A probe that goes quiet exactly when the thing it looks for is present is the
+    # defect class this whole PR is about, one function away from the comment that says so.
+    local bench_pools
+    bench_pools="$(on_miner "jq -r --arg b '$BENCH_HOST' '[.pools[]? | select((.url // \"\") | ascii_downcase | contains(\$b | ascii_downcase))] | length' '$MINER_XMRIG_CONFIG' 2>/dev/null" || true)"
+    case "$bench_pools" in
+    "" | *[!0-9]*)
+        warn "could not read $MINER_HOST's pool list to check it is not already borrowed (jq failed, or the config is unreadable/malformed)."
+        warn "  A config left half-written by a run that died before restoring looks exactly like this — do NOT read the silence as clean."
+        ;;
+    0) ;;
+    *)
+        warn "$MINER_HOST's xmrig config ALREADY names $BENCH_HOST in $bench_pools pool(s) before this run borrowed it."
         warn "  Either this rig keeps a permanent bench pool, or a previous e2e did not restore it."
-        warn "  The backup taken next records THAT state as the original, so a later restore returns to it."
+        warn "  The backup taken next records THAT state as the original, so a later restore returns to it (#1178)."
         warn "  Check by hand before trusting a restore: jq '.pools[].url' $MINER_XMRIG_CONFIG on $MINER_HOST"
-    fi
+        ;;
+    esac
     MINER_CFG_BACKUP="$MINER_XMRIG_CONFIG.e2e-orig.$(on_miner 'date +%Y%m%d-%H%M%S')"
     on_miner "cp -a '$MINER_XMRIG_CONFIG' '$MINER_CFG_BACKUP'" || die "Failed to back up the miner config."
     step "miner config backed up → $MINER_CFG_BACKUP"
