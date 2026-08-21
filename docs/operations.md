@@ -16,7 +16,7 @@ separately, [below](#appliance-only-commands).
 | `./pithead upgrade` | Re-render the generated config, then **pull** (release bundle) or **rebuild** (source checkout) the images and restart. Run after downloading a newer bundle or a `git pull`. |
 | `./pithead logs [service]` | Follow logs for all containers, or a single service (e.g. `logs p2pool`). |
 | `./pithead status` | Show container status and health-check every expected service. Warns about anything down/unhealthy and exits non-zero if so (handy for cron/monitoring). Profile-aware, and treats a stopped `p2pool`/`xmrig-proxy` as intentional during a node-down failover or while the miner is held until the chains sync. |
-| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus runtime checks: the Tor container is actually running while the mining stack runs (a loud FAIL when it's down — the privacy backbone is dead), the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on the stratum port (`p2pool.stratum_port`, default `3333`, and whether that port sits on a public IP), the dashboard app answers behind its container, a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — fix with `./pithead restart tor`, or set `tor.auto_heal: true` to automate it), and a local monerod reports `synchronized` from its own RPC (a node stranded at 0 peers by a Tor restart keeps a green healthcheck while mining sits on a stale tip — fix with `./pithead restart monerod`, #972). A paste-able health report. |
+| `./pithead doctor` | Read-only diagnostics: deps, Docker, AVX2, HugePages, RAM/disk, `.env`/onion state, and container status — plus runtime checks: the Tor container is actually running while the mining stack runs (a loud FAIL when it's down — the privacy backbone is dead), the Tor-egress firewall rules are actually installed (a reboot silently drops them while the containers auto-restart), something is listening on the stratum port (`p2pool.stratum_port`, default `3333`, and whether that port sits on a public IP), the dashboard app answers behind its container, a clearnet request through Tor's SOCKS succeeds (a failing Tor guard breaks Healthchecks/Telegram/XvB while mining still works — fix with `./pithead restart tor`, or set `tor.auto_heal: true` to automate it), a local monerod reports `synchronized` from its own RPC (a node stranded at 0 peers by a Tor restart keeps a green healthcheck while mining sits on a stale tip — fix with `./pithead restart monerod`, #972), and, on the appliance, the served dashboard certificate actually covers every name Caddy answers on and isn't within 30 days of expiring (fix either with `./pithead apply`; an unreadable certificate file warns instead of failing, so a read hiccup can't reboot-loop the box). A paste-able health report. |
 | `./pithead backup` | Save `config.json`, `.env`, `Caddyfile`, the Tor onion keys, and the dashboard's database (your hashrate history & settings) to a timestamped, passphrase-encrypted archive under `backups/` (checks free space first; stops a running stack for a clean copy, then restarts it). `--with-chains` also includes the blockchain data; `--no-encrypt` writes a plaintext `tar.gz`; `-y` / `--yes` skips the prompts (low free space and stopping the stack). |
 | `./pithead restore <archive>` | Restore those files from a backup archive, encrypted or plaintext (asks before overwriting; fixes Tor key ownership). `-y` / `--yes` skips the prompt. |
 | `./pithead reset-dashboard` | **DESTRUCTIVE**. Wipes and recreates the dashboard and P2Pool data. `-y` / `--yes` skips the prompt. |
@@ -183,6 +183,17 @@ off only removes units whose `ExecStart` points at itself, comparing physical pa
 `current` symlink and the versioned directory it targets count as the same checkout. Another
 checkout on the same box (an e2e harness, a bundle smoke test) therefore cannot delete the live
 stack's runner and strand its queued requests.
+
+Installation is ownership-checked the same way: when the units already name a different install
+that still exists on disk, `apply` refuses to overwrite them and names the owning directory — a
+sibling checkout turning the flag on can no longer repoint the live stack's runner at itself,
+which would leave the live dashboard's requests sitting unread with no error on either side.
+Units whose install directory is gone are adopted, a unit this tool did not write is left
+untouched, and a successful one-click upgrade takes the units over as part of moving `current`
+(the previous version's directory stays on disk as the rollback, so the upgrade is the one
+takeover that must not be refused). For the remaining deliberate cases — migrating an install by
+hand, or repairing after a failed upgrade — setting `PITHEAD_STEAL_CONTROL_UNITS=1` forces the
+takeover.
 
 The runner dispatches a fixed set of actions and rejects everything else: `apply --dry-run
 --porcelain` (preview), `apply -y` (commit), a release upgrade — the dashboard's
