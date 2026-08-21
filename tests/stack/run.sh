@@ -2235,6 +2235,31 @@ for svc in p2pool monero xmrig-proxy; do
         bad "pin $svc resolves to a value in its Dockerfile" "got '$pv'"
     fi
 done
+# The same drift guard for the pins read out of docker-compose.yml and build/tor, which had none
+# (#1138). pin() emits the EMPTY string when its grep stops matching — a renamed image, a moved tag
+# format — and the release notes then print "- caddy: " with nothing after it. The ingredient list's
+# whole job, silently not done, on the exact surface an operator uses to check what they installed.
+# grep -F, not -E: these values contain '/' and '.', and a regex match would accept a value that is
+# merely similar to one in the file.
+for comp in tari tari-wallet caddy socket-proxy tor-base; do
+    case "$comp" in
+    tor-base) pin_src="$ROOT/build/tor/Dockerfile" ;;
+    *) pin_src="$ROOT/docker-compose.yml" ;;
+    esac
+    # shellcheck disable=SC1090
+    pv="$(
+        cd "$ROOT" || exit
+        set --
+        source "$REL" 2>/dev/null
+        set +eu
+        pin "$comp"
+    )"
+    if [ -n "$pv" ] && grep -qF -- "$pv" "$pin_src"; then
+        ok "pin $comp resolves to a value in $(basename "$pin_src")"
+    else
+        bad "pin $comp resolves to a value in $(basename "$pin_src")" "got '$pv'"
+    fi
+done
 # The top-level VERSION file is the single source of truth (#44); the dashboard's Python package
 # metadata must stay in lockstep so a release can't ship two different "stack versions".
 ver_file="$(tr -d ' \t\r\n' <"$ROOT/VERSION")"
