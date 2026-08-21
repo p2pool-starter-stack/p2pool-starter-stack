@@ -316,8 +316,19 @@ h3 {
 }
 
 /* Earnings calculator what-if input (Issue #12) */
-.earnings-subtitle {
+/* The subtitle + disclaimer prose (#991): collapsed by default, same pattern as .egress-details —
+ * these two paragraphs were the single biggest block in the tallest card in the "Your Stack" grid
+ * section, so every shorter neighbour trailed blank space under it. */
+.earnings-details {
   margin: -4px 0 12px 0;
+}
+.earnings-details > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.earnings-subtitle {
+  margin: 8px 0 0 0;
   line-height: 1.4;
 }
 .earnings-input {
