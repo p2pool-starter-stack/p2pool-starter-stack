@@ -5234,12 +5234,24 @@ TOR_ENTRY="$ROOT/build/tor/entrypoint.sh"
 tor_torrc() { # <DASHBOARD_ONION_ENABLED> [COMPOSE_PROFILES] -> the torrc the entrypoint would hand to `tor -f`
     local d
     d="$(mktemp -d)"
-    printf '#!/bin/sh\ncat /tmp/torrc\n' >"$d/tor" # stub tor: ignore -f, just print the rendered file
+    # The stub cats the SANDBOX path, not /tmp/torrc (#1104). That is what makes the TORRC_OUT seam
+    # load-bearing: if the entrypoint ignored it and wrote the host-global file, this prints nothing
+    # and every assertion below goes red. Catting /tmp/torrc instead would keep passing off a stale
+    # file left by an earlier run — the vacuous version of this check.
+    printf '#!/bin/sh\ncat "%s"\n' "$d/torrc" >"$d/tor" # stub tor: ignore -f, print the rendered file
     chmod +x "$d/tor"
     PATH="$d:$PATH" DASHBOARD_ONION_ENABLED="$1" COMPOSE_PROFILES="${2-local_node,local_tari}" NETWORK_PREFIX=10.9.0 \
-        TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" sh "$TOR_ENTRY"
+        TORRC_TEMPLATE="$ROOT/build/tor/torrc.template" TORRC_OUT="$d/torrc" sh "$TOR_ENTRY"
     rm -rf "$d"
 }
+# The suite's only host-global fixture path, now sandboxed: two concurrent runs used to race on one
+# /tmp/torrc and redden the hidden-service assertions, and the natural remedy for that flake is
+# "re-run until green" — the habit this repo has been removing. The container default is unchanged
+# and MUST stay /tmp/torrc, because tier-3 assertions read that path inside the running container.
+assert_eq "tor entrypoint keeps /tmp/torrc as its container default (#1104)" \
+    "$(grep -c '^: "${TORRC_OUT:=/tmp/torrc}"$' "$TOR_ENTRY")" "1"
+assert_eq "tor entrypoint writes NO bare /tmp/torrc outside that default (#1104)" \
+    "$(grep -vE '^\s*#' "$TOR_ENTRY" | grep -cF '/tmp/torrc')" "1"
 tor_onion_on="$(tor_torrc true)"
 assert_contains "tor entrypoint: dashboard HiddenService appended when enabled (#343)" \
     "$tor_onion_on" "HiddenServiceDir /var/lib/tor/dashboard/"
