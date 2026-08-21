@@ -793,10 +793,18 @@ assert_running_state() {
         assert_eq "dashboard confirms Tari payout tracking is live (#462/#942)" "$(jq_get "$st" '.earnings.tari_confirmed.enabled')" "true"
     fi
 
-    # 9. Caddy scheme matches dashboard.secure.
-    local scheme
-    [ "$secure" = "false" ] && scheme="http://" || scheme="https://"
-    assert_contains "Caddyfile uses correct scheme" "$(rx 'head -n1 Caddyfile 2>/dev/null')" "$scheme"
+    # 9. Caddy scheme matches dashboard.secure — read from the DASHBOARD's site block, which is
+    #    neither line 1 nor the first scheme in the file. #1123 put a global options block
+    #    (`{ auto_https disable_redirects }`) at the top, and in HTTPS mode an `http:// {` redirect
+    #    block ABOVE the dashboard's own block. So `head -n1` sees `{`, and "the first scheme in the
+    #    file" sees `http://` on a box that is correctly serving HTTPS — both spellings report a
+    #    false RED on a healthy stack, which is how this assertion failed 8 times in one green run.
+    #    The dashboard's block is the one whose address carries a HOST after the scheme; the bare
+    #    redirect is `http:// {`, with a space where the host would be, so `[^ ]` separates them.
+    local want_scheme
+    [ "$secure" = "false" ] && want_scheme='^http://[^ ]' || want_scheme='^https://[^ ]'
+    assert_eq "Caddyfile's dashboard site block uses the correct scheme (#1123)" \
+        "$(rx "grep -qE '$want_scheme' Caddyfile && echo yes || echo no")" "yes"
 
     # 10. Secrets intact (proxy token + onions unchanged vs the baseline we captured).
     assert_eq "secrets intact (token + onions)" "$(secret_fingerprint)" "$BASELINE_SECRET_FP"
