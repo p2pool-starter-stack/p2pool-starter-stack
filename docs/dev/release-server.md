@@ -62,8 +62,11 @@ The safe rule: the keyed server only ever runs code you trust. Concretely:
 
 This is how the workflow ships.
 [`.github/workflows/release-gate.yml`](../../.github/workflows/release-gate.yml) runs only on
-`workflow_dispatch` (and `push` to `main`) on a `[self-hosted, pithead-release]` runner, never
-automatically on a PR.
+`workflow_dispatch`, on a `[self-hosted, pithead-release]` runner, never automatically on a PR
+and never on a push: no runner is registered, and a trigger that arrives before its runner is
+how `main` ends up wearing a gate that never ran (#1048). Since releases fast-forward `main`
+at publish time, a `push` trigger would also fire *after* the release it was meant to gate —
+any future automation belongs on the ref being cut, not on `main`.
 
 ## Provisioning the server
 

@@ -11,7 +11,7 @@
 #   5. Smoke          pull the STAGED images back and verify they resolve to the right version
 #   6. Promote        re-tag the smoke-tested digests to :vX.Y.Z + :latest (no rebuild) and push
 #   6b. Sign          cosign-sign the promoted digests + the install bundle with the box's key (#376)
-#   7. Publish        git tag, GitHub Release from CHANGELOG, attach the manifest + bundle + bundle sig
+#   7. Publish        git tag, GitHub Release from CHANGELOG + assets, fast-forward main to the tag
 #
 # Nothing user-facing is published until every gate is green. Promotion is by digest, so the released
 # bundle is bit-for-bit what was smoke-tested. The script NEVER starts the live stack on this host and
@@ -371,7 +371,7 @@ preflight() {
     if [ "$ALLOW_DIRTY" -eq 0 ] && [ -n "$(git status --porcelain)" ]; then
         die "Working tree is dirty. Commit/stash first, or pass --allow-dirty."
     fi
-    [ "$GIT_BRANCH" = "main" ] || warn "Releasing from '$GIT_BRANCH', not main."
+    [ "$GIT_BRANCH" = "develop" ] || warn "Releasing from '$GIT_BRANCH', not develop."
 
     if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
         die "Git tag $TAG already exists — bump VERSION before cutting a new release."
@@ -624,7 +624,7 @@ publish() {
         sign_bundle "$bundle" "$bundle_sig"
     fi
 
-    confirm "Create git tag $TAG, push it, and publish the GitHub Release?" ||
+    confirm "Create git tag $TAG, push it, fast-forward main to it, and publish the GitHub Release?" ||
         {
             warn "Publish cancelled. Images are promoted; re-run --resume-promote to finish, or publish by hand."
             return 0
@@ -632,6 +632,14 @@ publish() {
 
     run git tag -a "$TAG" -m "Pithead $TAG"
     run git push origin "$TAG"
+
+    # Move main to the released commit (docs/dev/releasing.md § Branch mechanics). A plain push can
+    # only fast-forward, so main gains no object the tag does not already name — which is what makes
+    # the old post-release back-merge unnecessary (#1076). The Main Branch ruleset admits this via
+    # the same admin bypass the protected tag push above already used.
+    if ! run git push origin "$GIT_COMMIT:refs/heads/main"; then
+        warn "main was not fast-forwarded — run: git push origin $GIT_COMMIT:refs/heads/main  (the release is unaffected; main lags until this runs)."
+    fi
 
     local notes="$WORKDIR/notes.md"
     changelog_notes >"$notes"
