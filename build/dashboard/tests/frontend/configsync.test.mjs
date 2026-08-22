@@ -16,8 +16,8 @@ import {
 } from "../../mining_dashboard/web/static/configsync.mjs";
 
 test("pathGet reads nested dotted paths and tolerates absent branches", () => {
-  const obj = { monero: { remote: { host: "gouda" } } };
-  assert.equal(pathGet(obj, "monero.remote.host"), "gouda");
+  const obj = { monero: { remote: { host: "bench-node" } } };
+  assert.equal(pathGet(obj, "monero.remote.host"), "bench-node");
   assert.equal(pathGet(obj, "monero.remote.rpc_port"), undefined);
   assert.equal(pathGet(obj, "tari.mode"), undefined);
   assert.equal(pathGet({}, "a.b.c"), undefined);
@@ -25,8 +25,8 @@ test("pathGet reads nested dotted paths and tolerates absent branches", () => {
 
 test("pathSet creates intermediate objects and overwrites scalars in the way", () => {
   const obj = {};
-  pathSet(obj, "monero.remote.host", "gouda");
-  assert.deepEqual(obj, { monero: { remote: { host: "gouda" } } });
+  pathSet(obj, "monero.remote.host", "bench-node");
+  assert.deepEqual(obj, { monero: { remote: { host: "bench-node" } } });
   // A scalar sitting where an object is needed must not crash the edit.
   const scalar = { monero: "oops" };
   pathSet(scalar, "monero.mode", "remote");
