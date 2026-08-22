@@ -14,6 +14,12 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# The repair escalation (#1062) may run e2fsck over the full data partition — hours on a
+# chain-sized filesystem, unbounded by design: killing e2fsck mid-rewrite can turn recoverable
+# damage into unrecoverable. Type=oneshot already disables the start timeout by default; this
+# states the intent explicitly, the same convention as pithead-boot.service, so a future Type=
+# or manager-default change cannot quietly arm a timer over a must-not-be-interrupted repair.
+TimeoutStartSec=infinity
 ExecStart=/usr/local/sbin/pithead-data-reset
 
 [Install]
