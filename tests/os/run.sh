@@ -45,6 +45,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=tests/os/hugepages-boot-verdict.sh
 . "$SCRIPT_DIR/hugepages-boot-verdict.sh"
+# shellcheck source=tests/os/failure-evidence.sh
+. "$SCRIPT_DIR/failure-evidence.sh"
 # shellcheck source=tests/os/restore-live-state-verdict.sh
 . "$SCRIPT_DIR/restore-live-state-verdict.sh"
 # shellcheck source=tests/os/reinstall-prefill-verdict.sh
@@ -102,6 +104,9 @@ ip=""
 # LAST attempt's error text, so a caller that just gave up can classify why without another round
 # trip. See _ssh_unreachable_reason.
 SSH_ERR="/tmp/pithead-os-ssh.err"
+# A fresh run must not inherit the last run's preserved console: the cleanup copy below is
+# no-clobber (the at-assertion copy is the authoritative one), so clear the slate here.
+rm -f "$SERIAL.failed"
 
 # The wallet every phase submits. It must be checksum-VALID: p2pool refuses a well-formed but
 # checksum-invalid address at startup with a SIGABRT and crash-loops (#829), which killed the
@@ -392,7 +397,9 @@ vm_destroy() {
 cleanup() {
     # Preserve the console on failure. It is deleted with everything else on a green run, which
     # meant the one artefact that explains a boot failure was destroyed by the failure itself.
-    if [ "$FAIL" -gt 0 ] && [ -s "$SERIAL" ]; then
+    if [ "$FAIL" -gt 0 ] && [ -s "$SERIAL" ] && [ ! -f "$SERIAL.failed" ]; then
+        # No-clobber: an assertion that copied the console AT the failure got it before later
+        # boots truncated $SERIAL — this end-of-phase copy would replace it with the wrong boot.
         cp "$SERIAL" "$SERIAL.failed" 2>/dev/null &&
             info "console from the failed run kept at $SERIAL.failed"
     fi
@@ -2429,22 +2436,11 @@ phase_provision() {
     # os-update is the path that writes the pending marker (a bare rauc install does not) — and
     # this is also the first tier-4 exercise of os-update against a REAL bundle: it needs
     # unsquashfs on the appliance to read the manifest back, which CI's stubbed rauc never shows.
-    local ou_out
-    if ! ou_out=$(_ssh "cd /data/pithead && ./pithead os-update /data/update.bundle --yes 2>&1"); then
-        printf '     os-update output: %s\n' "$(printf '%s' "$ou_out" | tail -8)"
-        # Capture the guest's own account BEFORE the assertion, because the guest is recycled
-        # moments later and this failure has outlived three batteries without anyone seeing it
-        # (#1060). It stops dead partway through "Copying image to rootfs.1" with no rauc error,
-        # which is the signature of a KILLED command rather than a failed one — so the kernel log
-        # and the memory picture are the evidence, not the CLI output. This leg runs after
-        # provisioning, so hugepages are already carved out of the guest's RAM before a multi-GB
-        # slot copy starts, which is the standing hypothesis this is here to confirm or kill.
-        printf '     --- guest evidence (#1060) ---\n'
-        _ssh "journalctl -k --no-pager 2>/dev/null | grep -iE 'out of memory|oom-kill|killed process' | tail -5
-              echo '-- rauc unit --'; journalctl -u rauc --no-pager -n 8 2>/dev/null
-              echo '-- memory --'; free -m | head -2
-              grep -E 'MemAvailable|HugePages_Total|^Dirty|^Writeback:' /proc/meminfo" 2>/dev/null |
-            tr -d '\r' | sed 's/^/     · /'
+    local ou_out ou_rc
+    ou_out=$(_ssh "cd /data/pithead && ./pithead os-update /data/update.bundle --yes 2>&1")
+    ou_rc=$?
+    if [ "$ou_rc" -ne 0 ]; then
+        osupdate_failure_evidence "$ou_rc" "$ou_out" # both transport ends + the console, at the moment of death
         bad "pithead os-update failed on the guest — see the guest evidence above, and do not restate the cause without reading it"
         return
     fi
