@@ -27,8 +27,12 @@ CVE-2026-24049
 # nobody had touched.
 #
 # Cleared when a base bump brings 2.41.5-0+deb13u1 in — `docker run --rm python:3.11-slim
-# dpkg-query -W util-linux` is the one-line check, and all four go together. The weekly CVE sweep
-# (#833) re-surfaces them regardless, so this cannot rot silently.
+# dpkg-query -W util-linux` is the one-line check, and all four go together. Nothing re-surfaces
+# these on its own: the weekly CVE sweep (#833) scans WITH this file applied, so a muted finding
+# never reaches it (#1174). The weekly mute watch checks whether an ID like these still shows up
+# in any image this file covers: its workflow (.github/workflows/trivyignore-watch.yml) lives on
+# THIS branch, the default one, so its schedule can fire — while the scripts/trivyignore-watch.sh
+# it runs lives on the appliance lane, which the workflow checks out to run it.
 CVE-2026-53612
 CVE-2026-53613
 CVE-2026-53614
