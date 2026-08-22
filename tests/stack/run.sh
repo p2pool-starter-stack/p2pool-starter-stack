@@ -9875,64 +9875,69 @@ unset -f nl_render nl_assert_agreement
 rm -rf "$NL"
 unset PITHEAD_TLS_DIR NL NL_HOSTNAME NL_IPS NL_HOST_IP NL_DASHBOARD_HOST pcf pcert
 
-echo "== unit: appliance_bridge_gateways — both compose bridges' gateways, either engine's JSON shape (reboot-leg fix) =="
-# mining_net's gateway is excludable from config (NETWORK_PREFIX), but proxy_net's is NOT —
-# docker-compose.yml says so outright, "Docker auto-assigns the subnet" (#345) — so this reads
-# both live from the engine instead. MUTATION PROOF: drop either half of the jq alternation and
-# the matching engine's shape stops reporting a gateway here.
-ABG="$SANDBOX/abg"
-mkdir -p "$ABG/bin"
-cat >"$ABG/bin/docker" <<'EOF'
-#!/usr/bin/env bash
-[ "$1" = network ] && [ "$2" = inspect ] || exit 1
-printf '%s' '[{"IPAM":{"Config":[{"Subnet":"172.28.0.0/24","Gateway":"172.28.0.1"}]}},{"IPAM":{"Config":[{"Subnet":"172.19.0.0/16","Gateway":"172.19.0.1"}]}}]'
-EOF
-chmod +x "$ABG/bin/docker"
-gws=$(PITHEAD_ENGINE=docker PATH="$ABG/bin:$PATH" run_sourced "$ABG" appliance_bridge_gateways)
-assert_contains "docker shape -> mining_net gateway" "$gws" "172.28.0.1"
-assert_contains "docker shape -> proxy_net gateway (the auto-assigned one #1204 missed)" "$gws" "172.19.0.1"
+echo "== unit: appliance_site_names stays engine-free — proxy_net's gateway is NOT excluded there (#reboot-leg-fix) =="
+# #1204 already excluded mining_net's gateway here (a known config literal, \${NETWORK_PREFIX}.1).
+# proxy_net's is NOT excluded here on purpose, even though it needs the SAME kind of exclusion —
+# see appliance_site_names' own header. This function runs from BOTH the mint (render, always
+# BEFORE \`up\` creates either bridge) and, via check_appliance_cert, doctor (always AFTER \`up\`,
+# inside the boot health-gate's retry loop) — an engine call here would make its answer depend on
+# whether docker/podman happened to be reachable at the exact moment it ran, and #1065 reboots the
+# box on a doctor FAIL. The live exclusion belongs ONLY to check_appliance_cert, the one caller who
+# can turn "engine didn't answer" into a WARN instead of a guess (next block).
+AST="$SANDBOX/appliance-site-test"
+mkdir -p "$AST/bin"
+ast_names() {
+    (
+        cd "$AST" || exit 1
+        # shellcheck disable=SC1090
+        source "$STACK" 2>/dev/null
+        set +e
+        is_appliance() { return 0; }
+        hostname() { if [ "${1:-}" = "-I" ]; then printf '192.168.1.50 172.28.0.1 172.19.0.1'; else printf 'coordinator'; fi; }
+        # shellcheck disable=SC2034
+        HOST_IP=""
+        # shellcheck disable=SC2034
+        NETWORK_PREFIX="172.28.0"
+        # shellcheck disable=SC2034
+        DASHBOARD_EXPOSE_PUBLIC_IP="false"
+        # shellcheck disable=SC2034
+        DASHBOARD_HOST=""
+        appliance_site_names
+    )
+}
+ast_out="$(ast_names)"
+assert_not_contains "mining_net's gateway (the known literal) stays excluded here" "$ast_out" "172.28.0.1"
+assert_contains "proxy_net's gateway is NOT excluded here — that exclusion moved to doctor" "$ast_out" "172.19.0.1"
+assert_contains "the real LAN address is still there" "$ast_out" "192.168.1.50"
+unset -f ast_names
+rm -rf "$AST"
+unset AST ast_out
 
-cat >"$ABG/bin/podman" <<'EOF'
-#!/usr/bin/env bash
-[ "$1" = network ] && [ "$2" = inspect ] || exit 1
-printf '%s' '[{"name":"mining_net","subnets":[{"subnet":"172.28.0.0/24","gateway":"172.28.0.1"}]},{"name":"proxy_net","subnets":[{"subnet":"10.89.1.0/24","gateway":"10.89.1.1"}]}]'
-EOF
-chmod +x "$ABG/bin/podman"
-gws=$(PITHEAD_ENGINE=podman PATH="$ABG/bin:$PATH" run_sourced "$ABG" appliance_bridge_gateways)
-assert_contains "podman shape -> mining_net gateway" "$gws" "172.28.0.1"
-assert_contains "podman shape -> proxy_net gateway (the auto-assigned one #1204 missed)" "$gws" "10.89.1.1"
-
-# Neither bridge exists yet — a first-ever render, before \`up\` — so the engine refuses ("no such
-# network"), and this must return cleanly empty, never abort under \`set -e\`.
-cat >"$ABG/bin/docker" <<'EOF'
-#!/usr/bin/env bash
-[ "$1" = network ] && [ "$2" = inspect ] || exit 1
-echo "Error: no such network: mining_net" >&2
-exit 1
-EOF
-chmod +x "$ABG/bin/docker"
-out=$(PITHEAD_ENGINE=docker PATH="$ABG/bin:$PATH" run_sourced "$ABG" appliance_bridge_gateways 2>&1)
-assert_eq "pre-\`up\` (bridges don't exist yet) -> empty, no error" "$out" ""
-rm -rf "$ABG"
-unset ABG gws out
-
-echo "== unit: check_appliance_cert agrees with a cert minted before \`up\` creates the compose bridges (#852 reboot-leg regression) =="
+echo "== unit: check_appliance_cert excludes proxy_net's gateway live, engine reachable (#reboot-leg-fix) =="
 # pithead-boot's real sequence: render (which mints the certificate, appliance_mint_cert) runs
-# BEFORE \`up\` — neither compose bridge exists yet, so appliance_site_names() at mint time never
-# sees their gateways. doctor's health-gate loop calls check_appliance_cert() AFTER \`up\`, when a
-# live hostname -I reports both gateways. Before this fix only mining_net's (config-known prefix)
-# was excluded from that later, live re-derivation; proxy_net's auto-assigned gateway (#345) was
-# a name doctor then considered SERVED that the pre-\`up\`-minted certificate never covered —
-# dr_fail on a perfectly healthy, still-syncing box. That FAIL is exactly the "commit gate
-# rejected a healthy still-syncing stack (over-tightened)" battery assertion this fixes.
-# MUTATION PROOF: revert appliance_site_names() to excluding only \${NETWORK_PREFIX}.1 and
-# "does not FAIL" below goes red.
+# BEFORE \`up\` — neither compose bridge exists yet, so the minted certificate never covers either
+# gateway. doctor's health-gate loop calls check_appliance_cert() AFTER \`up\`, when a live
+# hostname -I reports both gateways. Before this fix only mining_net's (config-known prefix) was
+# excluded from that later, live re-derivation; proxy_net's auto-assigned gateway (#345) was a name
+# doctor then considered SERVED that the pre-\`up\`-minted certificate never covered — dr_fail on a
+# perfectly healthy, still-syncing box. That FAIL is exactly the "commit gate rejected a healthy
+# still-syncing stack (over-tightened)" battery assertion this fixes, and independently, exactly
+# what stranded the OS-update 'updated' verdict behind a boot health gate that never passed (#1051
+# — a second investigation on this same #1204 regression, folded in here; see also #1210/#1218
+# below).
+#
+# MUTATION PROOF: delete the proxy_net leg from check_appliance_cert's engine loop and "does not
+# FAIL" below goes red.
 CAB="$SANDBOX/certboot"
 mkdir -p "$CAB/tls" "$CAB/bin"
 cat >"$CAB/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 [ "$1" = network ] && [ "$2" = inspect ] || exit 1
-printf '%s' '[{"IPAM":{"Config":[{"Subnet":"172.28.0.0/24","Gateway":"172.28.0.1"}]}},{"IPAM":{"Config":[{"Subnet":"172.19.0.0/16","Gateway":"172.19.0.1"}]}}]'
+case "$3" in
+mining_net) printf '%s' '[{"IPAM":{"Config":[{"Subnet":"172.28.0.0/24","Gateway":"172.28.0.1"}]}}]' ;;
+proxy_net) printf '%s' '[{"IPAM":{"Config":[{"Subnet":"172.19.0.0/16","Gateway":"172.19.0.1"}]}}]' ;;
+*) exit 1 ;;
+esac
 EOF
 chmod +x "$CAB/bin/docker"
 printf '{"dashboard":{"host":"auto"}}' >"$CAB/config.json"
@@ -9960,11 +9965,84 @@ cab_run() { # <hostname -I answer> <mint|doctor>
 }
 # The pre-\`up\` render/mint — only the LAN address, neither bridge exists yet.
 cab_run "192.168.1.20" mint >/dev/null
-# doctor, after \`up\` — both bridges now show up in hostname -I.
+# doctor, after \`up\` — both bridges now show up in hostname -I, and the engine can vouch for both.
 out=$(cab_run "192.168.1.20 172.28.0.1 172.19.0.1" doctor)
 assert_contains "doctor after \`up\` still says the cert covers every name" "$out" "covers every name"
 assert_not_contains "doctor after \`up\` does not FAIL a healthy, pre-\`up\`-minted cert" "$out" "FAIL"
-unset -f cab_run
+assert_not_contains "the engine answered, so no WARN is owed either" "$out" "WARN"
+
+# A GENUINE mismatch must still FAIL — this fix must not neuter #1141's own coverage check. An
+# address that is neither the base, localhost, nor a confirmed bridge gateway is a real gap.
+out=$(cab_run "192.168.1.20 172.28.0.1 172.19.0.1 10.55.55.55" doctor)
+assert_contains "a genuinely uncovered LAN address still FAILs (#1141 not neutered)" "$out" "FAIL"
+assert_contains "the FAIL names the real gap" "$out" "10.55.55.55"
+
+echo "== unit: check_appliance_cert WARNs (never FAILs) when the engine can't be asked — the security-review blocker =="
+# Demonstrated live by the reviewer with a stubbed daemon-unreachable docker: bridge INTERFACES
+# outlive an engine blip, so hostname -I keeps reporting both gateways whether or not the engine is
+# there to explain them. Reading "the engine didn't answer" as "nothing to exclude" would FAIL a
+# perfectly healthy box on a transient engine hiccup — worse than the pre-fix bug, because #1065
+# then reboots it, and the failure now looks intermittent instead of the deterministic, explicable
+# bug #1204 shipped. #1204's own philosophy for the analogous unreadable-certificate-file case: a
+# TOOLING problem WARNs, a certificate found with a real problem FAILs.
+#
+# MUTATION PROOF: replace the "if \$engine_ok != 1" branch with "if false" (verified by hand — the
+# real repro this test encodes) and this reproduces the exact regression: FAIL on a healthy box
+# during an engine hiccup.
+cat >"$CAB/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+exit 1
+EOF
+chmod +x "$CAB/bin/docker"
+out=$(cab_run "192.168.1.20 172.28.0.1 172.19.0.1" doctor)
+assert_contains "engine unreachable post-\`up\` -> WARN, naming the tooling gap" "$out" "WARN"
+assert_not_contains "engine unreachable post-\`up\` -> never FAILs a healthy box" "$out" "FAIL"
+
+# The base name is NOT excused by an unreachable engine — it needs no live state to derive, so an
+# uncovered base name is always a real, actionable problem.
+printf 'not a certificate' >"$CAB/tls/wizard.crt"
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -keyout "$CAB/tls/wizard.key" \
+    -out "$CAB/tls/wizard.crt" -subj "/CN=other" -addext "subjectAltName=DNS:somethingelse" \
+    -addext "basicConstraints=critical,CA:FALSE" >/dev/null 2>&1
+out=$(cab_run "192.168.1.20 172.28.0.1 172.19.0.1" doctor)
+assert_contains "an uncovered BASE name still FAILs even with the engine unreachable" "$out" "FAIL"
+assert_contains "the FAIL names the base" "$out" "rig1.local"
+
+# Nothing extra to explain (dashboard.host pinned collapses the auto-expansion to just the base,
+# per appliance_site_names' own "an explicit pin stays a single name on purpose" rule) -> an
+# unreachable engine is never even consulted, so no spurious WARN either. check_appliance_cert
+# re-derives DASHBOARD_HOST from $CONFIG_FILE itself (never trusts a caller-set variable — see its
+# own comment), so the pin has to be staged there, not just passed as a local override.
+printf '{"dashboard":{"host":"rig1.local"}}' >"$CAB/config.json"
+cab_run_pinned() {
+    (
+        cd "$CAB" || exit 1
+        PATH="$CAB/bin:$PATH"
+        PITHEAD_ENGINE=docker
+        # shellcheck disable=SC1090
+        source "$STACK" 2>/dev/null
+        set +e
+        is_appliance() { return 0; }
+        appliance_tls_dir() { printf '%s' "$CAB/tls"; }
+        env_get() {
+            case "$1" in
+            HOST_IP) printf 'rig1.local' ;;
+            *) printf '' ;;
+            esac
+        }
+        HOST_IP="rig1.local"
+        hostname() { if [ "${1:-}" = "-I" ]; then printf '192.168.1.20 172.28.0.1 172.19.0.1'; else printf 'rig1'; fi; }
+        check_appliance_cert 2>&1
+    )
+}
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -keyout "$CAB/tls/wizard.key" \
+    -out "$CAB/tls/wizard.crt" -subj "/CN=rig1.local" -addext "subjectAltName=DNS:rig1.local" \
+    -addext "basicConstraints=critical,CA:FALSE" >/dev/null 2>&1
+out=$(cab_run_pinned)
+assert_not_contains "a pinned dashboard.host is verified — no engine dependency to bypass into a WARN" "$out" "WARN"
+assert_not_contains "a pinned dashboard.host that IS covered -> no FAIL" "$out" "FAIL"
+unset -f cab_run cab_run_pinned
 rm -rf "$CAB"
 unset CAB out
 
@@ -13346,13 +13424,31 @@ echo "== unit: doctor's certificate check — SAN coverage and expiry, appliance
 #   - drop the -checkend call (always dr_ok)   -> "near-expiry FAILs" goes red
 #   - drop the -enddate readability gate       -> "an unreadable cert WARNs, not FAILs" goes red
 #   - drop the `is_appliance || return 0` guard -> "DIY gets no certificate section" goes red
+#
+# docker is stubbed here (never left to the ambient host) so "an uncovered name FAILs" cannot go
+# quietly green->WARN on a box with no docker/podman on PATH: 192.168.1.20 is an auto-expanded
+# "extra", and since the reboot-leg fix, check_appliance_cert only FAILs on an uncovered extra when
+# the engine can confirm BOTH compose bridges — see the dedicated WARN-path test above for the
+# unreachable-engine case this test deliberately does NOT exercise.
 DAC="$SANDBOX/dac"
-mkdir -p "$DAC/tls"
+mkdir -p "$DAC/tls" "$DAC/bin"
 printf '{"dashboard":{"host":"auto"}}' >"$DAC/config.json"
+cat >"$DAC/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = network ] && [ "$2" = inspect ] || exit 1
+case "$3" in
+mining_net) printf '%s' '[{"IPAM":{"Config":[{"Subnet":"172.28.0.0/24","Gateway":"172.28.0.1"}]}}]' ;;
+proxy_net) printf '%s' '[{"IPAM":{"Config":[{"Subnet":"172.19.0.0/16","Gateway":"172.19.0.1"}]}}]' ;;
+*) exit 1 ;;
+esac
+EOF
+chmod +x "$DAC/bin/docker"
 dac_run() { # <appliance rc: 0|1> -> the doctor certificate section's output
     local appliance_rc="$1"
     (
         cd "$DAC" || exit 1
+        PATH="$DAC/bin:$PATH"
+        PITHEAD_ENGINE=docker
         # shellcheck disable=SC1090
         source "$STACK" 2>/dev/null
         set +e
