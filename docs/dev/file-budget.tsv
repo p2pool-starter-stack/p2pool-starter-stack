@@ -37,5 +37,5 @@ tests/integration/e2e.sh	766
 tests/integration/lib.sh	677
 tests/integration/run.sh	2551
 tests/integration/selftest.sh	658
-tests/stack/run.sh	7980
+tests/stack/run.sh	7579
 tests/stack/test_compose.sh	454
