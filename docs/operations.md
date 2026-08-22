@@ -461,7 +461,9 @@ This prompts for a passphrase, then writes a timestamped, encrypted `tar.gz.enc`
 holding the irreplaceable state: `config.json`, `.env` (secrets), the `Caddyfile` (if present), the
 Tor onion keys, and the dashboard database (hashrate history and settings). Blockchains are
 excluded (they re-sync), so the archive is small. The archive is `chmod 600`, and `pithead` prints
-its path when done. Before writing, `backup` checks free space and prompts if it looks tight. On a
+its path when done. Before touching anything, `backup` checks that `config.json` and `.env` are
+still there as regular files, then checks free space and prompts if it looks tight — either check
+can refuse before the running stack is stopped for an archive that would fail anyway. On a
 source checkout, `backups/` is git-ignored — the archive carries `.env` and the onion private keys,
 and secret scanners can't see inside a tarball.
 

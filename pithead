@@ -3418,6 +3418,47 @@ factory_reset() {
 # Protect the irreplaceable bits: config.json, .env (secrets), the Caddyfile, and the Tor
 # data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
 # by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
+#
+# The two files a backup archive cannot be worth taking without (#1059/#1244): config.json and
+# .env carry the node credentials and secrets, unlike every optional item stack_backup adds
+# below them (Caddyfile, the Tor data dir, the dashboard dir all get a plain `[ -f ]`/`[ -d ]`
+# guard already — these two didn't). Called BEFORE the disk-space check and before anything
+# touches the running stack, so a refusal here leaves the box exactly as it was, the same
+# promise the space check already makes. `-f` (not `-e`) so a symlink dangling at this instant
+# refuses too, the same as one dangling at tar time would. A function, not inline, so it is
+# testable at tier 1 without driving the whole backup flow.
+backup_require_items() { # <item>...
+    local _req
+    for _req in "$@"; do
+        [ -f "$_req" ] ||
+            error "Backup needs $_req, and it is not there as a regular file (missing, or a symlink to nowhere) — nothing was touched. Run './pithead status' to check the install, or './pithead setup' if this box is unprovisioned."
+    done
+}
+
+# Turns a tar failure into something the NEXT investigation can read straight off the log,
+# instead of needing another bench boot before anyone can look (#1059/#1244: a genuine
+# occurrence had config.json present and root-owned moments earlier, then unstattable at tar
+# time — twice, across the #970 retry — on a guest that was recycled before the state could be
+# inspected by hand). $1 = the directory tar's `-C` pointed at; the rest = the absolute item
+# paths passed to it, so this prints exactly what an investigator would check by hand next.
+backup_diagnose_items() { # <tar -C dir> <item>...
+    local cwd="$1"
+    shift
+    warn "tar ran with -C \"$cwd\" against these resolved items:"
+    local it
+    for it in "$@"; do
+        if [ -f "$it" ]; then
+            warn "  present: $(ls -ld "$it" 2>&1)"
+        elif [ -L "$it" ]; then
+            warn "  DANGLING SYMLINK: $it -> $(readlink -f "$it" 2>&1)"
+        elif [ -e "$it" ]; then
+            warn "  present but not a regular file: $(ls -ld "$it" 2>&1)"
+        else
+            warn "  MISSING: $it"
+        fi
+    done
+}
+
 stack_backup() {
     local with_chains=0 assume_yes=0 was_running=0 no_encrypt=0
     for arg in "$@"; do
@@ -3475,7 +3516,18 @@ stack_backup() {
     # Collect what exists, as absolute paths. We tar with -C / and strip the leading slash, so
     # restore (extract at /) puts every file back exactly where it came from regardless of where
     # config.json / the data dirs live. config.json/.env/Caddyfile sit in the script dir ($PWD).
-    local items=("$PWD/$CONFIG_FILE" "$PWD/$ENV_FILE")
+    #
+    # CONFIG_FILE (unlike ENV_FILE) is overridable — PITHEAD_CONFIG_FILE points a single
+    # invocation at an absolute candidate path (the control gate's staged-config preview uses
+    # it). A bare "$PWD/$CONFIG_FILE" concatenation is unsound exactly then: prefixing $PWD onto
+    # an already-absolute path produces a doubled, non-existent path like
+    # "/data/pithead//tmp/staged.json" that no file was ever going to be at. Not what #1059's
+    # capture hit — that override was not in play there — but real whenever it is, so resolve it
+    # the way every path join should: only prefix $PWD onto a RELATIVE candidate.
+    local _cfg_path="$CONFIG_FILE"
+    case "$_cfg_path" in /*) ;; *) _cfg_path="$PWD/$_cfg_path" ;; esac
+    local items=("$_cfg_path" "$PWD/$ENV_FILE")
+    backup_require_items "${items[@]}"
     [ -f "Caddyfile" ] && items+=("$PWD/Caddyfile")
 
     if [ -d "$TOR_DATA_DIR" ]; then
@@ -3594,6 +3646,7 @@ stack_backup() {
     done
     if [ "$_backup_ok" -ne 1 ]; then
         [ "$was_running" -eq 1 ] && stack_up
+        backup_diagnose_items "/" "${items[@]}"
         error "Backup failed — the partial archive was removed."
     fi
     sudo chown "$REAL_USER":"$REAL_USER" "$archive"
