@@ -5,31 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mining_dashboard.config.config import (
-    TIER_DEFAULTS,
     XVB_STALE_DECAY_AFTER_S,
     XVB_STATS_STALE_AFTER_S,
     XVB_SWITCH_OVERHEAD_MS,
     XVB_TIME_ALGO_MS,
 )
-from mining_dashboard.service.algo_service import AlgoService
 
-
-@pytest.fixture
-def algo():
-    state_manager = MagicMock()
-    state_manager.get_tiers.return_value = dict(TIER_DEFAULTS)
-    # Cold controller by default (#249): no persisted commanded fraction, no standby held — so
-    # the warm-resume seed falls through to feedforward. Warm-resume tests override these.
-    state_manager.get_xvb_stats.return_value = {"commanded_fraction": 0.0}
-    state_manager.get_xvb_standby.return_value = None
-    # No recorded raffle wins by default, so the in-round hold (#769) is inactive
-    # and the calibration loop steers freely. Hold tests override this.
-    state_manager.get_raffle_wins.return_value = []
-    proxy_client = MagicMock()  # called via asyncio.to_thread -> sync methods
-    data_service = MagicMock()
-    data_service.workers_rejected = False  # not rejecting workers (Issue #31 guard off)
-    return AlgoService(state_manager, proxy_client, data_service)
-
+# The `algo` fixture lives in tests/service/conftest.py — shared with
+# test_projected_steering.py (#1285).
 
 # A share inside the PPLNS window (recent) so the "zero shares" guard doesn't trip.
 RECENT_SHARES = [{"ts": 10**12}]  # far-future ts -> always within window

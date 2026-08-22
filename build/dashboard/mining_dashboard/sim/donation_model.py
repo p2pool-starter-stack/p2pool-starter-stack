@@ -37,6 +37,11 @@ from mining_dashboard.config.config import (
     XVB_SWITCH_OVERHEAD_MS,
     XVB_TIME_ALGO_MS,
 )
+from mining_dashboard.sim.actuated_state import (
+    _SMART_SLEEP_TICK_S,
+    ActuatedResult,
+    _SecondsWindow,
+)
 
 # A 10-minute switching cycle is the simulation's time step.
 CYCLES_PER_HOUR = 6
@@ -76,7 +81,7 @@ class _FixedTiers:
         return []
 
 
-def make_algo_controller(algo, p2pool_difficulty=0) -> Controller:
+def make_algo_controller(algo, p2pool_difficulty=0, stamp_updates=False) -> Controller:
     """Adapt a real `AlgoService` into a `decide(...) -> fraction` callable.
 
     Routes through the actual `get_decision` path (with ``advance=True``, so the
@@ -84,11 +89,24 @@ def make_algo_controller(algo, p2pool_difficulty=0) -> Controller:
     the shipping behaviour — the integral controller, the VIP/PPLNS reserve, the
     minimum dwell, and the short-remainder rule — not an idealised model of it.
     ``p2pool_difficulty`` feeds the reserve; 0 leaves it on the flat fallback cap.
+
+    ``stamp_updates`` marks every cycle's stats as a genuine fetch on the SIM
+    clock (one cycle = 3600/CYCLES_PER_HOUR seconds), which is what arms the
+    protective trend projection — without a moving ``last_update`` the projection
+    records no samples and the loop is purely reactive. Sim timestamps would read
+    as ancient to the wall-clock staleness guard, so that check is stubbed out on
+    the adapted service; the staleness paths have their own dedicated tests.
     """
     pool_stats = {"pplns_window": _PPLNS_WINDOW, "difficulty": p2pool_difficulty}
+    sim_clock = [1_000_000.0]
+    if stamp_updates:
+        algo._stats_are_stale = lambda _stats: False
 
     def decide(current_hr, stable_hr, avg_1h, avg_24h):
         xvb_stats = {"avg_1h": avg_1h, "avg_24h": avg_24h, "fail_count": 0}
+        if stamp_updates:
+            sim_clock[0] += 3600.0 / CYCLES_PER_HOUR
+            xvb_stats["last_update"] = sim_clock[0]
         mode, dur_ms = algo.get_decision(
             current_hr, stable_hr, pool_stats, _P2P_MAIN, xvb_stats, _RECENT_SHARES
         )
@@ -343,68 +361,8 @@ def run_simulation(controller: Controller, scenario: Scenario) -> SimResult:
 # once per cycle and the real `_dwell_should_end` on every dwell tick — so a
 # dwell-rule bug shows up here as credited overshoot, where the fixed-step sim
 # is blind to it (it gave #70 a false all-clear while prod overshot 26-44%).
-
-_SMART_SLEEP_TICK_S = 30  # UPDATE_INTERVAL default: the live _smart_sleep check cadence
-
-
-class _SecondsWindow:
-    """Rolling per-second average over a fixed span, pre-filled with zeros
-    ("fixed" semantics: the average ramps up from 0 like a fresh XvB window)."""
-
-    def __init__(self, span_s: int):
-        from collections import deque
-
-        self.span = span_s
-        self._buf = deque([0.0] * span_s, maxlen=span_s)
-        self._sum = 0.0
-
-    def push(self, rate: float) -> None:
-        self._sum += rate - self._buf[0]  # deque is always full: append evicts left
-        self._buf.append(rate)
-
-    def average(self) -> float:
-        return self._sum / self.span
-
-
-@dataclass
-class ActuatedResult:
-    """Metrics from `run_actuated`. Window averages are sampled once per minute."""
-
-    target_hr: float
-    avg_1h: list[float] = field(default_factory=list)
-    avg_24h: list[float] = field(default_factory=list)
-    donated_s: float = 0.0
-    total_s: float = 0.0
-
-    @property
-    def _tail(self) -> slice:
-        # Steady state: the final day of minute samples (or the back half of short runs).
-        n = len(self.avg_1h)
-        return slice(max(n // 2, n - 24 * 60), n)
-
-    @property
-    def steady_overshoot_1h(self) -> float:
-        tail = self.avg_1h[self._tail]
-        return (sum(tail) / len(tail) / self.target_hr) if tail and self.target_hr else 0.0
-
-    @property
-    def steady_overshoot_24h(self) -> float:
-        tail = self.avg_24h[self._tail]
-        return (sum(tail) / len(tail) / self.target_hr) if tail and self.target_hr else 0.0
-
-    @property
-    def donated_duty(self) -> float:
-        """Share of wall-clock time actually routed to XvB (the actuated duty)."""
-        return self.donated_s / self.total_s if self.total_s else 0.0
-
-    def tier_held(self, tol: float = 0.02) -> bool:
-        """Both credited averages at/above threshold across steady state — the
-        raffle qualification condition (undershoot loses the tier)."""
-        t = self.target_hr * (1 - tol)
-        return (
-            min(self.avg_1h[self._tail], default=0.0) >= t
-            and min(self.avg_24h[self._tail], default=0.0) >= t
-        )
+# The rolling-window + result state (_SecondsWindow, ActuatedResult) live in
+# actuated_state.py (#1285); this function is their only caller.
 
 
 def run_actuated(

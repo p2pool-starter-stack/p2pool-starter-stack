@@ -17,6 +17,7 @@ from mining_dashboard.config.config import (
     XVB_MIN_TIME_SEND_MS,
     XVB_P2POOL_RESERVE_FACTOR,
     XVB_POOL_URL,
+    XVB_PROJECTION_HORIZON_S,
     XVB_STALE_DECAY_AFTER_S,
     XVB_STATS_STALE_AFTER_S,
     XVB_SWITCH_OVERHEAD_MS,
@@ -31,6 +32,13 @@ from mining_dashboard.helper.utils import (
     resolve_target_threshold,
     shares_in_pplns_window,
     xvb_stats_are_stale,
+)
+from mining_dashboard.service.steering_projection import (
+    max_donation_fraction,
+    projected_avg_1h,
+    record_avg1h_sample,
+    reference_hr,
+    won_round_live,
 )
 
 logger = logging.getLogger("AlgoService")
@@ -60,6 +68,9 @@ class AlgoService:
         # Advanced once per real cycle by the calibration loop (not in _smart_sleep).
         # None until the first decision seeds it from the feedforward estimate.
         self.donation_fraction = None
+        # (fetch-timestamp, avg_1h) history for the protective projection — appended
+        # only when a genuine fetch lands (last_update moved), pruned to the lookback.
+        self._avg1h_trend = []
 
     async def switch_miners(self, mode, state_label=None):
         """
@@ -196,6 +207,7 @@ class AlgoService:
                         avg_1h,
                     )
             else:
+                self._record_avg1h_sample(xvb_stats)
                 self._advance_controller(current_hr, target_hr, avg_1h, max_fraction)
 
         fraction = min(self.donation_fraction or 0.0, max_fraction)
@@ -255,48 +267,31 @@ class AlgoService:
         last_update = (xvb_stats or {}).get("last_update", 0) or 0
         return time.time() - last_update if last_update else 0.0
 
+    def _record_avg1h_sample(self, xvb_stats):
+        """See ``steering_projection.record_avg1h_sample``."""
+        self._avg1h_trend = record_avg1h_sample(self._avg1h_trend, xvb_stats)
+
+    def _projected_avg_1h(self, avg_1h):
+        """See ``steering_projection.projected_avg_1h``."""
+        return projected_avg_1h(self._avg1h_trend, avg_1h, XVB_PROJECTION_HORIZON_S, logger)
+
     def _reference_hr(self, target_hr):
-        """Hashrate the controller holds XvB's 1h average at: the tier threshold
-        plus a noise-covering cushion (capped in absolute H/s). The raffle
-        terminates a win if the 1h average dips below the round minimum, so the
-        cushion must clear the credited average's measured noise (#769) — while
-        the cap keeps a flat percentage from wasting p2pool hashrate at high tiers."""
-        return target_hr + min(target_hr * self.maint_margin_pct, self.maint_margin_abs_cap)
+        """See ``steering_projection.reference_hr``."""
+        return reference_hr(target_hr, self.maint_margin_pct, self.maint_margin_abs_cap)
 
     def _won_round_live(self, now=None):
-        """Whether a won raffle round may still be running: any recorded win newer
-        than ``XVB_WIN_ROUND_HOLD_S``. Steering the donation down during a live won
-        round can sag the credited 1h average through the round minimum and
-        terminate the round (#769), so ``_advance_controller`` skips downward steps
-        while this holds. Fails open to False (normal steering) on any read error —
-        the hold is a yield optimization, never a safety path."""
-        try:
-            since = (now if now is not None else time.time()) - XVB_WIN_ROUND_HOLD_S
-            wins = self.state_manager.get_raffle_wins(since=since)
-        except Exception as e:
-            logger.debug(f"Raffle-win read failed; steering normally: {e}")
-            return False
-        return isinstance(wins, list) and len(wins) > 0
+        """See ``steering_projection.won_round_live``."""
+        return won_round_live(self.state_manager, XVB_WIN_ROUND_HOLD_S, now, logger)
 
     def _max_donation_fraction(self, current_hr, window_duration, p2pool_stats):
-        """
-        Largest fraction of the cycle we may donate while keeping p2pool eligible
-        for "VIP" — i.e. still finding shares within the PPLNS window. A miner that
-        wins while non-VIP is skipped and gains a fail, so this reserve is a hard
-        constraint, not a preference.
-
-        p2pool needs ~``sidechain_difficulty / window_seconds`` H/s to land one
-        expected share per window; we reserve ``reserve_factor`` times that for
-        headroom against variance. When difficulty is unknown (stats not ready),
-        fall back to the flat hard cap.
-        """
-        difficulty = p2pool_stats.get("difficulty", 0) or 0
-        if current_hr <= 0 or difficulty <= 0 or window_duration <= 0:
-            return self.max_donation_fraction
-
-        min_p2pool_hr = (difficulty / window_duration) * self.p2pool_reserve_factor
-        sparable_fraction = max(0.0, 1.0 - (min_p2pool_hr / current_hr))
-        return min(sparable_fraction, self.max_donation_fraction)
+        """See ``steering_projection.max_donation_fraction``."""
+        return max_donation_fraction(
+            current_hr,
+            window_duration,
+            p2pool_stats,
+            self.p2pool_reserve_factor,
+            self.max_donation_fraction,
+        )
 
     def _advance_controller(self, current_hr, target_hr, avg_1h, max_fraction):
         """
@@ -307,7 +302,10 @@ class AlgoService:
 
         Because it steers off XvB's authoritative number rather than assuming
         ``credited == fraction * current_hr``, it holds the tier no matter how XvB
-        scales our donation — and it can't wind up: the gain is small and the
+        scales our donation. The number it steers off is the protective projection
+        (``_projected_avg_1h``): the measured 1h average, lowered — never raised —
+        by its own recent trend, so a credited decay is answered before it reaches
+        the round minimum instead of after — and it can't wind up: the gain is small and the
         fraction is clamped to ``[0, max_fraction]`` (the VIP reserve), so a
         still-ramping or stale 1h read can only drift it slowly within bounds.
 
@@ -325,7 +323,7 @@ class AlgoService:
             )
             return
 
-        error = self._reference_hr(target_hr) - avg_1h
+        error = self._reference_hr(target_hr) - self._projected_avg_1h(avg_1h)
         step = self.control_gain * error / current_hr
         if step < 0 and self._won_round_live():
             # A won round is (possibly) live: easing off now is how the credited 1h
