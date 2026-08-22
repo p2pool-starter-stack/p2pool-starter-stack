@@ -9875,6 +9875,99 @@ unset -f nl_render nl_assert_agreement
 rm -rf "$NL"
 unset PITHEAD_TLS_DIR NL NL_HOSTNAME NL_IPS NL_HOST_IP NL_DASHBOARD_HOST pcf pcert
 
+echo "== unit: appliance_bridge_gateways — both compose bridges' gateways, either engine's JSON shape (reboot-leg fix) =="
+# mining_net's gateway is excludable from config (NETWORK_PREFIX), but proxy_net's is NOT —
+# docker-compose.yml says so outright, "Docker auto-assigns the subnet" (#345) — so this reads
+# both live from the engine instead. MUTATION PROOF: drop either half of the jq alternation and
+# the matching engine's shape stops reporting a gateway here.
+ABG="$SANDBOX/abg"
+mkdir -p "$ABG/bin"
+cat >"$ABG/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = network ] && [ "$2" = inspect ] || exit 1
+printf '%s' '[{"IPAM":{"Config":[{"Subnet":"172.28.0.0/24","Gateway":"172.28.0.1"}]}},{"IPAM":{"Config":[{"Subnet":"172.19.0.0/16","Gateway":"172.19.0.1"}]}}]'
+EOF
+chmod +x "$ABG/bin/docker"
+gws=$(PITHEAD_ENGINE=docker PATH="$ABG/bin:$PATH" run_sourced "$ABG" appliance_bridge_gateways)
+assert_contains "docker shape -> mining_net gateway" "$gws" "172.28.0.1"
+assert_contains "docker shape -> proxy_net gateway (the auto-assigned one #1204 missed)" "$gws" "172.19.0.1"
+
+cat >"$ABG/bin/podman" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = network ] && [ "$2" = inspect ] || exit 1
+printf '%s' '[{"name":"mining_net","subnets":[{"subnet":"172.28.0.0/24","gateway":"172.28.0.1"}]},{"name":"proxy_net","subnets":[{"subnet":"10.89.1.0/24","gateway":"10.89.1.1"}]}]'
+EOF
+chmod +x "$ABG/bin/podman"
+gws=$(PITHEAD_ENGINE=podman PATH="$ABG/bin:$PATH" run_sourced "$ABG" appliance_bridge_gateways)
+assert_contains "podman shape -> mining_net gateway" "$gws" "172.28.0.1"
+assert_contains "podman shape -> proxy_net gateway (the auto-assigned one #1204 missed)" "$gws" "10.89.1.1"
+
+# Neither bridge exists yet — a first-ever render, before \`up\` — so the engine refuses ("no such
+# network"), and this must return cleanly empty, never abort under \`set -e\`.
+cat >"$ABG/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = network ] && [ "$2" = inspect ] || exit 1
+echo "Error: no such network: mining_net" >&2
+exit 1
+EOF
+chmod +x "$ABG/bin/docker"
+out=$(PITHEAD_ENGINE=docker PATH="$ABG/bin:$PATH" run_sourced "$ABG" appliance_bridge_gateways 2>&1)
+assert_eq "pre-\`up\` (bridges don't exist yet) -> empty, no error" "$out" ""
+rm -rf "$ABG"
+unset ABG gws out
+
+echo "== unit: check_appliance_cert agrees with a cert minted before \`up\` creates the compose bridges (#852 reboot-leg regression) =="
+# pithead-boot's real sequence: render (which mints the certificate, appliance_mint_cert) runs
+# BEFORE \`up\` — neither compose bridge exists yet, so appliance_site_names() at mint time never
+# sees their gateways. doctor's health-gate loop calls check_appliance_cert() AFTER \`up\`, when a
+# live hostname -I reports both gateways. Before this fix only mining_net's (config-known prefix)
+# was excluded from that later, live re-derivation; proxy_net's auto-assigned gateway (#345) was
+# a name doctor then considered SERVED that the pre-\`up\`-minted certificate never covered —
+# dr_fail on a perfectly healthy, still-syncing box. That FAIL is exactly the "commit gate
+# rejected a healthy still-syncing stack (over-tightened)" battery assertion this fixes.
+# MUTATION PROOF: revert appliance_site_names() to excluding only \${NETWORK_PREFIX}.1 and
+# "does not FAIL" below goes red.
+CAB="$SANDBOX/certboot"
+mkdir -p "$CAB/tls" "$CAB/bin"
+cat >"$CAB/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = network ] && [ "$2" = inspect ] || exit 1
+printf '%s' '[{"IPAM":{"Config":[{"Subnet":"172.28.0.0/24","Gateway":"172.28.0.1"}]}},{"IPAM":{"Config":[{"Subnet":"172.19.0.0/16","Gateway":"172.19.0.1"}]}}]'
+EOF
+chmod +x "$CAB/bin/docker"
+printf '{"dashboard":{"host":"auto"}}' >"$CAB/config.json"
+cab_run() { # <hostname -I answer> <mint|doctor>
+    (
+        cd "$CAB" || exit 1
+        PATH="$CAB/bin:$PATH"
+        PITHEAD_ENGINE=docker
+        # shellcheck disable=SC1090
+        source "$STACK" 2>/dev/null
+        set +e
+        is_appliance() { return 0; }
+        appliance_tls_dir() { printf '%s' "$CAB/tls"; }
+        env_get() {
+            case "$1" in
+            HOST_IP) printf 'rig1.local' ;;
+            *) printf '' ;;
+            esac
+        }
+        HOST_IP="rig1.local"
+        CAB_IPS="$1"
+        hostname() { if [ "${1:-}" = "-I" ]; then printf '%s' "$CAB_IPS"; else printf 'rig1'; fi; }
+        if [ "$2" = mint ]; then appliance_mint_cert >/dev/null; else check_appliance_cert 2>&1; fi
+    )
+}
+# The pre-\`up\` render/mint — only the LAN address, neither bridge exists yet.
+cab_run "192.168.1.20" mint >/dev/null
+# doctor, after \`up\` — both bridges now show up in hostname -I.
+out=$(cab_run "192.168.1.20 172.28.0.1 172.19.0.1" doctor)
+assert_contains "doctor after \`up\` still says the cert covers every name" "$out" "covers every name"
+assert_not_contains "doctor after \`up\` does not FAIL a healthy, pre-\`up\`-minted cert" "$out" "FAIL"
+unset -f cab_run
+rm -rf "$CAB"
+unset CAB out
+
 echo "== unit: the certificate re-mints when the served name list changes, not otherwise (#1132) =="
 # Compare, don't date-guess: the minted SAN list is derived from the certificate itself (openssl)
 # and set-compared against the machine's current name list. An operator who has pinned this

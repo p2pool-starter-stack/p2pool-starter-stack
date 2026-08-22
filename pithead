@@ -5382,6 +5382,31 @@ appliance_tls_dir() { printf '%s' "${PITHEAD_TLS_DIR:-$PWD/data/tls}"; }
 # mint, before CONFIG_FILE exists) $HOST_IP is empty; fall back to its own "auto" default rather
 # than duplicating that function's prompt/env logic here.
 #
+# The gateway addresses of pithead's OWN compose-managed bridges — mining_net AND proxy_net (#345)
+# — read live from the engine rather than assumed from config. mining_net's subnet is pinned
+# (NETWORK_PREFIX derives from it), but proxy_net's is NOT: docker-compose.yml says so outright,
+# "Docker auto-assigns the subnet" — so its gateway cannot be predicted from config the way
+# mining_net's can, and a check that only ever excluded mining_net's `${NETWORK_PREFIX}.1` left
+# proxy_net's gateway free to leak into the "served" name list.
+#
+# Neither bridge exists on the HOST until `up` creates it, and pithead-boot renders (which mints
+# the certificate) BEFORE `up` runs — so a render's own `hostname -I` never sees either gateway,
+# and this function returns nothing to exclude at that same moment: nothing wrong, since there is
+# nothing yet to filter either. The gap is doctor: pithead-boot's health-gate loop calls doctor
+# AFTER `up`, so `check_appliance_cert`'s live re-derivation of appliance_site_names() runs with
+# both bridges already up, sees their gateways in `hostname -I`, and — before this — certified
+# only one of the two against a certificate minted when neither existed. That is a certificate
+# FAIL on a perfectly healthy, still-syncing box (#852's over-tightening the reboot leg caught).
+#
+# Engine-agnostic like container_is_running (docker is podman's compat shim on the appliance).
+# `2>/dev/null` and the trailing `|| true`: a first-ever render with no networks yet, or a DIY host
+# with no docker/podman on PATH, must return cleanly empty, never abort under `set -e`.
+appliance_bridge_gateways() {
+    "$(container_engine)" network inspect mining_net proxy_net 2>/dev/null |
+        jq -r '.[] | (.subnets[]?.gateway // empty), (.IPAM.Config[]?.Gateway // empty)' 2>/dev/null ||
+        true
+}
+
 # "auto" (dashboard.host unset) expands to every address the appliance actually answers on — a
 # headless box reached by mDNS name, by IP, or from the console must have all three certified. An
 # explicit pin stays a single name on purpose: the site list collapsing was never the #1132 bug,
@@ -5393,7 +5418,13 @@ appliance_site_names() {
     fi
     local names="$base"
     if is_appliance && [ -z "${DASHBOARD_HOST:-}" ]; then
-        local extra
+        local extra bridge_gws
+        # Computed once per call, not per candidate address: one engine round-trip, not one per
+        # interface `hostname -I` happens to report. jq -r prints one gateway per LINE — folded to
+        # SPACE-separated here, because the membership check below (like the $names one above it)
+        # matches on space-padded substrings; left as newlines, a middle entry's trailing newline
+        # can never equal a trailing space and the check silently matches nothing.
+        bridge_gws=" $(appliance_bridge_gateways | tr '\n' ' ') "
         for extra in $(hostname -I 2>/dev/null) localhost; do
             case " $names " in *" $extra "*) continue ;; esac
             # `hostname -I` lists EVERY address on every interface, so on any network whose router
@@ -5407,14 +5438,16 @@ appliance_site_names() {
             if [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ] && is_public_ip "$extra"; then
                 continue
             fi
-            # The container-bridge gateway belongs to the ONION vhost, which serves on exactly that
+            # mining_net's gateway belongs to the ONION vhost, which serves on exactly that
             # address, and never to the LAN list — two site blocks naming the same scheme://address
             # make Caddy refuse the whole file with "ambiguous site definition" (see
-            # generate_caddyfile). Excluding it here keeps the certificate honest too: it was never
-            # reachable at the bridge gateway by anything except the tor container.
+            # generate_caddyfile). proxy_net's gateway serves nothing at all (#345: isolated,
+            # off the mining bridge, never Caddy-routed). Excluding both keeps the certificate
+            # honest too: neither is reachable at its gateway by anything Caddy fronts.
             if [ -n "${NETWORK_PREFIX:-}" ] && [ "$extra" = "${NETWORK_PREFIX}.1" ]; then
                 continue
             fi
+            case "$bridge_gws" in *" $extra "*) continue ;; esac
             names="$names $extra"
         done
     fi
