@@ -327,7 +327,15 @@ jq_assert "both Tari images carry the same tag (#1137)" \
 jq_assert "every service carries a healthcheck (#904)" \
     '[.services[] | select(.healthcheck == null)] | length == 0'
 jq_assert "xmrig-proxy healthcheck probes the control API via script (#904)" \
-    '.services["xmrig-proxy"].healthcheck.test == ["CMD", "/usr/local/bin/xmrig-proxy-healthcheck.sh"]'
+    '.services["xmrig-proxy"].healthcheck.test == ["CMD-SHELL", "[ -x /usr/local/bin/xmrig-proxy-healthcheck.sh ] && exec /usr/local/bin/xmrig-proxy-healthcheck.sh || exit 0"]'
+# #1098: a compose newer than its pinned images (the two are cut on different clocks) must report
+# healthy, not permanently unhealthy, when the script the healthcheck names does not exist yet in
+# the running image — real breakage (the API actually down) must still fail. Both halves asserted
+# so a future edit can't keep the "absent -> healthy" grace while quietly dropping the real probe.
+jq_assert "xmrig-proxy healthcheck degrades gracefully when the script is absent (#1098)" \
+    '(.services["xmrig-proxy"].healthcheck.test | tostring) | contains("[ -x /usr/local/bin/xmrig-proxy-healthcheck.sh ]") and contains("|| exit 0")'
+jq_assert "xmrig-proxy healthcheck still runs the real script when present (#1098)" \
+    '(.services["xmrig-proxy"].healthcheck.test | tostring) | contains("exec /usr/local/bin/xmrig-proxy-healthcheck.sh")'
 jq_assert "dashboard healthcheck probes /api/state via script (#904)" \
     '.services.dashboard.healthcheck.test == ["CMD", "/app/healthcheck.sh"]'
 jq_assert "caddy healthcheck probes the admin endpoint with wget (#904)" \

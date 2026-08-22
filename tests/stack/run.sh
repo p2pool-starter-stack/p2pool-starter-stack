@@ -128,6 +128,25 @@ echo "== unit: resolve-pins self-test (#1137) =="
 bash "$ROOT/scripts/resolve-pins.sh" --self-test >/dev/null 2>&1
 assert_rc "resolve-pins self-test passes" "$?" "0"
 
+echo "== unit: verify-healthcheck-scripts self-test (#1098) =="
+# #1098: docker-compose.yml named a healthcheck script (xmrig-proxy-healthcheck.sh) that the
+# pinned appliance images predated — the container reported unhealthy forever with nothing
+# actually broken. This is the narrower, permanent guard: does each service's OWN Dockerfile
+# actually place a file where compose's healthcheck looks for it. The self-test drives the
+# parsers (WORKDIR resolution, COPY --from=, multi-source directory COPYs) against fixtures and
+# reproduces the issue's own named mutation end to end: rename the script in a Dockerfile without
+# touching compose, and the check must go red.
+bash "$ROOT/scripts/verify-healthcheck-scripts.sh" --self-test >/dev/null 2>&1
+assert_rc "verify-healthcheck-scripts self-test passes" "$?" "0"
+
+echo "== unit: verify-healthcheck-scripts against the real tree (#1098) =="
+# The self-test above proves the parsers; this proves the CURRENT docker-compose.yml and build/*
+# Dockerfiles actually agree right now — the same real-tree pass release.sh and CI both get, so a
+# healthcheck rename that forgets the compose side (or vice versa) fails here before it ever
+# reaches an appliance.
+bash "$ROOT/scripts/verify-healthcheck-scripts.sh" >/dev/null 2>&1
+assert_rc "every real healthcheck script exists where its own Dockerfile promises (#1098)" "$?" "0"
+
 echo "== unit: patch-coverage overlap self-test (#1000) =="
 # diff-cover exits 0 on "No lines with coverage information" — a vacuous pass. The wrapper's
 # overlap check is what turns that into a loud not-applicable pass or a real failure; its
@@ -573,6 +592,23 @@ esac
 # INFO — and the secret value must NEVER appear in the change preview.
 assert_contains "stratum pw enable is DEST" "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" "DEST"
 assert_contains "stratum pw disable is INFO" "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD s3cr3t '')" "INFO"
+# Appliance (#1139): the DIY hint points at .env / './pithead status' to recover the password —
+# neither exists without a shell, and the dashboard never round-trips a secret value either (#33),
+# so there is no remedy to name. The appliance-lane message drops the instruction instead of
+# inventing one.
+#
+# MUTATION PROOF: drop the is_appliance branch (always emit the DIY message) and the "names no CLI
+# verb" assertion below goes red; force the appliance branch unconditionally and the unchanged-DIY
+# assertion at line ~574's sibling below goes red — neither direction passes both.
+stratum_pw_appliance="$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)"
+assert_contains "appliance stratum pw enable is still DEST" "$stratum_pw_appliance" "DEST"
+case "$stratum_pw_appliance" in
+*"./pithead"* | *".env"*) bad "appliance stratum pw enable names no CLI verb or .env" "still says: $stratum_pw_appliance" ;;
+*) ok "appliance stratum pw enable names no CLI verb or .env" ;;
+esac
+assert_contains "DIY stratum pw enable advice is unchanged" \
+    "$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" \
+    "find it in .env / './pithead status'"
 case "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD oldpw newpw)" in
 *oldpw* | *newpw*) bad "stratum pw change hides the secret" "value leaked into the change preview" ;;
 *DEST*) ok "stratum pw change hides the secret (DEST, no value shown)" ;;
@@ -582,6 +618,22 @@ esac
 assert_contains "tor auto-heal enable is INFO" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "INFO"
 assert_contains "tor auto-heal enable names the cost" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "drops ALL Tor circuits"
 assert_contains "tor auto-heal disable names the manual fix" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)" "restart tor"
+# Appliance (#1139): 'doctor' and a scoped tor restart are both CLI-only, and no dashboard control
+# restarts tor alone — the appliance-lane message states the fact instead of naming a remedy that
+# does not exist on that lane.
+#
+# MUTATION PROOF: drop the is_appliance branch (always emit the DIY message) and the "names no CLI
+# verb" assertion below goes red; force the appliance branch unconditionally and the unchanged-DIY
+# assertion right above (checked again explicitly below) goes red — neither direction passes both.
+tor_heal_appliance="$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)"
+assert_contains "appliance tor auto-heal disable is still INFO" "$tor_heal_appliance" "INFO"
+case "$tor_heal_appliance" in
+*"./pithead"*) bad "appliance tor auto-heal disable names no CLI verb" "still says: $tor_heal_appliance" ;;
+*) ok "appliance tor auto-heal disable names no CLI verb" ;;
+esac
+assert_contains "DIY tor auto-heal disable advice is unchanged" \
+    "$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)" \
+    "'./pithead doctor', fix with './pithead restart tor'"
 # Fail-closed miner hold (#490): INFO either way (like TARI_REQUIRED) — it's on the dashboard
 # control-channel allowlist, so a DEST flag here would make control_approval_gate refuse every
 # commit that touches it, defeating the allowlisting.
@@ -1788,7 +1840,13 @@ caddy_pinned="$(
     appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
     appliance_mint_cert() { return 1; }
     hostname() { printf '192.168.1.10 2001:db8::1 fd00::1\n'; }
-    DASHBOARD_SECURE=true HOST_IP=192.168.1.10 DASHBOARD_HOST=192.168.1.10 \
+    # Pinned to a NAME (the documented appliance case, #1089), not an IP literal: an
+    # IP-literal pin puts the box's own address INTO the site list too, so a bind built
+    # from the site list and a bind built from the box's addresses render identically —
+    # the mutation this test exists to catch (bind derived from $site_hosts instead of
+    # `hostname -I`) stayed green against that fixture. A name-only pin gives the site
+    # list no address literal at all, so the two derivations diverge.
+    DASHBOARD_SECURE=true HOST_IP=pithead.local DASHBOARD_HOST=pithead.local \
         DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
     cat Caddyfile
 )"
@@ -1797,6 +1855,10 @@ case "$(printf '%s' "$caddy_pinned" | grep '^    bind ')" in
 *2001:db8:*) bad "a pinned host does not reopen the global v6" "global address is bound" ;;
 *) ok "a pinned host does not reopen the global v6" ;;
 esac
+# The bind must come from the BOX's own addresses, never from the (name-only) site list —
+# #1021-class regression. Assert the bind line names the box's actual LAN address; under
+# the site-list-derived mutation it collapses to loopback-only and this goes red.
+assert_contains "a pinned dashboard.host still binds the box's own LAN address" "$(printf '%s' "$caddy_pinned" | grep '^    bind ')" "192.168.1.10"
 
 # Loopback is appended outside the address loop, so a box reporting no usable non-public address
 # still binds something reachable rather than silently falling back to a wildcard.
@@ -7633,6 +7695,56 @@ undeclared_socks="$(awk '
 ' "$STACK")"
 assert_eq "no dial refers to a socks variable its own function never declares" "$undeclared_socks" ""
 
+echo "== unit: appliance-lane release-fetch hints name no shell the box does not have (#1139) =="
+# The transport-failure and unparseable-response hints told the operator to run './pithead doctor'
+# — reachable from the dashboard's os-check (and the RigForge worker-upgrade) on an appliance,
+# which has no shell to run it from. gh_release_fetch now keys the retry hint off is_appliance, a
+# fact about the machine rather than the caller, so every caller gets it right for free.
+#
+# MUTATION PROOF: hardcode retry_hint to the DIY string (drop the is_appliance branch) and both
+# "names no CLI verb" assertions below go red; hardcode it to the appliance string instead and the
+# DIY-lane assertions (both here and in the block above) go red — neither direction can pass alone.
+gh_tf_appliance=$(PITHEAD_APPLIANCE=1 gh_fetch 000 '' 1)
+assert_eq "appliance transport failure is still a failure" "${gh_tf_appliance%%|*}" "1"
+assert_contains "and still reads as a dial that did not land" "$gh_tf_appliance" "could not reach the GitHub release API"
+assert_contains "and points at the dashboard instead of a shell" "$gh_tf_appliance" "Retry from the dashboard"
+case "$gh_tf_appliance" in
+*"./pithead"*) bad "appliance transport-failure hint names no CLI verb" "still says: $gh_tf_appliance" ;;
+*) ok "appliance transport-failure hint names no CLI verb" ;;
+esac
+
+gh_nocode_appliance=$(
+    cd "$GHR" || exit 1
+    # shellcheck disable=SC1090  # STACK path is dynamic by design
+    source "$STACK" 2>/dev/null
+    set +e
+    export PATH="$GHR/bin:$PATH" GH_STUB_BODY='{"message":"Not Found"}' GH_STUB_NOCODE=1 PITHEAD_APPLIANCE=1
+    gh_release_fetch p2pool-starter-stack/pithead
+    printf '%s|%s' "$?" "$GH_RELEASE_HINT"
+)
+assert_eq "appliance unparseable response is still a failure" "${gh_nocode_appliance%%|*}" "1"
+assert_contains "and reads as an unreadable shape" "$gh_nocode_appliance" "answered in a shape this cannot read"
+assert_contains "and points at the dashboard instead of a shell" "$gh_nocode_appliance" "Retry from the dashboard"
+case "$gh_nocode_appliance" in
+*"./pithead"*) bad "appliance unparseable-response hint names no CLI verb" "still says: $gh_nocode_appliance" ;;
+*) ok "appliance unparseable-response hint names no CLI verb" ;;
+esac
+
+# DIY-lane advice is untouched: 'doctor' is exactly right when the operator has a shell to run it
+# from — same fetch, same call, only the machine fact differs.
+gh_tf_diy=$(PITHEAD_APPLIANCE=0 gh_fetch 000 '' 1)
+assert_contains "DIY transport-failure advice is unchanged" "$gh_tf_diy" "Check './pithead doctor' and retry."
+gh_nocode_diy=$(
+    cd "$GHR" || exit 1
+    # shellcheck disable=SC1090  # STACK path is dynamic by design
+    source "$STACK" 2>/dev/null
+    set +e
+    export PATH="$GHR/bin:$PATH" GH_STUB_BODY='{"message":"Not Found"}' GH_STUB_NOCODE=1 PITHEAD_APPLIANCE=0
+    gh_release_fetch p2pool-starter-stack/pithead
+    printf '%s' "$GH_RELEASE_HINT"
+)
+assert_contains "DIY unparseable-response advice is unchanged" "$gh_nocode_diy" "Check './pithead doctor' and retry."
+
 echo "== black-box: control upgrade verb (#59) =="
 # A RELEASE install (no build/*/Dockerfile → is_source_checkout false) with the control channel
 # on. The runner's upgrade verb runs against a stub curl (GitHub release API + bundle download)
@@ -9812,14 +9924,17 @@ SWS=$(mktemp -d)
 export PITHEAD_TLS_DIR="$SWS/tls"
 sws_fp=$(run_sourced "$ROOT" stage_wizard_spool "$SWS/spool" 2>/dev/null)
 assert_contains "staging prints the certificate fingerprint the console advertises" "$sws_fp" ":"
-for f in wizard.crt wizard.key config.reference.json rig-defaults.json; do
+# data-wiped.json is checked for EXISTENCE only here (present/absent) — its content is always
+# "{}" off the appliance (PITHEAD_PRESEED_DIR unset), so that assertion belongs with the
+# data_wipe_note/publish_data_wipe_note tests below, not this staging-plumbing check.
+for f in wizard.crt wizard.key config.reference.json rig-defaults.json data-wiped.json; do
     assert_eq "staged: $f" "$([ -s "$SWS/spool/$f" ] && echo present || echo absent)" "present"
 done
 # The accept path's teardown, exactly as it happens, then the retry the outer loop drives.
 rm -rf "$SWS/spool"
 sws_fp2=$(run_sourced "$ROOT" stage_wizard_spool "$SWS/spool" 2>/dev/null)
 sws_missing=""
-for f in wizard.crt wizard.key config.reference.json rig-defaults.json; do
+for f in wizard.crt wizard.key config.reference.json rig-defaults.json data-wiped.json; do
     [ -s "$SWS/spool/$f" ] || sws_missing="$sws_missing $f"
 done
 assert_eq "a wiped spool is fully re-armed" "${sws_missing:-none}" "none"
@@ -10095,6 +10210,74 @@ else
     bad "the medium is left byte-for-byte unchanged" "it was rewritten"
 fi
 unset PITHEAD_PRESEED_DIR PSD
+
+echo "== unit: data_wipe_note / publish_data_wipe_note — the wipe note reader + spool carrier (#1121) =="
+# pithead-data-reset's own record_wipe format ("<UTC when> <reason>\n", appended to the ESP's
+# pithead-data-wiped) is the contract; this only reads it, never guesses it. "recovery"
+# discriminates a deliberate factory-reset (the operator asked for it, nothing to warn about)
+# from the wedged-/data case, where the wizard's next-move advice differs: restore a backup,
+# don't set up as if this were a fresh machine.
+DWN=$(mktemp -d)
+mkdir -p "$DWN/esp" "$DWN/spool"
+export PITHEAD_PRESEED_DIR="$DWN/esp"
+
+run_sourced "$SANDBOX" data_wipe_note >/dev/null 2>&1
+assert_rc "no note file -> rc 1" "$?" "1"
+
+printf '2026-08-21T09:00:00Z unrecoverable /data reinitialized — everything on it was lost\n' >"$DWN/esp/pithead-data-wiped"
+note=$(run_sourced "$SANDBOX" data_wipe_note)
+assert_eq "the wedged-partition wipe -> recovery true" "$(printf '%s' "$note" | jq -r '.recovery')" "true"
+assert_eq "the last line's timestamp is carried through" "$(printf '%s' "$note" | jq -r '.when')" "2026-08-21T09:00:00Z"
+assert_eq "the last line's reason is carried through" "$(printf '%s' "$note" | jq -r '.reason')" \
+    "unrecoverable /data reinitialized — everything on it was lost"
+
+printf '2026-08-20T08:00:00Z factory-reset requested\n2026-08-21T09:00:00Z factory-reset requested\n' >"$DWN/esp/pithead-data-wiped"
+note=$(run_sourced "$SANDBOX" data_wipe_note)
+assert_eq "a deliberate factory-reset -> recovery false" "$(printf '%s' "$note" | jq -r '.recovery')" "false"
+assert_eq "append-only log: only the LAST line is read" "$(printf '%s' "$note" | jq -r '.when')" "2026-08-21T09:00:00Z"
+
+printf 'garbage\n' >"$DWN/esp/pithead-data-wiped"
+run_sourced "$SANDBOX" data_wipe_note >/dev/null 2>&1
+assert_rc "a line with no '<when> <reason>' shape -> rc 1, never a made-up note" "$?" "1"
+
+# publish_data_wipe_note carries the note to the wizard's spool — the wizard container's ONLY
+# mount, so it cannot read PRESEED_DIR itself.
+rm -f "$DWN/esp/pithead-data-wiped"
+run_sourced "$SANDBOX" publish_data_wipe_note "$DWN/spool" >/dev/null 2>&1
+assert_eq "no note -> the spool gets an empty object, not a missing file" "$(cat "$DWN/spool/data-wiped.json")" "{}"
+assert_eq "no temp file left beside the atomic target" \
+    "$(find "$DWN/spool" -name '.data-wiped.json.*' | wc -l | tr -d ' ')" "0"
+
+printf '2026-08-21T09:00:00Z unrecoverable /data reinitialized — everything on it was lost\n' >"$DWN/esp/pithead-data-wiped"
+run_sourced "$SANDBOX" publish_data_wipe_note "$DWN/spool" >/dev/null 2>&1
+assert_eq "a real note reaches the spool" "$(jq -r '.recovery' "$DWN/spool/data-wiped.json")" "true"
+
+# The fleet-stick rule (same as publish_rig_defaults, #797 R3): a MISSING note must overwrite a
+# PREVIOUS machine's note, never leave it standing — the spool survives on /data between
+# machines. MUTATION PROOF: an early return in the publisher (`note=$(data_wipe_note) || return
+# 0`) leaves the previous machine's note in place; this assertion catches it (see the table in
+# the PR description for the actual red run).
+rm -f "$DWN/esp/pithead-data-wiped"
+run_sourced "$SANDBOX" publish_data_wipe_note "$DWN/spool" >/dev/null 2>&1
+assert_eq "a stale note from a previous machine does not survive an absent one" "$(cat "$DWN/spool/data-wiped.json")" "{}"
+
+# Removable boot media: PRESEED_DIR is the STICK's own ESP there, describing the stick, never
+# THIS machine — the publisher must not carry it across even when the stick's ESP holds a note.
+printf '2026-08-21T09:00:00Z unrecoverable /data reinitialized — everything on it was lost\n' >"$DWN/esp/pithead-data-wiped"
+(
+    cd "$SANDBOX" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    boot_is_removable() { return 0; }
+    publish_data_wipe_note "$DWN/spool"
+) >/dev/null 2>&1
+assert_eq "booting from removable media never carries the STICK's own note across" \
+    "$(cat "$DWN/spool/data-wiped.json")" "{}"
+
+unset PITHEAD_PRESEED_DIR
+rm -rf "$DWN"
+unset DWN note
 
 echo "== unit: is_appliance gates the tarball upgrade =="
 # The appliance's program tree is resynced from the system slot every boot, so a DIY tarball
@@ -10791,6 +10974,51 @@ assert_eq "an IPv6 literal gets NO --resolve (curl cannot parse one)" "$(grs 200
 assert_eq "an IPv4 literal gets no --resolve either" "$(grs 192.0.2.5 80)" ""
 unset -f gtu grs boot_fn
 
+echo "== unit: os_update_rollback_verdict — the rolled_back verdict, provable without a KVM boot (#1051) =="
+# A dashboard-driven install leaves data/os-update/in-flight.json naming the version the machine
+# was headed to. If THIS boot's VERSION disagrees, the bootloader already fell back — the update
+# failed its health gate, and the verdict belongs in the state file now. Before #1051 this was
+# inline code that only ran when pithead-boot was EXECUTED, never sourced, so no tier could ever
+# drive it with a fixture — genuinely untested, at every tier, despite being promised in two
+# operator-facing docs. It is pure file logic (an in-flight flag, a VERSION file, one jq call), so
+# nothing here needs real firmware or a real A/B updater to prove; #1051 pulled it into a function
+# for exactly that reason.
+# Mutation run: flip the != to = in os_update_rollback_verdict's version check -> both assertions
+# below invert (a real fallback stays silent, a real landing wrongly claims rollback).
+ORV="$SANDBOX/os-rollback-verdict"
+orv_run() { # <running-version> [inflight-to] -> "<outcome> <in-flight-consumed>"
+    rm -rf "$ORV"
+    mkdir -p "$ORV/data/os-update" "$ORV/data/control/results"
+    printf '%s\n' "$1" >"$ORV/VERSION"
+    # "consumed" has to mean the flag EXISTED and the function REMOVED it — checking only
+    # post-call existence conflates that with "there was never a flag to remove", so the
+    # no-flag case wrongly read back as consumed. had_flag pins the before state.
+    local had_flag=no
+    if [ -n "${2:-}" ]; then
+        printf '{"from":"1.0.0","to":"%s"}\n' "$2" >"$ORV/data/os-update/in-flight.json"
+        had_flag=yes
+    fi
+    (
+        cd "$ORV" || exit 1
+        # shellcheck disable=SC1090
+        source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+        OS_INFLIGHT=data/os-update/in-flight.json
+        OS_STATE_DIR=data/control/results
+        os_update_rollback_verdict >/dev/null
+    )
+    local outcome consumed=no
+    outcome=$(jq -r '.verdict.outcome // "none"' "$ORV/data/control/results/os-update-state.json" 2>/dev/null)
+    [ "$had_flag" = yes ] && [ ! -f "$ORV/data/os-update/in-flight.json" ] && consumed=yes
+    printf '%s %s' "${outcome:-none}" "$consumed"
+}
+assert_eq "a fallback boot (running the OLD version) writes rolled_back and consumes the flag" \
+    "$(orv_run 1.2.3 1.2.4)" "rolled_back yes"
+assert_eq "a landed boot (running matches the target) writes nothing here — the commit gate's success half owns it" \
+    "$(orv_run 1.2.4 1.2.4)" "none no"
+assert_eq "no in-flight flag at all is a no-op" "$(orv_run 1.2.3)" "none no"
+unset -f orv_run
+unset ORV
+
 echo "== unit: revenue_container_verdict — commit-gate honesty, syncing vs crashed (#852) =="
 # The pure classifier behind check_revenue_containers, so the commit gate's central judgement is
 # tested without a running stack. Two rules it must hold:
@@ -10969,13 +11197,23 @@ assert_rc "unstamped system + release bundle passes — stays shell-less, no cha
 OUSB=$(mktemp -d)
 mkdir -p "$OUSB/bin"
 # A fake rauc: logs every call, answers `info` with a canned shell-format body —
-# the format the real os_bundle_meta parses (RAUC 1.11's JSON output omits [meta.*]).
+# the format the real os_bundle_meta parses (RAUC 1.11's JSON output omits [meta.*]). Two escape
+# hatches for #1041's error-surfacing tests: RAUC_INFO_RC/RAUC_INFO_ERR fail `info` (a signature
+# verdict) with a chosen message on stderr, RAUC_INSTALL_RC/RAUC_INSTALL_ERR do the same for
+# `install`. Both default to a clean 0/no-output — every test above this one never sets them.
 cat >"$OUSB/bin/rauc" <<'EOF'
 #!/usr/bin/env bash
 echo "[rauc] $*" >>"${RAUC_LOG:?}"
 case "$1" in
-info) [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT" ;;
-install) exit 0 ;;
+info)
+    [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT"
+    [ -n "${RAUC_INFO_ERR:-}" ] && echo "$RAUC_INFO_ERR" >&2
+    exit "${RAUC_INFO_RC:-0}"
+    ;;
+install)
+    [ -n "${RAUC_INSTALL_ERR:-}" ] && echo "$RAUC_INSTALL_ERR" >&2
+    exit "${RAUC_INSTALL_RC:-0}"
+    ;;
 esac
 exit 0
 EOF
@@ -11046,6 +11284,69 @@ assert_rc "release -> release installs with no prompt" "$?" "0"
 assert_contains "rauc install ran unprompted" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.txt" 2>&1)
 assert_rc "a missing bundle path is an error, not an install" "$?" "1"
+
+echo "== unit: os_bundle_meta degrades to empty instead of aborting the caller (#1041) =="
+# run_sourced (used everywhere above) disables errexit right after sourcing, which would hide
+# the exact bug #1041 traces to: under `set -o pipefail`, `rauc info | sed | head` returns rauc's
+# own nonzero exit even though sed/head both succeed, and a bare `var=$(os_bundle_meta ...)`
+# assignment then trips `set -e` — silently, since the diagnostic went to `2>/dev/null`. This
+# check keeps errexit ON (the real pithead script's own posture) so a regression here reproduces
+# the actual failure: the subshell would abort before ever reaching the second echo.
+: >"$RAUC_LOG"
+ombm_out=$(
+    cd "$OUSB" || exit 1
+    PATH="$OUSB/bin:$PATH"
+    export RAUC_INFO_RC=1 RAUC_INFO_OUT="" RAUC_INFO_ERR="signature verification failed: self-signed certificate"
+    # shellcheck disable=SC1090
+    source "$STACK"
+    echo "before"
+    v=$(os_bundle_meta bundle.raucb version)
+    echo "after:[$v]"
+)
+ombm_rc=$?
+assert_rc "a failing rauc info does not abort the caller under errexit+pipefail" "$ombm_rc" "0"
+assert_contains "execution continues past the failed call" "$ombm_out" "after:[]"
+
+echo "== integration: os-update surfaces rauc's own diagnosis instead of a bare abort (#1041) =="
+# The bug as filed: a signature failure inside a command substitution (os_bundle_meta, above)
+# tripped the ERR trap with nothing to show for it — three bare "aborted unexpectedly" lines and
+# no clue rauc had already diagnosed it precisely on its own stderr. Runs the REAL script as a
+# subprocess (not sourced) so the ERR trap this bug lives in is actually armed.
+OUB=$(mktemp -d)
+mkdir -p "$OUB/bin"
+cp "$STACK" "$OUB/pithead"
+chmod +x "$OUB/pithead"
+cp "$OUSB/bin/rauc" "$OUB/bin/rauc"
+chmod +x "$OUB/bin/rauc"
+touch "$OUB/bundle.raucb"
+: >"$OUB/calls"
+out=$(cd "$OUB" && PATH="$OUB/bin:$PATH" RAUC_LOG="$OUB/calls" \
+    RAUC_INFO_RC=1 RAUC_INFO_ERR="signature verification failed: Verify error: self-signed certificate" \
+    ./pithead os-update bundle.raucb --yes 2>&1)
+rc=$?
+assert_rc "a bad-signature bundle refuses the update" "$rc" "1"
+assert_contains "rauc's own diagnosis reaches the operator" "$out" "self-signed certificate"
+assert_not_contains "the generic contentless abort does not ALSO fire" "$out" "aborted unexpectedly"
+assert_not_contains "rauc install is never reached on a bad signature" "$(cat "$OUB/calls")" "install"
+rm -rf "$OUB"
+
+echo "== unit: os-update surfaces rauc install's own stderr, not just a bare failure (#1041) =="
+: >"$RAUC_LOG"
+out=$(
+    cd "$OUSB" || exit 1
+    PATH="$OUSB/bin:$PATH"
+    export RAUC_INFO_OUT="$OUSB/info-release.txt" PITHEAD_VARIANT_FILE="$OUSB/variant-release"
+    export PITHEAD_MIGRATION_MARKER_FILE="$OUSB/marker-scratch"
+    export RAUC_INSTALL_RC=1 RAUC_INSTALL_ERR="LastError: mounting slot failed: no such device"
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    os_update bundle.raucb --yes </dev/null 2>&1
+)
+rc=$?
+assert_rc "an install-time rauc failure is refused, not silently ignored" "$rc" "1"
+assert_contains "rauc's install-time diagnosis reaches the operator" "$out" "mounting slot failed"
+unset RAUC_INFO_RC RAUC_INFO_ERR RAUC_INSTALL_RC RAUC_INSTALL_ERR
 
 # --- os-update version floor + data-migration guards (#856 downgrade, #851 migration deadlock) ---
 # A correctly-signed bundle is not automatically a safe one: an OLDER image re-opens fixed holes,
@@ -12264,6 +12565,39 @@ assert_eq "a record above the budget is capped at the budget" \
     "$(PITHEAD_HUGEPAGES_MARKER="$HG/marker" run_sourced "$SANDBOX" hugepages_decision_pages)" "3072"
 assert_eq "no marker reads as the full budget" \
     "$(PITHEAD_HUGEPAGES_MARKER="$HG/absent-marker" run_sourced "$SANDBOX" hugepages_decision_pages)" "3072"
+
+echo "== unit: check_data_wipe_note — doctor surfaces the wipe note, a support conversation gets the fact (#1121) =="
+# Same shape as the pre-seeding block: PITHEAD_PRESEED_DIR stands in for the ESP. Appliance-only
+# (the note only ever exists on that channel), so PITHEAD_APPLIANCE has to be forced on here —
+# tests run off the appliance.
+CDW=$(mktemp -d)
+mkdir -p "$CDW/esp"
+export PITHEAD_PRESEED_DIR="$CDW/esp"
+
+out=$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_eq "off the appliance -> silent regardless of the note" "$out" ""
+
+out=$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_eq "no note file -> doctor says nothing (not even a section header)" "$out" ""
+
+printf '2026-08-21T09:00:00Z unrecoverable /data reinitialized — everything on it was lost\n' >"$CDW/esp/pithead-data-wiped"
+out=$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_eq "off the appliance -> silent EVEN WITH a note present (a DIY host cannot have one)" "$out" ""
+
+out=$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_contains "a recovery wipe -> WARN" "$out" "WARN"
+assert_contains "the WARN names the date" "$out" "2026-08-21T09:00:00Z"
+assert_contains "the WARN points at restoring a backup" "$out" "restore from backup"
+assert_not_contains "a recovery wipe is a WARN, never a FAIL (must not fail the boot health gate)" "$out" "FAIL"
+
+printf '2026-08-19T07:30:00Z factory-reset requested\n' >"$CDW/esp/pithead-data-wiped"
+out=$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" check_data_wipe_note 2>&1)
+assert_not_contains "a deliberate factory-reset -> no WARN (the operator asked for it)" "$out" "WARN"
+assert_contains "a deliberate factory-reset -> still named, informationally" "$out" "2026-08-19T07:30:00Z"
+
+unset PITHEAD_PRESEED_DIR
+rm -rf "$CDW"
+unset CDW out
 
 echo "== unit: pithead-media-config — physical-presence media channel (#786 sub-issue D) =="
 # Source the boot leg (functions only — its main is guarded) and drive its pieces with stubbed

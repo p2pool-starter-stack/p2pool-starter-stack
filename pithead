@@ -1384,6 +1384,8 @@ doctor() {
         check_monerod_synchronized
     fi
 
+    check_data_wipe_note
+
     # --- Summary ---
     echo ""
     log "Diagnostics summary: ${DR_OK} OK, ${DR_WARN} warning(s), ${DR_FAIL} failure(s)."
@@ -1844,6 +1846,43 @@ preseed_token() {
     printf '%s' "$t"
 }
 
+# The note pithead-data-reset leaves on the ESP when it reinitializes /data (#1062, #1121): an
+# append-only log, one "<UTC timestamp> <reason>" line per wipe. Reads only the LAST line — the
+# most recent event is the one an operator needs — and prints one JSON object on success:
+# {when, reason, recovery}. "recovery" is false for a deliberate factory-reset (nothing to warn
+# about, the operator asked for it) and true for the wedged-/data case, where the next move is
+# restoring a backup rather than walking through setup as if this were a fresh machine. rc 1:
+# absent, unreadable, or a line with no "<when> <reason>" shape to parse.
+data_wipe_note() {
+    local f="$PRESEED_DIR/pithead-data-wiped" line when reason
+    [ -f "$f" ] || return 1
+    line=$(tail -n 1 "$f" 2>/dev/null) || return 1
+    case "$line" in *' '*) ;; *) return 1 ;; esac
+    when="${line%% *}"
+    reason="${line#* }"
+    [ -n "$when" ] && [ -n "$reason" ] || return 1
+    jq -cn --arg when "$when" --arg reason "$reason" \
+        '{when: $when, reason: $reason, recovery: ($reason != "factory-reset requested")}'
+}
+
+# Carries the wipe note to the wizard's spool (#1121): the wizard runs in a container whose only
+# mount is the spool (`-v "$spool":/wizard-spool`), so it cannot reach $PRESEED_DIR itself —
+# unlike doctor, which runs on the host. Same shape as publish_rig_defaults: derive fresh, write
+# atomically, always write SOMETHING (an empty object when there is no note) so a fleet stick's
+# spool never hands machine 2 machine 1's note. Skipped on removable boot media, where
+# PRESEED_DIR is the STICK's own ESP and would describe the stick, not this machine.
+publish_data_wipe_note() { # <spool-dir>
+    local tmp="$1/.data-wiped.json.$$" note
+    if boot_is_removable; then
+        note="{}"
+    else
+        note=$(data_wipe_note) || note="{}"
+    fi
+    printf '%s' "$note" >"$tmp" 2>/dev/null || : >"$tmp"
+    chown 1000:1000 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$1/data-wiped.json"
+}
+
 # The restore pre-seed (#909): an installer boot that accepted a backup archive stages it —
 # still encrypted, passphrase beside it — on the target's ESP, and the installed machine's
 # first boot lands here to restore ITSELF: config, Tor onion keys, dashboard database, the
@@ -2180,6 +2219,9 @@ stage_wizard_spool() { # <spool-dir> -> fingerprint on stdout
     # The rig role's pre-fill rides beside the reference — derived fresh each boot, like the
     # disk inventory, so machine 2 on a fleet stick never opens on machine 1's discovery.
     publish_rig_defaults "$spool"
+    # The data-wipe note (#1121): same "derived fresh every boot" rule, for the same fleet-stick
+    # reason — see publish_data_wipe_note.
+    publish_data_wipe_note "$spool"
     # Installer mode reads the disk list from here too; a retry with no list is the same dead end
     # in a different shape.
     installer_mode_available && publish_disk_inventory "$spool"
@@ -2957,7 +2999,14 @@ os_bundle_meta() { # $1: bundle, $2: [meta.pithead] key — echoes its value or 
     # tier-4 migration leg). Verification still runs: rauc info checks the bundle signature
     # against the system keyring before printing anything. Anything unparseable degrades to
     # empty, which every consumer treats as fail-closed "unstamped".
-    rauc info --output-format=shell "$1" 2>/dev/null |
+    #
+    # `|| true` on rauc's own leg: under `set -o pipefail` a signature failure makes rauc info
+    # exit nonzero, and that alone — with sed/head both still succeeding on empty input — fails
+    # the whole pipe. In a bare `var=$(os_bundle_meta ...)` assignment that trips `set -e` right
+    # here, before any caller sees a result, which is exactly this function's own "never fails"
+    # contract broken by pipefail (#1041: the actual mechanism behind the ERR trap's contentless
+    # "aborted unexpectedly" — os_update's callers below never got a chance to run at all).
+    { rauc info --output-format=shell "$1" 2>/dev/null || true; } |
         sed -n "s/^RAUC_META_PITHEAD_$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]')='\(.*\)'\$/\1/p" |
         head -1
 }
@@ -3093,6 +3142,20 @@ os_update() {
         error "rauc is not available here — OS updates apply to the appliance image, not a checkout install."
     [ -f "$bundle" ] || error "No such bundle: $bundle"
 
+    # Verify the bundle explicitly, before anything reads its metadata (#1041). `rauc info`
+    # checks the signature against the system keyring before it prints anything, so a bad
+    # signature fails right here with RAUC's own precise diagnosis on stderr (e.g. "signature
+    # verification failed: Verify error: self-signed certificate" — a bundle signed by a chain
+    # this machine doesn't trust). Captured explicitly rather than left to whatever later reads
+    # the bundle: the dashboard's os-verify/os-install doors already run this same check
+    # (os_verify_bundle_reason) before this CLI path ever runs, but the CLI's own os-update had
+    # nothing playing that role, so its ERR trap fired with no diagnosis to show for it.
+    local rauc_info_err rauc_rc=0
+    rauc_info_err=$(rauc info "$bundle" 2>&1 >/dev/null) || rauc_rc=$?
+    if [ "$rauc_rc" -ne 0 ]; then
+        error "rauc could not verify this bundle.${rauc_info_err:+ rauc said: $(printf '%s' "$rauc_info_err" | tail -1 | tr -d '[:cntrl:]' | head -c 300)}"
+    fi
+
     # Version floor + data-migration guards — the exact refusals the dashboard's os-verify/
     # os-install verbs run (os_update_version_guard, shared so the two doors never drift).
     local bundle_version bundle_min bundle_migrates running_version guard_reason
@@ -3136,7 +3199,25 @@ os_update() {
         fi
     fi
     log "Installing OS update bundle: $bundle (running: $running, bundle: $target)"
-    rauc install "$bundle"
+    # Tee'd like the wizard's fatal path (#1028's idiom): a bare `rauc install` let RAUC's own
+    # diagnosis (a signature mismatch, an incompatible bundle) vanish, leaving only the ERR
+    # trap's generic "aborted unexpectedly" — undiagnosable on a shell-less box where the
+    # console is the only output there is. The tee keeps rauc's progress on this process's own
+    # stdout (the dashboard's install poller reads the percentage off that same stream) while a
+    # copy lands in a scratch file this function can inspect on failure. No bundle path in the
+    # error text on purpose — that is a host staging detail, and the dashboard door whitelists
+    # this exact line straight into the container-visible result.
+    local rauc_log
+    rauc_log=$(mktemp)
+    if rauc install "$bundle" 2>&1 | tee "$rauc_log"; then
+        rm -f "$rauc_log"
+    else
+        local rauc_detail
+        rauc_detail=$(grep -aE '^LastError: |^\[ERROR\] |[Ff]ailed' "$rauc_log" 2>/dev/null |
+            tail -1 | tr -d '[:cntrl:]' | head -c 300) || rauc_detail=""
+        rm -f "$rauc_log"
+        error "rauc install failed.${rauc_detail:+ rauc said: $rauc_detail}"
+    fi
 
     # A data_migration bundle raises the /data floor so a later rollback below it is refused. Armed
     # at install (conservative: before the migration actually runs on the new slot's next boot) —
@@ -4106,6 +4187,26 @@ check_control_units() {
         dr_fail "The control runner watches a different spool than this install writes to ($spool) — requests are never picked up, with no error shown. Fix: run './pithead apply' from this directory."
     else
         dr_ok "Control runner units target this install."
+    fi
+}
+
+# Doctor check (#1121): the wipe note pithead-data-reset leaves on the ESP when it reinitializes
+# /data (#1062) — a support conversation on a box with a shell gets the fact without knowing
+# where to look. Appliance-only: PRESEED_DIR only carries this note on that channel; absent is
+# silent, matching every other doctor check that has nothing to report.
+check_data_wipe_note() {
+    is_appliance || return 0
+    local note
+    note=$(data_wipe_note) || return 0
+    local when reason
+    when=$(printf '%s' "$note" | jq -r '.when')
+    reason=$(printf '%s' "$note" | jq -r '.reason')
+    echo ""
+    echo "Data reset:"
+    if printf '%s' "$note" | jq -e '.recovery' >/dev/null 2>&1; then
+        dr_warn "/data was reinitialized on $when ($reason) — if this was not a deliberate factory reset, restore from backup rather than reprovisioning from scratch."
+    else
+        dr_info "/data was reformatted on $when ($reason)."
     fi
 }
 
@@ -6248,19 +6349,29 @@ GH_RELEASE_JSON=""
 # result sat at "running" for ever with a single dial in the log. One derivation, one truth.
 GH_SOCKS=""
 gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure
-    local repo="$1" prefix out code
+    local repo="$1" prefix out code retry_hint
     prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
     [ -n "$prefix" ] || prefix="172.28.0"
     GH_SOCKS="${prefix}.25:9050"
     GH_RELEASE_HINT=""
     GH_RELEASE_JSON=""
+    # Every caller of this fetch is reachable from the dashboard on an appliance (os-check, the
+    # RigForge worker-upgrade) — which has no shell to run 'doctor' from, the product's defining
+    # property (#1139). The one caller that DOES want the CLI hint (the DIY one-click upgrade)
+    # already refuses before it ever dials on an appliance host, so keying this off is_appliance
+    # — a fact about the machine, not the caller — gets every call site right with one seam.
+    if is_appliance; then
+        retry_hint="Retry from the dashboard in a few minutes."
+    else
+        retry_hint="Check './pithead doctor' and retry."
+    fi
     # -w appends the status on its own line, so a non-2xx keeps its BODY — which is where GitHub
     # says the limit was exceeded. Without -f, curl's own non-zero exit now means only a transport
     # failure, which is exactly the distinction that was missing.
     if ! out=$(curl -sS --max-time 60 --max-filesize "$CURL_CAP_SMALL" -w '\n%{http_code}' \
         --socks5-hostname "$GH_SOCKS" -H 'Accept: application/vnd.github+json' \
         "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null); then
-        GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. $retry_hint"
         return 1
     fi
     code=${out##*$'\n'}
@@ -6271,7 +6382,7 @@ gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE
     case "$code" in
     [0-9][0-9][0-9]) ;;
     *)
-        GH_RELEASE_HINT="the GitHub release API answered in a shape this cannot read — nothing was changed. Check './pithead doctor' and retry."
+        GH_RELEASE_HINT="the GitHub release API answered in a shape this cannot read — nothing was changed. $retry_hint"
         return 1
         ;;
     esac
@@ -8562,7 +8673,16 @@ describe_change() {
             msg="Stratum access-password DISABLED — any rig that can reach :3333 may mine again."
         elif [ -z "$old" ]; then
             flag=DEST
-            msg="Stratum access-password ENABLED — rigs must now send the matching 'pass' (find it in .env / './pithead status') or they're rejected; the xmrig-proxy container is recreated."
+            # The DIY hint points at .env / 'status' to recover an auto-generated password; the
+            # appliance has neither a shell nor a dashboard surface that reveals a secret value
+            # (#33's own trust boundary — masked config never round-trips a secret to the
+            # container), so there is no remedy to name here. Drop the instruction rather than
+            # invent one (#1139).
+            if is_appliance; then
+                msg="Stratum access-password ENABLED — rigs must now send the matching 'pass' or they're rejected; the xmrig-proxy container is recreated."
+            else
+                msg="Stratum access-password ENABLED — rigs must now send the matching 'pass' (find it in .env / './pithead status') or they're rejected; the xmrig-proxy container is recreated."
+            fi
         else
             flag=DEST
             msg="Stratum access-password CHANGED — update every rig's 'pass' to match or they're rejected; the xmrig-proxy container is recreated."
@@ -8717,6 +8837,11 @@ describe_change() {
     TOR_AUTO_HEAL)
         if [ "$new" == "true" ]; then
             msg="Tor guard self-heal ENABLED — when clearnet egress through Tor stays broken for 15 min (a failing guard), the dashboard restarts the tor container to pick fresh guards (max 3 restarts per outage, 30-min cooldown; each restart drops ALL Tor circuits, mining onions included, which then rebuild); the dashboard container is recreated."
+        # The DIY fix names 'doctor' + a scoped tor restart, both CLI-only; the appliance has no
+        # shell to run either from, and there is no dashboard control that restarts tor alone
+        # (#1139) — so this side just states the fact instead of a remedy it cannot offer.
+        elif is_appliance; then
+            msg="Tor guard self-heal DISABLED — a stuck guard is back to WARN-only, with no dashboard control to restart Tor manually; the dashboard container is recreated."
         else
             msg="Tor guard self-heal DISABLED — a stuck guard is back to WARN-only ('./pithead doctor', fix with './pithead restart tor'); the dashboard container is recreated."
         fi

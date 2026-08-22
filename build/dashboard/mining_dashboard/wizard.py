@@ -135,6 +135,15 @@ def _rig_defaults() -> dict:
     return _spool_json("rig-defaults.json")
 
 
+def _data_wiped() -> dict:
+    """The data-wipe note (#1121), published by the HOST the same way as the rig pre-fill: when
+    /data was reinitialized before this boot, {when, reason, recovery} — recovery distinguishes
+    a deliberate factory-reset (nothing to warn about) from the wedged-partition case, where the
+    operator's right next move is restoring a backup rather than treating this like a fresh
+    machine. {} when there is nothing to report."""
+    return _spool_json("data-wiped.json")
+
+
 def wizard_stage() -> str:
     """Which step this machine is actually on, decided by the SPOOL — never by the client.
 
@@ -239,6 +248,7 @@ async def wizard_state(request: web.Request) -> web.Response:
             "error": _spool_read("error.txt"),
             "disks": _disks(),
             "rig_defaults": _rig_defaults(),
+            "data_wiped": _data_wiped(),
             "handoff": json.loads(raw_handoff) if raw_handoff else None,
         }
     )
