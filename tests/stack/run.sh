@@ -9945,7 +9945,7 @@ cab_run() { # <hostname -I answer> <mint|doctor>
     (
         cd "$CAB" || exit 1
         PATH="$CAB/bin:$PATH"
-        PITHEAD_ENGINE=docker
+        export PITHEAD_ENGINE=docker
         # shellcheck disable=SC1090
         source "$STACK" 2>/dev/null
         set +e
@@ -10019,7 +10019,7 @@ cab_run_pinned() {
     (
         cd "$CAB" || exit 1
         PATH="$CAB/bin:$PATH"
-        PITHEAD_ENGINE=docker
+        export PITHEAD_ENGINE=docker
         # shellcheck disable=SC1090
         source "$STACK" 2>/dev/null
         set +e
@@ -13448,7 +13448,7 @@ dac_run() { # <appliance rc: 0|1> -> the doctor certificate section's output
     (
         cd "$DAC" || exit 1
         PATH="$DAC/bin:$PATH"
-        PITHEAD_ENGINE=docker
+        export PITHEAD_ENGINE=docker
         # shellcheck disable=SC1090
         source "$STACK" 2>/dev/null
         set +e
