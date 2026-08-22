@@ -35,8 +35,9 @@ CVE-2026-24049
 # Clears when compose moves to the docker 29 module path; `go list -m -versions github.com/docker/docker`
 # is the one-line check. Nothing re-surfaces this on its own: the weekly CVE sweep (#833) scans WITH
 # this file applied, so a muted finding never reaches it (#1174). scripts/trivyignore-watch.sh
-# checks whether this ID still shows up in any image the file covers; run it by hand until its
-# weekly wiring lands, same as the clearing check above.
+# checks whether this ID still shows up in any image the file covers — weekly now, via
+# .github/workflows/trivyignore-watch.yml on the default branch, which checks this lane out to
+# run it (#1174). Same cadence as the clearing check above.
 CVE-2026-34040
 # NOTE ON GO STDLIB FINDINGS — there are none listed here on purpose. The appliance rootfs used
 # to download upstream release binaries and inherit whichever Go toolchain built them, so every Go
@@ -61,7 +62,8 @@ CVE-2026-34040
 # dpkg-query -W util-linux` is the one-line check, and all four go together. Nothing re-surfaces
 # these on its own: the weekly CVE sweep (#833) scans WITH this file applied, so a muted finding
 # never reaches it (#1174). scripts/trivyignore-watch.sh checks whether an ID like these still
-# shows up in any image the file covers; run it by hand until its weekly wiring lands.
+# shows up in any image the file covers — weekly now, via .github/workflows/trivyignore-watch.yml
+# on the default branch, which checks this lane out to run it (#1174).
 CVE-2026-53612
 CVE-2026-53613
 CVE-2026-53614
