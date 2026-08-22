@@ -547,7 +547,23 @@ services:
       # stratum bind kills the process outright (already visible as a restart), while the API can
       # die quietly — and it is what the dashboard polls for worker stats. Surfaced in
       # `pithead status` and the container-health alert (#337); gates nothing (no dependents).
-      test: ["CMD", "/usr/local/bin/xmrig-proxy-healthcheck.sh"]
+      #
+      # The `[ -x ... ] &&` guard is the graceful half of #1098's fix: an appliance can boot with a
+      # docker-compose.yml newer than the images its release actually pinned (VERSION, and so the
+      # image tag, only moves at a release cut; this file moves on every merge — the two are cut
+      # on different clocks by construction). This exact script arrived together with this exact
+      # test in #904, one commit, but on the appliance they are read from two different artifacts
+      # that can fall out of step after the fact. A bare `CMD script` treats "no such file" as
+      # unhealthy, forever, for a container that is otherwise working fine — the permanently-red
+      # signal #1098 reported, which reads as a real fault to anyone running `podman ps`. Missing
+      # the script is a mismatched *release*, not a broken *proxy*, so this reports healthy instead
+      # of manufacturing a false alarm out of two files shipping on different schedules; scripts/
+      # verify-healthcheck-scripts.sh is the other half — it fails the PR itself if a healthcheck
+      # script and its compose reference ever go out of sync inside ONE commit, which this
+      # CMD-SHELL guard deliberately cannot catch (it only ever sees the one image it is running
+      # in). gates nothing today either way (no dependents) — this changes what "gates nothing"
+      # reports, not what it blocks.
+      test: ["CMD-SHELL", "[ -x /usr/local/bin/xmrig-proxy-healthcheck.sh ] && exec /usr/local/bin/xmrig-proxy-healthcheck.sh || exit 0"]
       interval: 30s
       timeout: 5s
       retries: 3

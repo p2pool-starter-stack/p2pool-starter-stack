@@ -128,6 +128,25 @@ echo "== unit: resolve-pins self-test (#1137) =="
 bash "$ROOT/scripts/resolve-pins.sh" --self-test >/dev/null 2>&1
 assert_rc "resolve-pins self-test passes" "$?" "0"
 
+echo "== unit: verify-healthcheck-scripts self-test (#1098) =="
+# #1098: docker-compose.yml named a healthcheck script (xmrig-proxy-healthcheck.sh) that the
+# pinned appliance images predated — the container reported unhealthy forever with nothing
+# actually broken. This is the narrower, permanent guard: does each service's OWN Dockerfile
+# actually place a file where compose's healthcheck looks for it. The self-test drives the
+# parsers (WORKDIR resolution, COPY --from=, multi-source directory COPYs) against fixtures and
+# reproduces the issue's own named mutation end to end: rename the script in a Dockerfile without
+# touching compose, and the check must go red.
+bash "$ROOT/scripts/verify-healthcheck-scripts.sh" --self-test >/dev/null 2>&1
+assert_rc "verify-healthcheck-scripts self-test passes" "$?" "0"
+
+echo "== unit: verify-healthcheck-scripts against the real tree (#1098) =="
+# The self-test above proves the parsers; this proves the CURRENT docker-compose.yml and build/*
+# Dockerfiles actually agree right now — the same real-tree pass release.sh and CI both get, so a
+# healthcheck rename that forgets the compose side (or vice versa) fails here before it ever
+# reaches an appliance.
+bash "$ROOT/scripts/verify-healthcheck-scripts.sh" >/dev/null 2>&1
+assert_rc "every real healthcheck script exists where its own Dockerfile promises (#1098)" "$?" "0"
+
 echo "== unit: patch-coverage overlap self-test (#1000) =="
 # diff-cover exits 0 on "No lines with coverage information" — a vacuous pass. The wrapper's
 # overlap check is what turns that into a loud not-applicable pass or a real failure; its
