@@ -601,6 +601,21 @@ wait_miner_running() { wait_for "${1:-180}" 5 "miner released" _pred_miner_runni
 wait_tari_synced() { wait_for "${1:-300}" 10 "Tari sync complete" _pred_tari_synced; }
 wait_pool_ready() { wait_for "${1:-180}" 5 "pool type determinate (${2})" _pred_pool_ready "$2"; }
 
+# Mining-liveness verdict (#905/#1082), factored out of assert_running_state so selftest can
+# prove --no-mining-asserts is a CONDITIONAL skip, not a permanent one: the two assertions must
+# still run — and be able to go red — every time the flag is unset. Only the caller-set skip
+# flag suppresses them; there is no auto-detection here (a live worker-count of zero from a
+# genuinely fallen-off rig must stay indistinguishable from a parked bench unless the operator
+# says so explicitly — see #1082's fail-open discussion).
+assert_mining_state() { # <skip: 0|1> <workers> <hashes> <expected-workers>
+    if [ "$1" = "1" ]; then
+        it_warn "SKIPPED workers online + stratum total hashes: no miner attached to this box (--no-mining-asserts) — drop the flag (and attach a miner) to make these binding again (#905/#1082)"
+        return 0
+    fi
+    assert_num_ge "workers online (>= $4)" "${2:-0}" "$4"
+    assert_num_gt "stratum total hashes > 0" "${3:-0}" 0
+}
+
 # Ground truth for the sidechain axis (#746): the rendered P2POOL_FLAGS in the box's .env carry
 # --mini / --nano (main carries neither). The dashboard classifies the sidechain by counting
 # connected peers' ports, so right after a pool SWITCH p2pool runs the NEW flags while the
