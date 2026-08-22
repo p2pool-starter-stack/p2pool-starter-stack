@@ -54,7 +54,13 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
      comment), `lint-file-budget` (the file-budget ratchet, issue #1105 Phase 0 — a new tracked
      file has a hard ceiling of 800 lines, target 400; an existing offender's current line count
      is its personal ceiling in `docs/dev/file-budget.tsv`, and a PR may not grow it past that —
-     ceilings only ever move down, and the gate rejects a budget edit that raises one. Generated
+     ceilings only ever move down, and the gate rejects a budget edit that raises one. A
+     deliberate, justified addition to a budgeted file therefore has exactly one legal path:
+     split or shrink the file so the addition fits under a ceiling that stays put or drops —
+     see issue #1258 for the worked example, where a security test that outgrew its file moved
+     into its own — and note the gate runs locally and in `make lint` but is not yet wired into
+     CI (issue #1257), so two same-wave merges can each pass alone and fail together: re-run
+     `make lint` after merging onto the tip. Generated
      code, vendored files, data/config, and prose docs are exempt by glob — see `is_exempt()` in
      the script — and so is the shipped `pithead` artifact itself, for now: its future `lib/*.sh`
      sources are what the gate will govern once Phase 2 splits it), `lint-proto` (buf),
