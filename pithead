@@ -1774,6 +1774,24 @@ restore_apply() { # <archive> <passphrase> <errfile> [<config-only-dest>]
     # dir afterwards, so ownership here does not need fixing up by hand.
     cp -a "$tmp"/. /
     rm -rf "$tmp"
+    # #1239 (live KVM guest evidence): the archive's .env is the SOURCE machine's own —
+    # DEPLOYMENT_COMPLETED=true there records THAT machine's prior deployment, not this
+    # hardware's. Both doors that reach here feed straight into a headless `setup()`
+    # (firstboot's spool-accept path, the ESP pre-seed door consumed at boot): setup()'s
+    # is_deployed guard exists to stop an operator re-running setup on a box that is already
+    # live (#924), and it has no way to tell "restored, never provisioned HERE" apart from
+    # "live" — a carried true fires that guard's exact fatal, no-tty refusal, and setup never
+    # runs: prepare_directories, render_env, provision_tor never fire, no container starts. A
+    # just-restored box has NOT completed deployment on this hardware — clear the marker so the
+    # caller's setup() actually provisions it. Every other restored .env value (the real onion
+    # addresses, tokens, HOST_IP) is exactly what a re-provision must reuse, so only this one
+    # line is touched; a full re-render happens anyway inside setup(). Scoped to THIS commit
+    # path on purpose — stack_restore (the admin `./pithead restore` command, for a box already
+    # deployed on its own hardware) has its own separate extraction and never calls restore_apply,
+    # so a live box's restore keeps its completion marker exactly as it should.
+    if [ -f "$PWD/$ENV_FILE" ]; then
+        safe_sed 's/^DEPLOYMENT_COMPLETED=.*/DEPLOYMENT_COMPLETED=false/' "$PWD/$ENV_FILE"
+    fi
     return 0
 }
 

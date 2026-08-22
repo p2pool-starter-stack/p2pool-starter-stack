@@ -232,6 +232,32 @@ the `/run` marker records the chosen page count and both of them honour it — s
 kernel optimization caps its grow at the recorded pages, and the local-miner render
 hands RigForge the recorded reservation, never the baked 6 GiB, as its headroom.
 
+**Fixed — a restored coordinator strands dark instead of provisioning itself (#1239).**
+Live KVM guest evidence: `pithead-firstboot` lands a restored archive (`consume_preseed_restore`
+or the wizard's spool channel) and calls `setup()`, but the archive's `.env` is the SOURCE
+machine's own — it carries that machine's `DEPLOYMENT_COMPLETED=true`. `setup()`'s headless
+`is_deployed` guard (#924) read that literally, could not tell "restored, never provisioned on
+THIS hardware" from "already live", and fatally refused with no tty to ask: `podman ps -a` on
+the live guest showed zero containers, ever. `restore_apply` — the one commit point both restore
+doors share — now clears the carried marker right after landing the archive, before its caller's
+`setup()` runs; every other restored value (onion keys, tokens, `HOST_IP`) still rides through
+untouched, and a full `.env` re-render happens inside `setup()` anyway. The guard itself is
+unchanged and still refuses a headless re-run on a genuinely live box (its own #924 test stays
+green) — `stack_restore` (the admin `./pithead restore` command, for a box already deployed on
+its own hardware) never calls `restore_apply` and keeps its completion marker exactly as before.
+Separately evaluated and left alone on purpose: `pithead-boot.service`'s
+`ConditionPathExists=|/data/pithead/config.json` is evaluated once, at the start of this same
+boot, before `pithead-firstboot` writes `config.json` — so the boot-health-gate/RAUC-commit unit
+never runs on the boot that provisions the machine, restored or fresh alike. This is not new
+and not restore-specific: every first-time provisioning already reaches a running stack through
+`setup()`'s own direct `stack_up` call, never through `pithead-boot`, so the A/B slot's own
+health-gate commit has always landed on the *next* boot rather than the provisioning one. The
+dashboard and the whole stack are live on the provisioning boot regardless — nothing is dark or
+stranded waiting for that reboot — so bolting a same-boot restart of `pithead-boot.service` onto
+just the restore path would fix nothing restore-specific and leave the identical timing on every
+fresh setup. See [Recovering from a backup](../docs/appliance.md#recovering-from-a-backup) for
+the operator-facing contract this restores.
+
 ## Open
 
 - **Installing to a disk still needs a human (#979).** Pre-seeding (`pithead-token.txt` /

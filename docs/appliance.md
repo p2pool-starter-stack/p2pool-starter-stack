@@ -419,8 +419,10 @@ next.
 "Restoring an existing Pithead? Upload its backup instead." above the form. Upload the archive
 and its passphrase; the machine decrypts, validates, and provisions itself from what it
 restores — the same wallets, the same Tor onion address, the same dashboard login and history,
-on hardware that has never seen them. This works on the installation medium's combined page
-too, alongside the disk choice.
+on hardware that has never seen them. Provisioning runs to completion and the stack comes up on
+that same boot: the restored configuration is new to this hardware, not a re-run of a finished
+setup, so it is treated as first-time provisioning even though the identity underneath it is not.
+This works on the installation medium's combined page too, alongside the disk choice.
 
 A wrong passphrase or a damaged archive is rejected with the reason, and the page falls back to
 the normal form — restore never blocks setup. Restore only runs at first setup, on a machine
