@@ -9487,6 +9487,79 @@ assert_contains "the refusal says how to proceed" "$su2_out" "run './pithead set
 assert_not_contains "the refusal never claims setup was skipped-as-success" "$su2_out" "Setup skipped"
 unset SU su_out su_rc su2_out su2_rc
 
+echo "== black-box: a restored coordinator's carried DEPLOYMENT_COMPLETED does not strand headless setup (#1239) =="
+# Live-guest evidence (#1239): a restored coordinator's .env carries the SOURCE machine's own
+# DEPLOYMENT_COMPLETED=true. Pre-fix, is_deployed() read that literally and setup()'s headless
+# guard (#924, proven above) fired on the box's OWN carried marker and fatally refused before
+# prepare_directories/render_env/provision_tor ever ran — `podman ps -a` on the live guest: zero
+# containers, forever, with a dark dashboard and no automatic recovery. restore_apply is the ONE
+# commit point both restore doors share (firstboot_consume_restore's spool channel and
+# consume_preseed_restore's ESP channel, exercised here — the exact door #1239's live guest hit at
+# boot), so clearing the carried marker there — a just-restored box has NOT completed deployment
+# on THIS hardware — fixes both without touching setup()'s guard, which must keep refusing an
+# operator re-running setup on a genuinely live box (proven immediately above, and again below).
+RT="$SANDBOX/restore-stranding"
+mkdir -p "$RT/build/tari" "$RT/build/dashboard" "$RT/data/tor" "$RT/data/dashboard"
+: >"$RT/build/dashboard/Dockerfile"
+cp "$STACK" "$RT/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$RT/build/tari/"
+make_stubs "$RT/bin"
+# make_stubs's sudo is a bare no-op — fine for setup's conditional sudo calls (writable test dirs
+# skip them), but stack_backup shells to `sudo tar`/`sudo du` UNCONDITIONALLY. Same passthrough
+# override the firstboot_consume_restore fixture above uses, for the same reason.
+cat >"$RT/bin/sudo" <<'SUDOEOF'
+#!/usr/bin/env bash
+[ "$1" = "chown" ] && exit 0
+exec "$@"
+SUDOEOF
+chmod +x "$RT/bin/sudo"
+cat >"$RT/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=RTTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$RT/config.json"
+printf 'ONIONKEY-ORIG\n' >"$RT/data/tor/hs_ed25519_secret_key"
+printf 'DBDATA-ORIG\n' >"$RT/data/dashboard/dashboard.db"
+out="$(cd "$RT" && PATH="$RT/bin:$PATH" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y 2>&1)"
+rc=$?
+assert_rc "restore-stranding fixture: backup exits 0" "$rc" "0"
+rt_archive="$(ls "$RT"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+{ [ -n "$rt_archive" ] && [ -f "$rt_archive" ]; } && ok "restore-stranding fixture: encrypted archive created" || bad "restore-stranding fixture: encrypted archive created" "no .enc archive"
+
+# Play the TARGET machine: a fresh appliance, nothing provisioned yet, the archive carried on its
+# ESP exactly as the installer stages it (#909) — same channel pithead-firstboot reads at boot.
+RTESP="$RT/esp"
+mkdir -p "$RTESP"
+cp "$rt_archive" "$RTESP/pithead-restore.enc"
+printf 'hunter2' >"$RTESP/pithead-restore-pass" # test fixture, not a real secret
+rm -f "$RT/config.json" "$RT/.env"
+printf 'CADDY-ORIG\n' >"$RT/Caddyfile"
+
+preseed_out=$(cd "$RT" && PATH="$RT/bin:$PATH" PITHEAD_PRESEED_DIR="$RTESP" run_sourced "$RT" consume_preseed_restore 2>&1 && echo rc0)
+assert_contains "consume_preseed_restore lands the carried archive" "$preseed_out" "rc0"
+assert_eq "the restored config.json carries the source wallet" \
+    "$([ -f "$RT/config.json" ] && grep -q "$WALLET" "$RT/config.json" && echo yes)" "yes"
+assert_eq "the restored .env's completion marker is cleared, not carried forward (#1239)" \
+    "$(cd "$RT" && run_sourced "$RT" env_get_file "$RT/.env" DEPLOYMENT_COMPLETED)" "false"
+
+# The exact live-guest reproduction: pithead-firstboot's own headless call, `setup`, against the
+# just-restored .env — pre-fix this hit is_deployed()'s no-tty branch and died with the SAME
+# refusal string the #924 guard test above proves for a genuinely live box; post-fix the restored
+# box actually provisions, same boot.
+rt_setup_out=$(cd "$RT" && PATH="$RT/bin:$PATH" DOCKER_LOG=/dev/null ./pithead setup --skip-deps --skip-optimize </dev/null 2>&1)
+rt_setup_rc=$?
+assert_rc "restored box's headless setup proceeds instead of refusing (#1239)" "$rt_setup_rc" "0"
+assert_contains "restored box's setup actually provisions" "$rt_setup_out" "Deployment preparation complete"
+assert_not_contains "restored box's setup never hits the live-box refusal" "$rt_setup_out" "Already provisioned, and re-running setup"
+assert_eq "restored box ends up actually deployed" \
+    "$(cd "$RT" && run_sourced "$RT" env_get_file "$RT/.env" DEPLOYMENT_COMPLETED)" "true"
+unset RT RTESP rt_archive preseed_out rt_setup_out rt_setup_rc
+
 echo "== black-box: 'pithead setup' with stratum_tls in a hand-written config generates the keypair (#261) =="
 # The setup path reaches compose through prepare_directories, never ensure_directories — a
 # hand-written config.json with stratum_tls:true at FIRST setup must still get its cert + the
