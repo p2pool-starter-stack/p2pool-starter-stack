@@ -170,10 +170,14 @@ A bench appliance can be moved to a new build entirely over SSH — copy the bun
 synced chain survives. This is proven on the physical bench: a full A/B update installed and the
 machine came back on the new slot with its chain intact.
 
-The trap is signing. **`mkbundle.sh --dev` generates a fresh throwaway chain on every run**, so a
-`--dev` bundle only installs on a machine whose keyring came from that same run. Point it at any
-other bench and RAUC refuses with `signature verification failed: Verify error: self-signed
-certificate`. To update a bench you built earlier, name that build's chain instead of generating
+The trap is signing. **`--dev` generates the throwaway chain once per checkout and reuses it after
+that** (`os/rauc/certs/`, gitignored — `resolve_signing_material` in `populate-slot.sh` only
+generates when nothing is there yet). So a `--dev` bundle installs on any machine whose keyring
+came from the *same checkout*, but a different checkout — a second clone, a fresh CI workspace, a
+`certs/` directory you deleted — starts with no cert and generates its own, different chain on
+its first `--dev` run. Point a bundle at a machine whose keyring came from a different checkout
+and RAUC refuses with `signature verification failed: Verify error: self-signed certificate`. To
+update a bench you built from another checkout, name that checkout's chain instead of generating
 a new one:
 
 ```sh
