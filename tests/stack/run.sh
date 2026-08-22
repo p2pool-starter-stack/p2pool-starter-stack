@@ -1862,11 +1862,12 @@ caddy_onion_https="$(
         generate_caddyfile >/dev/null 2>&1
     cat Caddyfile
 )"
-# Five blocks since #1123 took :80 over: the two LAN vhosts (the known-host :80 redirect and the
-# HTTPS one), the :80 catch-all, and the two onion vhosts. The number is worth pinning rather than
-# deriving — it is what caught the redirect blocks arriving without anyone re-counting.
-assert_eq "secure+onion+provisioned: the HTTPS onion vhost renders (5 site blocks)" \
-    "$(_site_count "$caddy_onion_https")" "5"
+# Six blocks since #1123 took :80 over and #1132 took :443's own empty-200 default: the two LAN
+# vhosts (the known-host :80 redirect and the HTTPS one), the :80 catch-all, the :443 catch-all,
+# and the two onion vhosts. The number is worth pinning rather than deriving — it is what caught
+# the redirect blocks arriving without anyone re-counting.
+assert_eq "secure+onion+provisioned: the HTTPS onion vhost renders (6 site blocks)" \
+    "$(_site_count "$caddy_onion_https")" "6"
 assert_eq "secure+onion+provisioned: every site block binds — no unbound wildcard on :443" \
     "$(_bind_count "$caddy_onion_https")" "$(_site_count "$caddy_onion_https")"
 
@@ -2031,10 +2032,11 @@ case "$caddy_catchall" in
 *) ok "the catch-all target never comes from the request" ;;
 esac
 # #1021: a site block with NO bind asks Caddy for a WILDCARD listener, which reopens every address
-# the bound blocks exclude — the globally-routable one included. Both new blocks are site blocks.
-# Three site blocks in this render — the two new :80 ones and the HTTPS LAN vhost — so three binds.
-assert_eq "every site block carries the bind, including both new :80 ones" \
-    "$(printf '%s\n' "$caddy_redir" | grep -c 'bind 192.168.1.10 172.28.0.1 fd00::1 127.0.0.1 ::1')" "3"
+# the bound blocks exclude — the globally-routable one included. All new catch-alls are site blocks.
+# Four site blocks in this render — the two new :80 ones, the new :443 one (#1132), and the HTTPS
+# LAN vhost — so four binds.
+assert_eq "every site block carries the bind, including both :80 catch-alls and the :443 one" \
+    "$(printf '%s\n' "$caddy_redir" | grep -c 'bind 192.168.1.10 172.28.0.1 fd00::1 127.0.0.1 ::1')" "4"
 # A custom port means a fronting proxy owns :80 (#740). Claiming it there breaks the co-hosting the
 # option exists for.
 case "$caddy_port_https" in
@@ -2046,6 +2048,40 @@ case "$caddy_http" in
 *"redir"*) bad "plain-HTTP mode renders no redirect at all" "a redir line appeared on a plain-HTTP site" ;;
 *) ok "plain-HTTP mode renders no redirect at all" ;;
 esac
+
+echo "== unit: the :443 catch-all replaces Caddy's empty-200 default for an unmatched Host (#1132) =="
+# Caddy's OWN default for a TLS connection whose Host/SNI matches no site block is a silent
+# `200`, `content-length: 0`, no body — measured, and the reason #1132's certificate/site-list
+# mismatch stayed quiet: the browser just showed a blank page. #1123 gave :80 a real answer;
+# this is the same trailing catch-all for :443, reusing $caddy_redir (same secure, no-custom-port,
+# no-onion render as the :80 test above — own_plain_port gates both catch-alls identically).
+#
+# MUTATION PROOF: point the catch-all at {host} (or {http.request.host}), and the "never comes
+# from the request" assertion goes red; drop $(_bind_line) from it, and the bind-count assertion
+# above (already re-derived to 4) goes red; give it a `tls` line of its own, and the
+# no-tls-directive assertion below goes red.
+caddy_https_catchall="$(printf '%s\n' "$caddy_redir" | sed -n '/^https:\/\/ {/,/^}/p')"
+assert_contains "the :443 catch-all exists" "$caddy_https_catchall" "redir https://"
+case "$caddy_https_catchall" in
+*"{host}"* | *"{http.request.host}"*) bad "the :443 catch-all target never comes from the request" "it interpolates the request host: $caddy_https_catchall" ;;
+*) ok "the :443 catch-all target never comes from the request" ;;
+esac
+# No `tls` directive of its own: proven against real Caddy (`caddy adapt`) that a hostless catch-all
+# falls through to the file's default TLS connection policy — the SAME certificate the named vhost
+# below already loads — so a matching SNI never reaches this block, and an unmatched one completes
+# the handshake against that certificate (an honest name-mismatch warning) instead of an empty 200.
+# An explicit `tls` line here would ask Caddy to manage a SEPARATE certificate for a site address
+# with no hostname to manage one against.
+case "$caddy_https_catchall" in
+*"    tls "*) bad "the :443 catch-all carries no tls directive of its own" "a tls line appeared: $caddy_https_catchall" ;;
+*) ok "the :443 catch-all carries no tls directive of its own" ;;
+esac
+# A custom port means a fronting proxy owns :443 too (#740), the same reasoning as :80 above.
+case "$caddy_port_https" in
+*"https:// {"*) bad "a custom port leaves :443 to the fronting proxy" "the render claimed the bare :443 catch-all anyway" ;;
+*) ok "a custom port leaves :443 to the fronting proxy" ;;
+esac
+
 # Onion + custom LAN port together (#740 × #343): the LAN vhost moves to the custom port and the
 # `disable_redirects` global is emitted, but the onion vhost MUST stay on the bridge gateway's bare
 # :80 — Tor's HiddenServicePort maps 80 -> NETWORK_PREFIX.1:80, so a custom LAN port must not leak
