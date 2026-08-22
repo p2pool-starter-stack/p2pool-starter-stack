@@ -6349,19 +6349,29 @@ GH_RELEASE_JSON=""
 # result sat at "running" for ever with a single dial in the log. One derivation, one truth.
 GH_SOCKS=""
 gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure
-    local repo="$1" prefix out code
+    local repo="$1" prefix out code retry_hint
     prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
     [ -n "$prefix" ] || prefix="172.28.0"
     GH_SOCKS="${prefix}.25:9050"
     GH_RELEASE_HINT=""
     GH_RELEASE_JSON=""
+    # Every caller of this fetch is reachable from the dashboard on an appliance (os-check, the
+    # RigForge worker-upgrade) — which has no shell to run 'doctor' from, the product's defining
+    # property (#1139). The one caller that DOES want the CLI hint (the DIY one-click upgrade)
+    # already refuses before it ever dials on an appliance host, so keying this off is_appliance
+    # — a fact about the machine, not the caller — gets every call site right with one seam.
+    if is_appliance; then
+        retry_hint="Retry from the dashboard in a few minutes."
+    else
+        retry_hint="Check './pithead doctor' and retry."
+    fi
     # -w appends the status on its own line, so a non-2xx keeps its BODY — which is where GitHub
     # says the limit was exceeded. Without -f, curl's own non-zero exit now means only a transport
     # failure, which is exactly the distinction that was missing.
     if ! out=$(curl -sS --max-time 60 --max-filesize "$CURL_CAP_SMALL" -w '\n%{http_code}' \
         --socks5-hostname "$GH_SOCKS" -H 'Accept: application/vnd.github+json' \
         "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null); then
-        GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. Check './pithead doctor' and retry."
+        GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. $retry_hint"
         return 1
     fi
     code=${out##*$'\n'}
@@ -6372,7 +6382,7 @@ gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE
     case "$code" in
     [0-9][0-9][0-9]) ;;
     *)
-        GH_RELEASE_HINT="the GitHub release API answered in a shape this cannot read — nothing was changed. Check './pithead doctor' and retry."
+        GH_RELEASE_HINT="the GitHub release API answered in a shape this cannot read — nothing was changed. $retry_hint"
         return 1
         ;;
     esac
@@ -8645,7 +8655,16 @@ describe_change() {
             msg="Stratum access-password DISABLED — any rig that can reach :3333 may mine again."
         elif [ -z "$old" ]; then
             flag=DEST
-            msg="Stratum access-password ENABLED — rigs must now send the matching 'pass' (find it in .env / './pithead status') or they're rejected; the xmrig-proxy container is recreated."
+            # The DIY hint points at .env / 'status' to recover an auto-generated password; the
+            # appliance has neither a shell nor a dashboard surface that reveals a secret value
+            # (#33's own trust boundary — masked config never round-trips a secret to the
+            # container), so there is no remedy to name here. Drop the instruction rather than
+            # invent one (#1139).
+            if is_appliance; then
+                msg="Stratum access-password ENABLED — rigs must now send the matching 'pass' or they're rejected; the xmrig-proxy container is recreated."
+            else
+                msg="Stratum access-password ENABLED — rigs must now send the matching 'pass' (find it in .env / './pithead status') or they're rejected; the xmrig-proxy container is recreated."
+            fi
         else
             flag=DEST
             msg="Stratum access-password CHANGED — update every rig's 'pass' to match or they're rejected; the xmrig-proxy container is recreated."
@@ -8800,6 +8819,11 @@ describe_change() {
     TOR_AUTO_HEAL)
         if [ "$new" == "true" ]; then
             msg="Tor guard self-heal ENABLED — when clearnet egress through Tor stays broken for 15 min (a failing guard), the dashboard restarts the tor container to pick fresh guards (max 3 restarts per outage, 30-min cooldown; each restart drops ALL Tor circuits, mining onions included, which then rebuild); the dashboard container is recreated."
+        # The DIY fix names 'doctor' + a scoped tor restart, both CLI-only; the appliance has no
+        # shell to run either from, and there is no dashboard control that restarts tor alone
+        # (#1139) — so this side just states the fact instead of a remedy it cannot offer.
+        elif is_appliance; then
+            msg="Tor guard self-heal DISABLED — a stuck guard is back to WARN-only, with no dashboard control to restart Tor manually; the dashboard container is recreated."
         else
             msg="Tor guard self-heal DISABLED — a stuck guard is back to WARN-only ('./pithead doctor', fix with './pithead restart tor'); the dashboard container is recreated."
         fi
