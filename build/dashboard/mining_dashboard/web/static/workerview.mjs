@@ -459,7 +459,9 @@ const InfoCard = ({ label, value }) => html`
 // The compact Workers-Alive list renders the enriched feed as a horizontal badge row; here in the
 // single-rig detail view the same server-built metrics read better as a label → value table (#507).
 // `stats` is the {label, value, variant, title} split of the very chips the list uses. A warn/bad
-// variant (bad governor, throttling, thermal hold) colours its value; `outline` metrics stay plain.
+// variant (bad governor, throttling, thermal hold) also colours its value; every value — including
+// the plain `outline` metrics with no entry below — gets the base `.stat-value` colour/weight
+// (#1232: an uncoloured value used to fall back to the dialog's ambient text and read as disabled).
 const STAT_VALUE_CLS = { ok: "status-ok", warn: "status-warn", bad: "status-bad" };
 export const StatsTable = ({ stats }) =>
   stats && stats.length
@@ -470,7 +472,7 @@ export const StatsTable = ({ stats }) =>
               (s) => html`
                 <tr>
                     <td class="text-muted" title=${s.title || ""}>${s.label}</td>
-                    <td class=${STAT_VALUE_CLS[s.variant] || ""}>${s.value}</td>
+                    <td class=${"stat-value " + (STAT_VALUE_CLS[s.variant] || "")}>${s.value}</td>
                 </tr>`,
             )}</tbody>
         </table>
