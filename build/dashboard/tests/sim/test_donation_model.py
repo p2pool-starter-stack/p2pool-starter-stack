@@ -20,6 +20,7 @@ from mining_dashboard.sim.donation_model import (
     make_algo_controller,
     run_actuated,
     run_algo,
+    run_simulation,
 )
 
 # A real-ish p2pool-main sidechain difficulty so the VIP reserve is exercised.
@@ -235,3 +236,76 @@ class TestDisturbanceRecovery:
         r = run_algo(sc)
         # Re-qualified on the 1h average by the final cycles (24h lags a full day).
         assert min(r.credited_1h[-CYCLES_PER_HOUR:]) >= sc.target_hr * 0.98
+
+class TestProjectedSteering:
+    """The protective trend projection (#892's steering half), closed-loop: at a
+    margin-riding equilibrium a mild credited decay is answered one horizon
+    earlier, which is measurably fewer cycles under the tier threshold — the
+    cycles that terminate a live won round. Projection may only ever tighten
+    steering (min(measured, projected)), so the reactive run bounds it from
+    below by construction; these tests pin that dominance in the loop.
+    ``stamp_updates`` arms the projection: without a moving ``last_update`` no
+    trend samples are recorded and the loop is purely reactive."""
+
+    def _run(self, horizon_s):
+        from unittest.mock import patch
+
+        with patch(
+            "mining_dashboard.service.algo_service.XVB_PROJECTION_HORIZON_S", horizon_s
+        ):
+            algo = build_controller()
+            controller = make_algo_controller(
+                algo, p2pool_difficulty=DIFFICULTY, stamp_updates=True
+            )
+            sc = Scenario(
+                name=f"projected-{horizon_s}",
+                target_hr=10_000,
+                current_hr=46_300,
+                warm_avg=11_200,
+                measurement="fixed",
+                p2pool_difficulty=DIFFICULTY,
+                cycles=10 * CYCLES_PER_HOUR,
+                report_lag_cycles=2,
+                drop_at=4 * CYCLES_PER_HOUR,
+                drop_factor=0.93,
+            )
+            return run_simulation(controller, sc)
+
+    def test_mild_decay_spends_fewer_cycles_below_threshold(self):
+        drop = 4 * CYCLES_PER_HOUR
+        reactive = self._run(0)
+        projected = self._run(1200)
+        below = lambda r: sum(1 for v in r.credited_1h[drop:] if v < 10_000)  # noqa: E731
+        assert below(projected) < below(reactive)
+        assert min(projected.credited_1h[drop:]) >= min(reactive.credited_1h[drop:])
+
+    def test_projection_never_worse_at_steady_state(self):
+        # No disturbance: both settle to the same reference; projection must not
+        # oscillate or over-donate relative to reactive.
+        from unittest.mock import patch
+
+        results = {}
+        for h in (0, 1200):
+            with patch("mining_dashboard.service.algo_service.XVB_PROJECTION_HORIZON_S", h):
+                algo = build_controller()
+                controller = make_algo_controller(
+                    algo, p2pool_difficulty=DIFFICULTY, stamp_updates=True
+                )
+                sc = Scenario(
+                    name=f"steady-{h}",
+                    target_hr=10_000,
+                    current_hr=46_300,
+                    warm_avg=10_500,
+                    measurement="fixed",
+                    p2pool_difficulty=DIFFICULTY,
+                    cycles=8 * CYCLES_PER_HOUR,
+                    report_lag_cycles=2,
+                )
+                results[h] = run_simulation(controller, sc)
+        tail = 2 * CYCLES_PER_HOUR
+        steady_reactive = results[0].credited_1h[-tail:]
+        steady_projected = results[1200].credited_1h[-tail:]
+        # Same equilibrium within 2%, and no extra overshoot from projection.
+        assert max(steady_projected) <= max(steady_reactive) * 1.02
+        assert min(steady_projected) >= min(steady_reactive) * 0.98
+

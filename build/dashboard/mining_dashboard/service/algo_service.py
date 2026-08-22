@@ -17,6 +17,7 @@ from mining_dashboard.config.config import (
     XVB_MIN_TIME_SEND_MS,
     XVB_P2POOL_RESERVE_FACTOR,
     XVB_POOL_URL,
+    XVB_PROJECTION_HORIZON_S,
     XVB_STALE_DECAY_AFTER_S,
     XVB_STATS_STALE_AFTER_S,
     XVB_SWITCH_OVERHEAD_MS,
@@ -43,6 +44,17 @@ logger = logging.getLogger("AlgoService")
 XVB_STALE_DECAY_FACTOR = 0.5
 XVB_STALE_DECAY_FLOOR = 0.005
 
+# Protective projection of the credited 1h average (see XVB_PROJECTION_HORIZON_S).
+# The trend is measured across genuine fetches only, needs at least MIN_SPAN of
+# history before it says anything (two adjacent noisy samples make a wild slope),
+# forgets samples older than MAX_LOOKBACK (the trend that matters is the fresh
+# one; a long tail of pre-decay samples dilutes it), and may lower the effective
+# reading by at most MAX_DROP_FRACTION of the measured value (a pathological
+# sample must not slam the loop).
+XVB_PROJECTION_MIN_SPAN_S = 600.0
+XVB_PROJECTION_MAX_LOOKBACK_S = 1500.0
+XVB_PROJECTION_MAX_DROP_FRACTION = 0.25
+
 
 class AlgoService:
     def __init__(self, state_manager, proxy_client, data_service):
@@ -60,6 +72,9 @@ class AlgoService:
         # Advanced once per real cycle by the calibration loop (not in _smart_sleep).
         # None until the first decision seeds it from the feedforward estimate.
         self.donation_fraction = None
+        # (fetch-timestamp, avg_1h) history for the protective projection — appended
+        # only when a genuine fetch lands (last_update moved), pruned to the lookback.
+        self._avg1h_trend = []
 
     async def switch_miners(self, mode, state_label=None):
         """
@@ -196,6 +211,7 @@ class AlgoService:
                         avg_1h,
                     )
             else:
+                self._record_avg1h_sample(xvb_stats)
                 self._advance_controller(current_hr, target_hr, avg_1h, max_fraction)
 
         fraction = min(self.donation_fraction or 0.0, max_fraction)
@@ -255,6 +271,48 @@ class AlgoService:
         last_update = (xvb_stats or {}).get("last_update", 0) or 0
         return time.time() - last_update if last_update else 0.0
 
+    def _record_avg1h_sample(self, xvb_stats):
+        """Remember (fetch time, avg_1h) for the trend projection. Only a genuine
+        fetch appends (``last_update`` moved — the same signal the staleness guard
+        trusts), so a frozen read repeated across cycles adds nothing."""
+        last_update = (xvb_stats or {}).get("last_update", 0) or 0
+        if not last_update:
+            return
+        if self._avg1h_trend and self._avg1h_trend[-1][0] >= last_update:
+            return
+        self._avg1h_trend.append((float(last_update), float(xvb_stats.get("avg_1h", 0) or 0)))
+        cutoff = last_update - XVB_PROJECTION_MAX_LOOKBACK_S
+        self._avg1h_trend = [(t, v) for t, v in self._avg1h_trend if t >= cutoff]
+
+    def _projected_avg_1h(self, avg_1h):
+        """Where the credited 1h average is HEADING, never above where it IS.
+
+        The reactive loop steers off a reading that lags the routed rate by up to
+        the whole rolling window; at a margin-riding equilibrium that lag is how a
+        decaying credited average sags through a live round's minimum before the
+        loop reacts. Extrapolate the measured trend one horizon forward and steer
+        off ``min(measured, projected)`` — a falling trend tightens steering early,
+        a rising trend changes nothing (never slacken on a forecast). Needs a real
+        baseline (span >= the minimum) and caps the drop, so noise cannot slam the
+        loop; disabled entirely when the horizon is 0."""
+        if XVB_PROJECTION_HORIZON_S <= 0 or len(self._avg1h_trend) < 2:
+            return avg_1h
+        t_new, v_new = self._avg1h_trend[-1]
+        t_old, v_old = self._avg1h_trend[0]
+        span = t_new - t_old
+        if span < XVB_PROJECTION_MIN_SPAN_S:
+            return avg_1h
+        slope = (v_new - v_old) / span
+        projected = avg_1h + slope * XVB_PROJECTION_HORIZON_S
+        floor = avg_1h * (1.0 - XVB_PROJECTION_MAX_DROP_FRACTION)
+        effective = max(min(avg_1h, projected), floor)
+        if effective < avg_1h:
+            logger.info(
+                "Credited 1h average trending down: steering off projected "
+                f"{effective:.0f} H/s instead of measured {avg_1h:.0f} H/s"
+            )
+        return effective
+
     def _reference_hr(self, target_hr):
         """Hashrate the controller holds XvB's 1h average at: the tier threshold
         plus a noise-covering cushion (capped in absolute H/s). The raffle
@@ -307,7 +365,10 @@ class AlgoService:
 
         Because it steers off XvB's authoritative number rather than assuming
         ``credited == fraction * current_hr``, it holds the tier no matter how XvB
-        scales our donation — and it can't wind up: the gain is small and the
+        scales our donation. The number it steers off is the protective projection
+        (``_projected_avg_1h``): the measured 1h average, lowered — never raised —
+        by its own recent trend, so a credited decay is answered before it reaches
+        the round minimum instead of after — and it can't wind up: the gain is small and the
         fraction is clamped to ``[0, max_fraction]`` (the VIP reserve), so a
         still-ramping or stale 1h read can only drift it slowly within bounds.
 
@@ -325,7 +386,7 @@ class AlgoService:
             )
             return
 
-        error = self._reference_hr(target_hr) - avg_1h
+        error = self._reference_hr(target_hr) - self._projected_avg_1h(avg_1h)
         step = self.control_gain * error / current_hr
         if step < 0 and self._won_round_live():
             # A won round is (possibly) live: easing off now is how the credited 1h
