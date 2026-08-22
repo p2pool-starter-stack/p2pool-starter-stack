@@ -4210,6 +4210,22 @@ check_data_wipe_note() {
     fi
 }
 
+# Doctor-only: a SINGLE compose bridge's gateway, read live from the engine — one network per
+# call, never a combined multi-name `network inspect a b`. A combined call's behavior when only
+# ONE of several names resolves is not a documented, stable shape across engines/versions, so
+# asking one name at a time keeps each call's outcome about exactly that network, and keeps
+# check_appliance_cert's WARN-vs-FAIL decision below simple: "did this ONE network answer with a
+# gateway", never "did some of a compound answer parse". Prints nothing on ANY failure — the
+# network genuinely does not exist yet, the engine is unreachable, the daemon restarted mid-boot, a
+# socket permission slip — deliberately making no attempt to tell those apart by exit code (docker
+# and podman do not reliably agree on one for "no such network" vs. everything else). Callers key
+# off whether this printed anything, never off its exit code.
+appliance_bridge_gateway() { # <network-name> -> the network's gateway on stdout, or nothing at all
+    "$(container_engine)" network inspect "$1" 2>/dev/null |
+        jq -r '(.[0].subnets[]?.gateway // empty), (.[0].IPAM.Config[]?.Gateway // empty)' 2>/dev/null |
+        awk 'NF{print; exit}'
+}
+
 # Doctor check (#1141): does the certificate Caddy is ACTUALLY serving still cover the machine's
 # name list, and is it still current? Appliance-only — DIY serves Caddy's own "tls internal" CA,
 # out of scope here. With #1132's shared appliance_site_names() behind both the mint and the
@@ -4222,8 +4238,31 @@ check_data_wipe_note() {
 # #1065 a FAIL here reboots the box. An unreadable or truncated certificate file is a TOOLING
 # problem, not proof the certificate itself is broken (a mid-write snapshot, a filesystem hiccup),
 # so it WARNs; a FAIL is reserved for a certificate openssl actually parsed and found a concrete
-# problem with — a host it does not cover, or a real expiry date. No network: every read here is
-# local (openssl x509 against the file already on disk).
+# problem with — a host it does not cover, or a real expiry date.
+#
+# Coverage is split into two questions with two different honesty rules, because they need
+# different evidence:
+#
+# The BASE name (appliance_base_name — a pinned dashboard.host, or this box's own hostname/.local)
+# needs no live state to derive. An uncovered base name is always a real, actionable problem, so
+# it can always FAIL.
+#
+# The rest is appliance_site_names' auto-expansion (only runs when dashboard.host is unset), and
+# its membership can include one of pithead's OWN compose-bridge gateways. mining_net's is already
+# excluded by appliance_site_names itself (a known config literal, ${NETWORK_PREFIX}.1); proxy_net's
+# is NOT — #345: Docker/podman auto-assigns its subnet, so there is no literal to exclude it by, and
+# telling it apart from a genuinely uncovered name needs asking the engine, live, right now (see
+# appliance_bridge_gateway). pithead-boot mints the certificate at render, BEFORE `up` creates
+# either bridge this boot; this check runs from doctor, inside pithead-boot's health-gate retry
+# loop, AFTER `up` — so by the time this runs, both bridges normally exist and their gateways are
+# in `hostname -I` whether or not the engine is reachable to explain them: bridge INTERFACES outlive
+# an engine hiccup. Reading "the engine didn't answer" as "nothing to exclude" would manufacture
+# exactly the FAIL this check exists to prevent — worse than the original bug, because it would
+# come back intermittently, on a healthy box, disguised as a passing check. So: engine reachable
+# for BOTH bridges -> filter the confirmed gateways out and FAIL on whatever is genuinely still
+# missing, same as any other name. Engine did not answer for either one -> dr_warn once and skip
+# the FAIL for every auto-expanded name this run — only the base name, which needs no engine at
+# all, can still fail this boot.
 check_appliance_cert() {
     is_appliance || return 0
     echo ""
@@ -4260,14 +4299,67 @@ check_appliance_cert() {
         return 0
     fi
 
-    local san missing="" h
+    local san h
     san=$(cert_san_string "$crt")
-    for h in $(appliance_site_names); do
-        case ",$san," in
-        *",DNS:$h,"* | *",IP:$h,"*) ;;
-        *) missing="${missing:+$missing }$h" ;;
-        esac
+
+    # Base and "localhost" are always checked outright — neither depends on live host-network
+    # state, so an engine hiccup never excuses either one. "localhost" is unconditional the moment
+    # the auto-expansion runs at all (appliance_site_names appends it beside every real address),
+    # so it has to be pulled out here explicitly — left inside $extras below, it would make
+    # "anything auto-expanded" true on EVERY appliance doctor run and WARN on every engine hiccup
+    # even when nothing bridge-related is actually in play.
+    local base missing=""
+    base=$(appliance_base_name)
+    case ",$san," in
+    *",DNS:$base,"* | *",IP:$base,"*) ;;
+    *) missing="$base" ;;
+    esac
+
+    # Everything else appliance_site_names() adds beyond the base — always empty when
+    # dashboard.host is pinned (appliance_site_names' own auto-expansion guard), so a pin never
+    # even reaches the engine-dependent leniency below: there is nothing here it would need to
+    # excuse. This is the only category that can contain a compose-bridge gateway.
+    local tok extras=""
+    for tok in $(appliance_site_names); do
+        [ "$tok" = "$base" ] && continue
+        if [ "$tok" = "localhost" ]; then
+            case ",$san," in
+            *",DNS:localhost,"* | *",IP:localhost,"*) ;;
+            *) missing="${missing:+$missing }localhost" ;;
+            esac
+            continue
+        fi
+        extras="${extras:+$extras }$tok"
     done
+
+    if [ -n "$extras" ]; then
+        local net gw bridge_gws="" engine_ok=1
+        # mining_net is probed too even though appliance_site_names already excludes its gateway
+        # (so it can never appear in $extras to filter) — it exists from the first `up` of every
+        # boot, so if the engine cannot even confirm THAT, the engine itself is the problem, not
+        # "proxy_net isn't up yet", and the WARN path below is the honest answer either way.
+        for net in mining_net proxy_net; do
+            gw=$(appliance_bridge_gateway "$net")
+            if [ -n "$gw" ]; then
+                bridge_gws="${bridge_gws:+$bridge_gws }$gw"
+            else
+                engine_ok=0
+            fi
+        done
+        if [ "$engine_ok" != 1 ]; then
+            dr_warn "Could not derive the bridge-gateway exclusions for the dashboard certificate check — the container engine did not answer for mining_net/proxy_net. Coverage was not checked against this box's auto-expanded addresses this run."
+        else
+            bridge_gws=" $bridge_gws "
+            for h in $extras; do
+                case "$bridge_gws" in *" $h "*) continue ;; esac
+                case ",$san," in
+                *",DNS:$h,"* | *",IP:$h,"*) ;;
+                *) missing="${missing:+$missing }$h" ;;
+                esac
+            done
+        fi
+    fi
+
     if [ -n "$missing" ]; then
         dr_fail "The dashboard certificate does not cover: $missing — Caddy serves those names without a certificate for them. Run './pithead apply' to re-mint."
     else
@@ -5375,22 +5467,43 @@ appliance_tls_dir() { printf '%s' "${PITHEAD_TLS_DIR:-$PWD/data/tls}"; }
 # each caller formats them for its own consumer (a literal Host for Caddy, a DNS:/IP: SAN entry
 # for the certificate).
 #
-# The base name is $HOST_IP — resolve_dashboard_host's own answer, which already carries its
-# "dashboard.host wins, else this machine's name" rule — so an operator who pins dashboard.host
-# gets that exact name from both consumers, never a certificate for the machine's OTHER names
-# (the #1132 mismatch). Called before resolve_dashboard_host has run (the wizard's very first
-# mint, before CONFIG_FILE exists) $HOST_IP is empty; fall back to its own "auto" default rather
-# than duplicating that function's prompt/env logic here.
-#
+# The base name both appliance_site_names() and check_appliance_cert() start from: $HOST_IP —
+# resolve_dashboard_host's own answer, which already carries its "dashboard.host wins, else this
+# machine's name" rule — so an operator who pins dashboard.host gets that exact name from both
+# consumers, never a certificate for the machine's OTHER names (the #1132 mismatch). Called before
+# resolve_dashboard_host has run (the wizard's very first mint, before CONFIG_FILE exists) $HOST_IP
+# is empty; fall back to its own "auto" default rather than duplicating that function's
+# prompt/env logic here. Pulled out on its own because check_appliance_cert needs to tell this name
+# apart from the auto-expanded ones below it — see that function's header for why.
+appliance_base_name() {
+    if [ -n "${HOST_IP:-}" ]; then
+        printf '%s' "$HOST_IP"
+    elif is_appliance; then
+        printf '%s.local' "$(hostname)"
+    else
+        hostname
+    fi
+}
+
 # "auto" (dashboard.host unset) expands to every address the appliance actually answers on — a
 # headless box reached by mDNS name, by IP, or from the console must have all three certified. An
 # explicit pin stays a single name on purpose: the site list collapsing was never the #1132 bug,
 # only the certificate not following suit was.
+#
+# Deliberately engine-free: this runs from BOTH generate_caddyfile (render, always BEFORE `up`
+# creates either compose bridge this boot) and, via check_appliance_cert, from doctor (always
+# AFTER `up`, inside pithead-boot's health-gate retry loop). A call here that talked to
+# docker/podman would make this function's answer depend on whether the engine happened to be
+# reachable at the exact moment it ran — and #1065 reboots the box on a doctor FAIL, so an engine
+# hiccup must never change what this reports. mining_net's gateway is excludable without asking
+# anything live (${NETWORK_PREFIX}.1, fixed by config) so it stays here; proxy_net's is NOT
+# (docker-compose.yml: "Docker auto-assigns the subnet", #345) and asking the engine for it is
+# check_appliance_cert's job alone — the ONE caller for whom a stale or unreachable answer would
+# otherwise manufacture a FAIL, and so the only one equipped to turn "can't tell" into a WARN
+# instead of a guess. See that function's header for the full reasoning.
 appliance_site_names() {
-    local base="${HOST_IP:-}"
-    if [ -z "$base" ]; then
-        if is_appliance; then base="$(hostname).local"; else base="$(hostname)"; fi
-    fi
+    local base
+    base=$(appliance_base_name)
     local names="$base"
     if is_appliance && [ -z "${DASHBOARD_HOST:-}" ]; then
         local extra
@@ -5407,11 +5520,14 @@ appliance_site_names() {
             if [ "${DASHBOARD_EXPOSE_PUBLIC_IP:-false}" != "true" ] && is_public_ip "$extra"; then
                 continue
             fi
-            # The container-bridge gateway belongs to the ONION vhost, which serves on exactly that
+            # mining_net's gateway belongs to the ONION vhost, which serves on exactly that
             # address, and never to the LAN list — two site blocks naming the same scheme://address
             # make Caddy refuse the whole file with "ambiguous site definition" (see
             # generate_caddyfile). Excluding it here keeps the certificate honest too: it was never
-            # reachable at the bridge gateway by anything except the tor container.
+            # reachable at the bridge gateway by anything except the tor container. proxy_net's
+            # gateway is the SAME kind of plumbing address but has no fixed literal to exclude it
+            # by — see this function's header for why that exclusion lives in check_appliance_cert
+            # instead of here.
             if [ -n "${NETWORK_PREFIX:-}" ] && [ "$extra" = "${NETWORK_PREFIX}.1" ]; then
                 continue
             fi
