@@ -46,7 +46,7 @@ lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release 
 		os/installer/pithead-install os/build-image.sh os/rauc/*.sh os/overlay/pithead-sync os/overlay/pithead-boot \
 		os/overlay/pithead-data-reset os/overlay/pithead-mount-generator os/overlay/pithead-ssh-host-keys \
 		os/overlay/pithead-machine-id os/overlay/pithead-media-config os/overlay/pithead-hugepages \
-		tests/os/run.sh tests/os/verify-image.sh
+		tests/os/run.sh tests/os/verify-image.sh tests/os/hugepages-boot-verdict.sh
 	shfmt -i 4 -d pithead pithead-completion.bash os/installer/pithead-install $(shell git ls-files '*.sh' | grep -v '^docs/research/')
 
 lint-py: ## ruff lint + format check on all repo Python (ruff runs via uv from the locked dev extra)

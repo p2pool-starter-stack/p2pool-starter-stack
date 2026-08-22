@@ -12810,6 +12810,38 @@ assert_eq "a record above the budget is capped at the budget" \
 assert_eq "no marker reads as the full budget" \
     "$(PITHEAD_HUGEPAGES_MARKER="$HG/absent-marker" run_sourced "$SANDBOX" hugepages_decision_pages)" "3072"
 
+echo "== unit: hugepages_boot_verdict — a bare boot can tell ran-and-no-op from never-ran (#1212) =="
+# tests/os/run.sh's phase_boot cannot be driven from here (it needs a real KVM guest), but the
+# verdict it now checks is pure text-matching over two already-observed strings
+# (HugePages_Total, `systemctl is-active` output) — #1212 pulled it into
+# tests/os/hugepages-boot-verdict.sh for exactly this reason: the discrimination the issue asked
+# for is provable with fixtures, without a bench boot. The case that matters is the first pair
+# below: the SAME HugePages_Total (3072 — the baked sysctl reserves it whether the unit ran or
+# not) must verdict differently once the unit's own record disagrees.
+# Mutation run: drop the is-active check and fall back to judging HugePages_Total alone -> the
+# "never ran" assertion flips from fail to pass, silently reintroducing #1212.
+hbv() { # <hugepages-total> <is-active-output> -> "<rc> <verdict-text>"
+    local out rc
+    out=$(
+        # shellcheck disable=SC1091
+        source "$ROOT/tests/os/hugepages-boot-verdict.sh"
+        hugepages_boot_verdict "$1" "$2"
+    )
+    rc=$?
+    printf '%s %s' "$rc" "$out"
+}
+assert_eq "ran + full pool: passes" \
+    "$(hbv 3072 active)" "0 hugepages sizing unit ran this boot and left the full pool intact (3072 pages)"
+assert_eq "never ran + the SAME full pool: fails — the #1212 case a pool-only check missed" \
+    "$(hbv 3072 inactive)" "1 hugepages sizing unit did not run this boot (is-active: inactive) — a full pool alone cannot prove the no-op (#1212)"
+assert_eq "ran but the pool is short: fails" \
+    "$(hbv 2560 active)" "1 hugepages sizing unit ran but the pool is short (HugePages_Total: 2560, want >= 3072)"
+assert_eq "never ran + unreadable is-active: fails, names it unreadable" \
+    "$(hbv "" "")" "1 hugepages sizing unit did not run this boot (is-active: unreadable) — a full pool alone cannot prove the no-op (#1212)"
+assert_eq "ran but the page count is garbage: fails cleanly, no arithmetic error" \
+    "$(hbv banana active)" "1 hugepage pool unreadable at boot (HugePages_Total: banana, want >= 3072)"
+unset -f hbv
+
 echo "== unit: check_data_wipe_note — doctor surfaces the wipe note, a support conversation gets the fact (#1121) =="
 # Same shape as the pre-seeding block: PITHEAD_PRESEED_DIR stands in for the ESP. Appliance-only
 # (the note only ever exists on that channel), so PITHEAD_APPLIANCE has to be forced on here —
