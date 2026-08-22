@@ -472,7 +472,7 @@ export const StatsTable = ({ stats }) =>
               (s) => html`
                 <tr>
                     <td class="text-muted" title=${s.title || ""}>${s.label}</td>
-                    <td class=${"stat-value " + (STAT_VALUE_CLS[s.variant] || "")}>${s.value}</td>
+                    <td class=${("stat-value " + (STAT_VALUE_CLS[s.variant] || "")).trim()}>${s.value}</td>
                 </tr>`,
             )}</tbody>
         </table>

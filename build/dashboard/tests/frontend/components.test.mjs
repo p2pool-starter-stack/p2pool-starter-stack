@@ -1042,9 +1042,9 @@ test('StatsTable renders the enriched feed as a label/value table, colouring war
     assert.match(html, /class="worker-history"/); // reuses the existing detail-table styling
     assert.doesNotMatch(html, /badge-row/); // NOT the compact list's badge row
     assert.match(html, /Governor<\/td>/);
-    assert.match(html, /class="status-warn">powersave/); // warn colours its value
-    assert.match(html, /class="status-bad">throttling/); // bad colours its value
-    assert.match(html, /<td class="">1280/); // outline metric stays plain
+    assert.match(html, /class="stat-value status-warn">powersave/); // warn colours its value
+    assert.match(html, /class="stat-value status-bad">throttling/); // bad colours its value
+    assert.match(html, /<td class="stat-value">1280/); // outline metric stays plain
 });
 
 test('StatsTable renders nothing when a rig reports no metrics (#507)', () => {
