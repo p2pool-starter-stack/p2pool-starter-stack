@@ -400,6 +400,34 @@ assert_num_ge "num_ge passes when equal" 5 5
 assert_num_gt "num_gt passes when greater" 6 5
 [ "$IT_PASS" -gt "$_p" ] && it_pass "passing assertions increment IT_PASS" || it_fail "passing assertions increment IT_PASS" "no increment"
 
+echo "== assert_mining_state: --no-mining-asserts is a CONDITIONAL skip, not permanent (#905/#1082) =="
+# Subshell-stub the emitters so the verdict under test can't touch this selftest's counters.
+mining_verdict() { # <skip> <workers> <hashes> <expected> -> concatenated PASS()/FAIL()/WARN() markers
+    (
+        it_pass() { printf 'PASS(%s) ' "$1"; }
+        it_fail() { printf 'FAIL(%s) ' "$1"; }
+        it_warn() { printf 'WARN(%s) ' "$1"; }
+        assert_mining_state "$1" "$2" "$3" "$4"
+    )
+}
+# The flag set: both assertions are skipped (no PASS/FAIL marker for either) — a WARN with a
+# reason and an un-skip instruction, never a silent unconditional pass.
+_out="$(mining_verdict 1 0 0 2)"
+case "$_out" in
+*PASS* | *FAIL*) it_fail "skip path emits no PASS/FAIL for the two assertions" "got [$_out]" ;;
+*) it_pass "skip path emits no PASS/FAIL for the two assertions" ;;
+esac
+assert_contains "skip reason names the flag" "$_out" "no-mining-asserts"
+assert_contains "skip reason says what un-skips it" "$_out" "drop the flag"
+# The flag unset with a healthy count: both assertions run and go green.
+assert_eq "flag unset + healthy count -> both PASS" "$(mining_verdict 0 3 500 2)" "PASS(workers online (>= 2)) PASS(stratum total hashes > 0) "
+# Mutation proof (break the checked thing -> red): flag unset is BINDING, not defanged. Without
+# this, a skip that silently ate the check whenever no one was looking would read exactly like
+# the assertions above passing — this is the other half of the skip contract.
+assert_eq "flag unset + zero workers/hashes -> both FAIL (mutation proof)" "$(mining_verdict 0 0 0 2)" "FAIL(workers online (>= 2)) FAIL(stratum total hashes > 0) "
+# One-sided mutation: only the broken half reddens, the healthy half still passes.
+assert_eq "flag unset + workers ok, hashes 0 -> only hashes FAILs" "$(mining_verdict 0 3 0 2)" "PASS(workers online (>= 2)) FAIL(stratum total hashes > 0) "
+
 echo "== rig_lock: the shared-bench flock (#430 / rigforge#183) =="
 # The canonical rig lock, exercised in a sandbox via the env-overridable paths — no root, no
 # /var/lock. Holders run as background subshells that acquire, signal readiness, then block on
