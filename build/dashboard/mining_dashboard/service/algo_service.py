@@ -33,6 +33,13 @@ from mining_dashboard.helper.utils import (
     shares_in_pplns_window,
     xvb_stats_are_stale,
 )
+from mining_dashboard.service.steering_projection import (
+    max_donation_fraction,
+    projected_avg_1h,
+    record_avg1h_sample,
+    reference_hr,
+    won_round_live,
+)
 
 logger = logging.getLogger("AlgoService")
 
@@ -43,17 +50,6 @@ logger = logging.getLogger("AlgoService")
 # cycle — a fast, obvious retreat when we can't confirm the donation is still needed.
 XVB_STALE_DECAY_FACTOR = 0.5
 XVB_STALE_DECAY_FLOOR = 0.005
-
-# Protective projection of the credited 1h average (see XVB_PROJECTION_HORIZON_S).
-# The trend is measured across genuine fetches only, needs at least MIN_SPAN of
-# history before it says anything (two adjacent noisy samples make a wild slope),
-# forgets samples older than MAX_LOOKBACK (the trend that matters is the fresh
-# one; a long tail of pre-decay samples dilutes it), and may lower the effective
-# reading by at most MAX_DROP_FRACTION of the measured value (a pathological
-# sample must not slam the loop).
-XVB_PROJECTION_MIN_SPAN_S = 600.0
-XVB_PROJECTION_MAX_LOOKBACK_S = 1500.0
-XVB_PROJECTION_MAX_DROP_FRACTION = 0.25
 
 
 class AlgoService:
@@ -272,89 +268,30 @@ class AlgoService:
         return time.time() - last_update if last_update else 0.0
 
     def _record_avg1h_sample(self, xvb_stats):
-        """Remember (fetch time, avg_1h) for the trend projection. Only a genuine
-        fetch appends (``last_update`` moved — the same signal the staleness guard
-        trusts), so a frozen read repeated across cycles adds nothing."""
-        last_update = (xvb_stats or {}).get("last_update", 0) or 0
-        if not last_update:
-            return
-        if self._avg1h_trend and self._avg1h_trend[-1][0] >= last_update:
-            return
-        self._avg1h_trend.append((float(last_update), float(xvb_stats.get("avg_1h", 0) or 0)))
-        cutoff = last_update - XVB_PROJECTION_MAX_LOOKBACK_S
-        self._avg1h_trend = [(t, v) for t, v in self._avg1h_trend if t >= cutoff]
+        """See ``steering_projection.record_avg1h_sample``."""
+        self._avg1h_trend = record_avg1h_sample(self._avg1h_trend, xvb_stats)
 
     def _projected_avg_1h(self, avg_1h):
-        """Where the credited 1h average is HEADING, never above where it IS.
-
-        The reactive loop steers off a reading that lags the routed rate by up to
-        the whole rolling window; at a margin-riding equilibrium that lag is how a
-        decaying credited average sags through a live round's minimum before the
-        loop reacts. Extrapolate the measured trend one horizon forward and steer
-        off ``min(measured, projected)`` — a falling trend tightens steering early,
-        a rising trend changes nothing (never slacken on a forecast). Needs a real
-        baseline (span >= the minimum) and caps the drop, so noise cannot slam the
-        loop; disabled entirely when the horizon is 0."""
-        if XVB_PROJECTION_HORIZON_S <= 0 or len(self._avg1h_trend) < 2:
-            return avg_1h
-        t_new, v_new = self._avg1h_trend[-1]
-        t_old, v_old = self._avg1h_trend[0]
-        span = t_new - t_old
-        if span < XVB_PROJECTION_MIN_SPAN_S:
-            return avg_1h
-        slope = (v_new - v_old) / span
-        projected = avg_1h + slope * XVB_PROJECTION_HORIZON_S
-        floor = avg_1h * (1.0 - XVB_PROJECTION_MAX_DROP_FRACTION)
-        effective = max(min(avg_1h, projected), floor)
-        if effective < avg_1h:
-            logger.info(
-                "Credited 1h average trending down: steering off projected "
-                f"{effective:.0f} H/s instead of measured {avg_1h:.0f} H/s"
-            )
-        return effective
+        """See ``steering_projection.projected_avg_1h``."""
+        return projected_avg_1h(self._avg1h_trend, avg_1h, XVB_PROJECTION_HORIZON_S, logger)
 
     def _reference_hr(self, target_hr):
-        """Hashrate the controller holds XvB's 1h average at: the tier threshold
-        plus a noise-covering cushion (capped in absolute H/s). The raffle
-        terminates a win if the 1h average dips below the round minimum, so the
-        cushion must clear the credited average's measured noise (#769) — while
-        the cap keeps a flat percentage from wasting p2pool hashrate at high tiers."""
-        return target_hr + min(target_hr * self.maint_margin_pct, self.maint_margin_abs_cap)
+        """See ``steering_projection.reference_hr``."""
+        return reference_hr(target_hr, self.maint_margin_pct, self.maint_margin_abs_cap)
 
     def _won_round_live(self, now=None):
-        """Whether a won raffle round may still be running: any recorded win newer
-        than ``XVB_WIN_ROUND_HOLD_S``. Steering the donation down during a live won
-        round can sag the credited 1h average through the round minimum and
-        terminate the round (#769), so ``_advance_controller`` skips downward steps
-        while this holds. Fails open to False (normal steering) on any read error —
-        the hold is a yield optimization, never a safety path."""
-        try:
-            since = (now if now is not None else time.time()) - XVB_WIN_ROUND_HOLD_S
-            wins = self.state_manager.get_raffle_wins(since=since)
-        except Exception as e:
-            logger.debug(f"Raffle-win read failed; steering normally: {e}")
-            return False
-        return isinstance(wins, list) and len(wins) > 0
+        """See ``steering_projection.won_round_live``."""
+        return won_round_live(self.state_manager, XVB_WIN_ROUND_HOLD_S, now, logger)
 
     def _max_donation_fraction(self, current_hr, window_duration, p2pool_stats):
-        """
-        Largest fraction of the cycle we may donate while keeping p2pool eligible
-        for "VIP" — i.e. still finding shares within the PPLNS window. A miner that
-        wins while non-VIP is skipped and gains a fail, so this reserve is a hard
-        constraint, not a preference.
-
-        p2pool needs ~``sidechain_difficulty / window_seconds`` H/s to land one
-        expected share per window; we reserve ``reserve_factor`` times that for
-        headroom against variance. When difficulty is unknown (stats not ready),
-        fall back to the flat hard cap.
-        """
-        difficulty = p2pool_stats.get("difficulty", 0) or 0
-        if current_hr <= 0 or difficulty <= 0 or window_duration <= 0:
-            return self.max_donation_fraction
-
-        min_p2pool_hr = (difficulty / window_duration) * self.p2pool_reserve_factor
-        sparable_fraction = max(0.0, 1.0 - (min_p2pool_hr / current_hr))
-        return min(sparable_fraction, self.max_donation_fraction)
+        """See ``steering_projection.max_donation_fraction``."""
+        return max_donation_fraction(
+            current_hr,
+            window_duration,
+            p2pool_stats,
+            self.p2pool_reserve_factor,
+            self.max_donation_fraction,
+        )
 
     def _advance_controller(self, current_hr, target_hr, avg_1h, max_fraction):
         """
