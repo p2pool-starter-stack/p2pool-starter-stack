@@ -7668,17 +7668,30 @@ generate_caddyfile() {
         printf '    bind %s' "${NETWORK_PREFIX}.1"
     }
 
-    # The :80 site that replaces Caddy's reflecting catch-all (#1123). Built here because it needs
-    # both halves that are only settled by now:
+    # The :80 and :443 catch-alls that replace Caddy's own defaults for an unmatched Host. Built
+    # here because both need everything that is only settled by now ($site_hosts, the bind list).
     #
     #  - the KNOWN hosts keep the address the operator typed, so browsing by mDNS name and browsing
     #    by IP each land on the name they used and match the certificate minted for it;
-    #  - the trailing catch-all answers everything else — including a forged Host — with THIS box's
-    #    canonical address, never with what the request asked for. Caddy answers an unmatched host
-    #    with an empty 200, so refusing outright would read as a dead machine.
-    #  - and BOTH carry the same bind list as the vhosts above. A site block with no bind asks Caddy
-    #    for a WILDCARD listener, which would reopen every address the bound blocks were written to
-    #    exclude — the globally-routable one included (#1021). That is the whole hazard here.
+    #  - the trailing catch-alls answer everything else — including a forged Host or SNI — with
+    #    THIS box's canonical address, never with what the request asked for. Unmatched, Caddy's
+    #    own default is a reflecting redirect on :80 (closed by #1123) and an empty 200 on :443 —
+    #    `content-length: 0`, no body, so a browser just shows a blank page (#1132's third bullet:
+    #    the certificate/site-list mismatch this closes made that page's Host land HERE, not on the
+    #    real vhost, and this was the only piece of the mismatch that stayed silent). Refusing
+    #    outright would read as a dead machine, same reasoning as the :80 catch-all.
+    #  - the :443 catch-all carries NO `tls` line of its own: it has no hostname in its address for
+    #    Caddy to manage a certificate against, and needs none — proven with `caddy adapt` against
+    #    the rendered file, a catch-all with no per-block TLS policy falls through to the file's
+    #    default connection policy, which serves whatever certificate the named vhost below already
+    #    loads (the appliance's minted file, or DIY's `tls internal`). A matching SNI never sees
+    #    this block at all; an unmatched one completes the handshake against that same certificate
+    #    (a name mismatch the browser will flag, honestly) and gets the redirect below instead of
+    #    a silent 200.
+    #  - and ALL of these carry the same bind list as the vhosts above. A site block with no bind
+    #    asks Caddy for a WILDCARD listener, which would reopen every address the bound blocks were
+    #    written to exclude — the globally-routable one included (#1021). That is the whole hazard
+    #    here.
     #
     # A literal, NOT $(printf ...): command substitution strips the trailing newlines and the next
     # site block lands on the same line as this one's closing brace, which Caddy refuses.
@@ -7690,6 +7703,11 @@ $(_bind_line)
 }
 
 http:// {
+$(_bind_line)
+    redir https://$HOST_IP{uri} 308
+}
+
+https:// {
 $(_bind_line)
     redir https://$HOST_IP{uri} 308
 }
