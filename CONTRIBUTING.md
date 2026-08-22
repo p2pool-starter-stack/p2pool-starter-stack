@@ -46,7 +46,12 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
      `lint-operator-strings` (no issue/PR numbers in operator-facing `pithead`/dashboard text, and
      no bare `docs/` paths in `pithead` operator text — release bundles ship no `docs/`, so point at
      `$DOCS_URL/docs/<file>.md#anchor` instead; comments keep the plain path),
-     `lint-proto` (buf), `lint-toml` (taplo). The
+     `lint-topology` (no real-looking IPv6/IPv4 literal, `/home/<name>` path, `.lan`/`.internal`/
+     `.local` hostname, or `user@host` string — a public repo, so every one of those has to stay a
+     generic class, not a trace of whoever's actual box; `tests/` and `docs/` are an accepted
+     exemption boundary for illustrative/fixture content, and each class also carries a small,
+     explicit value-level allowlist — see the script's own header — never a per-file exemption
+     comment), `lint-proto` (buf), `lint-toml` (taplo). The
      non-Python tools run via `npx`/`uvx`/`docker`, so a contributor needs **Node, uv, and Docker**
      on PATH (plus `shfmt`); `pre-commit` runs the same checks on changed files. Link-checking
      (`lychee`) runs on a weekly schedule, not per-PR.
