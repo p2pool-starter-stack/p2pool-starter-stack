@@ -45,7 +45,6 @@ assert_rc "allows mount subfolder" "$?" "0"
 # shellcheck source=tests/stack/test-harness-tooling.sh
 source "$HERE/test-harness-tooling.sh"
 
-
 echo "== unit: is_public_ip classifier (#113) =="
 # Globally-routable -> rc 0 (public). Includes boundaries just OUTSIDE each excluded range.
 for ip in 8.8.8.8 1.1.1.1 172.15.0.1 172.32.0.1 100.128.0.1 169.1.1.1 2606:4700:4700::1111 2001:db8::1; do
