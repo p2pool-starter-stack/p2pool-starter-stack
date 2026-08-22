@@ -127,6 +127,28 @@ def _hashrate(metrics):
 # --- Chart (Issue #65: real-time x-axis, outage gaps as breaks) -----------------------
 
 
+def _xvb_archive():
+    # In a checkout the repo root is four levels up; inside the dashboard image the
+    # tests live at /app/tests and there is no repo root at all — parents[4] itself
+    # raises there, so the lookup must fail soft for the skipif to see "absent".
+    try:
+        root = Path(__file__).parents[4]
+    except IndexError:
+        return None
+    return (
+        root
+        / "docs"
+        / "research"
+        / "xvb-delivery-study"
+        / "data"
+        / "sources"
+        / "xmrvsbeast-reward_estimate_pub.txt"
+    )
+
+
+_XVB_ARCHIVE = _xvb_archive()
+
+
 class TestChart:
     def _line(self, n, start_ts, step=30):
         return [
@@ -2402,13 +2424,69 @@ class TestXvbCalc:
         assert by_threshold[100_000] == 6.17  # donor_whale
         assert by_threshold[1_000_000] == 56.9  # donor_mega
 
-    def test_stale_estimates_flagged_and_reward_nulled(self):
-        # A stale fetch must degrade: no per-tier number implied fresh, estimates_available False.
+    def test_enabled_stale_estimates_do_not_use_the_fallback(self):
+        # #1214 regression: an ENABLED box whose fetch is merely failing right now (a transient
+        # bot-challenge, a network blip — the sync loop writes only on success) must NOT get the
+        # vendored fallback. That box isn't "off"; claiming "published, not live because XvB is
+        # off" would be a straight lie. It keeps exactly the pre-#1214 honest degradation: no
+        # per-tier number implied fresh, estimates_available False, estimates_source "none".
         sm = self._sm(last_update=time.time() - XVB_STATS_STALE_AFTER_S - 1)
-        out = build_xvb_calc(_metrics(), sm)
+        out = build_xvb_calc(_metrics(xvb_enabled=True), sm)
         assert out["estimates_available"] is False
         assert out["estimates_stale"] is True
+        assert out["estimates_source"] == "none"
+        assert out["estimates_published_date"] is None
         assert all(t["expected_reward_year"] is None for t in out["tiers"])
+        assert all(t["assumed_reward_year_range"] is None for t in out["tiers"])
+
+    def test_disabled_stale_falls_back_to_the_published_table(self):
+        # A DISABLED box whose cache aged out while off — "just-disabled" in the issue's terms —
+        # gets the vendored fallback: no per-tier number implied FRESH (estimates_available stays
+        # False), but expected_reward_year fills in from XvB's own last-published table (never a
+        # live number, and labelled as such via estimates_source).
+        sm = self._sm(last_update=time.time() - XVB_STATS_STALE_AFTER_S - 1)
+        out = build_xvb_calc(_metrics(xvb_enabled=False), sm)
+        assert out["estimates_available"] is False
+        assert out["estimates_stale"] is True
+        assert out["estimates_source"] == "published"
+        assert out["estimates_published_date"] == views.XVB_PUBLISHED_REWARD_FALLBACK_DATE
+        by_threshold = {t["threshold"]: t["expected_reward_year"] for t in out["tiers"]}
+        assert by_threshold[1_000] == views.XVB_PUBLISHED_REWARD_FALLBACK["donor"]
+        assert by_threshold[100_000] == views.XVB_PUBLISHED_REWARD_FALLBACK["donor_whale"]
+
+    def test_disabled_never_fetched_falls_back_to_the_published_table(self):
+        # #1214's actual bug report: a box that has NEVER enabled XvB has no cache at all (never
+        # fetched, not merely stale). Same fallback, same labelling.
+        sm = self._sm(estimates={}, last_update=0.0)
+        out = build_xvb_calc(_metrics(xvb_enabled=False), sm)
+        assert out["estimates_available"] is False
+        assert out["estimates_stale"] is False
+        assert out["estimates_source"] == "published"
+        by_threshold = {t["threshold"]: t["expected_reward_year"] for t in out["tiers"]}
+        assert by_threshold[1_000] == views.XVB_PUBLISHED_REWARD_FALLBACK["donor"]
+        assert by_threshold[10_000] == views.XVB_PUBLISHED_REWARD_FALLBACK["donor_vip"]
+        assert by_threshold[100_000] == views.XVB_PUBLISHED_REWARD_FALLBACK["donor_whale"]
+        assert by_threshold[1_000_000] == views.XVB_PUBLISHED_REWARD_FALLBACK["donor_mega"]
+
+    @pytest.mark.skipif(
+        _XVB_ARCHIVE is None or not _XVB_ARCHIVE.exists(),
+        reason="the delivery-study archive lives outside the dashboard image's build context; "
+        "this parity guard runs in the checkout-based dashboard CI job, which fails loudly "
+        "if the fallback and the archive ever disagree",
+    )
+    def test_fallback_values_match_the_archived_source_files_player_rows(self):
+        # #1214 guard: the vendored fallback must be the PER-PLAYER row XvB publishes, exactly
+        # what the live parser would extract — never the pool-total row just above it (that
+        # figure is the whole round's payout, not one qualifier's share, and is 7-70x larger).
+        # Parses the archived source with the real live parser
+        # (mining_dashboard.client.xvb_client.parse_reward_estimates, the exact regex a live
+        # fetch uses) so a future re-vendor from the wrong column fails this test immediately
+        # instead of silently drifting from what a live fetch would ever show.
+        from mining_dashboard.client.xvb_client import DONOR_ROUND_TYPES, parse_reward_estimates
+
+        parsed = parse_reward_estimates(_XVB_ARCHIVE.read_text())
+        assert set(parsed) == set(DONOR_ROUND_TYPES)  # the archive still names all four tiers
+        assert views.XVB_PUBLISHED_REWARD_FALLBACK == parsed
 
     def test_round_stats_expose_per_tier_draw_odds(self):
         # #872: the winners file's players column makes the draw knowable — each tier carries its
@@ -2438,17 +2516,26 @@ class TestXvbCalc:
 
     def test_unmeasured_boxes_get_the_prior_band_measured_boxes_do_not(self):
         # #872: no local measurement -> published × the measured prior band, so "should I enable
-        # this" is answerable everywhere. A measured factor supersedes it (never both), and stale
-        # estimates null both — a band cannot resurrect a stale face value.
+        # this" is answerable everywhere. A measured factor supersedes it (never both).
         out = build_xvb_calc(_metrics(), self._sm())
         whale = next(t for t in out["tiers"] if t["threshold"] == 100_000)
         lo, hi = views.XVB_REALIZATION_PRIOR
         assert whale["assumed_reward_year_range"] == pytest.approx([6.17 * lo, 6.17 * hi])
         out = build_xvb_calc(_metrics(), self._sm(), realization=(0.19, 15))
         assert all(t["assumed_reward_year_range"] is None for t in out["tiers"])
+        # A measured factor still wins even on a DISABLED, stale box where #1214's vendored
+        # fallback is otherwise eligible — "yours" always supersedes the band, fallback or not.
         stale = self._sm(last_update=time.time() - XVB_STATS_STALE_AFTER_S - 1)
-        out = build_xvb_calc(_metrics(), stale)
+        out = build_xvb_calc(_metrics(xvb_enabled=False), stale, realization=(0.19, 15))
         assert all(t["assumed_reward_year_range"] is None for t in out["tiers"])
+        # Same DISABLED, stale box with NO measured factor: #1214's fallback fills the band from
+        # the published face value instead of leaving it null — the whole point of the fallback.
+        # (An ENABLED, stale box must NOT do this — see test_enabled_stale_estimates_do_not_use_
+        # the_fallback — the fallback is gated on the box being off, not merely stale.)
+        out = build_xvb_calc(_metrics(xvb_enabled=False), stale)
+        whale = next(t for t in out["tiers"] if t["threshold"] == 100_000)
+        face = views.XVB_PUBLISHED_REWARD_FALLBACK["donor_whale"]
+        assert whale["assumed_reward_year_range"] == pytest.approx([face * lo, face * hi])
 
     def test_no_realization_leaves_realized_none(self):
         # Unmeasured (too few wins / payout confirmation off): realized stays None so the client
@@ -2462,12 +2549,81 @@ class TestXvbCalc:
         assert all(t["realized_reward_year"] is None for t in out["tiers"])
 
     def test_empty_estimates_available_false_no_crash(self):
-        # Never fetched / unparseable cache: available False, not "stale" (last_update 0), rewards None.
+        # Never fetched / unparseable cache on an ENABLED box (e.g. mid cold-start right after
+        # enabling, or persistently-failing fetches — never "off"): available False, not "stale"
+        # (last_update 0), and #1214's fallback must NOT fire here — same gate as the stale case,
+        # see test_enabled_stale_estimates_do_not_use_the_fallback. The never-enabled-XvB box the
+        # issue is actually about is test_disabled_never_fetched_falls_back_to_the_published_table.
         sm = self._sm(estimates={}, last_update=0.0)
-        out = build_xvb_calc(_metrics(), sm)
+        out = build_xvb_calc(_metrics(xvb_enabled=True), sm)
         assert out["estimates_available"] is False
         assert out["estimates_stale"] is False
+        assert out["estimates_source"] == "none"
         assert all(t["expected_reward_year"] is None for t in out["tiers"])
+
+    def test_fallback_never_backs_realized_reward_year(self):
+        # #1214: THIS wallet's own measured delivery factor must never be applied to a dated,
+        # generic fallback figure — that would overstate precision the wallet has no basis for.
+        # realized_reward_year keeps requiring a LIVE, fresh estimate even when realization is
+        # (unusually) supplied alongside a disabled box's empty cache.
+        sm = self._sm(estimates={}, last_update=0.0)
+        out = build_xvb_calc(_metrics(xvb_enabled=False), sm, realization=(0.5, 9))
+        assert all(t["realized_reward_year"] is None for t in out["tiers"])
+        # expected_reward_year still gets the fallback — only realized_reward_year is withheld.
+        assert any(t["expected_reward_year"] is not None for t in out["tiers"])
+
+    def test_fallback_skips_tiers_the_published_table_does_not_name(self):
+        # A custom TIER_CONFIG round-type the archived table never named degrades to None, same
+        # as before this fix — the fallback is a fixed vendored table, never invented per key.
+        sm = self._sm(estimates={}, last_update=0.0)
+        sm.get_tiers.return_value = {"donor": 1_000, "custom_tier": 5_000}
+        out = build_xvb_calc(_metrics(xvb_enabled=False), sm)
+        by_threshold = {t["threshold"]: t["expected_reward_year"] for t in out["tiers"]}
+        assert by_threshold[1_000] == views.XVB_PUBLISHED_REWARD_FALLBACK["donor"]
+        assert by_threshold[5_000] is None
+
+    def test_live_estimates_report_source_live_no_fallback_date(self):
+        # A fresh live fetch must be labelled "live", never "published" — the two must never be
+        # ambiguous to the client, which uses this to decide the disabled-note wording.
+        out = build_xvb_calc(_metrics(), self._sm())
+        assert out["estimates_source"] == "live"
+        assert out["estimates_published_date"] is None
+
+    def test_never_fetched_and_fallback_missing_reports_source_none(self):
+        # A DISABLED box whose future TIER_CONFIG names nothing the fallback recognises must
+        # still report "none" rather than falsely claiming "published" — isolates the "fallback
+        # dict has no matching key" case from the enabled/disabled gate (test above).
+        sm = self._sm(estimates={}, last_update=0.0)
+        sm.get_tiers.return_value = {"custom_tier": 5_000}
+        out = build_xvb_calc(_metrics(xvb_enabled=False), sm)
+        assert out["estimates_source"] == "none"
+        assert out["estimates_published_date"] is None
+
+    def test_disabled_path_never_touches_the_network_layer(self):
+        # #163's no-egress-when-disabled contract, at this tier: filling the decision table's
+        # reward columns from #1214's vendored fallback must never make an outbound HTTP call —
+        # build_xvb_calc only reads state_mgr (local) and the static XVB_PUBLISHED_REWARD_FALLBACK
+        # dict. Patches BOTH the chokepoint every real XvB fetch goes through
+        # (mining_dashboard.helper.http.bounded_get) AND requests' own low-level entry point
+        # (requests.sessions.Session.request, what requests.get ultimately calls), so a
+        # regression that wires an on-demand fetch into this path — through the shared helper or
+        # straight through requests — fails this test immediately rather than passing quietly.
+        import requests
+
+        import mining_dashboard.helper.http as http_mod
+
+        def _dial(*a, **k):
+            raise AssertionError("build_xvb_calc must never dial out while XvB is disabled")
+
+        sm = self._sm(estimates={}, last_update=0.0)
+        with (
+            patch.object(http_mod, "bounded_get", side_effect=_dial),
+            patch.object(requests.sessions.Session, "request", side_effect=_dial),
+        ):
+            out = build_xvb_calc(_metrics(xvb_enabled=False), sm)
+        # And the fallback did its job — the dashes are gone, not just "no crash".
+        assert out["estimates_source"] == "published"
+        assert all(t["expected_reward_year"] is not None for t in out["tiers"])
 
     # --- current-tier reward folded into net profit (#712) ---------------------------
 

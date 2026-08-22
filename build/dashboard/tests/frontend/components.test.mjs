@@ -746,6 +746,41 @@ test('XvB decision table: verdict colours cover green and zero-spanning bands, s
     assert.match(sh, /0\.365\d* XMR/); // vip cost at 1e-7
 });
 
+test('XvB decision table: the vendored-fallback reward columns render values and say so, not the bare "tier costs only" footer (#1214)', () => {
+    // #1214: with XvB disabled and never enabled (no live cache), the server fills the reward
+    // columns from its published-table fallback and labels it estimates_source: 'published'
+    // plus a date. The table must show real figures (not dashes) and the footer must say the
+    // numbers are the last-published table, not a live fetch — never the old bare "tier costs
+    // only" wording, which reads as "we have no idea" when the real answer is available.
+    const s = clone();
+    s.earnings.available = true;
+    s.earnings.coeff_day = 1e-9;
+    s.earnings.p2pool_hr = 200000;
+    // expected_reward_year/assumed_reward_year_range mirror what build_xvb_calc's corrected
+    // fallback (views.XVB_PUBLISHED_REWARD_FALLBACK["donor_vip"] = 0.81, the archived file's
+    // PER-PLAYER row, not the much larger pool-total row) would actually emit for a disabled box.
+    s.xvb_calc = {
+        enabled: false, max_fraction: 0.85, estimates_available: false, estimates_stale: false,
+        estimates_source: 'published', estimates_published_date: '2026-08-10',
+        current_tier: 'Disabled', target_tier: 'Disabled', target_threshold: 10000,
+        sustainable: true, note: 'raffle status', mode_note: null,
+        realization_pct: null, realization_wins: null,
+        tiers: [
+            { name: 'Vip (10.00 kH/s+)', threshold: 10000, expected_reward_year: 0.81,
+              realized_reward_year: null, assumed_reward_year_range: [0.81 * 0.28, 0.81 * 0.39],
+              win_odds_day: null, players_avg: null },
+        ],
+    };
+    const up = renderApp({ state: s });
+    // XvB says / yr and Study est. / yr are no longer dashed.
+    assert.match(up, /0\.810000 XMR/); // c-purple "XvB says" cell, face value straight from the fallback
+    assert.match(up, /0\.226800 XMR … 0\.315900 XMR/); // Study est. band = fallback face × the SAME prior
+    assert.doesNotMatch(up, /tier costs only/);
+    assert.match(up, /last published table \(2026-08-10\)/);
+    // The odds column has no such fallback — same root cause, still honestly empty (#1214).
+    assert.match(up, /<td>—<\/td>/);
+});
+
 test('XvBStats greys the credited figures and flags the footer when the fetch is stale (#311)', () => {
     // Fresh (base fixture, xvb_stale false): the normal "Stats fetched" footer, no stale marks.
     const fresh = renderApp();

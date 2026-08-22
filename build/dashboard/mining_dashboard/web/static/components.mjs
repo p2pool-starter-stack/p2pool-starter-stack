@@ -561,7 +561,9 @@ function XvbDecisionTable({ calc, coeffDay, hr, energy }) {
                 ${
                   calc.estimates_available
                     ? "XvB figures fetched over Tor from the operator's published estimates; odds from the public winners feed; the draw is random among qualifiers — donating above a threshold buys no extra odds."
-                    : "Expected reward estimate unavailable — tier costs only."
+                    : calc.estimates_source === "published"
+                      ? `Reward figures are XvB's last published table (${calc.estimates_published_date}), not a live fetch — XvB is off, so nothing is fetched from xmrvsbeast.com. Win odds need the live winners feed and stay unavailable until XvB runs again.`
+                      : "Expected reward estimate unavailable — tier costs only."
                 }
             </p>
         </div>`;
@@ -587,8 +589,14 @@ function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
             ? null
             : html`<p class="text-muted text-xs" id="xvb-disabled-note">
                 XvB donation is off — this table prices what enabling it would earn and cost at
-                your hashrate. Nothing is fetched from xmrvsbeast.com while it is off, so the
-                odds and reward columns run from the last cached read.</p>`
+                your hashrate. Nothing is fetched from xmrvsbeast.com while it is off${
+                  calc.estimates_source === "published"
+                    ? html`, so the reward columns use XvB's last published table (${calc.estimates_published_date}) instead of a live read`
+                    : calc.estimates_source === "live"
+                      ? ", so the reward columns run from the last live read"
+                      : ""
+                }. The odds column needs the live winners feed, so it stays empty until
+                XvB runs again.</p>`
         }
         <div class="stat-grid">
             <${StatCard} label="Sustainable Tier" value=${t ? t.tier : "None"} cls="c-purple"
