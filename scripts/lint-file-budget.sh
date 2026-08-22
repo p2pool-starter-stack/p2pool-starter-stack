@@ -24,11 +24,21 @@ TARGET_LINES=400
 HARD_CEILING=800
 BUDGET_FILE="docs/dev/file-budget.tsv"
 
-# The branch this PR ratchets against. origin/develop when it's reachable (CI, any normal
-# clone); a bare `develop` as a local-only fallback; if neither resolves (a shallow or
-# origin-less checkout) the monotonic check is skipped with a loud note, never silently.
+# The branch this PR ratchets against — the twin lane it will merge into, NOT a fixed branch.
+# develop-v2 carries develop's whole history plus the appliance code, so the same files are
+# legitimately LARGER there; ratcheting a develop-v2 PR against origin/develop would reject
+# every one of those larger ceilings as an illegal "raise". The lane is detected by ancestry:
+# only a develop-v2-lane branch has origin/develop-v2 as an ancestor (develop's history is an
+# ancestor of BOTH lanes, so it cannot distinguish them). Each candidate falls back to its
+# bare local name; if nothing resolves the monotonic check is skipped with a loud note.
 resolve_base_ref() {
-    if git rev-parse -q --verify origin/develop >/dev/null 2>&1; then
+    if git rev-parse -q --verify origin/develop-v2 >/dev/null 2>&1 &&
+        git merge-base --is-ancestor origin/develop-v2 HEAD 2>/dev/null; then
+        echo origin/develop-v2
+    elif git rev-parse -q --verify develop-v2 >/dev/null 2>&1 &&
+        git merge-base --is-ancestor develop-v2 HEAD 2>/dev/null; then
+        echo develop-v2
+    elif git rev-parse -q --verify origin/develop >/dev/null 2>&1; then
         echo origin/develop
     elif git rev-parse -q --verify develop >/dev/null 2>&1; then
         echo develop
