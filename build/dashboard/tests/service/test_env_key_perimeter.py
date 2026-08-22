@@ -1,10 +1,6 @@
-"""The dashboard-committability security perimeter (#1094 / #1069 W9).
-
-Moved verbatim from test_control_service.py (file-budget ratchet, #1105): the perimeter list and
-its test, which check pithead's editable/confirm allowlists and the dashboard's
-EDITABLE/CONFIRM_ENV_KEY_PATHS independently against the keys that must never be
-dashboard-committable at all.
-"""
+"""The dashboard-committability security perimeter (#1094 / #1069 W9): checks pithead's
+editable/confirm allowlists and the dashboard's EDITABLE/CONFIRM_ENV_KEY_PATHS independently
+against the keys that must never be dashboard-committable at all."""
 
 import pytest
 
