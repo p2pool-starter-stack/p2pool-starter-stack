@@ -12930,6 +12930,11 @@ else
 fi
 [ -f "$STICK5/pithead-config.json" ] && ok "a cancelled change is not consumed — the stick still carries it" ||
     bad "a cancelled change is not consumed" "the stick's file was removed anyway"
+# #1061: the running config staying untouched is not proof the operator was ever told — a
+# cancelled change looks identical to a silent one from that assertion alone. This is the one
+# that would have caught the console promising a confirmation that never appeared.
+assert_contains "the cancelled change is announced on the console" "$(cat "$MC/abort.out")" \
+    "Media configuration channel: cancelled — no changes applied."
 
 # main() must FAIL CLOSED end to end when the secret-path list can't be read: with a broken host
 # program, no diff (which could leak raw secret values) is ever shown and no config is applied.

@@ -2655,9 +2655,13 @@ phase_media() {
     wait_serial "staged configuration differs from the running one" 180 || bad "no diff banner on the abort leg"
     # Pull the medium mid-countdown — the deliberate physical act that cancels a pending change.
     _detach_media_stick
-    wait_serial "cancelled" 90 &&
-        ok "removing the media mid-countdown cancels the change" ||
-        bad "no cancellation ever appeared on the console after the media was pulled"
+    # Full expected text, matching the apply leg's own precision above (#1061): a bare
+    # "cancelled" would also match unrelated boot noise, and it is exactly the console's own
+    # wording that went missing when this issue was filed — the weak match could not have told
+    # "the right line appeared" from "some other word did".
+    wait_serial "Media configuration channel: cancelled" 90 &&
+        ok "removing the media mid-countdown cancels the change, and says so on the console" ||
+        bad "no cancellation confirmation ever appeared on the console after the media was pulled"
     _wait_ssh 180 || {
         bad "guest never came back after the cancelled change"
         return

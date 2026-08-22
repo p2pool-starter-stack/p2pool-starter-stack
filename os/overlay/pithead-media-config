@@ -28,7 +28,14 @@ STAGED_NAME="pithead-config.json"
 # Put words in front of a human standing at the machine, on every physical console — the same
 # broadcast the wizard uses (pithead's token announcement): /dev/console is only whichever the
 # kernel cmdline named LAST, so a message sent there alone is invisible to an operator watching
-# the other one. Every line also reaches the journal.
+# the other one. The per-device write below is genuinely best-effort: `[ -w ]` only proves the
+# device node's permission bits, not that a write will land, and a write that loses a race with
+# getty claiming the tty is silently swallowed by `2>/dev/null || true` — an operator who pulls
+# the stick to cancel a change can be left with no confirmation on the physical console at all.
+# The `echo` below is NOT part of that best-effort path: it runs first, unconditionally, to this
+# process's own stdout, and pithead-boot.service carries no StandardOutput= override — so
+# systemd's default (the journal) captures every line here even on a boot where every physical
+# write is lost. `journalctl -u pithead-boot` is the fallback for exactly that boot.
 _console() { # lines...
     local line dev
     for line in "$@"; do
