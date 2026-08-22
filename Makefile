@@ -83,7 +83,10 @@ lint-proto: ## buf lint + build on the vendored Tari protos (config: .../tari/pr
 		docker run --rm -v "$$PWD":/workspace --workdir /workspace bufbuild/buf:1.71.0 build
 
 lint-toml: ## taplo TOML format check (config: .taplo.toml)
-	npx --yes @taplo/cli@0.7.0 fmt --check
+	@# Tracked files only, never a filesystem walk: taplo's walker panics on any unreadable
+	@# dir (EACCES scandir — e.g. root-owned artifacts under .claude/ agent worktrees).
+	@test -n "$$(git ls-files '*.toml')" || { echo "lint-toml: zero tracked TOML files — refusing a vacuous pass"; exit 1; }
+	git ls-files -z '*.toml' | xargs -0 npx --yes @taplo/cli@0.7.0 fmt --check
 
 # Cut a release from the private build/test server — GHCR publish, gated on the test suite +
 # the #54 integration matrix (issue #44). Pass options through ARGS, e.g. a safe plan-only preview:
