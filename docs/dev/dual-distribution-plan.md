@@ -12,7 +12,7 @@ the #394 tracker; decision comments are on #77 and #78.
 | Question | Decision |
 |---|---|
 | Appliance foundation | **Debian 13 + A/B images, updater RAUC** (bake-off verdict 2026-07-25 — see [Verdict](#verdict-2026-07-25-rauc-on-stability-grounds--conditional-on-fault-injection); the v2 decision named Rugix, and the bake-off replaced it on stability grounds). Peer-proven pattern: umbrelOS (Debian + Rugix, crypto-node appliance), HAOS (Buildroot + RAUC). bootc + CentOS Stream rejected — no third-party shipping appliance found on it, rolling base, manual rollback + greenboot bolt-on; full evidence table in the v2 section below. |
-| Container runtime | **Quadlet on the appliance, Compose on the DIY channel — #78 outcome (A)** (operator decision, v4; supersedes v3's Podman-everywhere). Appliance: daemonless, each container a systemd service supervised and restarted independently — the idiomatic fit where we own the OS (Debian 13, Podman 5.4.2). DIY: Compose stays — the reach argument is concrete: Quadlet's `Notify=healthy` needs Podman ≥ 5.0, and Ubuntu 24.04 LTS ships 4.9, so Podman-everywhere would exclude the largest current LTS until 2029. Compose runs wherever Docker runs; existing deployments (gouda, prod) never migrate. Cost accepted: two runtime renders, mitigated by generation + parity (below). |
+| Container runtime | **Quadlet on the appliance, Compose on the DIY channel — #78 outcome (A)** (operator decision, v4; supersedes v3's Podman-everywhere). Appliance: daemonless, each container a systemd service supervised and restarted independently — the idiomatic fit where we own the OS (Debian 13, Podman 5.4.2). DIY: Compose stays — the reach argument is concrete: Quadlet's `Notify=healthy` needs Podman ≥ 5.0, and Ubuntu 24.04 LTS ships 4.9, so Podman-everywhere would exclude the largest current LTS until 2029. Compose runs wherever Docker runs; existing deployments (the bench box, prod) never migrate. Cost accepted: two runtime renders, mitigated by generation + parity (below). |
 | Runtime definitions | `docker-compose.yml` stays the maintained reference (as today, `.env`-rendered by `pithead`). The appliance adds `pithead render-quadlet`: units generated from `config.json`, never hand-maintained. A parity test derives expectations from the compose file itself and **fails on any compose key it does not recognize** — new compose features cannot silently skip the appliance. |
 | Distribution channels | **(1) curl installer (Docker/Compose), (2) flashable appliance image (Podman/Quadlet), (3) git clone (developers).** Package-manager/apt-repo channel dropped. |
 | Explicitly rejected (from external review, 2026-07-22) | Kubernetes/Helm/Nomad render backends (speculative; #17 closed as not-planned; TrueNAS publicly retreated from single-node k8s). Repo split into installer/os/core packages (one repo + `os/` dir suffices). Cluster/fleet layer for stack hosts (fleet = RigForge + control channel, already shipped). Config format rename to YAML (`config.json` is already the single declarative source). |
@@ -61,7 +61,7 @@ renders `.env` + service configs from it. The appliance adds a second render tar
 the DIY channel changes nothing.
 
 - **DIY channel: today's stack, byte-identical.** `docker-compose.yml` (env-rendered),
-  the `DOCKER-USER` egress firewall, socket proxies, hardening — untouched. gouda and
+  the `DOCKER-USER` egress firewall, socket proxies, hardening — untouched. The bench box and
   prod never migrate.
 - **Appliance**: `pithead render-quadlet` writes `.container`/`.network` units from
   `config.json` into `/etc/containers/systemd/` — same pattern as the `.env` render.
@@ -475,8 +475,8 @@ their own look.
 **The finding that decides it, measured rather than argued:** `rockylinux:10` refuses
 to start on this project's own release box —
 `Fatal glibc error: CPU does not support x86-64-v3`. RHEL 10 raised the
-microarchitecture baseline to v3 (Haswell, 2013+). Gouda is a Xeon X5690 with no AVX
-at all, and it mines today. A stack routinely deployed on repurposed hardware cannot
+microarchitecture baseline to v3 (Haswell, 2013+). That release box is a pre-AVX
+Xeon from the Nehalem/Westmere era, and it mines today. A stack routinely deployed on repurposed hardware cannot
 adopt a base that excludes that hardware at the libc level.
 
 | Base | Active support | Security tail | CPU floor | Verdict |
@@ -1011,7 +1011,7 @@ disk before first boot with the reason recorded beside it.
    release keys become the single point of compromise for every channel. The
    mechanism is settled: the existing cosign keypair (`cosign.pub` is already
    committed; signing already wired as opt-in in `release.sh`) — keyless/OIDC does
-   not fit a release flow that cuts on gouda, a self-hosted release server, not CI.
+   not fit a release flow that cuts on a self-hosted release server, not CI.
    The open decision is custody hardening (offline copy, hardware token), made
    before phase 1 flips signing to mandatory; one key discipline for stack bundles
    and OS images.
