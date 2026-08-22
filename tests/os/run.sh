@@ -2062,9 +2062,9 @@ phase_provision() {
     fi
     ok "config validated and installed by the host"
 
-    local deadline=$(($(date +%s) + 1500)) names="" SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}"
+    local deadline=$(($(date +%s) + 1500)) names=""
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        names=$(SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" _ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
         case "$names" in
         *dashboard*caddy* | *caddy*dashboard*) break ;;
         esac
@@ -2601,9 +2601,9 @@ phase_media() {
         bad "the ESP pre-seed never reached the running system — nothing to change from here"
         return
     fi
-    local deadline=$(($(date +%s) + 1500)) names="" SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}"
+    local deadline=$(($(date +%s) + 1500)) names=""
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        names=$(SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" _ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
         case "$names" in *dashboard*caddy* | *caddy*dashboard*) break ;; esac
         sleep 15
     done
@@ -3219,10 +3219,9 @@ phase_reset() {
     fi
     ok "provisioned: config installed by the host"
 
-    local SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" # scoped: later calls in this phase run long
     names="" deadline=$(($(date +%s) + 1500))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        names=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        names=$(SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" _ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
         case "$names" in
         *dashboard*caddy* | *caddy*dashboard*) break ;;
         esac
