@@ -1,0 +1,22 @@
+# Captured 2026-08-22T07:45:21Z by tests/stack/fixtures/rauc-info/capture.sh
+# rauc --version: rauc 1.11.3
+# Real 'rauc info --no-verify --output-format=shell' on a bundle built from the real
+# render_bundle_manifest(1.18.0, release, true, 1.18.0) — a migrating release.
+RAUC_MF_COMPATIBLE='pithead-amd64'
+RAUC_MF_VERSION='1.18.0'
+RAUC_MF_DESCRIPTION=''
+RAUC_MF_BUILD=''
+RAUC_MF_HASH='aad5c1fa382d88acdc0e64ea76805c5cf9a3eed6d3e410070d47f637c7fda657'
+RAUC_MF_IMAGES=1
+RAUC_MF_HOOKS=''
+RAUC_META_PITHEAD_VERSION='1.18.0'
+RAUC_META_PITHEAD_VARIANT='release'
+RAUC_META_PITHEAD_MINIMUM_OS_VERSION='1.18.0'
+RAUC_META_PITHEAD_DATA_MIGRATION='true'
+RAUC_IMAGE_NAME_0='rootfs.ext4'
+RAUC_IMAGE_CLASS_0='rootfs'
+RAUC_IMAGE_VARIANT_0=''
+RAUC_IMAGE_DIGEST_0='d8534431168b8009a3c070a89b4b803c11dbca72fa145c8e0a75d5b082508b50'
+RAUC_IMAGE_SIZE_0=76
+RAUC_IMAGE_HOOKS_0=''
+
