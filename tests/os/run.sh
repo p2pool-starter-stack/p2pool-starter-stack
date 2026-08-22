@@ -47,6 +47,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/hugepages-boot-verdict.sh"
 # shellcheck source=tests/os/restore-live-state-verdict.sh
 . "$SCRIPT_DIR/restore-live-state-verdict.sh"
+# shellcheck source=tests/os/reinstall-prefill-verdict.sh
+. "$SCRIPT_DIR/reinstall-prefill-verdict.sh"
 
 IMAGE=""
 KEEP=0
@@ -1397,9 +1399,16 @@ phase_install() {
     fi
     # ---- reinstall pre-fill: the previous machine's answers, never its secrets ----------
     # The host mounted the target's data partition read-only at wizard start and published
-    # the stripped previous config as the page's pre-fill. Two assertions, both through the
-    # page's own state API: the first leg's wallet came back, and no password crossed. Runs
-    # BEFORE the wipe legs on purpose — they destroy the config the pre-fill was read from.
+    # the stripped previous config as the page's pre-fill (pithead:2350,
+    # prefill_from_previous_install). A wallet-address match on the page's own state API alone
+    # cannot tell "the branch read the target disk and published it" from "the page shows that
+    # value for some other reason" — #1038 found this leg green for four consecutive batteries
+    # while never proving the branch itself had run. Pairing the outcome with the branch's OWN
+    # record — the exact log line it prints ONLY on that path (StandardOutput=journal+console
+    # per pithead-firstboot.service, so it lands on $SERIAL) — is what tells the two apart, the
+    # same discrimination #1212 needed for hugepages; reinstall_prefill_verdict is fixture-tested
+    # at tier 1 (tests/stack/run.sh) for exactly that reason. Runs BEFORE the wipe legs on
+    # purpose — they destroy the config the pre-fill was read from.
     token=""
     tries2=0
     while [ -z "$token" ] && [ "$tries2" -lt 40 ]; do
@@ -1409,21 +1418,21 @@ phase_install() {
     done
     if [ -n "$token" ] && _wizard_up; then
         jar=$(mktemp)
-        local pf_state=""
+        local pf_state="" branch_logged=0 wallet_prefilled=0 password_leaked=0 pf_verdict
         curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null &&
             pf_state=$(curl -fsSk -b "$jar" "https://$ip/api/wizard-state" 2>/dev/null)
         rm -f "$jar"
-        if printf '%s' "$pf_state" | grep -q "\"wallet_address\": \"${HARNESS_WALLET:0:8}"; then
-            ok "pre-fill carries the previous install's wallet"
-        else
-            bad "the previous install's answers did not pre-fill the reinstall page"
-        fi
+        grep -qF "Found the previous installation's settings on the target disk" "$SERIAL" &&
+            branch_logged=1
+        printf '%s' "$pf_state" | grep -q "\"wallet_address\": \"${HARNESS_WALLET:0:8}" &&
+            wallet_prefilled=1
         # The provisioned config held a generated dashboard password; the merged state may
         # only ever show the reference's empty default for any "password" key.
-        if printf '%s' "$pf_state" | grep -Eq '"password": "[^"]'; then
-            bad "a password crossed into the reinstall page's state"
+        printf '%s' "$pf_state" | grep -Eq '"password": "[^"]' && password_leaked=1
+        if pf_verdict=$(reinstall_prefill_verdict "$branch_logged" "$wallet_prefilled" "$password_leaked"); then
+            ok "$pf_verdict"
         else
-            ok "no password reaches the reinstall page"
+            bad "$pf_verdict"
         fi
     else
         bad "no wizard session for the pre-fill check (token: ${token:-none})"
