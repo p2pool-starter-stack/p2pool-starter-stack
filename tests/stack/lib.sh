@@ -152,15 +152,15 @@ file_uid() { stat -c %u "$1" 2>/dev/null || stat -f %u "$1" 2>/dev/null; }
 # $WALLET. Body is the verbatim block run.sh built inline (indentation left untouched so the
 # seed_env heredoc keeps its column-0 terminator).
 build_val_sandbox() {
-V="$SANDBOX/val"
-mkdir -p "$V/build/tari" "$V/build/dashboard"
-: >"$V/build/dashboard/Dockerfile"
-cp "$STACK" "$V/pithead"
-make_stubs "$V/bin"
-cp "$ROOT/build/tari/config.toml.template" "$V/build/tari/"
-mkdir -p "$V/data/monero" "$V/data/tari" "$V/data/p2pool" "$V/data/tor" "$V/data/dashboard" "$V/data/p2pool/stats"
-seed_env() {
-    cat >"$V/.env" <<EOF
+    V="$SANDBOX/val"
+    mkdir -p "$V/build/tari" "$V/build/dashboard"
+    : >"$V/build/dashboard/Dockerfile"
+    cp "$STACK" "$V/pithead"
+    make_stubs "$V/bin"
+    cp "$ROOT/build/tari/config.toml.template" "$V/build/tari/"
+    mkdir -p "$V/data/monero" "$V/data/tari" "$V/data/p2pool" "$V/data/tor" "$V/data/dashboard" "$V/data/p2pool/stats"
+    seed_env() {
+        cat >"$V/.env" <<EOF
 MONERO_ONION_ADDRESS=mona.onion
 TARI_ONION_ADDRESS=taria.onion
 P2POOL_ONION_ADDRESS=p2pa.onion
@@ -169,27 +169,27 @@ HOST_IP=box.lan
 DEPLOYMENT_COMPLETED=true
 COMPOSE_PROFILES=local_node
 EOF
-}
-WALLET="$VALID_PRIMARY" # checksum-valid mainnet primary (the XMRig donation address) — #250 gates the type, #829 the checksum
+    }
+    WALLET="$VALID_PRIMARY" # checksum-valid mainnet primary (the XMRig donation address) — #250 gates the type, #829 the checksum
 }
 
 # The control-channel sandbox: builds $C, defines CTRL_LOG, seed_control_env, control_config.
 build_control_sandbox() {
-C="$SANDBOX/control"
-mkdir -p "$C/build/tari" "$C/build/dashboard" \
-    "$C/data/monero" "$C/data/tari" "$C/data/p2pool/stats" "$C/data/tor" "$C/data/dashboard"
-: >"$C/build/dashboard/Dockerfile"
-cp "$STACK" "$C/pithead"
-# The control gate reads config.reference.json (the closed schema) from beside the script; it ships
-# in the bundle + checkout root, so mirror it into the sandbox.
-cp "$ROOT/config.reference.json" "$C/config.reference.json"
-make_stubs "$C/bin"
-cp "$ROOT/build/tari/config.toml.template" "$C/build/tari/"
-# The password hash step reads the pinned Caddy image out of docker-compose.yml (#8).
-cp "$ROOT/docker-compose.yml" "$C/docker-compose.yml"
-CTRL_LOG="$C/docker.log"
-seed_control_env() {
-    cat >"$C/.env" <<EOF
+    C="$SANDBOX/control"
+    mkdir -p "$C/build/tari" "$C/build/dashboard" \
+        "$C/data/monero" "$C/data/tari" "$C/data/p2pool/stats" "$C/data/tor" "$C/data/dashboard"
+    : >"$C/build/dashboard/Dockerfile"
+    cp "$STACK" "$C/pithead"
+    # The control gate reads config.reference.json (the closed schema) from beside the script; it ships
+    # in the bundle + checkout root, so mirror it into the sandbox.
+    cp "$ROOT/config.reference.json" "$C/config.reference.json"
+    make_stubs "$C/bin"
+    cp "$ROOT/build/tari/config.toml.template" "$C/build/tari/"
+    # The password hash step reads the pinned Caddy image out of docker-compose.yml (#8).
+    cp "$ROOT/docker-compose.yml" "$C/docker-compose.yml"
+    CTRL_LOG="$C/docker.log"
+    seed_control_env() {
+        cat >"$C/.env" <<EOF
 MONERO_ONION_ADDRESS=mona.onion
 TARI_ONION_ADDRESS=taria.onion
 P2POOL_ONION_ADDRESS=p2pa.onion
@@ -198,14 +198,14 @@ HOST_IP=box.lan
 DEPLOYMENT_COMPLETED=true
 COMPOSE_PROFILES=local_node
 EOF
-}
-control_config() { # <pool> [extra dashboard keys...] -> writes $C/config.json
-    printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
+    }
+    control_config() { # <pool> [extra dashboard keys...] -> writes $C/config.json
+        printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
               "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"%s"},
               "dashboard":{"secure":true,"host":"box.lan",
                            "auth":{"username":"admin","password":"a control passphrase"},
                            "control":{"enabled":true}} }\n' "$WALLET" "$1" >"$C/config.json"
-}
+    }
 }
 
 run_pending() { (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead control-run-pending 2>&1); }
