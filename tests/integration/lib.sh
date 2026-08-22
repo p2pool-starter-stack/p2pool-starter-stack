@@ -358,15 +358,15 @@ control_units_verdict() { # <doctor-output>
     esac
 }
 
-# Authoritative "is Monero caught up?" — query monerod's own get_info on the box (creds stay
-# on the box) and trust its `synchronized` flag / target_height 0, exactly like the sync gate.
-# This is the readiness GATE (the source of truth, and it avoids waiting on a dashboard poll cycle).
-# The dashboard's `.sync.monero.state` now also reaches "done" for a synced node — run.sh asserts
-# that display separately. Returns 0 when synced.
+# Authoritative "is Monero caught up?" — query monerod's own get_info (creds stay on the box)
+# and trust its `synchronized` flag / target_height 0, exactly like the sync gate. "Its own"
+# follows the mode: in monero.mode=remote nothing listens on the box's loopback (the render
+# emits no MONERO_RPC_URL; the in-stack relay is container-local), so the endpoint derives from
+# config.json — found by #1083's first live remote run. Returns 0 when synced.
 monero_caught_up() {
     rx 'u=$(grep -E "^MONERO_NODE_USERNAME=" .env 2>/dev/null | cut -d= -f2-);
         p=$(grep -E "^MONERO_NODE_PASSWORD=" .env 2>/dev/null | cut -d= -f2-);
-        url=$(grep -E "^MONERO_RPC_URL=" .env 2>/dev/null | cut -d= -f2-); [ -n "$url" ] || url="http://127.0.0.1:18081";
+        url=$(grep -E "^MONERO_RPC_URL=" .env 2>/dev/null | cut -d= -f2-); [ -n "$url" ] || url=$(jq -r "if (.monero.mode // \"local\") == \"remote\" and .monero.remote.host then \"http://\" + .monero.remote.host + \":\" + ((.monero.remote.rpc_port // 18081) | tostring) else \"http://127.0.0.1:18081\" end" config.json 2>/dev/null); [ -n "$url" ] || url="http://127.0.0.1:18081";
         if [ -n "$u" ]; then body=$(curl -fsS --max-time 8 --digest -u "$u:$p" "$url/get_info" 2>/dev/null);
         else body=$(curl -fsS --max-time 8 "$url/get_info" 2>/dev/null); fi;
         printf "%s" "$body" | jq -e "(.status==\"OK\") and ((.synchronized==true) or (.target_height==0))" >/dev/null 2>&1'
