@@ -237,6 +237,7 @@ class TestDisturbanceRecovery:
         # Re-qualified on the 1h average by the final cycles (24h lags a full day).
         assert min(r.credited_1h[-CYCLES_PER_HOUR:]) >= sc.target_hr * 0.98
 
+
 class TestProjectedSteering:
     """The protective trend projection (#892's steering half), closed-loop: at a
     margin-riding equilibrium a mild credited decay is answered one horizon
@@ -250,9 +251,7 @@ class TestProjectedSteering:
     def _run(self, horizon_s):
         from unittest.mock import patch
 
-        with patch(
-            "mining_dashboard.service.algo_service.XVB_PROJECTION_HORIZON_S", horizon_s
-        ):
+        with patch("mining_dashboard.service.algo_service.XVB_PROJECTION_HORIZON_S", horizon_s):
             algo = build_controller()
             controller = make_algo_controller(
                 algo, p2pool_difficulty=DIFFICULTY, stamp_updates=True
@@ -275,7 +274,10 @@ class TestProjectedSteering:
         drop = 4 * CYCLES_PER_HOUR
         reactive = self._run(0)
         projected = self._run(1200)
-        below = lambda r: sum(1 for v in r.credited_1h[drop:] if v < 10_000)  # noqa: E731
+
+        def below(r):
+            return sum(1 for v in r.credited_1h[drop:] if v < 10_000)
+
         assert below(projected) < below(reactive)
         assert min(projected.credited_1h[drop:]) >= min(reactive.credited_1h[drop:])
 
@@ -308,4 +310,3 @@ class TestProjectedSteering:
         # Same equilibrium within 2%, and no extra overshoot from projection.
         assert max(steady_projected) <= max(steady_reactive) * 1.02
         assert min(steady_projected) >= min(steady_reactive) * 0.98
-
