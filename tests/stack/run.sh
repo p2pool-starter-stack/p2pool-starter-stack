@@ -1788,7 +1788,13 @@ caddy_pinned="$(
     appliance_tls_dir() { printf '%s' "$SANDBOX/notls"; }
     appliance_mint_cert() { return 1; }
     hostname() { printf '192.168.1.10 2001:db8::1 fd00::1\n'; }
-    DASHBOARD_SECURE=true HOST_IP=192.168.1.10 DASHBOARD_HOST=192.168.1.10 \
+    # Pinned to a NAME (the documented appliance case, #1089), not an IP literal: an
+    # IP-literal pin puts the box's own address INTO the site list too, so a bind built
+    # from the site list and a bind built from the box's addresses render identically —
+    # the mutation this test exists to catch (bind derived from $site_hosts instead of
+    # `hostname -I`) stayed green against that fixture. A name-only pin gives the site
+    # list no address literal at all, so the two derivations diverge.
+    DASHBOARD_SECURE=true HOST_IP=pithead.local DASHBOARD_HOST=pithead.local \
         DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
     cat Caddyfile
 )"
@@ -1797,6 +1803,10 @@ case "$(printf '%s' "$caddy_pinned" | grep '^    bind ')" in
 *2001:db8:*) bad "a pinned host does not reopen the global v6" "global address is bound" ;;
 *) ok "a pinned host does not reopen the global v6" ;;
 esac
+# The bind must come from the BOX's own addresses, never from the (name-only) site list —
+# #1021-class regression. Assert the bind line names the box's actual LAN address; under
+# the site-list-derived mutation it collapses to loopback-only and this goes red.
+assert_contains "a pinned dashboard.host still binds the box's own LAN address" "$(printf '%s' "$caddy_pinned" | grep '^    bind ')" "192.168.1.10"
 
 # Loopback is appended outside the address loop, so a box reporting no usable non-public address
 # still binds something reachable rather than silently falling back to a wildcard.
@@ -10825,6 +10835,51 @@ assert_eq "a name gets a --resolve spec pointing at loopback" \
 assert_eq "an IPv6 literal gets NO --resolve (curl cannot parse one)" "$(grs 2001:db8::1 443)" ""
 assert_eq "an IPv4 literal gets no --resolve either" "$(grs 192.0.2.5 80)" ""
 unset -f gtu grs boot_fn
+
+echo "== unit: os_update_rollback_verdict — the rolled_back verdict, provable without a KVM boot (#1051) =="
+# A dashboard-driven install leaves data/os-update/in-flight.json naming the version the machine
+# was headed to. If THIS boot's VERSION disagrees, the bootloader already fell back — the update
+# failed its health gate, and the verdict belongs in the state file now. Before #1051 this was
+# inline code that only ran when pithead-boot was EXECUTED, never sourced, so no tier could ever
+# drive it with a fixture — genuinely untested, at every tier, despite being promised in two
+# operator-facing docs. It is pure file logic (an in-flight flag, a VERSION file, one jq call), so
+# nothing here needs real firmware or a real A/B updater to prove; #1051 pulled it into a function
+# for exactly that reason.
+# Mutation run: flip the != to = in os_update_rollback_verdict's version check -> both assertions
+# below invert (a real fallback stays silent, a real landing wrongly claims rollback).
+ORV="$SANDBOX/os-rollback-verdict"
+orv_run() { # <running-version> [inflight-to] -> "<outcome> <in-flight-consumed>"
+    rm -rf "$ORV"
+    mkdir -p "$ORV/data/os-update" "$ORV/data/control/results"
+    printf '%s\n' "$1" >"$ORV/VERSION"
+    # "consumed" has to mean the flag EXISTED and the function REMOVED it — checking only
+    # post-call existence conflates that with "there was never a flag to remove", so the
+    # no-flag case wrongly read back as consumed. had_flag pins the before state.
+    local had_flag=no
+    if [ -n "${2:-}" ]; then
+        printf '{"from":"1.0.0","to":"%s"}\n' "$2" >"$ORV/data/os-update/in-flight.json"
+        had_flag=yes
+    fi
+    (
+        cd "$ORV" || exit 1
+        # shellcheck disable=SC1090
+        source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+        OS_INFLIGHT=data/os-update/in-flight.json
+        OS_STATE_DIR=data/control/results
+        os_update_rollback_verdict >/dev/null
+    )
+    local outcome consumed=no
+    outcome=$(jq -r '.verdict.outcome // "none"' "$ORV/data/control/results/os-update-state.json" 2>/dev/null)
+    [ "$had_flag" = yes ] && [ ! -f "$ORV/data/os-update/in-flight.json" ] && consumed=yes
+    printf '%s %s' "${outcome:-none}" "$consumed"
+}
+assert_eq "a fallback boot (running the OLD version) writes rolled_back and consumes the flag" \
+    "$(orv_run 1.2.3 1.2.4)" "rolled_back yes"
+assert_eq "a landed boot (running matches the target) writes nothing here — the commit gate's success half owns it" \
+    "$(orv_run 1.2.4 1.2.4)" "none no"
+assert_eq "no in-flight flag at all is a no-op" "$(orv_run 1.2.3)" "none no"
+unset -f orv_run
+unset ORV
 
 echo "== unit: revenue_container_verdict — commit-gate honesty, syncing vs crashed (#852) =="
 # The pure classifier behind check_revenue_containers, so the commit gate's central judgement is
