@@ -127,6 +127,28 @@ def _hashrate(metrics):
 # --- Chart (Issue #65: real-time x-axis, outage gaps as breaks) -----------------------
 
 
+def _xvb_archive():
+    # In a checkout the repo root is four levels up; inside the dashboard image the
+    # tests live at /app/tests and there is no repo root at all — parents[4] itself
+    # raises there, so the lookup must fail soft for the skipif to see "absent".
+    try:
+        root = Path(__file__).parents[4]
+    except IndexError:
+        return None
+    return (
+        root
+        / "docs"
+        / "research"
+        / "xvb-delivery-study"
+        / "data"
+        / "sources"
+        / "xmrvsbeast-reward_estimate_pub.txt"
+    )
+
+
+_XVB_ARCHIVE = _xvb_archive()
+
+
 class TestChart:
     def _line(self, n, start_ts, step=30):
         return [
@@ -2446,6 +2468,12 @@ class TestXvbCalc:
         assert by_threshold[100_000] == views.XVB_PUBLISHED_REWARD_FALLBACK["donor_whale"]
         assert by_threshold[1_000_000] == views.XVB_PUBLISHED_REWARD_FALLBACK["donor_mega"]
 
+    @pytest.mark.skipif(
+        _XVB_ARCHIVE is None or not _XVB_ARCHIVE.exists(),
+        reason="the delivery-study archive lives outside the dashboard image's build context; "
+        "this parity guard runs in the checkout-based dashboard CI job, which fails loudly "
+        "if the fallback and the archive ever disagree",
+    )
     def test_fallback_values_match_the_archived_source_files_player_rows(self):
         # #1214 guard: the vendored fallback must be the PER-PLAYER row XvB publishes, exactly
         # what the live parser would extract — never the pool-total row just above it (that
@@ -2456,16 +2484,7 @@ class TestXvbCalc:
         # instead of silently drifting from what a live fetch would ever show.
         from mining_dashboard.client.xvb_client import DONOR_ROUND_TYPES, parse_reward_estimates
 
-        archive = (
-            Path(__file__).parents[4]
-            / "docs"
-            / "research"
-            / "xvb-delivery-study"
-            / "data"
-            / "sources"
-            / "xmrvsbeast-reward_estimate_pub.txt"
-        )
-        parsed = parse_reward_estimates(archive.read_text())
+        parsed = parse_reward_estimates(_XVB_ARCHIVE.read_text())
         assert set(parsed) == set(DONOR_ROUND_TYPES)  # the archive still names all four tiers
         assert views.XVB_PUBLISHED_REWARD_FALLBACK == parsed
 
