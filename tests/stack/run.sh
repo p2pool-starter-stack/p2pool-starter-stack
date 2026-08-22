@@ -10933,13 +10933,23 @@ assert_rc "unstamped system + release bundle passes — stays shell-less, no cha
 OUSB=$(mktemp -d)
 mkdir -p "$OUSB/bin"
 # A fake rauc: logs every call, answers `info` with a canned shell-format body —
-# the format the real os_bundle_meta parses (RAUC 1.11's JSON output omits [meta.*]).
+# the format the real os_bundle_meta parses (RAUC 1.11's JSON output omits [meta.*]). Two escape
+# hatches for #1041's error-surfacing tests: RAUC_INFO_RC/RAUC_INFO_ERR fail `info` (a signature
+# verdict) with a chosen message on stderr, RAUC_INSTALL_RC/RAUC_INSTALL_ERR do the same for
+# `install`. Both default to a clean 0/no-output — every test above this one never sets them.
 cat >"$OUSB/bin/rauc" <<'EOF'
 #!/usr/bin/env bash
 echo "[rauc] $*" >>"${RAUC_LOG:?}"
 case "$1" in
-info) [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT" ;;
-install) exit 0 ;;
+info)
+    [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT"
+    [ -n "${RAUC_INFO_ERR:-}" ] && echo "$RAUC_INFO_ERR" >&2
+    exit "${RAUC_INFO_RC:-0}"
+    ;;
+install)
+    [ -n "${RAUC_INSTALL_ERR:-}" ] && echo "$RAUC_INSTALL_ERR" >&2
+    exit "${RAUC_INSTALL_RC:-0}"
+    ;;
 esac
 exit 0
 EOF
@@ -11010,6 +11020,69 @@ assert_rc "release -> release installs with no prompt" "$?" "0"
 assert_contains "rauc install ran unprompted" "$(cat "$RAUC_LOG")" "install bundle.raucb"
 out=$(ourun "$OUSB/variant-debug" "$OUSB/info-release.txt" 2>&1)
 assert_rc "a missing bundle path is an error, not an install" "$?" "1"
+
+echo "== unit: os_bundle_meta degrades to empty instead of aborting the caller (#1041) =="
+# run_sourced (used everywhere above) disables errexit right after sourcing, which would hide
+# the exact bug #1041 traces to: under `set -o pipefail`, `rauc info | sed | head` returns rauc's
+# own nonzero exit even though sed/head both succeed, and a bare `var=$(os_bundle_meta ...)`
+# assignment then trips `set -e` — silently, since the diagnostic went to `2>/dev/null`. This
+# check keeps errexit ON (the real pithead script's own posture) so a regression here reproduces
+# the actual failure: the subshell would abort before ever reaching the second echo.
+: >"$RAUC_LOG"
+ombm_out=$(
+    cd "$OUSB" || exit 1
+    PATH="$OUSB/bin:$PATH"
+    export RAUC_INFO_RC=1 RAUC_INFO_OUT="" RAUC_INFO_ERR="signature verification failed: self-signed certificate"
+    # shellcheck disable=SC1090
+    source "$STACK"
+    echo "before"
+    v=$(os_bundle_meta bundle.raucb version)
+    echo "after:[$v]"
+)
+ombm_rc=$?
+assert_rc "a failing rauc info does not abort the caller under errexit+pipefail" "$ombm_rc" "0"
+assert_contains "execution continues past the failed call" "$ombm_out" "after:[]"
+
+echo "== integration: os-update surfaces rauc's own diagnosis instead of a bare abort (#1041) =="
+# The bug as filed: a signature failure inside a command substitution (os_bundle_meta, above)
+# tripped the ERR trap with nothing to show for it — three bare "aborted unexpectedly" lines and
+# no clue rauc had already diagnosed it precisely on its own stderr. Runs the REAL script as a
+# subprocess (not sourced) so the ERR trap this bug lives in is actually armed.
+OUB=$(mktemp -d)
+mkdir -p "$OUB/bin"
+cp "$STACK" "$OUB/pithead"
+chmod +x "$OUB/pithead"
+cp "$OUSB/bin/rauc" "$OUB/bin/rauc"
+chmod +x "$OUB/bin/rauc"
+touch "$OUB/bundle.raucb"
+: >"$OUB/calls"
+out=$(cd "$OUB" && PATH="$OUB/bin:$PATH" RAUC_LOG="$OUB/calls" \
+    RAUC_INFO_RC=1 RAUC_INFO_ERR="signature verification failed: Verify error: self-signed certificate" \
+    ./pithead os-update bundle.raucb --yes 2>&1)
+rc=$?
+assert_rc "a bad-signature bundle refuses the update" "$rc" "1"
+assert_contains "rauc's own diagnosis reaches the operator" "$out" "self-signed certificate"
+assert_not_contains "the generic contentless abort does not ALSO fire" "$out" "aborted unexpectedly"
+assert_not_contains "rauc install is never reached on a bad signature" "$(cat "$OUB/calls")" "install"
+rm -rf "$OUB"
+
+echo "== unit: os-update surfaces rauc install's own stderr, not just a bare failure (#1041) =="
+: >"$RAUC_LOG"
+out=$(
+    cd "$OUSB" || exit 1
+    PATH="$OUSB/bin:$PATH"
+    export RAUC_INFO_OUT="$OUSB/info-release.txt" PITHEAD_VARIANT_FILE="$OUSB/variant-release"
+    export PITHEAD_MIGRATION_MARKER_FILE="$OUSB/marker-scratch"
+    export RAUC_INSTALL_RC=1 RAUC_INSTALL_ERR="LastError: mounting slot failed: no such device"
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    os_update bundle.raucb --yes </dev/null 2>&1
+)
+rc=$?
+assert_rc "an install-time rauc failure is refused, not silently ignored" "$rc" "1"
+assert_contains "rauc's install-time diagnosis reaches the operator" "$out" "mounting slot failed"
+unset RAUC_INFO_RC RAUC_INFO_ERR RAUC_INSTALL_RC RAUC_INSTALL_ERR
 
 # --- os-update version floor + data-migration guards (#856 downgrade, #851 migration deadlock) ---
 # A correctly-signed bundle is not automatically a safe one: an OLDER image re-opens fixed holes,

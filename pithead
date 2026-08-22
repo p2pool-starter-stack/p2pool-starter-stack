@@ -2957,7 +2957,14 @@ os_bundle_meta() { # $1: bundle, $2: [meta.pithead] key — echoes its value or 
     # tier-4 migration leg). Verification still runs: rauc info checks the bundle signature
     # against the system keyring before printing anything. Anything unparseable degrades to
     # empty, which every consumer treats as fail-closed "unstamped".
-    rauc info --output-format=shell "$1" 2>/dev/null |
+    #
+    # `|| true` on rauc's own leg: under `set -o pipefail` a signature failure makes rauc info
+    # exit nonzero, and that alone — with sed/head both still succeeding on empty input — fails
+    # the whole pipe. In a bare `var=$(os_bundle_meta ...)` assignment that trips `set -e` right
+    # here, before any caller sees a result, which is exactly this function's own "never fails"
+    # contract broken by pipefail (#1041: the actual mechanism behind the ERR trap's contentless
+    # "aborted unexpectedly" — os_update's callers below never got a chance to run at all).
+    { rauc info --output-format=shell "$1" 2>/dev/null || true; } |
         sed -n "s/^RAUC_META_PITHEAD_$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]')='\(.*\)'\$/\1/p" |
         head -1
 }
@@ -3093,6 +3100,20 @@ os_update() {
         error "rauc is not available here — OS updates apply to the appliance image, not a checkout install."
     [ -f "$bundle" ] || error "No such bundle: $bundle"
 
+    # Verify the bundle explicitly, before anything reads its metadata (#1041). `rauc info`
+    # checks the signature against the system keyring before it prints anything, so a bad
+    # signature fails right here with RAUC's own precise diagnosis on stderr (e.g. "signature
+    # verification failed: Verify error: self-signed certificate" — a bundle signed by a chain
+    # this machine doesn't trust). Captured explicitly rather than left to whatever later reads
+    # the bundle: the dashboard's os-verify/os-install doors already run this same check
+    # (os_verify_bundle_reason) before this CLI path ever runs, but the CLI's own os-update had
+    # nothing playing that role, so its ERR trap fired with no diagnosis to show for it.
+    local rauc_info_err rauc_rc=0
+    rauc_info_err=$(rauc info "$bundle" 2>&1 >/dev/null) || rauc_rc=$?
+    if [ "$rauc_rc" -ne 0 ]; then
+        error "rauc could not verify this bundle.${rauc_info_err:+ rauc said: $(printf '%s' "$rauc_info_err" | tail -1 | tr -d '[:cntrl:]' | head -c 300)}"
+    fi
+
     # Version floor + data-migration guards — the exact refusals the dashboard's os-verify/
     # os-install verbs run (os_update_version_guard, shared so the two doors never drift).
     local bundle_version bundle_min bundle_migrates running_version guard_reason
@@ -3136,7 +3157,25 @@ os_update() {
         fi
     fi
     log "Installing OS update bundle: $bundle (running: $running, bundle: $target)"
-    rauc install "$bundle"
+    # Tee'd like the wizard's fatal path (#1028's idiom): a bare `rauc install` let RAUC's own
+    # diagnosis (a signature mismatch, an incompatible bundle) vanish, leaving only the ERR
+    # trap's generic "aborted unexpectedly" — undiagnosable on a shell-less box where the
+    # console is the only output there is. The tee keeps rauc's progress on this process's own
+    # stdout (the dashboard's install poller reads the percentage off that same stream) while a
+    # copy lands in a scratch file this function can inspect on failure. No bundle path in the
+    # error text on purpose — that is a host staging detail, and the dashboard door whitelists
+    # this exact line straight into the container-visible result.
+    local rauc_log
+    rauc_log=$(mktemp)
+    if rauc install "$bundle" 2>&1 | tee "$rauc_log"; then
+        rm -f "$rauc_log"
+    else
+        local rauc_detail
+        rauc_detail=$(grep -aE '^LastError: |^\[ERROR\] |[Ff]ailed' "$rauc_log" 2>/dev/null |
+            tail -1 | tr -d '[:cntrl:]' | head -c 300) || rauc_detail=""
+        rm -f "$rauc_log"
+        error "rauc install failed.${rauc_detail:+ rauc said: $rauc_detail}"
+    fi
 
     # A data_migration bundle raises the /data floor so a later rollback below it is refused. Armed
     # at install (conservative: before the migration actually runs on the new slot's next boot) —
