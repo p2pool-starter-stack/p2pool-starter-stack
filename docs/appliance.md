@@ -450,8 +450,11 @@ setting instead of keeping it, name it with a value of `null`. At boot:
   for a password, token or RPC credential, that it changed — never what it changed to. Wallet
   addresses print in full; confirming the payout address is the point of the display.
 - The console then counts down 60 seconds. Pulling the stick during the countdown cancels the
-  change. On a machine with a keyboard attached, `a` applies immediately and `n` cancels; a
-  headless machine needs neither key — letting the countdown run out applies the change.
+  change, and the console says so — nothing is applied. On a machine with a keyboard attached,
+  `a` applies immediately and `n` cancels; a headless machine needs neither key — letting the
+  countdown run out applies the change. If the confirmation never reaches the physical console
+  (a serial line can lose a message to a login prompt claiming it at the wrong moment), the same
+  line is always in the journal: `journalctl -u pithead-boot` on that machine.
 - Once applied, the file is deleted from the stick, the same way the installer clears its own
   pre-seed, so the same change cannot reapply on a later boot. Reinsert a fresh export to make
   another change.
