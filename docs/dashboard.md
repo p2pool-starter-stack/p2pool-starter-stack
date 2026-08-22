@@ -1015,7 +1015,11 @@ control channel as everything else on this page: the dashboard container only as
 re-derives and re-verifies every step itself.
 
 1. **Check.** The host asks the release API (over Tor) for the latest release and its OS bundle.
-   The dashboard's passive new-release badge covers the same ground hourly; the button asks now.
+   The dashboard's passive new-release badge covers the same ground hourly, from inside the
+   container. The button is a separate, host-side check with its own 10-minute anti-beacon
+   throttle: a fresh answer from inside that window is served from cache, but a click that lands
+   after a failed or in-flight check is refused outright ("an update check ran less than 10
+   minutes ago — retry in a few minutes"). Either way it is not instant on every click.
 2. **Download.** The bundle (on the order of a gigabyte) lands on the data partition, over Tor,
    resumable: a dropped connection or a closed page keeps the bytes already fetched, and Retry
    continues from there instead of starting over. Mining is unaffected, and the host refuses to
