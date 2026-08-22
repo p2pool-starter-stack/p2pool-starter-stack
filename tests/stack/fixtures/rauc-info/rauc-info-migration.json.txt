@@ -1,0 +1,7 @@
+# Captured 2026-08-22T07:45:21Z by tests/stack/fixtures/rauc-info/capture.sh
+# rauc --version: rauc 1.11.3
+# Real 'rauc info --no-verify --output-format=json' on the SAME bundle. This is RAUC
+# 1.11's shape: [meta.*] is entirely absent from the JSON output (#1093) — the fake rauc
+# in tests/stack/run.sh serves THIS file when a caller asks for json, so a regression
+# back to --output-format=json degrades to fail-closed 'unstamped', for real, in the test.
+{"compatible":"pithead-amd64","version":"1.18.0","description":null,"build":null,"hooks":[],"hash":"aad5c1fa382d88acdc0e64ea76805c5cf9a3eed6d3e410070d47f637c7fda657","images":[{"rootfs":{"variant":null,"filename":"rootfs.ext4","checksum":"d8534431168b8009a3c070a89b4b803c11dbca72fa145c8e0a75d5b082508b50","size":76,"hooks":[],"adaptive":[]}}]}

@@ -11445,12 +11445,27 @@ mkdir -p "$OUSB/bin"
 # hatches for #1041's error-surfacing tests: RAUC_INFO_RC/RAUC_INFO_ERR fail `info` (a signature
 # verdict) with a chosen message on stderr, RAUC_INSTALL_RC/RAUC_INSTALL_ERR do the same for
 # `install`. Both default to a clean 0/no-output — every test above this one never sets them.
+#
+# RAUC_INFO_OUT_JSON (#1093): most callers below never set this, so `info` behaves exactly as
+# before — cat RAUC_INFO_OUT regardless of the `--output-format` the caller actually passed,
+# which is precisely the gap #1093 named: a caller that regressed to --output-format=json would
+# still get the hand-written shell-format fixture back, so the drift could never turn any
+# assertion red. The migration-floor real-fixture block below sets RAUC_INFO_OUT_JSON so `info`
+# answers format-honestly: shell gets RAUC_INFO_OUT, json gets RAUC_INFO_OUT_JSON — two REAL
+# `rauc info` captures of the same bundle (tests/stack/fixtures/rauc-info/), not two hand-written
+# stand-ins that already agree with the parser by construction.
 cat >"$OUSB/bin/rauc" <<'EOF'
 #!/usr/bin/env bash
 echo "[rauc] $*" >>"${RAUC_LOG:?}"
 case "$1" in
 info)
-    [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT"
+    fmt=shell
+    for _a in "$@"; do case "$_a" in --output-format=*) fmt="${_a#--output-format=}" ;; esac; done
+    if [ -n "${RAUC_INFO_OUT_JSON:-}" ] && [ "$fmt" = json ]; then
+        [ -s "$RAUC_INFO_OUT_JSON" ] && cat "$RAUC_INFO_OUT_JSON"
+    else
+        [ -s "${RAUC_INFO_OUT:-}" ] && cat "$RAUC_INFO_OUT"
+    fi
     [ -n "${RAUC_INFO_ERR:-}" ] && echo "$RAUC_INFO_ERR" >&2
     exit "${RAUC_INFO_RC:-0}"
     ;;
@@ -11690,6 +11705,73 @@ FN="$OUSB/floor-none"
 rm -f "$FN"
 ourun_v "1.10.0" "$FN" "$OUSB/info-1170.txt" bundle.raucb >/dev/null 2>&1
 assert_eq "a non-migration bundle records no floor" "$([ -f "$FN" ] && echo present || echo absent)" "absent"
+
+echo "== unit: os_bundle_meta pinned against REAL rauc info output, not a hand-written stand-in (#1093) =="
+# Every info-*.txt fixture above is hand-typed RAUC_META_PITHEAD_KEY='value' text, invented to
+# already match the sed pattern it feeds — it can never catch a real parse drift. #1093: RAUC
+# 1.11's --output-format=json OMITS [meta.*] entirely (the drift os_bundle_meta's comment already
+# names), and the fake rauc's `info` case never looked at --output-format at all, so a caller that
+# regressed to json would still get the shell-format fixture back — invisible to every assertion
+# above. tests/stack/fixtures/rauc-info/*.txt are genuine `rauc info` captures off a bundle built
+# from the real render_bundle_manifest (see capture.sh for the recipe and refresh instructions),
+# and the fake rauc now answers format-honestly (RAUC_INFO_OUT for shell, RAUC_INFO_OUT_JSON for
+# json) — so this block proves the parse against real tool output, both shapes.
+RIS="$ROOT/tests/stack/fixtures/rauc-info/rauc-info-migration.shell.txt"
+RIJ="$ROOT/tests/stack/fixtures/rauc-info/rauc-info-migration.json.txt"
+if [ -s "$RIS" ] && [ -s "$RIJ" ]; then
+    ok "real rauc-info fixtures present ($RIS, $RIJ)"
+else
+    bad "real rauc-info fixtures present" "missing $RIS or $RIJ"
+fi
+
+rmeta() { # <key> — both real fixtures loaded together, so the format os_bundle_meta's own argv
+    # actually requests decides which one the fake rauc serves. A caller that regressed from
+    # --output-format=shell to json would silently start reading the json capture here instead —
+    # empty meta, not the pinned value — which is exactly the drift this block exists to catch.
+    cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="$RIS" RAUC_INFO_OUT_JSON="$RIJ" \
+        run_sourced "$OUSB" os_bundle_meta bundle.raucb "$1"
+}
+assert_eq "real bundle: os_bundle_meta reads variant off genuine shell output" \
+    "$(rmeta variant)" "release"
+assert_eq "real bundle: os_bundle_meta reads data_migration off genuine shell output" \
+    "$(rmeta data_migration)" "true"
+assert_eq "real bundle: os_bundle_meta reads minimum_os_version off genuine shell output" \
+    "$(rmeta minimum_os_version)" "1.18.0"
+# The drift itself, in isolation: pointed at ONLY the real json capture (RAUC 1.11's own shape —
+# [meta.*] entirely absent), the parse must degrade to empty — fail-closed "unstamped", never a
+# wrong-but-plausible value — regardless of which format asked for it.
+assert_eq "the real json capture alone has no meta section to read" \
+    "$(cd "$OUSB" && PATH="$OUSB/bin:$PATH" RAUC_INFO_OUT="$RIJ" RAUC_INFO_OUT_JSON="" \
+        run_sourced "$OUSB" os_bundle_meta bundle.raucb minimum_os_version)" ""
+unset -f rmeta
+
+# os_raise_data_floor, driven end to end by the REAL fixture through os_update: a migrating bundle
+# whose meta the genuine shell-format capture carries must record the floor at the value the real
+# bundle actually declares (1.18.0), not a hand-typed stand-in.
+ourun_v_realfixture() { # <running-version> <floor-file> <shell-fixture> <json-fixture> [os-update args...]
+    local rv="$1" ff="$2" ijs="$3" ijj="$4"
+    shift 4
+    (
+        cd "$OUSB" || exit
+        PATH="$OUSB/bin:$PATH"
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        PITHEAD_VERSION="$rv" PITHEAD_DATA_FLOOR_FILE="$ff" \
+            PITHEAD_MIGRATION_MARKER_FILE="${MARKER_FILE:-$OUSB/marker-scratch}" \
+            RAUC_INFO_OUT="$ijs" RAUC_INFO_OUT_JSON="$ijj" \
+            PITHEAD_VARIANT_FILE="$OUSB/variant-release" os_update "$@" </dev/null
+    )
+}
+FWR="$OUSB/floor-written-real"
+rm -f "$FWR"
+: >"$RAUC_LOG"
+ourun_v_realfixture "1.10.0" "$FWR" "$RIS" "$RIJ" bundle.raucb >/dev/null 2>&1
+assert_rc "the real migrating bundle installs" "$?" "0"
+assert_eq "the real bundle's own declared floor is recorded, not a stand-in value" \
+    "$(tr -d ' \n' <"$FWR" 2>/dev/null)" "1.18.0"
+unset -f ourun_v_realfixture
+unset RIS RIJ FWR
 
 # #851 marker lifecycle: a migrating install leaves the pending marker (stamped with the bundle's
 # version) for the next boot's chain hold; a non-migrating install clears a stale one — it
@@ -12841,6 +12923,48 @@ assert_eq "never ran + unreadable is-active: fails, names it unreadable" \
 assert_eq "ran but the page count is garbage: fails cleanly, no arithmetic error" \
     "$(hbv banana active)" "1 hugepage pool unreadable at boot (HugePages_Total: banana, want >= 3072)"
 unset -f hbv
+
+echo "== unit: restore_live_state_verdict — a restore leaves proof it is RUNNING, not just unpacked (#1091) =="
+# tests/os/run.sh's phase_install restore leg cannot be driven from here (it needs a real KVM
+# guest, a genuine encrypted backup, and the wizard's HTTP upload path), but the verdict it now
+# checks is pure text-matching over two already-observed strings (`podman ps` names, /api/state's
+# live stratum wallet) — #1091 pulled it into tests/os/restore-live-state-verdict.sh for exactly
+# that reason. The case that matters is the second pair below: `config.json` on disk (proven by a
+# separate assertion in the battery) says nothing about whether the stack is actually RUNNING
+# it — the verdict must fail that case even though the file landed.
+# Mutation run: drop the live-wallet comparison and fall back to judging `podman ps` alone -> the
+# "stack up but wallet never came back" and "stack up but wrong wallet" cases both flip from fail
+# to pass, silently reintroducing #1091.
+# The same fixture wallet tests/os/run.sh's battery uses (HARNESS_WALLET) — any well-formed
+# address works here since the verdict only ever string-compares two values, never parses one.
+RLV_WALLET="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F9YMEiMNjN6W4Shn4pLcfNAja621jwyg"
+rlv() { # <podman-ps-names> <live-wallet> <want-wallet> -> "<rc> <verdict-text>"
+    local out rc
+    out=$(
+        # shellcheck disable=SC1091
+        source "$ROOT/tests/os/restore-live-state-verdict.sh"
+        restore_live_state_verdict "$1" "$2" "$3"
+    )
+    rc=$?
+    printf '%s %s' "$rc" "$out"
+}
+assert_eq "stack up + live wallet matches: passes" \
+    "$(rlv "dashboard caddy monerod" "$RLV_WALLET" "$RLV_WALLET")" \
+    "0 the restored machine's LIVE state (p2pool's own running config) carries the restored wallet — not just the unpacked archive file"
+assert_eq "stack never came up: fails — the #1091 case a file-only check missed" \
+    "$(rlv "" "" "$RLV_WALLET")" \
+    "1 the stack never came up on the restored machine (podman ps: 'none') — config.json on disk is not proof the machine is RUNNING what was restored (#1091)"
+assert_eq "stack up but live wallet never came back: fails, names it unreadable" \
+    "$(rlv "dashboard caddy" "" "$RLV_WALLET")" \
+    "1 the stack is up but live state never carried a readable stratum wallet (got 'none')"
+assert_eq "stack up but live wallet is a fresh/different address: fails — config.json alone would have missed this too" \
+    "$(rlv "dashboard caddy" "44SomeFreshUnrelatedAddress" "$RLV_WALLET")" \
+    "1 the stack is up but live state's wallet is '44SomeFreshUnrelatedAddress', not the restored '$RLV_WALLET' — the restore landed a file but the running stack does not reflect it (#1091)"
+assert_eq "stack up but /api/state answered literal Unknown/null: still fails, not treated as a match" \
+    "$(rlv "caddy dashboard" "Unknown" "$RLV_WALLET")" \
+    "1 the stack is up but live state never carried a readable stratum wallet (got 'Unknown')"
+unset -f rlv
+unset RLV_WALLET
 
 echo "== unit: check_data_wipe_note — doctor surfaces the wipe note, a support conversation gets the fact (#1121) =="
 # Same shape as the pre-seeding block: PITHEAD_PRESEED_DIR stands in for the ESP. Appliance-only

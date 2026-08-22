@@ -45,6 +45,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=tests/os/hugepages-boot-verdict.sh
 . "$SCRIPT_DIR/hugepages-boot-verdict.sh"
+# shellcheck source=tests/os/restore-live-state-verdict.sh
+. "$SCRIPT_DIR/restore-live-state-verdict.sh"
 
 IMAGE=""
 KEEP=0
@@ -1815,9 +1817,11 @@ phase_install() {
         return
     }
     ok "restore leg: uploaded the backup archive instead of the form"
+    local rhandoff=""
     tries2=0
     while [ "$tries2" -lt 24 ]; do
-        curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"' && break
+        rhandoff=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null)
+        printf '%s' "$rhandoff" | grep -q '"password"' && break
         sleep 5
         tries2=$((tries2 + 1))
     done
@@ -1827,6 +1831,10 @@ phase_install() {
         return
     }
     ok "restore leg: the restored config drove provisioning to a credentials card"
+    # Captured for the live-state check below (#1091) — the restored machine's OWN generated
+    # login, not the source machine's, since a keep-reinstall would have kept the old one.
+    DASH_USER=$(printf '%s' "$rhandoff" | jq -r '.username // "admin"')
+    DASH_PASS=$(printf '%s' "$rhandoff" | jq -r '.password // ""')
     curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null
     rm -f "$jar"
     tries2=0
@@ -1874,6 +1882,47 @@ phase_install() {
         ok "restore leg: restored machine carries the ORIGINAL wallet address, not a fresh one"
     else
         bad "restore leg: restored machine's config does not carry the original wallet"
+    fi
+    # THE assertion this leg exists for (#1091): config.json landing on disk proves the archive
+    # was UNPACKED — it is a grep of a file the restore itself just wrote, so it is true even if
+    # the stack never came back up on the restored config. The DIY channel already proves the
+    # stronger claim (tests/integration/run.sh reads .pool.type out of LIVE state after
+    # restore+up); mirror it here — wait for the stack to actually come up, then require a value
+    # sourced from the restored config to appear in LIVE state. The verdict itself
+    # (restore_live_state_verdict) is fixture-tested at tier 1 (tests/stack/run.sh) the same way
+    # #1212's hugepages_boot_verdict is — only the polling against the real guest lives here.
+    local rsnames="" live_wallet="" verdict
+    local rsdeadline
+    rsdeadline=$(($(date +%s) + 900))
+    while [ "$(date +%s)" -lt "$rsdeadline" ]; do
+        rsnames=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
+        case "$rsnames" in *dashboard*caddy* | *caddy*dashboard*) break ;; esac
+        sleep 15
+    done
+    case "$rsnames" in
+    *dashboard*caddy* | *caddy*dashboard*)
+        local lwdeadline
+        lwdeadline=$(($(date +%s) + 180))
+        while [ "$(date +%s)" -lt "$lwdeadline" ]; do
+            live_wallet=$(curl -sSk -u "$DASH_USER:$DASH_PASS" "https://$ip/api/state" 2>/dev/null | jq -r '.stratum.wallet // ""')
+            [ -n "$live_wallet" ] && [ "$live_wallet" != "Unknown" ] && [ "$live_wallet" != "null" ] && break
+            sleep 10
+        done
+        ;;
+    esac
+    if verdict=$(restore_live_state_verdict "$rsnames" "$live_wallet" "$HARNESS_WALLET"); then
+        ok "restore leg: $verdict"
+    else
+        bad "restore leg: $verdict"
+        # A stack that never came up won't answer the identity check below either — stop here
+        # rather than burn its 600s timeout on a machine already known to be broken.
+        case "$rsnames" in
+        *dashboard*caddy* | *caddy*dashboard*) ;;
+        *)
+            rm -f "$target_disk" "$restore_archive" "$restore_target"
+            return
+            ;;
+        esac
     fi
     local new_onion="" tor_hostname=""
     local odeadline
