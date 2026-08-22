@@ -246,6 +246,10 @@ jobs:
         run: make lint-sh
       - name: Run pithead test suite
         run: bash tests/stack/run.sh
+      - name: Run real-image data-reset suite
+        # Real ext4 damage against the product's own repair escalation (#1062). Unprivileged —
+        # e2fsprogs on plain files — and it hard-fails rather than skips when CI lacks the tools.
+        run: bash tests/stack/test_data_reset.sh
       - name: Test-inventory drift check
         # The inventory generator is grep-based; it exits non-zero when any suite it
         # enumerates counts zero — i.e. a suite moved or changed shape and the inventory
