@@ -24,7 +24,7 @@ build/dashboard/tests/frontend/logic.test.mjs	836
 build/dashboard/tests/frontend/workerview.test.mjs	518
 build/dashboard/tests/service/test_alert_service.py	1102
 build/dashboard/tests/service/test_algo_service.py	839
-build/dashboard/tests/service/test_control_service.py	522
+build/dashboard/tests/service/test_control_service.py	459
 build/dashboard/tests/service/test_data_service.py	3056
 build/dashboard/tests/service/test_egress.py	480
 build/dashboard/tests/service/test_metrics.py	463
