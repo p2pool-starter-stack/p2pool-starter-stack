@@ -42,55 +42,8 @@ assert_rc "rejects ':' (compose volume-mount injection)" "$?" "1"
 run_sourced "$SANDBOX" assert_safe_dir "/mnt/disk/monero" >/dev/null 2>&1
 assert_rc "allows mount subfolder" "$?" "0"
 
-echo "== unit: lint-operator-strings self-test (#755) =="
-# The operator-strings guard's frontend scanner is non-trivial awk (comment-stripping + CSS-hex-colour
-# skip); a silent break would make it stop catching leaks. Its --self-test drives fixtures through the
-# real scanners and fails if a planted #NNN is missed or a hex colour/comment is wrongly flagged.
-bash "$ROOT/scripts/lint-operator-strings.sh" --self-test >/dev/null 2>&1
-assert_rc "operator-strings guard self-test passes" "$?" "0"
-
-echo "== unit: pin-watch self-test (#1128) =="
-# The watcher's whole product is the COMPARISON: our pins do not spell versions the way upstream
-# tags them (`caddy:2.11.4` vs `v2.11.4`, `minotari_node:v5.3.1-mainnet` vs `v5.6.0`), so a plain
-# string compare reports two components stale every week for ever and the report gets muted — as
-# useless as the scheduled workflow that lived on a non-default branch and never ran at all. Its
-# --self-test drives the normalisation over the real pin spellings and drives both lookup failure
-# paths, because an upstream lookup that could not run must never read as "current".
-bash "$ROOT/scripts/pin-watch.sh" --self-test >/dev/null 2>&1
-assert_rc "pin-watch self-test passes" "$?" "0"
-
-echo "== unit: resolve-pins self-test (#1137) =="
-# pin-watch.sh above compares VERSIONS; it does not ask whether a pinned tag@sha256 digest still
-# matches what its registry serves for that tag. This is the check that does, and its --self-test
-# drives the exact half-done bump #1137 is about (tag moved, old digest left in the file) red.
-bash "$ROOT/scripts/resolve-pins.sh" --self-test >/dev/null 2>&1
-assert_rc "resolve-pins self-test passes" "$?" "0"
-
-echo "== unit: verify-healthcheck-scripts self-test (#1098) =="
-# #1098: docker-compose.yml named a healthcheck script (xmrig-proxy-healthcheck.sh) that the
-# pinned appliance images predated — the container reported unhealthy forever with nothing
-# actually broken. This is the narrower, permanent guard: does each service's OWN Dockerfile
-# actually place a file where compose's healthcheck looks for it. The self-test drives the
-# parsers (WORKDIR resolution, COPY --from=, multi-source directory COPYs) against fixtures and
-# reproduces the issue's own named mutation end to end: rename the script in a Dockerfile without
-# touching compose, and the check must go red.
-bash "$ROOT/scripts/verify-healthcheck-scripts.sh" --self-test >/dev/null 2>&1
-assert_rc "verify-healthcheck-scripts self-test passes" "$?" "0"
-
-echo "== unit: verify-healthcheck-scripts against the real tree (#1098) =="
-# The self-test above proves the parsers; this proves the CURRENT docker-compose.yml and build/*
-# Dockerfiles actually agree right now — the same real-tree pass release.sh and CI both get, so a
-# healthcheck rename that forgets the compose side (or vice versa) fails here before it ever
-# reaches an appliance.
-bash "$ROOT/scripts/verify-healthcheck-scripts.sh" >/dev/null 2>&1
-assert_rc "every real healthcheck script exists where its own Dockerfile promises (#1098)" "$?" "0"
-
-echo "== unit: patch-coverage overlap self-test (#1000) =="
-# diff-cover exits 0 on "No lines with coverage information" — a vacuous pass. The wrapper's
-# overlap check is what turns that into a loud not-applicable pass or a real failure; its
-# --self-test drives fixtures through both branches plus the file-present quiet pass.
-bash "$ROOT/scripts/patch-coverage.sh" --self-test >/dev/null 2>&1
-assert_rc "patch-coverage wrapper self-test passes" "$?" "0"
+# shellcheck source=tests/stack/test-harness-tooling.sh
+source "$HERE/test-harness-tooling.sh"
 
 echo "== unit: is_public_ip classifier (#113) =="
 # Globally-routable -> rc 0 (public). Includes boundaries just OUTSIDE each excluded range.
