@@ -37,7 +37,9 @@ for tool in mkfs.ext4 e2fsck mke2fs debugfs; do
 done
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# One trap, both dirs: bash traps replace rather than stack, so a bare "$WORK" trap here would
+# silently disarm lib.sh's cleanup of $SANDBOX and leak a temp dir per run.
+trap 'rm -rf "$WORK" "${SANDBOX:-}"' EXIT
 IMG="$WORK/data.img"
 PAYLOAD="IRREPLACEABLE-WALLET-KEY-MATERIAL"
 
@@ -69,9 +71,18 @@ decide() { # $1: marker path -> verdict on stdout, product log on stderr
 fresh_image() {
     rm -f "$IMG"
     truncate -s 600M "$IMG"
-    mkfs.ext4 -q -F -L data "$IMG"
+    # A fixture that failed to build must say so HERE — letting it limp on would fail a later
+    # assertion whose wording blames the product for what was a disk-full or a broken debugfs.
+    mkfs.ext4 -q -F -L data "$IMG" || {
+        echo "FATAL: mkfs.ext4 could not build the fixture image" >&2
+        exit 1
+    }
     printf '%s\n' "$PAYLOAD" >"$WORK/payload.txt"
     debugfs -w -R "write $WORK/payload.txt wallet.txt" "$IMG" >/dev/null 2>&1
+    [ "$(debugfs -R 'cat /wallet.txt' "$IMG" 2>/dev/null)" = "$PAYLOAD" ] || {
+        echo "FATAL: could not seed the payload into the fixture image" >&2
+        exit 1
+    }
 }
 
 echo "== real-image: a healthy /data is never touched =="
