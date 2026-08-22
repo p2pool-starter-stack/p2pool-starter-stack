@@ -927,7 +927,6 @@ echo "== regression: every command installs the Tor-egress firewall BEFORE compo
 # Each case neutralises the command's preamble and records the order of the two load-bearing ops; the
 # firewall sentinel MUST precede the compose sentinel. fw_then_compose() extracts just those two from
 # whatever else the function prints (warnings, banners) so the assert is exact.
-fw_then_compose() { printf '%s\n' "$1" | grep -xE 'firewall|compose' | tr '\n' ','; }
 
 # up: the reference path #276 fixed — pin it too so a future reorder of stack_up is caught here.
 up_order=$(
@@ -1105,41 +1104,6 @@ echo "== black-box: verify_release_images fail-closed gate (#376) =="
 # pinned image is already present, and logs the cosign argv that follows the image ref — which keeps
 # every assertion below reading exactly as it did when cosign was a host binary. A release install
 # is a dir without build/dashboard/Dockerfile.
-write_fake_docker() { # <bin-dir> — the containerized verifier's stand-in (#1072)
-    mkdir -p "$1"
-    cat >"$1/docker" <<'EOF'
-#!/usr/bin/env bash
-case "$1" in
-info | pull) exit 0 ;;
-image) exit 0 ;; # `image inspect` -> pinned verifier already local, nothing pulled
-run)
-    shift
-    # Drop the run flags up to and including the pinned verifier image; what remains is the cosign
-    # argv the caller actually asked for.
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-        *sigstore/cosign*)
-            shift
-            break
-            ;;
-        *) shift ;;
-        esac
-    done
-    echo "[cosign] $*" >>"${COSIGN_LOG:-/dev/null}"
-    exit "${COSIGN_RC:-0}"
-    ;;
-esac
-exit 0
-EOF
-    chmod +x "$1/docker"
-}
-write_unreachable_docker() { # <bin-dir> — docker present, daemon down: the "cannot verify" branch.
-    # Probing the daemon rather than unsetting PATH keeps this deterministic on hosts that ship
-    # /usr/bin/docker, which the pinned PATHs below deliberately still expose.
-    mkdir -p "$1"
-    printf '#!/usr/bin/env bash\n[ "$1" = "info" ] && exit 1\nexit 0\n' >"$1/docker"
-    chmod +x "$1/docker"
-}
 VRI="$SANDBOX/verify376"
 write_fake_docker "$VRI/bin"
 write_unreachable_docker "$VRI/nodocker"
@@ -1559,19 +1523,6 @@ mk_timedatectl ""
 assert_eq "clock_sync_status: blank => unknown" "$(PATH="$CLKBIN:$PATH" run_sourced "$SANDBOX" clock_sync_status)" "unknown"
 
 echo "== unit: monero_address_type — p2pool needs a PRIMARY address, and a REAL one (#250, #829) =="
-# Two gates in one verdict. Shape (network-byte prefix + length): primary 4…/95 (the only payable
-# kind), integrated 4…/106, subaddress 8…/95. Then base58-check: block-wise decode + the 4-byte
-# legacy-Keccak checksum — a well-shaped address with one mistyped character crashes p2pool at
-# startup, so "checksum" is its own verdict with its own operator message.
-#
-# Checksum-VALID fixtures are well-known PUBLIC addresses (never ours): XMRig's donation address
-# (primary) and the Monero project's donation address (subaddress). The integrated fixture is the
-# XMRig donation keys re-tagged with a zero payment id and a recomputed checksum — no public
-# project publishes a stable integrated donation address. The checksum-INVALID primary is the KVM
-# harness wallet that slipped the shape-only gate and crash-looped a provisioned appliance.
-VALID_PRIMARY="48edfHu7V9Z84YzzMa6fUueoELZ9ZRXq9VetWzYGzKt52XU5xvqgzYnDK9URnRoJMk1j8nLwEVsaSWJ4fhdUyZijBGUicoD"
-VALID_SUBADDR="888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H"
-VALID_INTEGRATED="4JMJg6ic6R584YzzMa6fUueoELZ9ZRXq9VetWzYGzKt52XU5xvqgzYnDK9URnRoJMk1j8nLwEVsaSWJ4fhdUyZijGDpDGTWtLM516v46mB"
 _a94="$(printf 'a%.0s' $(seq 94))"
 _a93="$(printf 'a%.0s' $(seq 93))"
 assert_eq "monero_address_type: real 4…/95  => primary" "$(run_sourced "$SANDBOX" monero_address_type "$VALID_PRIMARY")" "primary"
@@ -1599,16 +1550,6 @@ chmod +x "$NOPY/python3"
 assert_eq "monero_address_type: python3 unusable => shape-only primary" "$(PATH="$NOPY:$PATH" run_sourced "$SANDBOX" monero_address_type "4$_h94")" "primary"
 
 echo "== unit: tari_address_type — DammSum over both address forms (#845) =="
-# The Tari sibling of the gate above. Both Tari forms (base58 and emoji) carry a 1-byte DammSum
-# checksum; the decode and check order mirror tari's own from_bytes. The checksum-VALID fixture
-# is the dual mainnet address hardcoded in tari's OWN test suite (test_serialize_deserialize_
-# dual_address: one-sided, known view/spend keys) — reference-blessed, never ours. The emoji
-# fixture is that same address's byte-for-byte emoji form; the single-address fixture reuses the
-# reference spend key with a recomputed checksum (no project publishes a single-form address).
-# The invalid emoji strings are ALSO tari's own test vectors (invalid_emoji / invalid_checksum).
-VALID_TARI="126J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5BJ"
-VALID_TARI_EMOJI="🐢📟🍼🌈🍓🚓➕🎸🍆🍷🎣🍗📿😂🥊⏰🍯👾🤔👒🍾👀🍼🌊🎷📟😈🚨👙🍈🌈🛵🤢🍔🔋👙🚽🤑🎽🎓🎓🐀🐜🐴🥄🚿📷💰👶👍🎉🍄🎢🔌🐋🚰🚑💅👢🦂🐬🐋🍗🍸🎹🏀🍄"
-VALID_TARI_SINGLE="1224yPceFvbksLKQ8JE6APDzVY2D6P3SpXwB5LLC3BH4F7oF"
 assert_eq "tari_address_type: reference dual base58 => ok" "$(run_sourced "$SANDBOX" tari_address_type "$VALID_TARI")" "ok"
 assert_eq "tari_address_type: same address, emoji form => ok" "$(run_sourced "$SANDBOX" tari_address_type "$VALID_TARI_EMOJI")" "ok"
 assert_eq "tari_address_type: single form => ok" "$(run_sourced "$SANDBOX" tari_address_type "$VALID_TARI_SINGLE")" "ok"
@@ -3824,25 +3765,7 @@ assert_rc "apply without .env fails" "$rc" "1"
 assert_contains "apply needs setup" "$out" "setup"
 
 echo "== black-box: config validation =="
-V="$SANDBOX/val"
-mkdir -p "$V/build/tari" "$V/build/dashboard"
-: >"$V/build/dashboard/Dockerfile"
-cp "$STACK" "$V/pithead"
-make_stubs "$V/bin"
-cp "$ROOT/build/tari/config.toml.template" "$V/build/tari/"
-mkdir -p "$V/data/monero" "$V/data/tari" "$V/data/p2pool" "$V/data/tor" "$V/data/dashboard" "$V/data/p2pool/stats"
-seed_env() {
-    cat >"$V/.env" <<EOF
-MONERO_ONION_ADDRESS=mona.onion
-TARI_ONION_ADDRESS=taria.onion
-P2POOL_ONION_ADDRESS=p2pa.onion
-PROXY_AUTH_TOKEN=ORIGINALTOKEN
-HOST_IP=box.lan
-DEPLOYMENT_COMPLETED=true
-COMPOSE_PROFILES=local_node
-EOF
-}
-WALLET="$VALID_PRIMARY" # checksum-valid mainnet primary (the XMRig donation address) — #250 gates the type, #829 the checksum
+build_val_sandbox
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"banana"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
@@ -5397,12 +5320,6 @@ echo "== unit+black-box: secret files are owner-only from creation (#368) =="
 # The subshell umask must make the secret-bearing files 600 from the FIRST byte — a chmod after
 # the write leaves a world-readable window on a shared host, and a silently failed chmod used to
 # leave them 644 forever. The mv shim captures the credential temp file's mode BEFORE it lands on
-# config.json, proving the mode at creation, not just the end state.
-# GNU form first: `stat -c` errors cleanly on BSD/macOS, so the `||` fallback fires there. The
-# reverse order is wrong — on Linux `stat -f` is a VALID flag (filesystem status) that succeeds
-# with the wrong output, so the fallback never runs and CI (Linux) reads garbage.
-file_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null; }
-file_uid() { stat -c %u "$1" 2>/dev/null || stat -f %u "$1" 2>/dev/null; }
 PB="$SANDBOX/perm368"
 mkdir -p "$PB/bin"
 printf '{ "monero": {} }\n' >"$PB/config.json"
@@ -6574,37 +6491,7 @@ echo "== black-box: dashboard control channel (#33) =="
 # A deployed sandbox with the control channel on: config carries a dashboard password (required)
 # and dashboard.control.enabled, docker/sudo stubbed. The runner is exercised end-to-end against
 # real spool files; `apply` inside it runs this same sandboxed pithead.
-C="$SANDBOX/control"
-mkdir -p "$C/build/tari" "$C/build/dashboard" \
-    "$C/data/monero" "$C/data/tari" "$C/data/p2pool/stats" "$C/data/tor" "$C/data/dashboard"
-: >"$C/build/dashboard/Dockerfile"
-cp "$STACK" "$C/pithead"
-# The control gate reads config.reference.json (the closed schema) from beside the script; it ships
-# in the bundle + checkout root, so mirror it into the sandbox.
-cp "$ROOT/config.reference.json" "$C/config.reference.json"
-make_stubs "$C/bin"
-cp "$ROOT/build/tari/config.toml.template" "$C/build/tari/"
-# The password hash step reads the pinned Caddy image out of docker-compose.yml (#8).
-cp "$ROOT/docker-compose.yml" "$C/docker-compose.yml"
-CTRL_LOG="$C/docker.log"
-seed_control_env() {
-    cat >"$C/.env" <<EOF
-MONERO_ONION_ADDRESS=mona.onion
-TARI_ONION_ADDRESS=taria.onion
-P2POOL_ONION_ADDRESS=p2pa.onion
-PROXY_AUTH_TOKEN=ORIGINALTOKEN
-HOST_IP=box.lan
-DEPLOYMENT_COMPLETED=true
-COMPOSE_PROFILES=local_node
-EOF
-}
-control_config() { # <pool> [extra dashboard keys...] -> writes $C/config.json
-    printf '{ "monero":{"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"},
-              "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"%s"},
-              "dashboard":{"secure":true,"host":"box.lan",
-                           "auth":{"username":"admin","password":"a control passphrase"},
-                           "control":{"enabled":true}} }\n' "$WALLET" "$1" >"$C/config.json"
-}
+build_control_sandbox
 
 # Fail-closed: enabling the control channel without a dashboard password must not validate.
 seed_control_env
@@ -6724,7 +6611,6 @@ REQS="$C/data/control/requests"
 RESULTS="$C/data/control/results"
 STAGED="$C/data/control/staged"
 AUDIT="$C/data/control/audit/control.log"
-run_pending() { (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead control-run-pending 2>&1); }
 
 # Preview: a valid typed intent (pool main -> mini) → previewed result + a host-side staged copy.
 jq -n --arg w "$WALLET" --arg id "$UUID1" '{id:$id, action:"preview", actor:"admin", config:{
@@ -9354,15 +9240,6 @@ core_reads=$(awk '/^wizard_ask_core\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read 
 shape_reads=$(awk '/^wizard_ask_shape\(\) \{/,/^\}/' "$STACK" | grep -c '^\s*read -r')
 assert_eq "wizard_ask_core has exactly 12 read prompts (wallets, node config, pool tier, dashboard login)" "$core_reads" "12"
 assert_eq "wizard_ask_shape has exactly 6 read prompts (clearnet-sync, remote-access, alerts cluster, local-miner opt-in)" "$shape_reads" "6"
-
-# A small helper so tests can drive the whole Q&A -> write in one sourced call, sharing the globals
-# wizard_ask_core/wizard_ask_shape set with wizard_write_config (each function's locals don't
-# survive a return, so they must run in the same invocation).
-run_wizard() {
-    wizard_ask_core
-    wizard_ask_shape
-    wizard_write_config
-}
 
 echo "== unit: wizard — Enter-through defaults skip everything but the core answers (#502) =="
 # Local node, every optional prompt left blank. Proves two things at once: the core answers land
