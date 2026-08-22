@@ -42,6 +42,10 @@
 # --keep leaves the VM + disks for inspection.
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=tests/os/hugepages-boot-verdict.sh
+. "$SCRIPT_DIR/hugepages-boot-verdict.sh"
+
 IMAGE=""
 KEEP=0
 PHASE="all"
@@ -492,14 +496,20 @@ phase_boot() {
     # Hugepages are load-bearing (the RandomX dataset must land in hugetlbfs, not the cgroup —
     # the Dockerfile's own words): the baked sysctl reserves 3072 2M pages, and a boot that
     # silently lost them starves the miner while everything else looks healthy. Since #977 this
-    # also pins the boot-time sizing unit's no-op branch: on this 16 GiB guest it must leave
-    # the full pool alone (the degrade tiers are tier-1, stack suite).
-    local hp
+    # also aims to pin the boot-time sizing unit's no-op branch — but HugePages_Total alone reads
+    # identically whether the unit ran and correctly changed nothing, or never ran at all: the
+    # baked sysctl reserves the same pool either way. Pairing the page count with the unit's own
+    # record (systemd's is-active, true only once the RemainAfterExit=yes oneshot has actually
+    # run) tells the two apart (#1212); hugepages_boot_verdict is fixture-tested at tier 1
+    # (tests/stack/run.sh) so the discrimination itself is provable without a KVM boot. The
+    # degrade tiers this unit computes are proven separately, also tier-1.
+    local hp active verdict
     hp=$(_ssh "awk '/^HugePages_Total/{print \$2}' /proc/meminfo" 2>/dev/null) || hp=""
-    if [ -n "$hp" ] && [ "$hp" -ge 3072 ]; then
-        ok "hugepage pool reserved at boot ($hp pages)"
+    active=$(_ssh "systemctl is-active pithead-hugepages.service" 2>/dev/null | tr -d '\r\n') || active=""
+    if verdict=$(hugepages_boot_verdict "$hp" "$active"); then
+        ok "$verdict"
     else
-        bad "hugepage pool missing or short at boot (HugePages_Total: ${hp:-unreadable}, want >= 3072)"
+        bad "$verdict"
     fi
 
     # #895: machine-id must be assigned once and then STAY. An empty-baked image with no
