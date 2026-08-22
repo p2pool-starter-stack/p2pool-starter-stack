@@ -1848,18 +1848,26 @@ phase_install() {
     else
         bad "restore leg: restored machine's config does not carry the original wallet"
     fi
-    local new_onion=""
+    local new_onion="" tor_hostname=""
     local odeadline
     odeadline=$(($(date +%s) + 600))
     while [ "$(date +%s)" -lt "$odeadline" ]; do
         new_onion=$(_ssh "grep MONERO_ONION_ADDRESS /data/pithead/.env 2>/dev/null" | cut -d= -f2 | tr -d '\r')
-        [ -n "$new_onion" ] && break
+        tor_hostname=$(_ssh "podman exec tor cat /var/lib/tor/monero/hostname 2>/dev/null" | tr -d '\r')
+        [ -n "$new_onion" ] && [ -n "$tor_hostname" ] && break
         sleep 15
     done
-    if [ -n "$new_onion" ] && [ "$new_onion" = "$orig_onion" ]; then
+    # .env is itself an archive member that load_preserved_state replays verbatim whenever it is
+    # already non-empty (pithead:6155-6166) — new_onion == orig_onion here proves only that the
+    # CONFIG FILE made the round trip, which holds even if the Tor data dir (the actual onion
+    # PRIVATE KEYS) was dropped from the backup: the stale address string rides along in .env while
+    # Tor silently mints a fresh, unrelated hidden service underneath it (#1090). The only
+    # comparison that proves the keys themselves came back is against Tor's OWN hostname file,
+    # sourced from the restored key material rather than from the archived config.
+    if [ -n "$new_onion" ] && [ -n "$tor_hostname" ] && [ "$new_onion" = "$orig_onion" ] && [ "$tor_hostname" = "$orig_onion" ]; then
         ok "restore leg: restored machine kept the ORIGINAL Tor identity, not a regenerated one"
     else
-        bad "restore leg: onion address changed ($orig_onion -> ${new_onion:-none}) — identity was not restored"
+        bad "restore leg: onion identity not restored (.env: $orig_onion -> ${new_onion:-none}, Tor's own hostname: ${tor_hostname:-none})"
     fi
     rm -f "$target_disk" "$restore_archive" "$restore_target"
 }
@@ -3046,10 +3054,14 @@ phase_fault() {
 #          reimplementation of it — which arms the `pithead-reset` marker on the ESP
 #          ($PRESEED_DIR/pithead-reset, default /boot/efi) and reboots. pithead-data-reset picks
 #          the marker up before /data mounts, reformats it, and consumes the marker. Assert the
-#          machine comes back to the wizard, the provisioned config and old container images are
-#          gone, the seeded dirs are back, and — the reset-tier rule — host identity (SSH
-#          host-key fingerprint, machine-id) is FRESH, not carried over: a handed-over box must
-#          not keep the old owner's identity (os/overlay/pithead-data-reset).
+#          machine comes back to the wizard without bricking, the provisioned config and old
+#          container images are gone, and — the reset-tier rule — host identity (SSH host-key
+#          fingerprint, machine-id) is FRESH, not carried over: a handed-over box must not keep
+#          the old owner's identity (os/overlay/pithead-data-reset). The reseed directive itself
+#          (systemd-repart's MakeDirectories= for the overlay/var upperdirs and /pithead) is
+#          proven statically against the built image in tests/os/verify-image.sh (#1092) — a
+#          post-boot dir check here cannot observe a dropped entry honestly (see the comment at
+#          the assertion site below).
 #   leg 2  the OTHER trigger: a data partition that will not mount even after fsck. Corrupt the
 #          ext4 magic on partition 4 (the fixed data slot) from the HOST, on the powered-off
 #          disk, then boot and assert the box self-heals into the wizard instead of bricking.
@@ -3170,11 +3182,17 @@ phase_reset() {
     else
         ok "the provisioned config is gone"
     fi
-    if _ssh "test -d /data/overlay/var && test -d /data/overlay/var-work && test -d /data/pithead"; then
-        ok "the /var overlay + /pithead dirs were reseeded on the fresh partition"
-    else
-        bad "reseeded dirs missing after factory-reset (/data/overlay/var, /data/overlay/var-work, /data/pithead)"
-    fi
+    # #1092: a post-boot `test -d` here is true by construction, not a check of the reseed. The
+    # overlay/var + var-work upperdirs cannot be observed missing at this point — with no `nofail`
+    # on that fstab line (os/rauc/populate-slot.sh), a missing upperdir fails local-fs.target on
+    # this read-only root and the box never answers SSH, so the leg would already have bailed
+    # above at "guest never returned after factory-reset — BRICKED". And /data/pithead is
+    # recreated by pithead-sync's own `mkdir -p` on every boot (os/overlay/pithead-sync) whether
+    # or not repart seeded it, so its presence here proves the sync script ran, not that the seed
+    # worked. The seeding mechanism itself — systemd-repart's MakeDirectories= for all three dirs
+    # — is asserted statically against the built image in tests/os/verify-image.sh, the one place
+    # that can actually observe a dropped entry. What THIS leg proves is the pair above: the
+    # reformat+reboot cycle didn't brick, and it landed back at an unprovisioned wizard.
     # The dashboard image is BAKED into the OS image (the wizard archive) and legitimately
     # reloaded onto the fresh store by the post-reset wizard boot — its presence proves nothing.
     # The wipe probe is an image that only ever arrives by PULL at provision time: monerod.
