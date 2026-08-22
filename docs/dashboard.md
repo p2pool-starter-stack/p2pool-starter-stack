@@ -703,6 +703,10 @@ round minimum; and collecting any win needs a share in the P2Pool PPLNS window (
 being a "VIP"). So the optimum donation is the minimum that clears your tier — never more. A tier
 is raffle status, not an XMR payout, and the card says so. The tier thresholds come from the
 server's tier table — the same one the donation controller steers by — so the two can't disagree.
+Because the credited 1h average lags what the controller actually routes, the controller also
+watches that average's own trend: when it is falling, steering switches to the projected value —
+never the other way around — so a decay toward the round minimum is answered before it lands
+rather than after. A rising trend changes nothing.
 
 NOTE: on the mini/nano sidechains the block adds a reminder that switching the P2Pool sidechain
 resets your PPLNS shares — and with them XvB win collectability until a new share lands.
