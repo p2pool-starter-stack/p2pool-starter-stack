@@ -33,7 +33,10 @@ CVE-2026-24049
 # all pin v28.5.2+incompatible. The advisory is also a daemon-side authz bypass — compose links the
 # client half, and the appliance talks to podman's compat socket, not dockerd.
 # Clears when compose moves to the docker 29 module path; `go list -m -versions github.com/docker/docker`
-# is the one-line check. The weekly CVE sweep (#833) re-surfaces it regardless (#1153).
+# is the one-line check. Nothing re-surfaces this on its own: the weekly CVE sweep (#833) scans WITH
+# this file applied, so a muted finding never reaches it (#1174). scripts/trivyignore-watch.sh
+# checks whether this ID still shows up in any image the file covers; run it by hand until its
+# weekly wiring lands, same as the clearing check above.
 CVE-2026-34040
 # NOTE ON GO STDLIB FINDINGS — there are none listed here on purpose. The appliance rootfs used
 # to download upstream release binaries and inherit whichever Go toolchain built them, so every Go
@@ -55,8 +58,10 @@ CVE-2026-34040
 # nobody had touched.
 #
 # Cleared when a base bump brings 2.41.5-0+deb13u1 in — `docker run --rm python:3.11-slim
-# dpkg-query -W util-linux` is the one-line check, and all four go together. The weekly CVE sweep
-# (#833) re-surfaces them regardless, so this cannot rot silently.
+# dpkg-query -W util-linux` is the one-line check, and all four go together. Nothing re-surfaces
+# these on its own: the weekly CVE sweep (#833) scans WITH this file applied, so a muted finding
+# never reaches it (#1174). scripts/trivyignore-watch.sh checks whether an ID like these still
+# shows up in any image the file covers; run it by hand until its weekly wiring lands.
 CVE-2026-53612
 CVE-2026-53613
 CVE-2026-53614
