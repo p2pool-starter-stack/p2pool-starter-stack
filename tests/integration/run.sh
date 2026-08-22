@@ -628,8 +628,9 @@ assert_running_state() {
     #    timeout.
     if [ "$SKIP_MINING_ASSERTS" = "1" ]; then
         # #905: no miner is connected on purpose (e2e --no-miner), so a live worker/hash count
-        # would fail a healthy stack. Skip these two loudly; every other assertion stays binding.
-        it_warn "SKIPPED mining assertions (workers online, stratum hashes): --no-mining-asserts"
+        # would fail a healthy stack. assert_mining_state (lib.sh) skips these two loudly; every
+        # other assertion in the scenario stays binding.
+        assert_mining_state "1" "" "" "$EXPECTED_WORKERS"
     else
         local workers conns hashes
         wait_stratum_hashes 180 || true
@@ -637,8 +638,7 @@ assert_running_state() {
         workers="$(jq_get "$st" '.proxy_workers')"
         conns="$(jq_get "$st" '.stratum.conns')"
         hashes="$(jq_get "$st" '.stratum.total_hashes')"
-        assert_num_ge "workers online (>= $EXPECTED_WORKERS)" "${workers:-0}" "$EXPECTED_WORKERS"
-        assert_num_gt "stratum total hashes > 0" "${hashes:-0}" 0
+        assert_mining_state "0" "$workers" "$hashes" "$EXPECTED_WORKERS"
         it_step "stratum conns=${conns:-?} (informational)"
     fi
 
