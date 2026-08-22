@@ -268,6 +268,10 @@ export class WizardApp extends Component {
     rigWorker: "",
     rigPassword: "",
     rigDefaults: {},
+    // The data-wipe note (#1121): set when /data was reinitialized before this boot. Only
+    // `recovery: true` ever renders — a deliberate factory-reset is not a surprise to the
+    // operator who asked for it.
+    dataWiped: {},
     // Restore-at-setup (#909): an alternative to the whole form above, toggled independently
     // of role/install-target — an uploaded backup replaces the config the operator would
     // otherwise type in.
@@ -296,6 +300,7 @@ export class WizardApp extends Component {
       disks: s.disks,
       error: s.error || "",
       rigDefaults: s.rig_defaults || {},
+      dataWiped: s.data_wiped || {},
       handoff: s.handoff || null,
     };
     // The host's discovery pre-fills the rig fields, but only while they are untouched — the
@@ -592,7 +597,7 @@ export class WizardApp extends Component {
     const tg = telegramPairReady(v("telegramToken"), v("telegramChat"));
     const remoteMonero = v("moneroMode") === "remote";
     const remoteTari = v("tariMode") === "remote";
-    const { installer, disks, chosen, confirm, wipe } = this.state;
+    const { installer, disks, chosen, confirm, wipe, dataWiped } = this.state;
     const rig = this.state.role === "rig";
     // Keep-everything reinstall: the machine's settings, wallets, login and chains all survive,
     // so there is nothing to ask — the config half of the page would collect answers the
@@ -626,6 +631,12 @@ export class WizardApp extends Component {
                   : html`Only the answers that cannot be guessed for you. Everything else keeps
                 its documented default and stays editable from the dashboard.`
         }</p>
+        ${
+          dataWiped.recovery &&
+          html`<p class="c-bad">This machine's data area could not be read and was reinitialized
+          on ${dataWiped.when} — the wallets, node identity and synced chains that were on it are
+          gone. If you have a backup, restore it below instead of setting up as a fresh machine.</p>`
+        }
         <p><button type="button" class="wizard-link"
             onClick=${() => this.setState({ restoreMode: true, error: "" })}>
             Restoring an existing Pithead? Upload its backup instead.</button></p>

@@ -388,8 +388,10 @@ A machine that comes back to the setup wizard **without** being asked to is a di
 event: the data area would not mount, and the machine repaired it or, failing that,
 reinitialized it to get itself back. Repair is tried first and goes as far as rebuilding
 the filesystem's superblock from a backup copy — a data area is only ever erased when
-nothing could mount it. When that does happen the machine writes a dated note on its boot
-partition, so a wiped machine can be told apart from one that was never set up.
+nothing could mount it. When that does happen the setup page itself says so, dated, and
+`pithead doctor` reports the same fact for a support conversation on a machine with a
+shell. If you have a backup, restore it instead of setting up as a fresh machine — a
+factory reset you asked for never shows this notice.
 
 ## Recovering from a backup
 
