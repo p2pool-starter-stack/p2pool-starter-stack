@@ -140,6 +140,31 @@ gate_ready() { # <http_code> <size_download>
     ./pithead doctor --json >"$BOOT_DOCTOR_JSON" 2>/dev/null
 }
 
+# OS-update verdict, rollback half (#1051): a dashboard-driven install leaves an in-flight flag
+# naming the version the machine was headed to. Booting a DIFFERENT version with that flag
+# present means the bootloader already fell back — the update failed its health gate and the
+# fallback is terminal, so the verdict is written now, into the state file the dashboard renders
+# through the control spool. The success half lives at the commit gate below: "updated" is only
+# honest once this slot marks good. Every step best-effort — a verdict must never break a boot.
+#
+# A function, not inline, so it is driven directly at tier 1 with doctored fixtures — the same
+# pattern as gate_ready/gate_url above. It is pure file logic (an in-flight flag, a VERSION
+# file, a jq call): nothing here needs real firmware or a real A/B updater to prove, so a KVM
+# boot would only re-run the same comparison the function already makes deterministically.
+# Reads OS_INFLIGHT/OS_STATE_DIR (globals, set by the caller) and ./VERSION.
+os_update_rollback_verdict() {
+    [ -f "$OS_INFLIGHT" ] && command -v jq >/dev/null 2>&1 || return 0
+    local to
+    to=$(jq -r '.to // ""' "$OS_INFLIGHT" 2>/dev/null)
+    [ -n "$to" ] && [ "$to" != "$(tr -d '[:space:]' <VERSION 2>/dev/null)" ] || return 0
+    mkdir -p "$OS_STATE_DIR" 2>/dev/null || true
+    jq -n --arg f "$(jq -r '.from // ""' "$OS_INFLIGHT" 2>/dev/null)" --arg t "$to" \
+        '{step:"idle",verdict:{outcome:"rolled_back",from:$f,to:$t,ts:(now|floor)}}' \
+        >"$OS_STATE_DIR/os-update-state.json" 2>/dev/null || true
+    rm -f "$OS_INFLIGHT"
+    echo "pithead-boot: the $to update never committed — the bootloader fell back and this boot runs the previous version"
+}
+
 # Sourceable for the test suite: everything above is definitions, so a `source` stops here and the
 # suite can drive fail_boot in a sandbox. Executed directly — every real boot — this is a no-op.
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
@@ -176,25 +201,12 @@ if [ -f machine-role ] && [ "$(tr -d '[:space:]' <machine-role)" = "rig" ]; then
     fail_boot "the rig's miner never came up"
 fi
 
-# OS-update verdict, rollback half: a dashboard-driven install leaves an in-flight flag naming
-# the version the machine was headed to. Booting a DIFFERENT version with that flag present
-# means the bootloader already fell back — the update failed its health gate and the fallback
-# is terminal, so the verdict is written now, into the state file the dashboard renders through
-# the control spool. The success half lives at the commit below: "updated" is only honest once
-# this slot marks good. Every step best-effort — a verdict must never break a boot.
+# OS-update verdict, rollback half — see os_update_rollback_verdict above for the full story.
+# The success half lives at the commit gate below: "updated" is only honest once this slot marks
+# good.
 OS_INFLIGHT=data/os-update/in-flight.json
 OS_STATE_DIR=data/control/results
-if [ -f "$OS_INFLIGHT" ] && command -v jq >/dev/null 2>&1; then
-    to=$(jq -r '.to // ""' "$OS_INFLIGHT" 2>/dev/null)
-    if [ -n "$to" ] && [ "$to" != "$(tr -d '[:space:]' <VERSION 2>/dev/null)" ]; then
-        mkdir -p "$OS_STATE_DIR" 2>/dev/null || true
-        jq -n --arg f "$(jq -r '.from // ""' "$OS_INFLIGHT" 2>/dev/null)" --arg t "$to" \
-            '{step:"idle",verdict:{outcome:"rolled_back",from:$f,to:$t,ts:(now|floor)}}' \
-            >"$OS_STATE_DIR/os-update-state.json" 2>/dev/null || true
-        rm -f "$OS_INFLIGHT"
-        echo "pithead-boot: the $to update never committed — the bootloader fell back and this boot runs the previous version"
-    fi
-fi
+os_update_rollback_verdict
 
 # Containers are DERIVED too (#798): the baked archives ship in the slot, but podman's store
 # lives on /data and the image tag is constant across releases — a keep-reinstall or A/B

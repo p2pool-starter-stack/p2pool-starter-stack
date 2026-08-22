@@ -848,6 +848,13 @@ class H(http.server.SimpleHTTPRequestHandler):
         pass
     def do_GET(self):
         path = self.translate_path(self.path)
+        # Independent witness for the resume leg (#1051): the product's own `resumed_from`
+        # field is the size of the partial file it staged BEFORE curl ever ran, so it holds
+        # whether or not curl actually resumed — it cannot catch a resume that silently
+        # restarted from zero. This log records what the server itself received on the wire,
+        # which is the one place that can.
+        with open(os.path.join(sys.argv[1], ".requests.log"), "a") as _lf:
+            _lf.write(f"{os.path.basename(path)} {self.headers.get('Range') or 'none'}\n")
         if not os.path.isfile(path):
             self.send_error(404)
             return
@@ -1046,6 +1053,15 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
 
     # Resume: restore the good bundle, pre-stage a genuine prefix as the interrupted transfer,
     # and require the download to CONTINUE from it rather than start over.
+    #
+    # `resumed_from` alone is tautological (#1051): it is the size of the .partial file THIS
+    # test staged, echoed back before curl ever runs, so it holds whether or not curl actually
+    # resumed — a client that silently restarted from zero would still report it. The independent
+    # witness is what the SERVER actually received on the wire (`.requests.log`, written by
+    # `_serve_update_dir` above): a genuine resume sends `Range: bytes=4194304-`; a silent restart
+    # sends no Range header (or one starting at 0). Truncate the log first so a stale request from
+    # an earlier step in this leg can't be misread as this one's.
+    : >"$srv/.requests.log"
     cp "$srv/good.raucb" "$srv/pithead-os-$tag.raucb"
     head -c 4194304 "$srv/good.raucb" |
         _ssh "mkdir -p /data/pithead/data/os-update && cat > /data/pithead/data/os-update/pithead-os-$tag.raucb.partial" || {
@@ -1053,10 +1069,11 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     }
     out=$(_os_step "{\"action\":\"download\",\"version\":\"$tag\"}" 900)
     if [ "$(printf '%s' "$out" | jq -r '.status')" = "downloaded" ] &&
-        [ "$(printf '%s' "$out" | jq -r '.resumed_from // 0')" = "4194304" ]; then
-        ok "leg 4: RESUME PROVEN — the download continued from the interrupted 4 MiB, not from zero"
+        [ "$(printf '%s' "$out" | jq -r '.resumed_from // 0')" = "4194304" ] &&
+        grep -q "^pithead-os-$tag.raucb bytes=4194304-\$" "$srv/.requests.log" 2>/dev/null; then
+        ok "leg 4: RESUME PROVEN — the download continued from the interrupted 4 MiB, not from zero (server witnessed the Range request)"
     else
-        bad "leg 4: the download did not resume from the staged prefix (got: $(printf '%s' "$out" | cut -c1-200))"
+        bad "leg 4: the download did not resume from the staged prefix (got: $(printf '%s' "$out" | cut -c1-200); server saw: $(cat "$srv/.requests.log" 2>/dev/null | tr '\n' ';'))"
     fi
 
     # Verify + install: the good bundle passes for real, the install writes the spare slot while
