@@ -76,7 +76,7 @@ class _FixedTiers:
         return []
 
 
-def make_algo_controller(algo, p2pool_difficulty=0) -> Controller:
+def make_algo_controller(algo, p2pool_difficulty=0, stamp_updates=False) -> Controller:
     """Adapt a real `AlgoService` into a `decide(...) -> fraction` callable.
 
     Routes through the actual `get_decision` path (with ``advance=True``, so the
@@ -84,11 +84,24 @@ def make_algo_controller(algo, p2pool_difficulty=0) -> Controller:
     the shipping behaviour — the integral controller, the VIP/PPLNS reserve, the
     minimum dwell, and the short-remainder rule — not an idealised model of it.
     ``p2pool_difficulty`` feeds the reserve; 0 leaves it on the flat fallback cap.
+
+    ``stamp_updates`` marks every cycle's stats as a genuine fetch on the SIM
+    clock (one cycle = 3600/CYCLES_PER_HOUR seconds), which is what arms the
+    protective trend projection — without a moving ``last_update`` the projection
+    records no samples and the loop is purely reactive. Sim timestamps would read
+    as ancient to the wall-clock staleness guard, so that check is stubbed out on
+    the adapted service; the staleness paths have their own dedicated tests.
     """
     pool_stats = {"pplns_window": _PPLNS_WINDOW, "difficulty": p2pool_difficulty}
+    sim_clock = [1_000_000.0]
+    if stamp_updates:
+        algo._stats_are_stale = lambda _stats: False
 
     def decide(current_hr, stable_hr, avg_1h, avg_24h):
         xvb_stats = {"avg_1h": avg_1h, "avg_24h": avg_24h, "fail_count": 0}
+        if stamp_updates:
+            sim_clock[0] += 3600.0 / CYCLES_PER_HOUR
+            xvb_stats["last_update"] = sim_clock[0]
         mode, dur_ms = algo.get_decision(
             current_hr, stable_hr, pool_stats, _P2P_MAIN, xvb_stats, _RECENT_SHARES
         )

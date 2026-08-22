@@ -30,8 +30,13 @@ build/dashboard/tests/frontend/wizard.test.mjs	765
 build/dashboard/tests/frontend/workerview.test.mjs	518
 build/dashboard/tests/service/test_alert_service.py	1102
 build/dashboard/tests/service/test_algo_service.py	839
+<<<<<<< HEAD
 build/dashboard/tests/service/test_control_service.py	500
 build/dashboard/tests/service/test_data_service.py	3130
+=======
+build/dashboard/tests/service/test_control_service.py	459
+build/dashboard/tests/service/test_data_service.py	3056
+>>>>>>> origin/develop
 build/dashboard/tests/service/test_egress.py	480
 build/dashboard/tests/service/test_metrics.py	463
 build/dashboard/tests/service/test_storage_service.py	1646
@@ -44,7 +49,13 @@ scripts/release.sh	851
 tests/integration/e2e.sh	766
 tests/integration/lib.sh	692
 tests/integration/run.sh	2551
+<<<<<<< HEAD
 tests/integration/selftest.sh	686
 tests/os/run.sh	3442
 tests/stack/run.sh	13038
 tests/stack/test_compose.sh	462
+=======
+tests/integration/selftest.sh	658
+tests/stack/run.sh	7579
+tests/stack/test_compose.sh	454
+>>>>>>> origin/develop

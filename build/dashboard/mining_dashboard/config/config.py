@@ -758,6 +758,19 @@ XVB_WIN_ROUND_HOLD_S = float(os.environ.get("XVB_WIN_ROUND_HOLD_S", 5400))
 # especially if XvB over-credits). 0.03 converges in a few hours and stays stable.
 XVB_CONTROL_GAIN = float(os.environ.get("XVB_CONTROL_GAIN", 0.03))
 
+# Projection horizon of the loop's protective steering. The 1h average the loop
+# steers off lags what we actually route by up to the whole rolling window, so at
+# a margin-riding equilibrium a decaying credited average can reach the round
+# minimum before the reactive loop has moved — measured live: ~19 minutes from a
+# won round's draw to the terminating dip, with the ramp-back landing 4 minutes
+# too late. Each advance the controller also projects the credited trend this
+# many seconds forward and steers off min(measured, projected): projection only
+# ever tightens steering, never slackens it, so its worst case is the reactive
+# loop's behavior plus an earlier ramp. 0 disables projection. Default 20 min —
+# inside the measured decay-to-threshold window, and short enough that a full
+# window turnover never doubles a real trend.
+XVB_PROJECTION_HORIZON_S = float(os.environ.get("XVB_PROJECTION_HORIZON_S", 1200))
+
 # Age past which a frozen XvB stats read is treated as stale (#311). A successful
 # fetch lands every ~10 poll cycles (data_service throttle) and only a real fetch
 # bumps `last_update` (#136), so its age IS the fetch age. When the fetch goes quiet
