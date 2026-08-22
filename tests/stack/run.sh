@@ -573,6 +573,23 @@ esac
 # INFO — and the secret value must NEVER appear in the change preview.
 assert_contains "stratum pw enable is DEST" "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" "DEST"
 assert_contains "stratum pw disable is INFO" "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD s3cr3t '')" "INFO"
+# Appliance (#1139): the DIY hint points at .env / './pithead status' to recover the password —
+# neither exists without a shell, and the dashboard never round-trips a secret value either (#33),
+# so there is no remedy to name. The appliance-lane message drops the instruction instead of
+# inventing one.
+#
+# MUTATION PROOF: drop the is_appliance branch (always emit the DIY message) and the "names no CLI
+# verb" assertion below goes red; force the appliance branch unconditionally and the unchanged-DIY
+# assertion at line ~574's sibling below goes red — neither direction passes both.
+stratum_pw_appliance="$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)"
+assert_contains "appliance stratum pw enable is still DEST" "$stratum_pw_appliance" "DEST"
+case "$stratum_pw_appliance" in
+*"./pithead"* | *".env"*) bad "appliance stratum pw enable names no CLI verb or .env" "still says: $stratum_pw_appliance" ;;
+*) ok "appliance stratum pw enable names no CLI verb or .env" ;;
+esac
+assert_contains "DIY stratum pw enable advice is unchanged" \
+    "$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" \
+    "find it in .env / './pithead status'"
 case "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD oldpw newpw)" in
 *oldpw* | *newpw*) bad "stratum pw change hides the secret" "value leaked into the change preview" ;;
 *DEST*) ok "stratum pw change hides the secret (DEST, no value shown)" ;;
@@ -582,6 +599,22 @@ esac
 assert_contains "tor auto-heal enable is INFO" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "INFO"
 assert_contains "tor auto-heal enable names the cost" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL false true)" "drops ALL Tor circuits"
 assert_contains "tor auto-heal disable names the manual fix" "$(run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)" "restart tor"
+# Appliance (#1139): 'doctor' and a scoped tor restart are both CLI-only, and no dashboard control
+# restarts tor alone — the appliance-lane message states the fact instead of naming a remedy that
+# does not exist on that lane.
+#
+# MUTATION PROOF: drop the is_appliance branch (always emit the DIY message) and the "names no CLI
+# verb" assertion below goes red; force the appliance branch unconditionally and the unchanged-DIY
+# assertion right above (checked again explicitly below) goes red — neither direction passes both.
+tor_heal_appliance="$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)"
+assert_contains "appliance tor auto-heal disable is still INFO" "$tor_heal_appliance" "INFO"
+case "$tor_heal_appliance" in
+*"./pithead"*) bad "appliance tor auto-heal disable names no CLI verb" "still says: $tor_heal_appliance" ;;
+*) ok "appliance tor auto-heal disable names no CLI verb" ;;
+esac
+assert_contains "DIY tor auto-heal disable advice is unchanged" \
+    "$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)" \
+    "'./pithead doctor', fix with './pithead restart tor'"
 # Fail-closed miner hold (#490): INFO either way (like TARI_REQUIRED) — it's on the dashboard
 # control-channel allowlist, so a DEST flag here would make control_approval_gate refuse every
 # commit that touches it, defeating the allowlisting.
@@ -7593,6 +7626,56 @@ undeclared_socks="$(awk '
     /--socks5-hostname "\$socks"/ && !declared { print FNR " in " fn }
 ' "$STACK")"
 assert_eq "no dial refers to a socks variable its own function never declares" "$undeclared_socks" ""
+
+echo "== unit: appliance-lane release-fetch hints name no shell the box does not have (#1139) =="
+# The transport-failure and unparseable-response hints told the operator to run './pithead doctor'
+# — reachable from the dashboard's os-check (and the RigForge worker-upgrade) on an appliance,
+# which has no shell to run it from. gh_release_fetch now keys the retry hint off is_appliance, a
+# fact about the machine rather than the caller, so every caller gets it right for free.
+#
+# MUTATION PROOF: hardcode retry_hint to the DIY string (drop the is_appliance branch) and both
+# "names no CLI verb" assertions below go red; hardcode it to the appliance string instead and the
+# DIY-lane assertions (both here and in the block above) go red — neither direction can pass alone.
+gh_tf_appliance=$(PITHEAD_APPLIANCE=1 gh_fetch 000 '' 1)
+assert_eq "appliance transport failure is still a failure" "${gh_tf_appliance%%|*}" "1"
+assert_contains "and still reads as a dial that did not land" "$gh_tf_appliance" "could not reach the GitHub release API"
+assert_contains "and points at the dashboard instead of a shell" "$gh_tf_appliance" "Retry from the dashboard"
+case "$gh_tf_appliance" in
+*"./pithead"*) bad "appliance transport-failure hint names no CLI verb" "still says: $gh_tf_appliance" ;;
+*) ok "appliance transport-failure hint names no CLI verb" ;;
+esac
+
+gh_nocode_appliance=$(
+    cd "$GHR" || exit 1
+    # shellcheck disable=SC1090  # STACK path is dynamic by design
+    source "$STACK" 2>/dev/null
+    set +e
+    export PATH="$GHR/bin:$PATH" GH_STUB_BODY='{"message":"Not Found"}' GH_STUB_NOCODE=1 PITHEAD_APPLIANCE=1
+    gh_release_fetch p2pool-starter-stack/pithead
+    printf '%s|%s' "$?" "$GH_RELEASE_HINT"
+)
+assert_eq "appliance unparseable response is still a failure" "${gh_nocode_appliance%%|*}" "1"
+assert_contains "and reads as an unreadable shape" "$gh_nocode_appliance" "answered in a shape this cannot read"
+assert_contains "and points at the dashboard instead of a shell" "$gh_nocode_appliance" "Retry from the dashboard"
+case "$gh_nocode_appliance" in
+*"./pithead"*) bad "appliance unparseable-response hint names no CLI verb" "still says: $gh_nocode_appliance" ;;
+*) ok "appliance unparseable-response hint names no CLI verb" ;;
+esac
+
+# DIY-lane advice is untouched: 'doctor' is exactly right when the operator has a shell to run it
+# from — same fetch, same call, only the machine fact differs.
+gh_tf_diy=$(PITHEAD_APPLIANCE=0 gh_fetch 000 '' 1)
+assert_contains "DIY transport-failure advice is unchanged" "$gh_tf_diy" "Check './pithead doctor' and retry."
+gh_nocode_diy=$(
+    cd "$GHR" || exit 1
+    # shellcheck disable=SC1090  # STACK path is dynamic by design
+    source "$STACK" 2>/dev/null
+    set +e
+    export PATH="$GHR/bin:$PATH" GH_STUB_BODY='{"message":"Not Found"}' GH_STUB_NOCODE=1 PITHEAD_APPLIANCE=0
+    gh_release_fetch p2pool-starter-stack/pithead
+    printf '%s' "$GH_RELEASE_HINT"
+)
+assert_contains "DIY unparseable-response advice is unchanged" "$gh_nocode_diy" "Check './pithead doctor' and retry."
 
 echo "== black-box: control upgrade verb (#59) =="
 # A RELEASE install (no build/*/Dockerfile → is_source_checkout false) with the control channel
