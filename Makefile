@@ -1,5 +1,5 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml release release-smoke
+.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml lint-topology release release-smoke
 
 test: lint test-dashboard test-frontend test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
@@ -38,7 +38,7 @@ test-inventory: ## Write the test coverage inventory to docs/dev/test-inventory.
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
-lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-proto lint-toml ## Lint/format-check every surface
+lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-proto lint-toml ## Lint/format-check every surface
 
 lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release + test scripts
 	shellcheck --severity=warning pithead pithead-completion.bash scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/test_compose.sh \
@@ -64,6 +64,10 @@ lint-docs-voice: ## Fail if banned marketing words appear in prose docs (house v
 lint-operator-strings: ## Fail if a #NNN issue/PR number or a bare docs/ path leaks into pithead or dashboard operator-facing text (#755, #1024)
 	bash scripts/lint-operator-strings.sh --self-test
 	bash scripts/lint-operator-strings.sh
+
+lint-topology: ## Fail if a real-looking IPv6/IPv4/hostname/path/user@host literal leaks into the repo (generic classes only)
+	bash scripts/lint-topology-classes.sh --self-test
+	bash scripts/lint-topology-classes.sh
 
 lint-proto: ## buf lint + build on the vendored Tari protos (config: .../tari/proto/buf.yaml)
 	cd build/dashboard/mining_dashboard/client/tari/proto && \
