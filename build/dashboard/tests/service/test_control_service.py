@@ -428,13 +428,22 @@ def test_confirm_keys_have_no_intra_repo_drift():
     assert set(control_service.CONFIRM_ENV_KEY_PATHS.keys()) == pithead_keys
 
 
-# The security perimeter (#1094): env keys that must never be dashboard-committable at all — auth,
-# onion exposure, the bind/host, the control channel itself, Tor egress, and wallet/node
-# credentials. The two drift tests above only catch the editable/confirm allowlists' two hand-kept
-# copies disagreeing with EACH OTHER; a key added to BOTH copies at once (#1094's mutation proof:
-# DASHBOARD_AUTH_HASH_B64, or DASHBOARD_HOST, added to pithead's list and EDITABLE_ENV_KEY_PATHS
-# together) leaves them in perfect agreement and both drift tests stay green. This list is the
-# claim those tests can't make: not "do the two copies match" but "is this key committable at all".
+# The security perimeter (#1094, #1069 W9): env keys that must never be dashboard-committable at
+# all. SECURITY.md:99-100 is the authority for what belongs here — "wallets and view keys,
+# dashboard auth and onion exposure, the control channel itself, the Tor egress firewall, node
+# endpoints, binds, every credential, and the per-rig hosts and tokens" (the last category is
+# enforced elsewhere: worker descriptors are refused outright, per control_service.py's
+# EDITABLE_ENV_KEY_PATHS docstring, so they never reach this env-key-path list at all). The two
+# drift tests above only catch the editable/confirm allowlists' two hand-kept copies disagreeing
+# with EACH OTHER; a key added to BOTH copies at once (#1094's mutation proof: DASHBOARD_AUTH_HASH_B64,
+# or DASHBOARD_HOST, added to pithead's list and EDITABLE_ENV_KEY_PATHS together) leaves them in
+# perfect agreement and both drift tests stay green. This list is the claim those tests can't make:
+# not "do the two copies match" but "is this key committable at all".
+#
+# THIS LIST AND SECURITY.md:99-100 MUST STAY IN SYNC: a perimeter category added to the doc without
+# a matching entry here is a silent gap; an entry here with no textual basis in SECURITY.md is
+# scope creep on a security-critical list. SECURITY.md's enumeration is prose, not a machine-
+# readable key list, so the sync is manual — re-read both on any change to either.
 NEVER_COMMITTABLE_ENV_KEYS = frozenset(
     {
         "DASHBOARD_AUTH_USER",
@@ -452,16 +461,27 @@ NEVER_COMMITTABLE_ENV_KEYS = frozenset(
         "MONERO_NODE_PASSWORD",
         "WALLET_RPC_PASSWORD",
         "TARI_VIEW_KEY",
+        # Node endpoints (SECURITY.md's "node endpoints"): where the stack points its Monero/Tari
+        # RPC clients. Dashboard-committable, this repoints mining traffic to an attacker's node.
+        "MONERO_NODE_HOST",
+        "MONERO_RPC_PORT",
+        "MONERO_ZMQ_PORT",
+        "TARI_GRPC_ADDRESS",
+        # Binds (SECURITY.md's "binds"): the RPC/gRPC listen addresses. DASHBOARD_HOST (above)
+        # covers the dashboard's own bind; these are the merge-mined services' local listeners.
+        "MONERO_RPC_BIND",
+        "MONERO_ZMQ_BIND",
+        "TARI_GRPC_BIND",
         "TARI_WALLET_PASSWORD",
     }
 )
 
 
 def test_perimeter_env_keys_never_committable_from_either_copy():
-    """#1094: names the security perimeter directly and checks each of the four allowlists (pithead's
-    editable + confirm sets, EDITABLE_ENV_KEY_PATHS + CONFIRM_ENV_KEY_PATHS) against it
-    independently, so a key added to every copy at once still fails — unlike the drift tests above,
-    which compare the copies only to each other."""
+    """#1094 / #1069 W9: names the security perimeter directly (SECURITY.md:99-100) and checks each
+    of the four allowlists (pithead's editable + confirm sets, EDITABLE_ENV_KEY_PATHS +
+    CONFIRM_ENV_KEY_PATHS) against it independently, so a key added to every copy at once still
+    fails — unlike the drift tests above, which compare the copies only to each other."""
     import re
     from pathlib import Path
 
