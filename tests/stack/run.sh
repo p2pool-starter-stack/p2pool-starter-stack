@@ -12842,6 +12842,41 @@ assert_eq "ran but the page count is garbage: fails cleanly, no arithmetic error
     "$(hbv banana active)" "1 hugepage pool unreadable at boot (HugePages_Total: banana, want >= 3072)"
 unset -f hbv
 
+echo "== unit: reinstall_prefill_verdict — a wallet match alone cannot prove which path produced it (#1038) =="
+# tests/os/run.sh's reinstall pre-fill check cannot be driven from here (it needs a real KVM
+# guest reinstalled over an existing install), but the verdict it now checks is pure
+# text-matching over three already-observed signals (the branch's own console log line, the
+# wallet match, the password-leak check) — #1038 pulled it into
+# tests/os/reinstall-prefill-verdict.sh for exactly that reason: the discrimination the issue
+# asked for is provable with fixtures, without a bench boot. The case that matters is the first
+# pair below: a wallet match with NO console record of the branch having run (the exact shape
+# #1038 found passing for four consecutive batteries) must verdict as a failure.
+# Mutation run: drop the branch_logged check and judge by the wallet match alone -> the
+# "branch never logged" case flips from fail to pass, silently reintroducing #1038.
+rpv() { # <branch-logged> <wallet-prefilled> <password-leaked> -> "<rc> <verdict-text>"
+    local out rc
+    out=$(
+        # shellcheck disable=SC1091
+        source "$ROOT/tests/os/reinstall-prefill-verdict.sh"
+        reinstall_prefill_verdict "$1" "$2" "$3"
+    )
+    rc=$?
+    printf '%s %s' "$rc" "$out"
+}
+assert_eq "branch ran, wallet matched, no password: passes" \
+    "$(rpv 1 1 0)" "0 reinstall pre-fill ran this boot and published the previous install's non-secret answers (secrets left out)"
+assert_eq "wallet matched but the branch never logged: fails — the #1038 case a wallet-only check missed" \
+    "$(rpv 0 1 0)" "1 the pre-fill branch's own log line never appeared this boot — a wallet match alone cannot prove which code path produced it (#1038)"
+assert_eq "branch ran but the wallet never reached the page: fails" \
+    "$(rpv 1 0 0)" "1 the pre-fill branch ran but the previous install's wallet never reached the page"
+assert_eq "branch ran, wallet matched, but a password leaked: fails" \
+    "$(rpv 1 1 1)" "1 a password crossed into the reinstall page's pre-filled state"
+assert_eq "neither the branch nor the wallet: fails on the branch record first" \
+    "$(rpv 0 0 0)" "1 the pre-fill branch's own log line never appeared this boot — a wallet match alone cannot prove which code path produced it (#1038)"
+assert_eq "empty inputs (unset shell vars): treated as not-logged, fails cleanly" \
+    "$(rpv "" "" "")" "1 the pre-fill branch's own log line never appeared this boot — a wallet match alone cannot prove which code path produced it (#1038)"
+unset -f rpv
+
 echo "== unit: check_data_wipe_note — doctor surfaces the wipe note, a support conversation gets the fact (#1121) =="
 # Same shape as the pre-seeding block: PITHEAD_PRESEED_DIR stands in for the ESP. Appliance-only
 # (the note only ever exists on that channel), so PITHEAD_APPLIANCE has to be forced on here —
