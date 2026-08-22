@@ -116,6 +116,12 @@ cat <<EOF
 - #90 hardening invariants: no-new-privileges / cap_drop / read-only roots, credential-free
   healthchecks, least-privilege Docker socket proxies, and the pinned \`pithead\` project name
 
+### Real-image data-reset repair (tests/stack/test_data_reset.sh)
+- #1062 on a REAL ext4 image with the system's own e2fsprogs: the superblock-magic damage the
+  battery injects is repaired with its payload intact — never reformatted — and a destroyed
+  image still reaches the reformat escape
+- only \`mount\` is stubbed, and its verdict is \`e2fsck -fn\` on the image itself, never a counter
+
 ## Tier 2 — Contract (real clients vs controllable fakes)
 
 ### tests/integration/fakes/test_contract.py — ${n_py_fake} tests
