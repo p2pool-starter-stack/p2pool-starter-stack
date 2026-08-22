@@ -27,24 +27,39 @@ BUDGET_FILE="docs/dev/file-budget.tsv"
 # The branch this PR ratchets against — the twin lane it will merge into, NOT a fixed branch.
 # develop-v2 carries develop's whole history plus the appliance code, so the same files are
 # legitimately LARGER there; ratcheting a develop-v2 PR against origin/develop would reject
-# every one of those larger ceilings as an illegal "raise". The lane is detected by ancestry:
-# only a develop-v2-lane branch has origin/develop-v2 as an ancestor (develop's history is an
-# ancestor of BOTH lanes, so it cannot distinguish them). Each candidate falls back to its
-# bare local name; if nothing resolves the monotonic check is skipped with a loud note.
+# every one of those larger ceilings as an illegal "raise". The lane is a property of the
+# branch's HISTORY, never of being level with the lane tip: a develop-v2 branch carries
+# v2-only commits in its merge-base with develop-v2, and develop's own history never does.
+# The previous rule (is the lane TIP an ancestor of HEAD) false-REDded every in-flight
+# develop-v2 branch the moment any other merge moved the lane. Each candidate
+# falls back to its bare local name; if nothing resolves the monotonic check is skipped
+# with a loud note.
 resolve_base_ref() {
-    if git rev-parse -q --verify origin/develop-v2 >/dev/null 2>&1 &&
-        git merge-base --is-ancestor origin/develop-v2 HEAD 2>/dev/null; then
-        echo origin/develop-v2
-    elif git rev-parse -q --verify develop-v2 >/dev/null 2>&1 &&
-        git merge-base --is-ancestor develop-v2 HEAD 2>/dev/null; then
-        echo develop-v2
-    elif git rev-parse -q --verify origin/develop >/dev/null 2>&1; then
-        echo origin/develop
-    elif git rev-parse -q --verify develop >/dev/null 2>&1; then
-        echo develop
-    else
-        echo ""
-    fi
+    local v2 dev mb
+    for v2 in origin/develop-v2 develop-v2; do
+        git rev-parse -q --verify "$v2" >/dev/null 2>&1 || continue
+        mb=$(git merge-base HEAD "$v2" 2>/dev/null) || mb=""
+        [ -n "$mb" ] || break
+        for dev in origin/develop develop; do
+            git rev-parse -q --verify "$dev" >/dev/null 2>&1 || continue
+            if git merge-base --is-ancestor "$mb" "$dev" 2>/dev/null; then
+                echo "$dev"
+            else
+                echo "$v2"
+            fi
+            return 0
+        done
+        # develop-v2 exists but no develop ref at all: v2-lane by elimination.
+        echo "$v2"
+        return 0
+    done
+    for dev in origin/develop develop; do
+        if git rev-parse -q --verify "$dev" >/dev/null 2>&1; then
+            echo "$dev"
+            return 0
+        fi
+    done
+    echo ""
 }
 
 # A broken enumeration and a genuinely clean tree both read as "zero hits" — refuse to treat an
@@ -293,6 +308,41 @@ self_test() {
     (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
     expect "a budgeted file dropped below target still listed FAILS (stale entry)" 1 "$rc"
     seq 1 500 >"$tmp/budgeted.sh"
+
+    # Two-lane shape: a develop-v2 branch cut BEFORE the lane tip advanced must still
+    # ratchet against develop-v2, not fall back to develop and read this lane's larger
+    # ceiling as a raise — the false RED that bit two live PRs the day the tip moved.
+    local tmp3
+    tmp3=$(mktemp -d)
+    git -C "$tmp3" init -q -b develop
+    git -C "$tmp3" config user.email test@example.invalid
+    git -C "$tmp3" config user.name test
+    mkdir -p "$tmp3/$(dirname "$BUDGET_FILE")"
+    seq 1 500 >"$tmp3/budgeted.sh"
+    printf '# test budget\nbudgeted.sh\t500\n' >"$tmp3/$BUDGET_FILE"
+    git -C "$tmp3" add -A && git -C "$tmp3" commit -q -m dev-base
+    git -C "$tmp3" checkout -q -b develop-v2
+    seq 1 600 >"$tmp3/budgeted.sh"
+    printf '# test budget\nbudgeted.sh\t600\n' >"$tmp3/$BUDGET_FILE"
+    git -C "$tmp3" add -A && git -C "$tmp3" commit -q -m v2-larger
+    git -C "$tmp3" checkout -q -b feature
+    git -C "$tmp3" checkout -q develop-v2
+    echo x >"$tmp3/other.txt"
+    git -C "$tmp3" add other.txt && git -C "$tmp3" commit -q -m v2-advances
+    git -C "$tmp3" checkout -q feature
+    seq 1 580 >"$tmp3/budgeted.sh"
+    printf '# test budget\nbudgeted.sh\t580\n' >"$tmp3/$BUDGET_FILE"
+    rc=0
+    (cd "$tmp3" && run_gate) >"$out" 2>&1 || rc=$?
+    expect "a v2-lane branch behind the moved lane tip still ratchets against develop-v2" 0 "$rc"
+    rc=0
+    (cd "$tmp3" && [ "$(resolve_base_ref)" = develop-v2 ]) || rc=1
+    expect "lane detection reads history, not tip-levelness" 0 "$rc"
+    git -C "$tmp3" checkout -q -f develop
+    rc=0
+    (cd "$tmp3" && [ "$(resolve_base_ref)" = develop ]) || rc=1
+    expect "a develop-lane checkout still resolves to develop" 0 "$rc"
+    rm -rf "$tmp3"
 
     rc=0
     (
