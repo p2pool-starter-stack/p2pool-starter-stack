@@ -9,9 +9,10 @@
 // Run with Node's built-in test runner (CI runs exactly this):
 //     node --test build/dashboard/tests/frontend/
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { WorkerInspect } from "../../mining_dashboard/web/static/workerview.mjs";
+import { StatsTable, WorkerInspect } from "../../mining_dashboard/web/static/workerview.mjs";
 import { renderToString } from "./helpers/render.mjs";
 
 const SENTINEL = { __secret__: true };
@@ -431,4 +432,87 @@ test("Inspect surfaces the RigForge new-release callout only when the server der
   // Current rig / plain xmrig: the server sends null -> no callout, no error.
   const current = { ...DETAIL, rigforge_update: null };
   assert.doesNotMatch(renderToString(readyInstance(current).render()), /New RigForge release/);
+});
+
+// --- StatsTable value contrast (#1232) ------------------------------------------------------
+//
+// The detail-row values (Governor, HugePages, Mainboard, …) render with variant "outline" for a
+// plain metric — STAT_VALUE_CLS has no entry for it, so before the fix the value <td> got an
+// empty class: no colour, no font-weight, and it read as disabled text in dark mode. The fix
+// puts every value in `.stat-value` (explicit --text colour + weight 600), with status-ok/warn/
+// bad still layered on top to colour a flagged metric. These two tests would catch a regression
+// to the old behaviour: reverting the markup edit that adds `.stat-value` (the class check
+// below), or reverting/weakening the CSS rule itself (the second test, and the ratio test after
+// it) — verified by reverting each change locally and confirming the corresponding test reds.
+
+test("StatsTable: a plain outline value still gets the stat-value class, not an empty one (#1232)", () => {
+  const out = renderToString(StatsTable({ stats: [{ label: "Governor", value: "performance", variant: "outline" }] }));
+  const valueCell = out.match(/<td class="([^"]*)">performance<\/td>/);
+  assert.ok(valueCell, `expected a value <td> for the outline stat, got: ${out}`);
+  assert.match(valueCell[1], /\bstat-value\b/);
+  // The old code emitted `STAT_VALUE_CLS[s.variant] || ""`, which for "outline" (or any variant
+  // with no colour entry) rendered class="" — an empty class is exactly the regression.
+  assert.notEqual(valueCell[1].trim(), "");
+});
+
+test("StatsTable: a warn-variant value keeps its status colour alongside stat-value (#1232)", () => {
+  const out = renderToString(StatsTable({ stats: [{ label: "Temp / max", value: "78°C / 90°C", variant: "warn" }] }));
+  const valueCell = out.match(/<td class="([^"]*)">78°C \/ 90°C<\/td>/);
+  assert.ok(valueCell, `expected a value <td> for the warn stat, got: ${out}`);
+  assert.match(valueCell[1], /\bstat-value\b/);
+  assert.match(valueCell[1], /\bstatus-warn\b/);
+});
+
+// WCAG contrast ratio (relative-luminance formula, same one the WCAG 2.x spec defines) computed
+// directly from the theme tokens the CSS declares — not a rendered/measured colour, since this
+// repo's frontend tests run with no DOM (see helpers/render.mjs). AA for normal text is 4.5:1.
+function srgbToLinear(c) {
+  const v = c / 255;
+  return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+function relativeLuminance(hex) {
+  const n = Number.parseInt(hex.replace("#", ""), 16);
+  const r = srgbToLinear((n >> 16) & 0xff);
+  const g = srgbToLinear((n >> 8) & 0xff);
+  const b = srgbToLinear(n & 0xff);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+function contrastRatio(hexA, hexB) {
+  const [l1, l2] = [relativeLuminance(hexA), relativeLuminance(hexB)].sort((a, b) => b - a);
+  return (l1 + 0.05) / (l2 + 0.05);
+}
+
+const DASHBOARD_CSS = readFileSync(
+  new URL("../../mining_dashboard/web/static/dashboard.css", import.meta.url),
+  "utf8",
+);
+
+function themeToken(css, themeBlockRe, varName) {
+  const block = css.match(themeBlockRe);
+  assert.ok(block, `expected to find the ${varName} theme block in dashboard.css`);
+  const tok = block[0].match(new RegExp(`${varName}:\\s*(#[0-9a-fA-F]{6})`));
+  assert.ok(tok, `expected ${varName} inside the matched theme block`);
+  return tok[1];
+}
+
+test("dashboard.css: .stat-value declares an explicit --text colour, not an empty/inherited one (#1232)", () => {
+  const rule = DASHBOARD_CSS.match(/\.stat-value\s*\{([^}]*)\}/);
+  assert.ok(rule, "expected a .stat-value rule in dashboard.css");
+  assert.match(rule[1], /color:\s*var\(--text\)/);
+  assert.match(rule[1], /font-weight:\s*6\d\d/); // 600-ish, matching the top stat-card values
+});
+
+test("dashboard.css: .stat-value's --text on --card meets WCAG AA (>= 4.5:1) in dark AND light (#1232)", () => {
+  // Dark is the base palette (:root, :root[data-theme="dark"]); light is the explicit override
+  // block. Both declare --text and --card, so pull each theme's pair independently rather than
+  // assuming the first match in the file belongs to the theme under test.
+  const darkText = themeToken(DASHBOARD_CSS, /:root,\s*:root\[data-theme="dark"\]\s*\{[^}]*\}/, "--text");
+  const darkCard = themeToken(DASHBOARD_CSS, /:root,\s*:root\[data-theme="dark"\]\s*\{[^}]*\}/, "--card");
+  const lightText = themeToken(DASHBOARD_CSS, /:root\[data-theme="light"\]\s*\{[^}]*\}/, "--text");
+  const lightCard = themeToken(DASHBOARD_CSS, /:root\[data-theme="light"\]\s*\{[^}]*\}/, "--card");
+
+  const darkRatio = contrastRatio(darkText, darkCard);
+  const lightRatio = contrastRatio(lightText, lightCard);
+  assert.ok(darkRatio >= 4.5, `dark .stat-value contrast ${darkRatio.toFixed(2)}:1 is below AA (4.5:1)`);
+  assert.ok(lightRatio >= 4.5, `light .stat-value contrast ${lightRatio.toFixed(2)}:1 is below AA (4.5:1)`);
 });

@@ -673,8 +673,12 @@ XMRvsBeast tier could this hashrate hold, and what would it cost?". It renders w
 too (`xvb.enabled: false`) — the decision table below is exactly the enable/don't-enable aid, so
 it must be readable *before* you enable anything. While disabled, the two live-credit rows
 (Current Tier, Target Tier) disappear, and — because disabling XvB stops every fetch from
-xmrvsbeast.com — the odds and reward columns run from the last cached read: on a box that never
-enabled XvB they show tier costs only. The raffle winner is drawn at random among everyone above
+xmrvsbeast.com — the reward columns run from the last cached read when one exists, or otherwise
+from a bundled snapshot of XvB's own published table, labelled with the date it was captured so
+you can see how old it is; either way nothing is fetched to produce it. The odds column has no
+such stand-in — draw frequency and qualifier counts are live numbers XvB's winners feed alone
+carries, so it stays empty on a box that has never enabled XvB, filling in once XvB runs and that
+feed is read for the first time. The raffle winner is drawn at random among everyone above
 the threshold, so donating more than the threshold buys zero extra win chance — but the odds
 themselves are knowable: XvB's winners file publishes the qualifier count for every round, and
 the comparison below shows them.

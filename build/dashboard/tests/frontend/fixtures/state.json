@@ -746,6 +746,8 @@
     "current_tier": "None",
     "enabled": true,
     "estimates_available": true,
+    "estimates_published_date": null,
+    "estimates_source": "live",
     "estimates_stale": false,
     "max_fraction": 0.85,
     "mode_note": null,

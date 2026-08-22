@@ -699,6 +699,16 @@ tr:last-child td {
 }
 
 /* Components */
+/* #1232: a StatsTable value with no status-ok/warn/bad ("outline") got no colour and no
+ * font-weight, so it fell back to whatever ambient colour the dialog offered — the only text
+ * in Worker Inspect that was neither bold nor explicitly coloured, and the one that read as
+ * disabled text in dark mode. Give every value cell an explicit --text colour and the same
+ * weight the top stat-card values carry; declared before status-ok/warn/bad below so a flagged
+ * metric's status colour still wins the cascade (same specificity, later rule). */
+.stat-value {
+  color: var(--text);
+  font-weight: 600;
+}
 .status-ok {
   color: var(--ok-fg);
 }

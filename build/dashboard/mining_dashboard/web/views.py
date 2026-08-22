@@ -1556,6 +1556,38 @@ _XVB_REALIZATION_WINDOW_S = 45 * SECONDS_PER_DAY
 # ponytail: single-wallet study constant — recalibrate from the public-winners generalization.
 XVB_REALIZATION_PRIOR = (0.28, 0.39)
 
+# Vendored fallback for XvB's own published per-tier reward table (#1214). ``build_xvb_calc``'s
+# reward columns need XvB's face figure, but the #163 egress rule stops the live fetch entirely
+# while XvB is disabled — so a box that has never enabled XvB has no cache to read and the table
+# can never answer "is enabling this worth it". These four numbers are the "Player:" line for
+# each donor round type in XvB's own ``reward_estimate_pub.txt`` — the PER-PLAYER expected
+# reward, exactly what the live parser extracts (``_REGEX_REWARD_LINE`` in
+# ``client/xvb_client.py`` matches ``Round: <type> Player: <value> XMR/year`` only; it deliberately
+# skips the pool-total ``Round: <type>: <value> XMR/year`` line just above each Player line, which
+# is a different, much larger figure — the whole raffle's total payout for that round type, not
+# one qualifier's share of it). Using the wrong row here would make the fallback disagree with
+# what any live fetch would ever show. Archived verbatim (no live fetch involved) as part of the
+# delivery study on the date below:
+# docs/research/xvb-delivery-study/data/sources/xmrvsbeast-reward_estimate_pub.txt
+# (docs/research/xvb-delivery-study/data/sources/MANIFEST.md). Keyed by round-type, same as a
+# live ``estimates`` cache, and used ONLY when the box is disabled (see ``build_xvb_calc``'s
+# ``_face_value``: this must never fire for an ENABLED-but-stale box — that box's own live fetch
+# is just failing right now, e.g. a transient bot-challenge, and the honest read is "estimate
+# unavailable", not a claim it is "off" and using a published snapshot). It never overrides a
+# live figure, and it feeds the SAME ``XVB_REALIZATION_PRIOR`` band above, never a second,
+# differently-derived estimate. Static by design (option 1 of #1214): these change rarely, so a
+# dated, labelled snapshot is worth more than a permanent blank on a box that has never enabled
+# XvB. Refresh only by re-archiving the source file and updating the date — a test
+# (TestXvbCalc.test_fallback_values_match_the_archived_source_files_player_rows) parses the
+# archive with the live parser and fails if this dict ever drifts from it.
+XVB_PUBLISHED_REWARD_FALLBACK = {
+    "donor": 0.064,
+    "donor_vip": 0.81,
+    "donor_whale": 4.67,
+    "donor_mega": 54.54,
+}
+XVB_PUBLISHED_REWARD_FALLBACK_DATE = "2026-08-10"
+
 
 def xvb_forecast_tier_key(metrics, tiers):
     """The tier the expected-wins forecast should speak to: held, else targeted (#866).
@@ -1854,12 +1886,22 @@ def build_xvb_calc(metrics, state_mgr, realization=None):
 
     Published with XvB DISABLED too (#938): the table is the enable/don't-enable decision aid, so
     hiding it behind the flag defeated its purpose. Everything here is computable from local
-    config plus the cached public feeds; disabling XvB stops the fetches (the egress rule, #726),
-    so on a box that never enabled XvB the odds and reward columns are honestly empty and on a
-    just-disabled box they age out through the same staleness rule as always. The live-credit
-    context goes quiet on its own: ``build_state`` computes ``realization`` only while enabled,
-    and ``Metrics`` reports current/target tier as "Disabled" — the client keys every
-    live-donation surface (and the current/target cards here) off ``enabled``."""
+    config plus the cached public feeds; disabling XvB stops the fetches (the egress rule, #726).
+    The reward columns still light up on a box that is DISABLED — never enabled, or turned off
+    after its cache aged out (#1214): when nothing live/cached is usable AND ``metrics.xvb_enabled``
+    is False, they fall back to ``XVB_PUBLISHED_REWARD_FALLBACK``, a static, dated, labelled
+    snapshot of XvB's own published table (never a live fetch, so the egress rule is untouched) —
+    ``estimates_source``/``estimates_published_date`` tell the client which one it got. The
+    fallback deliberately does NOT fire for an ENABLED-but-stale box (e.g. a transient fetch
+    failure such as a bot-challenge): that box's live estimate is momentarily unavailable, not
+    "off", so it keeps the honest pre-existing degradation instead — ``estimates_source`` reads
+    "none" and the client shows the same "estimate unavailable" text it always has. The odds
+    column has no fallback at all, disabled or not: qualifier counts are live competitive data
+    with no stable published table to vendor, so it stays honestly empty until XvB runs and the
+    winners feed populates the cache. The live-credit context goes quiet on its own: ``build_state``
+    computes ``realization`` only while enabled, and ``Metrics`` reports current/target tier as
+    "Disabled" — the client keys every live-donation surface (and the current/target cards here)
+    off ``enabled``."""
     tiers = state_mgr.get_tiers()
     round_state = state_mgr.get_xvb_round_stats()
     round_types = (
@@ -1878,54 +1920,83 @@ def build_xvb_calc(metrics, state_mgr, realization=None):
     # XvB's published per-tier expected reward (XMR/year), fetched over Tor and cached (#118). The
     # tier KEY is exactly the round-type in the file (donor / donor_vip / donor_whale / donor_mega),
     # so a tier maps to its estimate by key. A stale or empty cache degrades to None per tier +
-    # estimates_available False — the client shows "estimate unavailable", never a frozen number
-    # implied fresh (reusing the stats staleness rule so the two never disagree, #311).
+    # estimates_available False (reusing the stats staleness rule so the two never disagree, #311)
+    # — ``_face_value`` below then tries the vendored fallback before giving up.
     est_state = state_mgr.get_xvb_reward_estimates()
     estimates = (est_state or {}).get("estimates") or {}
     estimates_stale = xvb_stats_are_stale(est_state)
     estimates_available = bool(estimates) and not estimates_stale
+    # #1214: one static fallback figure per tier, tried only when the box is DISABLED (never
+    # enabled, or turned off after its cache aged out) — an enabled box with a merely-stale or
+    # not-yet-populated cache (a transient fetch failure, e.g. a bot-challenge) is NOT "off"; it
+    # keeps the honest pre-existing "estimate unavailable" degradation instead of a fallback that
+    # would falsely read as "XvB is off, using its last published table". Only tried for tiers the
+    # archived table actually names — a custom TIER_CONFIG round-type it doesn't recognise just
+    # stays None, same as before this fix.
+    fallback_eligible = not metrics.xvb_enabled
+    fallback_used = False
+
+    def _face_value(key):
+        """XvB's own face figure for a tier — live estimate first, vendored fallback second.
+
+        ``realized_reward_year`` deliberately does NOT use this: mixing THIS wallet's own
+        measured delivery factor with a dated, generic fallback would overstate precision the
+        wallet has no basis for, and ``realization`` is only ever non-None while XvB is enabled
+        (``build_state``), when a live estimate is normally available anyway. It keeps requiring
+        a live, fresh figure, same as before this fix."""
+        nonlocal fallback_used
+        if estimates_available and key in estimates:
+            return float(estimates[key])
+        if not estimates_available and fallback_eligible and key in XVB_PUBLISHED_REWARD_FALLBACK:
+            fallback_used = True
+            return XVB_PUBLISHED_REWARD_FALLBACK[key]
+        return None
+
+    tier_rows = []
+    for key, t in tiers.items():
+        if t <= 0:
+            continue
+        face = _face_value(key)
+        live_face = float(estimates[key]) if estimates_available and key in estimates else None
+        tier_rows.append(
+            {
+                "name": get_tier_info(t, tiers)[0],
+                "threshold": float(t),
+                "expected_reward_year": face,
+                # Published figure × measured realization (#872) — the net the panel can
+                # honestly act on. None until enough wins measure the factor; LIVE face value
+                # only (see ``_face_value``'s docstring) — a stale/fallback figure can't be
+                # "realized" against.
+                "realized_reward_year": (
+                    live_face * realization[0] if live_face is not None and realization else None
+                ),
+                # Unmeasured boxes still get a calculable band (#872): the published figure
+                # (live or vendored fallback) scaled by the measured realization PRIOR below.
+                # None once a local measurement exists (realized_reward_year supersedes it) or no
+                # face value is available at all — the two never show together.
+                "assumed_reward_year_range": (
+                    [face * XVB_REALIZATION_PRIOR[0], face * XVB_REALIZATION_PRIOR[1]]
+                    if face is not None and not realization
+                    else None
+                ),
+                "win_odds_day": _odds_day(key),
+                "players_avg": (round_types.get(key) or {}).get("players_avg"),
+            }
+        )
     return {
         "enabled": metrics.xvb_enabled,
         # Ascending tier table for the client's what-if; names via get_tier_info so they read
         # exactly like the tier strings everywhere else (threshold already embedded in the name).
-        # expected_reward_year is XvB's own figure for the tier, or None when unavailable/stale.
-        "tiers": sorted(
-            (
-                {
-                    "name": get_tier_info(t, tiers)[0],
-                    "threshold": float(t),
-                    "expected_reward_year": (
-                        float(estimates[key]) if estimates_available and key in estimates else None
-                    ),
-                    # Published figure × measured realization (#872) — the net the panel can
-                    # honestly act on. None until enough wins measure the factor.
-                    "realized_reward_year": (
-                        float(estimates[key]) * realization[0]
-                        if estimates_available and key in estimates and realization
-                        else None
-                    ),
-                    # Unmeasured boxes still get a calculable band (#872): the published figure
-                    # scaled by the measured realization PRIOR below. None once a local
-                    # measurement exists (realized_reward_year supersedes it) or estimates are
-                    # stale — the two never show together.
-                    "assumed_reward_year_range": (
-                        [
-                            float(estimates[key]) * XVB_REALIZATION_PRIOR[0],
-                            float(estimates[key]) * XVB_REALIZATION_PRIOR[1],
-                        ]
-                        if estimates_available and key in estimates and not realization
-                        else None
-                    ),
-                    "win_odds_day": _odds_day(key),
-                    "players_avg": (round_types.get(key) or {}).get("players_avg"),
-                }
-                for key, t in tiers.items()
-                if t > 0
-            ),
-            key=lambda entry: entry["threshold"],
-        ),
+        "tiers": sorted(tier_rows, key=lambda entry: entry["threshold"]),
         "estimates_available": estimates_available,
         "estimates_stale": estimates_stale,
+        # #1214: "live" when a fresh fetch backs the reward columns, "published" when the vendored
+        # fallback filled them instead (with the date it was archived, so the client can label how
+        # old it is), "none" when neither had anything for any tier.
+        "estimates_source": "live"
+        if estimates_available
+        else ("published" if fallback_used else "none"),
+        "estimates_published_date": XVB_PUBLISHED_REWARD_FALLBACK_DATE if fallback_used else None,
         # Measurement context for the realized figures: the factor and its sample size, or None
         # while unmeasured (the client then labels the published number face value).
         "realization_pct": round(realization[0] * 100) if realization else None,
