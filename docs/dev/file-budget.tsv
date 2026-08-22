@@ -46,5 +46,5 @@ tests/integration/lib.sh	692
 tests/integration/run.sh	2551
 tests/integration/selftest.sh	686
 tests/os/run.sh	3447
-tests/stack/run.sh	13905
+tests/stack/run.sh	13782
 tests/stack/test_compose.sh	462
