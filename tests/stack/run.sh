@@ -4934,6 +4934,91 @@ assert_eq "the retry actually ran (fixture consumed)" "$([ -f "$RB/first-tar-fai
 rbarchive="$(ls "$RB"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
 { [ -n "$rbarchive" ] && [ -s "$rbarchive" ]; } && ok "retry produced a real archive" || bad "retry produced a real archive" "no .enc archive"
 
+echo "== unit: backup_require_items — refuses a missing/dangling required item before anything is touched (#1244) =="
+# The KVM battery caught tar failing to stat config.json AFTER the stack had already been
+# stopped for the backup (#1059) — a real archive attempt was thrown away and the box paid for
+# a stop/start cycle it didn't need. These two functions are pulled out of stack_backup and
+# sourced directly (the same pattern gate_ready/os_update_rollback_verdict use) so the refusal
+# and the diagnostic dump are provable without driving tar, sudo, or the whole backup flow.
+BRI="$SANDBOX/backup-require-items"
+mkdir -p "$BRI"
+: >"$BRI/present.txt"
+ln -s "$BRI/nowhere" "$BRI/dangling.txt"
+out=$(run_sourced "$BRI" backup_require_items "$BRI/present.txt" "$BRI/missing.txt" 2>&1)
+rc=$?
+assert_rc "a genuinely missing item refuses (nonzero)" "$rc" "1"
+assert_contains "the refusal names the exact resolved path" "$out" "$BRI/missing.txt"
+assert_contains "the refusal says what to do next" "$out" "pithead setup"
+out=$(run_sourced "$BRI" backup_require_items "$BRI/present.txt" "$BRI/dangling.txt" 2>&1)
+rc=$?
+assert_rc "a dangling symlink refuses the same way a missing file does" "$rc" "1"
+assert_contains "the dangling-symlink refusal also names the path" "$out" "$BRI/dangling.txt"
+out=$(run_sourced "$BRI" backup_require_items "$BRI/present.txt" 2>&1)
+rc=$?
+assert_rc "every item present passes silently" "$rc" "0"
+assert_eq "nothing is printed when every required item is present" "$out" ""
+
+echo "== unit: backup_diagnose_items — a tar failure names its cwd and each item's real state (#1244) =="
+# The diagnostic half of the same fix: when tar fails anyway (both #970 retry attempts spent),
+# the failure names the -C directory it ran against and what each resolved item actually was —
+# so the NEXT occurrence of #1059's run-conditional vanish doesn't need another bench boot
+# before anyone can look.
+out=$(run_sourced "$BRI" backup_diagnose_items "/" "$BRI/present.txt" "$BRI/missing.txt" "$BRI/dangling.txt" 2>&1)
+assert_contains "names the -C directory tar ran against" "$out" 'tar ran with -C "/"'
+assert_contains "a present item is reported present with its own listing" "$out" "present: "
+assert_contains "the present item's line names its own path" "$out" "$BRI/present.txt"
+assert_contains "a missing item is called out by name" "$out" "MISSING: $BRI/missing.txt"
+assert_contains "a dangling symlink is distinguished from a plain miss" "$out" "DANGLING SYMLINK: $BRI/dangling.txt"
+unset BRI out rc
+
+echo "== unit: stack_backup — an absolute CONFIG_FILE override is archived at its real path, not a doubled one (#1244) =="
+# PITHEAD_CONFIG_FILE (the control gate's staged-config preview seam) can be an ABSOLUTE path.
+# Before this fix, stack_backup unconditionally prefixed $PWD onto it ("$PWD/$CONFIG_FILE"),
+# which for an absolute override built a doubled, nonexistent path like
+# "$PWD//tmp/staged.json" — tar would fail to stat THAT, the same shape #1059 hunted, just from
+# a cause the live capture ruled out rather than the one that actually happened.
+CJ="$SANDBOX/backup-cfg-override"
+mkdir -p "$CJ/build/tari" "$CJ/data/tor" "$CJ/data/dashboard" "$CJ/bin"
+cp "$STACK" "$CJ/pithead"
+cp "$ROOT/build/tari/config.toml.template" "$CJ/build/tari/"
+cat >"$CJ/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat >"$CJ/bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "chown" ] && exit 0
+exec "$@"
+EOF
+chmod +x "$CJ/bin/docker" "$CJ/bin/sudo"
+cat >"$CJ/.env" <<EOF
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=CJTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+EOF
+# The override candidate lives OUTSIDE $CJ entirely — a doubled "$CJ/<absolute candidate>" path
+# could never coincidentally resolve to something real, so a pass here can only mean the join
+# is absolute-safe, not a lucky path collision.
+CJALT="$SANDBOX/backup-cfg-override-elsewhere"
+mkdir -p "$CJALT"
+printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$CJALT/candidate.json"
+out=$(cd "$CJ" && PATH="$CJ/bin:$PATH" PITHEAD_CONFIG_FILE="$CJALT/candidate.json" PITHEAD_BACKUP_PASSPHRASE=hunter2 ./pithead backup -y 2>&1)
+rc=$?
+assert_rc "backup succeeds against an absolute CONFIG_FILE override" "$rc" "0"
+cjarchive="$(ls "$CJ"/backups/pithead-backup-*.tar.gz.enc 2>/dev/null | head -1)"
+{ [ -n "$cjarchive" ] && [ -s "$cjarchive" ]; } && ok "override archive was written" || bad "override archive was written" "no .enc archive"
+# The archive's member list is the ground truth for what tar was actually told to stat: the
+# override's OWN absolute path (leading / stripped, same as every other item), never a doubled
+# artifact of the old $PWD-prefix bug.
+cjlist=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass pass:hunter2 -in "$cjarchive" 2>/dev/null | tar -tzf - 2>/dev/null)
+assert_contains "the archive carries the override's real, un-doubled path" "$cjlist" "${CJALT#/}/candidate.json"
+assert_not_contains "the archive never carries a \$PWD-doubled override path" "$cjlist" "${CJ#/}${CJALT}"
+unset CJ CJALT out rc cjarchive cjlist
+
 echo "== unit: install.sh host gate (#77 phase 1) =="
 # The installer hard-fails on the platforms the stack cannot run on, before any download.
 IBIN="$SANDBOX/install-stub-bin"
