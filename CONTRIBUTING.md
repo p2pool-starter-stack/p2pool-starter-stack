@@ -51,7 +51,14 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
      generic class, not a trace of whoever's actual box; `tests/` and `docs/` are an accepted
      exemption boundary for illustrative/fixture content, and each class also carries a small,
      explicit value-level allowlist — see the script's own header — never a per-file exemption
-     comment), `lint-proto` (buf), `lint-toml` (taplo). The
+     comment), `lint-file-budget` (the file-budget ratchet, issue #1105 Phase 0 — a new tracked
+     file has a hard ceiling of 800 lines, target 400; an existing offender's current line count
+     is its personal ceiling in `docs/dev/file-budget.tsv`, and a PR may not grow it past that —
+     ceilings only ever move down, and the gate rejects a budget edit that raises one. Generated
+     code, vendored files, data/config, and prose docs are exempt by glob — see `is_exempt()` in
+     the script — and so is the shipped `pithead` artifact itself, for now: its future `lib/*.sh`
+     sources are what the gate will govern once Phase 2 splits it), `lint-proto` (buf),
+     `lint-toml` (taplo). The
      non-Python tools run via `npx`/`uvx`/`docker`, so a contributor needs **Node, uv, and Docker**
      on PATH (plus `shfmt`); `pre-commit` runs the same checks on changed files. Link-checking
      (`lychee`) runs on a weekly schedule, not per-PR.
