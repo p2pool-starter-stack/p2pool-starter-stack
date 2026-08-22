@@ -411,16 +411,27 @@ NEVER_COMMITTABLE_ENV_KEYS = frozenset(
         "MONERO_NODE_PASSWORD",
         "WALLET_RPC_PASSWORD",
         "TARI_VIEW_KEY",
+        # Node endpoints (SECURITY.md's "node endpoints"): where the stack points its Monero/Tari
+        # RPC clients. Dashboard-committable, this repoints mining traffic to an attacker's node.
+        "MONERO_NODE_HOST",
+        "MONERO_RPC_PORT",
+        "MONERO_ZMQ_PORT",
+        "TARI_GRPC_ADDRESS",
+        # Binds (SECURITY.md's "binds"): the RPC/gRPC listen addresses. DASHBOARD_HOST (above)
+        # covers the dashboard's own bind; these are the merge-mined services' local listeners.
+        "MONERO_RPC_BIND",
+        "MONERO_ZMQ_BIND",
+        "TARI_GRPC_BIND",
         "TARI_WALLET_PASSWORD",
     }
 )
 
 
 def test_perimeter_env_keys_never_committable_from_either_copy():
-    """#1094: names the security perimeter directly and checks each of the four allowlists (pithead's
-    editable + confirm sets, EDITABLE_ENV_KEY_PATHS + CONFIRM_ENV_KEY_PATHS) against it
-    independently, so a key added to every copy at once still fails — unlike the drift tests above,
-    which compare the copies only to each other."""
+    """#1094 / #1069 W9: names the security perimeter directly (SECURITY.md:99-100) and checks each
+    of the four allowlists (pithead's editable + confirm sets, EDITABLE_ENV_KEY_PATHS +
+    CONFIRM_ENV_KEY_PATHS) against it independently, so a key added to every copy at once still
+    fails — unlike the drift tests above, which compare the copies only to each other."""
     import re
     from pathlib import Path
 
