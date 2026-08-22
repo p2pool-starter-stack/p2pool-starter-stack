@@ -475,8 +475,8 @@ their own look.
 **The finding that decides it, measured rather than argued:** `rockylinux:10` refuses
 to start on this project's own release box —
 `Fatal glibc error: CPU does not support x86-64-v3`. RHEL 10 raised the
-microarchitecture baseline to v3 (Haswell, 2013+). Gouda is a Xeon X5690 with no AVX
-at all, and it mines today. A stack routinely deployed on repurposed hardware cannot
+microarchitecture baseline to v3 (Haswell, 2013+). That release box is a pre-AVX
+Xeon from the Nehalem/Westmere era, and it mines today. A stack routinely deployed on repurposed hardware cannot
 adopt a base that excludes that hardware at the libc level.
 
 | Base | Active support | Security tail | CPU floor | Verdict |
