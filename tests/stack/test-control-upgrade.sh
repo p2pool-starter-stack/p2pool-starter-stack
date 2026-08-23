@@ -18,9 +18,9 @@
 # $WALLET, set explicitly: lib.sh's control_config() closure reads it (lib.sh:207) without ever
 # setting it — in run.sh it was already set globally by build_val_sandbox()'s far-earlier
 # config-validation section. Same trap as module 7's onion-report fix: $VALID_PRIMARY is what
-# WALLET equals there, and it's always bound. NOT fixed in lib.sh here (wrong blast radius for a
-# mechanical move) — every future control-sandbox domain file hits this; defaulting WALLET at
-# build_control_sandbox's entry is a candidate one-line follow-up for later sandbox-cluster cuts.
+# WALLET equals there, and it's always bound. Since FIXED in lib.sh (#1305): both sandbox builders
+# default WALLET now, so a future control-sandbox domain file no longer has to set it. The line
+# below is kept because it is correct and harmless, not because anything still requires it.
 build_control_sandbox
 # shellcheck disable=SC2034  # read by lib.sh's control_config() closure, unseen here
 WALLET="$VALID_PRIMARY"
