@@ -84,6 +84,27 @@ test("hostIsInternal: the stack's own docker-bridge subnet is internal, default 
   assert.equal(hostIsInternal("172.30.0.5", "172.30.0.0/24"), true);
 });
 
+test("hostIsInternal: a trailing dot does not clear the localhost class", () => {
+  // Round-4 finding: curl resolves "localhost." identically to "localhost" (DNS's FQDN-root
+  // marker) — dropping the trailing-dot strip (or reordering it after the alias check) reopens
+  // this as an unrecognized, letter-containing "hostname" that clears every check below.
+  assert.equal(hostIsInternal("localhost."), true);
+  assert.equal(hostIsInternal("LOCALHOST."), true);
+});
+
+test("hostIsInternal: the standard /etc/hosts loopback aliases are refused", () => {
+  // Round-4 finding: real /etc/hosts entries on this stack's own target OS (Debian ships
+  // "::1 ip6-localhost ip6-loopback"; RHEL-family ships "127.0.0.1 localhost localhost.localdomain")
+  // — verified via `getent hosts` + live curl to resolve to loopback, same as the bare name.
+  for (const h of ["localhost.localdomain", "ip6-localhost", "ip6-loopback", "IP6-LOOPBACK."]) {
+    assert.equal(hostIsInternal(h), true, h);
+  }
+});
+
+test("hostIsInternal: a subdomain of an alias is not itself aliased", () => {
+  assert.equal(hostIsInternal("sub.ip6-localhost"), false);
+});
+
 test("hostIsInternal: alternate IP encodings are refused, not waved through as hostnames", () => {
   // The actual bypass a security review found: each of these fails the naive 4-octet regex, and
   // the original bug then treated "not a recognized dotted-decimal" as "must be a hostname,

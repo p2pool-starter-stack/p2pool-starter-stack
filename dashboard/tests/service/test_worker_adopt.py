@@ -221,6 +221,12 @@ class TestHostIsInternal:
             "224.0.0.1",  # multicast
             "240.0.0.1",  # reserved
             "::1",  # loopback, IPv6
+            "localhost.",  # DNS "FQDN root" dot; curl resolves it identically to "localhost"
+            "LOCALHOST.",
+            "localhost.localdomain",  # the standard /etc/hosts loopback alias (RHEL-family)
+            "ip6-localhost",  # the standard /etc/hosts ::1 alias (Debian-family)
+            "ip6-loopback",
+            "IP6-LOOPBACK.",  # case + trailing-dot combined
         ],
     )
     def test_internal_classes_refused(self, host):
@@ -242,6 +248,27 @@ class TestHostIsInternal:
     def test_malformed_subnet_in_live_config_fails_closed_to_the_default(self):
         live = {"network": {"subnet": "not-a-subnet"}}
         assert host_is_internal("172.28.0.5", live) is True
+
+    def test_trailing_dot_alone_does_not_clear_the_localhost_class(self):
+        # Round-4 finding: dropping the `h = h[:-1]` trailing-dot strip (or reordering it after the
+        # alias-set membership check) reopens "localhost." / "LOCALHOST." as an unrecognized,
+        # letter-containing "hostname" that clears every check below — verified live: curl resolves
+        # "localhost." to 127.0.0.1/::1 identically to "localhost".
+        assert host_is_internal("localhost.", {}) is True
+        assert host_is_internal("LOCALHOST.", {}) is True
+
+    def test_etc_hosts_loopback_aliases_are_not_missed(self):
+        # Round-4 finding: narrowing _LOOPBACK_ALIASES back down to just {"localhost"} (or
+        # reverting to the old `h == "localhost" or h.endswith(".localhost")` check) reopens
+        # localhost.localdomain / ip6-localhost / ip6-loopback — real /etc/hosts entries on this
+        # stack's own target OS, verified to resolve to loopback via `getent hosts` + live curl.
+        for alias in ("localhost.localdomain", "ip6-localhost", "ip6-loopback"):
+            assert host_is_internal(alias, {}) is True
+
+    def test_a_subdomain_of_an_alias_is_not_itself_aliased(self):
+        # The alias set is bare-name membership, not a suffix match like ".localhost" — confirms
+        # the fix didn't overreach into refusing every hostname that merely contains "ip6-localhost".
+        assert host_is_internal("sub.ip6-localhost", {}) is False
 
     @pytest.mark.parametrize(
         "host",

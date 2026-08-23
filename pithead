@@ -9689,8 +9689,9 @@ _is_canonical_ipv4() {
 
 # True if $1 — a workers.list[] host the add-only exception is about to let a commit introduce —
 # resolves inside THIS host's own reach: loopback, unspecified ("this network"), link-local,
-# multicast/reserved, the literal name "localhost", or the stack's own docker-bridge subnet
-# (network.subnet). Mirrors the READ-path SSRF guard a miner-claimed IP already gets
+# multicast/reserved, "localhost" (and its standard /etc/hosts aliases and root-terminated
+# spelling — localhost., localhost.localdomain, ip6-localhost, ip6-loopback), or the stack's own
+# docker-bridge subnet (network.subnet). Mirrors the READ-path SSRF guard a miner-claimed IP already gets
 # (_safe_probe_host, dashboard/mining_dashboard/client/xmrig_client.py, #122) for the WRITE path:
 # an add-only append is DASHBOARD-chosen (the operator confirms it in the browser, but the actual
 # HTTP request is built and sent by the — possibly compromised — dashboard container), so without
@@ -9711,8 +9712,14 @@ _is_canonical_ipv4() {
 _control_host_is_internal() {
     local host a b prefix
     host=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+    # A trailing dot is DNS's "FQDN root" marker — resolvers (and curl) treat "localhost." exactly
+    # like "localhost" — so strip exactly one before any hostname comparison, or the root-terminated
+    # spelling sails past a literal-string match untouched. localhost.localdomain / ip6-localhost /
+    # ip6-loopback are the standard /etc/hosts loopback aliases on Debian/RHEL-family Linux (this
+    # stack's own target OS) — refused explicitly, not just the bare "localhost" family.
+    host="${host%.}"
     case "$host" in
-    localhost | *.localhost) return 0 ;;
+    localhost | *.localhost | localhost.localdomain | ip6-localhost | ip6-loopback) return 0 ;;
     esac
     case "$host" in
     *[a-z]*)

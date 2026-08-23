@@ -146,6 +146,26 @@ class TestAdoptGuardOnPreview:
         assert resp.status == 400, host
         assert list((control_spool / "requests").glob("*.json")) == []
 
+    @pytest.mark.parametrize(
+        "host",
+        ["localhost.", "LOCALHOST.", "localhost.localdomain", "ip6-localhost", "ip6-loopback"],
+    )
+    async def test_new_rig_with_a_localhost_alias_or_root_terminated_form_refused(
+        self, control_client, control_spool, host
+    ):
+        # Round-4 finding: a security review verified each of these live (getent hosts + curl)
+        # resolves to loopback on this stack's own target OS, and none of them matched the
+        # original literal `host == "localhost"` check — the route-level guard must refuse all of
+        # them, not just the bare spelling.
+        proposed = _proposed(
+            [LIVE_RIG1], {"name": "evil", "host": host, "control_port": 8000, "token": "attacker"}
+        )
+        resp = await control_client.post(
+            "/api/control/preview", json={"config": proposed}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400, host
+        assert list((control_spool / "requests").glob("*.json")) == []
+
     async def test_new_rig_missing_token_refused(self, control_client, control_spool):
         proposed = _proposed([LIVE_RIG1], {"name": "rig2", "host": "10.0.0.10"})
         resp = await control_client.post(

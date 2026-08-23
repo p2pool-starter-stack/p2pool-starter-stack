@@ -70,13 +70,26 @@ _DEFAULT_SUBNET = "172.28.0.0/24"
 _THIS_NETWORK = ipaddress.ip_network("0.0.0.0/8")
 
 
+_LOOPBACK_ALIASES = frozenset(
+    {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+)
+
+
 def host_is_internal(host, live_cfg):
     """Mirrors pithead's ``_control_host_is_internal`` (the host-side SSRF floor an add-only
     append's host must clear, #122): loopback, "this network", link-local, multicast/reserved,
-    ``localhost``, or the stack's own docker-bridge subnet (``network.subnet``, read from the SAME
-    live config the caller already has — never the staged proposal, matching the bash gate's own
+    ``localhost`` (and its standard ``/etc/hosts`` aliases and root-terminated spelling — see
+    below), or the stack's own docker-bridge subnet (``network.subnet``, read from the SAME live
+    config the caller already has — never the staged proposal, matching the bash gate's own
     reasoning: a same-commit ``network.subnet`` change is refused by the generic allowlist gate
     before this would ever matter). An ordinary LAN/public rig address is unaffected.
+
+    A trailing dot is DNS's "FQDN root" marker — resolvers (and curl) treat ``localhost.`` exactly
+    like ``localhost`` — so it is stripped before any hostname comparison, or the root-terminated
+    spelling sails past a literal-string match untouched. ``localhost.localdomain`` /
+    ``ip6-localhost`` / ``ip6-loopback`` are the standard ``/etc/hosts`` loopback aliases on
+    Debian/RHEL-family Linux (this stack's own target OS) — refused explicitly, not just the bare
+    ``localhost`` family.
 
     A string this host's own dial (curl, in the runner) would treat as numeric must be recognized
     as one here too, or an alternate encoding of the very addresses above — a bare decimal integer
@@ -89,7 +102,9 @@ def host_is_internal(host, live_cfg):
     already refuses all of the ambiguous forms above) failing to recognize it means REFUSE, never
     "must be a hostname after all"."""
     h = host.strip().lower()
-    if h == "localhost" or h.endswith(".localhost"):
+    if h.endswith("."):
+        h = h[:-1]
+    if h in _LOOPBACK_ALIASES or h.endswith(".localhost"):
         return True
     if any(c.isalpha() for c in h):
         return "0x" in h  # a hex literal is still numeric-shaped; anything else is a real hostname

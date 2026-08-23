@@ -44,12 +44,26 @@ export function validateAdoptFields(host, controlPort, token) {
 const CANONICAL_IPV4_RE =
   /^(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})$/;
 
+const LOOPBACK_ALIASES = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "ip6-localhost",
+  "ip6-loopback",
+]);
+
 /**
  * Client-side mirror of the host's SSRF floor on a NEW workers.list[] entry (pithead's
  * ``_control_host_is_internal`` / the dashboard's ``worker_adopt.host_is_internal``): loopback,
- * "this network", link-local, multicast/reserved, "localhost", or the stack's own docker-bridge
- * subnet. UX only — a fast, clear refusal before the round trip; the host-side gate (and its own
+ * "this network", link-local, multicast/reserved, "localhost" (and its standard ``/etc/hosts``
+ * aliases and root-terminated spelling — see below), or the stack's own docker-bridge subnet. UX
+ * only — a fast, clear refusal before the round trip; the host-side gate (and its own
  * dashboard-side mirror, checked at preview) is what actually enforces this.
+ *
+ * A trailing dot is DNS's "FQDN root" marker — resolvers (and curl) treat "localhost." exactly
+ * like "localhost" — so it is stripped before any hostname comparison. "localhost.localdomain" /
+ * "ip6-localhost" / "ip6-loopback" are the standard ``/etc/hosts`` loopback aliases on
+ * Debian/RHEL-family Linux (this stack's own target OS) — refused explicitly, not just the bare
+ * "localhost" family.
  *
  * A host this stack's own dial would treat as numeric must be recognized as one here too, or an
  * alternate encoding of the very addresses above — a bare decimal integer ("2130706433"), an
@@ -60,8 +74,9 @@ const CANONICAL_IPV4_RE =
  * refused outright unless it is the exact canonical form. Ambiguous never means "safe".
  */
 export function hostIsInternal(host, subnet) {
-  const h = (host || "").trim().toLowerCase();
-  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  let h = (host || "").trim().toLowerCase();
+  if (h.endsWith(".")) h = h.slice(0, -1);
+  if (LOOPBACK_ALIASES.has(h) || h.endsWith(".localhost")) return true;
   if (/[a-z]/.test(h)) return h.includes("0x"); // a hex literal, or a genuine hostname
   const m = h.match(CANONICAL_IPV4_RE);
   if (!m) return true; // numeric-shaped (digits/dots only) but not the exact canonical form
