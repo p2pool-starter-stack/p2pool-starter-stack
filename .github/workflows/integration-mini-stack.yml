@@ -10,7 +10,7 @@ on:
   pull_request:
     paths:
       - "tests/integration/**"
-      - "build/dashboard/**"
+      - "dashboard/**"
       - ".github/workflows/integration-mini-stack.yml"
 
 permissions:

@@ -3,7 +3,7 @@
 # "No lines with coverage information" when the diff and coverage.xml don't overlap — which is
 # fine for a shell/docs/compose-only PR but a silent hole when the diff changed measured
 # dashboard Python that a stale coverage.xml never saw. This wrapper runs diff-cover, then
-# checks that every changed file under the measured tree (build/dashboard/mining_dashboard/)
+# checks that every changed file under the measured tree (dashboard/mining_dashboard/)
 # appears in coverage.xml: absent files fail loudly, a diff with nothing measurable passes
 # loudly and says so. Run `--self-test` to check the overlap logic against fixtures.
 set -euo pipefail
@@ -11,7 +11,7 @@ set -euo pipefail
 COMPARE=origin/develop
 # The tree the dashboard coverage run measures (pytest --cov=mining_dashboard). Python outside
 # it (tests, integration fakes) is never in coverage.xml, so it can't make the gate applicable.
-MEASURED='build/dashboard/mining_dashboard/*.py'
+MEASURED='dashboard/mining_dashboard/*.py'
 
 # Decide the gate's verdict from the changed measured files vs coverage.xml. Args: <coverage.xml>
 # then the changed files (repo-relative). No changed files -> loud not-applicable pass. Every
@@ -25,11 +25,16 @@ check_overlap() {
     local xml="$1" f rel missing=()
     shift
     if [ "$#" -eq 0 ]; then
-        echo "patch coverage: nothing under build/dashboard/mining_dashboard/ changed in this diff — the >=90% gate is not applicable."
+        echo "patch coverage: nothing under dashboard/mining_dashboard/ changed in this diff — the >=90% gate is not applicable."
         return 0
     fi
     for f in "$@"; do
-        rel="${f#build/dashboard/mining_dashboard/}" # coverage.xml filenames are source-root-relative
+        case "$f" in
+        # Generated Tari gRPC stubs are coverage-omitted by design (pyproject's omit) — a
+        # rename or regeneration must not read as unmeasured changed code.
+        */client/tari/generated/*) continue ;;
+        esac
+        rel="${f#dashboard/mining_dashboard/}" # coverage.xml filenames are source-root-relative
         grep -q "filename=\"$rel\"" "$xml" || missing+=("$f")
     done
     if [ "${#missing[@]}" -gt 0 ]; then
@@ -67,16 +72,21 @@ if [ "${1:-}" = "--self-test" ]; then
     }
 
     rc=0
-    check_overlap "$tmp/coverage.xml" build/dashboard/mining_dashboard/web/views.py >"$tmp/out" || rc=$?
+    check_overlap "$tmp/coverage.xml" dashboard/mining_dashboard/web/views.py >"$tmp/out" || rc=$?
     expect_rc "changed file present in coverage.xml -> pass" 0 "$rc"
 
     rc=0
-    check_overlap "$tmp/coverage.xml" build/dashboard/mining_dashboard/web/ghost.py >"$tmp/out" || rc=$?
+    check_overlap "$tmp/coverage.xml" dashboard/mining_dashboard/web/ghost.py >"$tmp/out" || rc=$?
     expect_rc "changed file absent from coverage.xml -> fail" 1 "$rc"
+
     grep -q "ghost.py" "$tmp/out" || {
         echo "  self-test FAIL: failure doesn't name the unmeasured file"
         st_fail=1
     }
+
+    rc=0
+    check_overlap "$tmp/coverage.xml" dashboard/mining_dashboard/client/tari/generated/foo_pb2.py >"$tmp/out" || rc=$?
+    expect_rc "generated stub absent from coverage.xml -> still pass (coverage-omitted by design)" 0 "$rc"
 
     [ "$st_fail" -eq 0 ] && {
         echo "patch-coverage self-test OK"
@@ -88,7 +98,7 @@ fi
 
 # --- main: diff-cover as before, then the overlap check on its green paths ----------------------
 rc=0
-(cd build/dashboard && uv run --locked --extra test \
+(cd dashboard && uv run --locked --extra test \
     diff-cover coverage.xml --compare-branch="$COMPARE" --fail-under=90) || rc=$?
 [ "$rc" -ne 0 ] && exit "$rc"
 
@@ -100,4 +110,4 @@ changed=$({
 } | sort -u)
 
 # shellcheck disable=SC2086  # repo paths are space-free; intentional word-split into args
-check_overlap build/dashboard/coverage.xml $changed
+check_overlap dashboard/coverage.xml $changed

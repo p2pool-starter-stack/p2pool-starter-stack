@@ -13,7 +13,7 @@
 set -uo pipefail
 
 # Directory-independent: this script assumes cwd == repo root for the relative paths later on
-# (./pithead, build/dashboard/...), so resolve the shared helper from the script's own location
+# (./pithead, dashboard/...), so resolve the shared helper from the script's own location
 # instead of adding a cd that would change those.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=os/rauc/loop-wait.sh
@@ -246,7 +246,7 @@ fi
 # above, and behaved like the previous build on a bench. The stamp catches a stale TREE; these
 # catch a stale ARTIFACT — the program and the baked container image are compared against the
 # very files this checkout holds. Skipped when run outside the repo.
-if [ -f ./pithead ] && [ -f build/dashboard/mining_dashboard/wizard.py ]; then
+if [ -f ./pithead ] && [ -f dashboard/mining_dashboard/wizard.py ]; then
     echo "==> the artifact matches the tree it was built from"
     chk "shipped pithead is the tree's pithead" 'cmp -s "$ROOT/opt/pithead/pithead" ./pithead'
     chk "shipped compose file matches" 'cmp -s "$ROOT/opt/pithead/docker-compose.yml" ./docker-compose.yml'
@@ -270,7 +270,7 @@ if [ -f ./pithead ] && [ -f build/dashboard/mining_dashboard/wizard.py ]; then
         done
     fi
     chk "the baked wizard image contains the tree's wizard.py" \
-        '[ -n "$WIZ_SHIPPED" ] && cmp -s "$WIZ_SHIPPED" build/dashboard/mining_dashboard/wizard.py'
+        '[ -n "$WIZ_SHIPPED" ] && cmp -s "$WIZ_SHIPPED" dashboard/mining_dashboard/wizard.py'
     rm -rf "$WIZ_TMP"
 else
     skip "the artifact matches the tree it was built from" "not run from the repo root"
@@ -307,6 +307,24 @@ chk "machine-id restore unit enabled" \
 chk "machine-id restore orders before networkd (DHCP DUID) and the journal flush" \
     'grep -q "systemd-networkd.service" "$ROOT/etc/systemd/system/pithead-machine-id.service" &&
      grep -q "systemd-journal-flush.service" "$ROOT/etc/systemd/system/pithead-machine-id.service"'
+# First-boot interrupt record (#1030): Storage=persistent (journald.conf.d/pithead.conf) has
+# nowhere real to write without this bind mount — /var/log/journal otherwise sits on the same
+# read-only root as /etc, so a hard reset mid-first-boot left no journal to diagnose it from.
+chk "persistent-journald config baked" \
+    'grep -q "^Storage=persistent" "$ROOT/etc/systemd/journald.conf.d/pithead.conf"'
+chk "the /data-backed journal mountpoint is baked (must pre-exist: a bind mount cannot mkdir a read-only root)" \
+    '[ -d "$ROOT/var/log/journal" ]'
+chk "journal-persist script baked and executable" '[ -x "$ROOT/usr/local/sbin/pithead-journal-persist" ]'
+# #1030 review: the baked script must actually chown the persisted directory to
+# root:systemd-journal, not just claim to in a comment — the parent chain under /data is
+# root:root, and setgid alone only propagates the DIRECTORY's own group, so a promoted journal
+# without this line ends up group root and unreadable by non-root systemd-journal members.
+chk "journal-persist chowns the persisted directory to root:systemd-journal" \
+    'grep -q "chown root:systemd-journal" "$ROOT/usr/local/sbin/pithead-journal-persist"'
+chk "journal-persist unit enabled" \
+    'test -L "$ROOT/etc/systemd/system/sysinit.target.wants/pithead-journal-persist.service"'
+chk "journal-persist orders before the journal flush it exists to feed" \
+    'grep -q "systemd-journal-flush.service" "$ROOT/etc/systemd/system/pithead-journal-persist.service"'
 # An empty machine-id makes systemd run FIRST-BOOT semantics on every power cycle (the volatile
 # /etc upper resets it), and first boot applies preset-all — with no preset files, systemd's
 # fallback is enable-everything, which would resurrect the deliberately-disabled ssh.service on

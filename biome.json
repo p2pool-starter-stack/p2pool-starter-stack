@@ -3,9 +3,9 @@
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "includes": [
-      "build/dashboard/mining_dashboard/web/static/**/*.{js,mjs,css}",
-      "!build/dashboard/mining_dashboard/web/static/vendor",
-      "!build/dashboard/mining_dashboard/web/static/chart.umd.min.js"
+      "dashboard/mining_dashboard/web/static/**/*.{js,mjs,css}",
+      "!dashboard/mining_dashboard/web/static/vendor",
+      "!dashboard/mining_dashboard/web/static/chart.umd.min.js"
     ]
   },
   "formatter": {

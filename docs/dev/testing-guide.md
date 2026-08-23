@@ -33,10 +33,10 @@ make test-integration ARGS="--host user@box --dir pithead --check"   # tier-4 li
 
 | You changed… | Write the test here | Tier |
 |---|---|---|
-| Dashboard logic (a decision, metric, `/api/state` field) | `build/dashboard/tests/**/test_*.py` (pytest) | 1 |
-| Frontend logic (worker sort, formatting) | `build/dashboard/tests/frontend/*.test.mjs` (`node --test`) | 1 |
+| Dashboard logic (a decision, metric, `/api/state` field) | `dashboard/tests/**/test_*.py` (pytest) | 1 |
+| Frontend logic (worker sort, formatting) | `dashboard/tests/frontend/*.test.mjs` (`node --test`) | 1 |
 | A client that parses a daemon (monerod RPC, Tari gRPC) | `tests/integration/fakes/test_contract.py` (+ extend the fakes) | 2 |
-| The control plane (sync-gate #35, failover #31) | `build/dashboard/tests/service/test_data_service.py` (+ a `mini-stack` scenario) | 1 + 3 |
+| The control plane (sync-gate #35, failover #31) | `dashboard/tests/service/test_data_service.py` (+ a `mini-stack` scenario) | 1 + 3 |
 | `pithead` CLI behavior | `tests/stack/run.sh` | 1 |
 | A compose **security/hardening** invariant (caps, `no-new-privileges`, no secret in a healthcheck, socket-proxy scope) | the #90 section of `tests/stack/test_compose.sh` | 1 |
 | A new `config.json` axis | one row in `tests/integration/scenarios.sh` | 4 |
@@ -47,7 +47,7 @@ make test-integration ARGS="--host user@box --dir pithead --check"   # tier-4 li
 
 ### Dashboard behavior (tier 1)
 
-Add a `test_*` to the matching file under `build/dashboard/tests/`. Name it for the behavior, add
+Add a `test_*` to the matching file under `dashboard/tests/`. Name it for the behavior, add
 a one-line docstring stating the intent, mock at the client boundary (the conftest gives you an
 in-memory `state_manager`). Run `make test-dashboard`; coverage must stay ≥ 80%.
 
@@ -89,7 +89,7 @@ drift guard in `tests/web/test_views.py` reruns the generator and fails on any s
 difference from the checked-in fixture, down to nested keys. Then serve the real app around it:
 
 ```bash
-cd build/dashboard
+cd dashboard
 uv run --extra test python tests/frontend/fixtures/_gen_state.py
 python3 - <<'EOF'
 import http.server, mimetypes

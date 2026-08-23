@@ -282,7 +282,7 @@ services:
 
   dashboard:
     build:
-      context: ./build/dashboard
+      context: ./dashboard
       args:
         FOO: bar
     healthcheck:
@@ -304,7 +304,7 @@ EOF
     st "tari (no build:, no .sh) contributes nothing" "$(grep -c '^tari|' <<<"$targets" || true)" "0"
     st "caddy's wget probe (no .sh path, no build:) contributes nothing" "$(grep -c '^caddy|' <<<"$targets" || true)" "0"
     st "xmrig-proxy's inline build: form is read" "$(grep -c '^xmrig-proxy|\./build/xmrig-proxy|/usr/local/bin/xmrig-proxy-healthcheck\.sh$' <<<"$targets" || true)" "1"
-    st "dashboard's block build:/context: form is read" "$(grep -c '^dashboard|\./build/dashboard|/app/healthcheck\.sh$' <<<"$targets" || true)" "1"
+    st "dashboard's block build:/context: form is read" "$(grep -c '^dashboard|\./dashboard|/app/healthcheck\.sh$' <<<"$targets" || true)" "1"
     # THE PARSER-GAP mutation: a block-list `test:` (quoted item, on its own lines rather than a
     # flow sequence) is equally valid compose YAML. A parser that only recognises `test: [...]`
     # makes this service invisible to the whole check — not a red, just silently unchecked.
@@ -332,10 +332,10 @@ EOF
     st "the block-list miss is named, not swallowed" "$(grep -c '^MISSING: bar-blocklist' <<<"$out")" "1"
 
     # --- run_check end to end, mirroring the real tree's shape -----------------------------
-    mkdir -p "$WORK/build/xmrig-proxy" "$WORK/build/dashboard" "$WORK/build/foo-blocklist"
+    mkdir -p "$WORK/build/xmrig-proxy" "$WORK/dashboard" "$WORK/build/foo-blocklist"
     printf 'FROM ubuntu:24.04\nCOPY healthcheck.sh /usr/local/bin/foo-healthcheck.sh\n' >"$WORK/build/foo-blocklist/Dockerfile"
     cp "$WORK/single-src.Dockerfile" "$WORK/build/xmrig-proxy/Dockerfile"
-    cp "$WORK/workdir.Dockerfile" "$WORK/build/dashboard/Dockerfile"
+    cp "$WORK/workdir.Dockerfile" "$WORK/dashboard/Dockerfile"
     if out="$(run_check "$WORK/compose.yml" "$WORK" 2>&1)"; then rc=0; else rc=$?; fi
     st "a fully consistent tree passes" "$rc" "0"
 

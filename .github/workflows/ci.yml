@@ -76,7 +76,7 @@ jobs:
       # tested with Node's built-in runner — no package.json/node_modules/build step. Component
       # rendering is covered by a manual browser smoke test, not here.
       - name: Run frontend logic tests
-        run: node --test build/dashboard/tests/frontend/*.test.mjs
+        run: node --test dashboard/tests/frontend/*.test.mjs
 
   dashboard-image:
     name: Dashboard image (Docker test stage)
@@ -88,27 +88,38 @@ jobs:
         with:
           persist-credentials: false
       - name: Build the dashboard test stage (installs package + runs the suite in-container)
-        run: docker build --target test ./build/dashboard
+        run: docker build --target test ./dashboard
 
   build-images:
-    # Build every build/* image so a broken Dockerfile / COPY path / entrypoint / pinned-digest is
-    # caught in CI instead of at deploy time (#124). Previously only the dashboard test stage was
-    # built, so e.g. the Tor image's entrypoint restructure (#180) shipped with no CI safety net.
-    # Tari is an upstream image (no Dockerfile here), so it's excluded. fail-fast: false so one
-    # broken image doesn't hide the others; empty build-args keep the dashboard build working bare.
+    # Build every build/* image, plus dashboard/ (moved out of build/, #1106), so a broken
+    # Dockerfile / COPY path / entrypoint / pinned-digest is caught in CI instead of at deploy
+    # time (#124). Previously only the dashboard test stage was built, so e.g. the Tor image's
+    # entrypoint restructure (#180) shipped with no CI safety net. Tari is an upstream image (no
+    # Dockerfile here), so it's excluded. fail-fast: false so one broken image doesn't hide the
+    # others; empty build-args keep the dashboard build working bare.
     name: Build image (${{ matrix.service }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        service: [monero, p2pool, tor, xmrig-proxy, dashboard]
+        include:
+          - service: monero
+            context: build/monero
+          - service: p2pool
+            context: build/p2pool
+          - service: tor
+            context: build/tor
+          - service: xmrig-proxy
+            context: build/xmrig-proxy
+          - service: dashboard
+            context: dashboard
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: docker build ./build/${{ matrix.service }}
-        run: docker build -t "pithead-${{ matrix.service }}:ci" "./build/${{ matrix.service }}"
+      - name: docker build ./${{ matrix.context }}
+        run: docker build -t "pithead-${{ matrix.service }}:ci" "./${{ matrix.context }}"
       - name: Scan image for CVEs (Trivy)
         # Gate on actionable (fixable) HIGH/CRITICAL only; accepted findings live in .trivyignore.
         # Must stay green before v1.1 images publish (#282).
@@ -147,8 +158,8 @@ jobs:
             https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
           echo "56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010  /tmp/hadolint" | sha256sum -c -
           sudo install -m 0755 /tmp/hadolint /usr/local/bin/hadolint
-      - name: Lint all build/* Dockerfiles (config in .hadolint.yaml)
-        run: hadolint build/*/Dockerfile
+      - name: Lint all build/* and dashboard/ Dockerfiles (config in .hadolint.yaml)
+        run: hadolint build/*/Dockerfile dashboard/Dockerfile
 
   python-lint:
     name: Python lint + format (ruff)
@@ -169,7 +180,7 @@ jobs:
           export UV_INSTALL_DIR="$HOME/.local/bin"   # deterministic install dir (runners may set CARGO_HOME)
           curl -LsSf https://astral.sh/uv/0.10.10/install.sh | sh
           echo "$UV_INSTALL_DIR" >> "$GITHUB_PATH"
-      - name: ruff check + format --check (config in build/dashboard/pyproject.toml + root ruff.toml)
+      - name: ruff check + format --check (config in dashboard/pyproject.toml + root ruff.toml)
         # Single source of truth: the Makefile `lint-py` target, which runs ruff via uv from the
         # locked `dev` extra — one pinned ruff for CI, pre-commit, and local devs.
         run: make lint-py
@@ -237,10 +248,10 @@ jobs:
           echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
           tar -xJf /tmp/sc.tar.xz -C /tmp
           sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
-      - name: Lint pithead, build/* container scripts, and test scripts (shellcheck + shfmt)
+      - name: Lint pithead, build/* + dashboard/ container scripts, and test scripts (shellcheck + shfmt)
         # Single source of truth: the Makefile `lint-sh` target (so the file list can't drift
-        # between here and the Makefile). Covers build/*/*.sh — the entrypoints + healthchecks that
-        # run in every container (#124). Gate on warnings+errors; info-level style nits vary by
+        # between here and the Makefile). Covers build/*/*.sh and dashboard/*.sh — the entrypoints
+        # + healthchecks that run in every container (#124). Gate on warnings+errors; info-level style nits vary by
         # shellcheck version. Python lint runs in its own `python-lint` job (ruff isn't on this
         # runner; `make lint` runs both for local devs).
         run: make lint-sh
@@ -250,6 +261,18 @@ jobs:
         # Real ext4 damage against the product's own repair escalation (#1062). Unprivileged —
         # e2fsprogs on plain files — and it hard-fails rather than skips when CI lacks the tools.
         run: bash tests/stack/test_data_reset.sh
+      - name: Run OS-update recovery suite
+        # #1050 dead-end states re-arm and report; standalone suite wired here because the shell-tests job runs each
+        # standalone file explicitly (Makefile test-stack alone never runs in CI).
+        run: bash tests/stack/test_os_update_recovery.sh
+      - name: Run first-boot journal suite
+        # #1030 journal persistence across interrupts; standalone suite wired here because the shell-tests job runs each
+        # standalone file explicitly (Makefile test-stack alone never runs in CI).
+        run: bash tests/stack/test_firstboot_journal.sh
+      - name: Run appliance hugepages suite
+        # #1103 co-location refusal on the reduced tier; standalone suite wired here because the shell-tests job runs each
+        # standalone file explicitly (Makefile test-stack alone never runs in CI).
+        run: bash tests/stack/test_appliance_hugepages.sh
       - name: Test-inventory drift check
         # The inventory generator is grep-based; it exits non-zero when any suite it
         # enumerates counts zero — i.e. a suite moved or changed shape and the inventory
@@ -260,7 +283,10 @@ jobs:
         # Pure-logic checks for the tests/integration/ harness (config rendering, matrix
         # coverage, redaction). The LIVE matrix (tests/integration/run.sh) needs a real test
         # server and runs as a gated/manual release gate (#54), not on every PR.
-        run: bash tests/integration/selftest.sh
+        run: |
+          bash tests/integration/selftest.sh
+          bash tests/integration/selftest-rigforge-apply-settle.sh
+          bash tests/integration/selftest-compose-profiles.sh
 
   compose:
     name: Compose config + security hardening

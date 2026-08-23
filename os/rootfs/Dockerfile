@@ -159,9 +159,9 @@ COPY os/rootfs/BUILD_COMMIT /opt/pithead/BUILD_COMMIT
 COPY pithead pithead-completion.bash VERSION docker-compose.yml \
      config.reference.json config.core-keys.json config.minimal.json /opt/pithead/
 # ONLY the build/ subtrees services bind-mount at runtime (config templates and wrapper
-# entrypoints). Copying the whole tree ships build/dashboard/Dockerfile, which is exactly what
-# is_source_checkout() looks for — the appliance would then think it is a dev checkout, tag its
-# images :dev, set the pull policy to never, and SKIP cosign verification of the release images.
+# entrypoints). dashboard/Dockerfile isn't among them (moved out of build/, #1106; see
+# KNOWN-ISSUES.md) — is_source_checkout() keys off its presence here, so shipping one by accident
+# would make the appliance think it's a dev checkout, tag :dev, never pull, and SKIP cosign.
 COPY build/monero/ /opt/pithead/build/monero/
 COPY build/tari/ /opt/pithead/build/tari/
 COPY build/tari-wallet/ /opt/pithead/build/tari-wallet/
@@ -244,7 +244,8 @@ RUN set -e \
 RUN printf 'PITHEAD_ENGINE=podman\n' >> /etc/environment \
     && printf 'vm.nr_hugepages=3072\n' > /etc/sysctl.d/99-pithead-hugepages.conf \
     && mkdir -p /etc/systemd/journald.conf.d \
-    && printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/pithead.conf
+    && printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/pithead.conf \
+    && mkdir -p /var/log/journal # bind-mount target for pithead-journal-persist.service (#1030)
 
 # Hardware/systemd watchdog: catch a soft-hung kernel or wedged init on an unattended headless
 # box — the case panic=60 (grub.cfg) and container restart policies cannot see, because nothing
@@ -303,27 +304,25 @@ COPY os/overlay/pithead-media-config /usr/local/sbin/pithead-media-config
 COPY os/overlay/pithead-hugepages.service /etc/systemd/system/pithead-hugepages.service
 COPY os/overlay/pithead-hugepages /usr/local/sbin/pithead-hugepages
 # The two-tier reset's deep tier and the wedged-/data recovery path: reformats /data before it
-# mounts, either on a `pithead factory-reset` request (ESP marker) or when the partition is
-# genuinely unmountable. Ordered before data.mount by its unit — the wipe cannot run once /data is
-# in use — and fail-safe: a healthy, unmarked partition is never touched.
+# mounts, on a `pithead factory-reset` request (ESP marker) or a genuinely unmountable partition.
+# Ordered before data.mount by its unit; fail-safe — a healthy, unmarked partition is never touched.
 COPY os/overlay/pithead-data-reset.service /etc/systemd/system/pithead-data-reset.service
 COPY os/overlay/pithead-data-reset /usr/local/sbin/pithead-data-reset
-# CPU governor: hold the cores at performance every boot (mining appliance tuning). Oneshot, and
-# a no-op on a box with no cpufreq — see the unit for the RigForge co-location note.
+# CPU governor: hold cores at performance every boot; a no-op with no cpufreq (co-location note on the unit).
 COPY os/overlay/pithead-cpu-governor.service /etc/systemd/system/pithead-cpu-governor.service
-# Host identity (#894/#895): neither SSH host keys nor machine-id may ship CONCRETE — all were
-# baked by their packages' own postinst during this build (openssh-server, systemd, dbus), which
-# made them extractable from a published release and identical across every machine flashed from
-# one. dbus's copy counts fully: systemd's first-boot logic PREFERS /var/lib/dbus/machine-id
-# when it exists, so a baked copy there resurrects the shared identity even with /etc emptied —
-# the KVM reset leg caught exactly that (every "fresh" first boot minting the same id). The
-# standard symlink makes dbus follow /etc/machine-id instead. Deleting/emptying here is only
-# half the fix; the other half is the boot-time mechanism below that generates (once) and
-# persists them on /data, the single persistence root.
+# Host identity (#894/#895): neither SSH host keys nor machine-id may ship CONCRETE — both were
+# baked by their packages' own postinst (openssh-server, systemd, dbus), extractable from a
+# published release and identical across every machine flashed from one. dbus's copy counts
+# fully too: its first-boot logic PREFERS /var/lib/dbus/machine-id when present, resurrecting
+# the shared identity even with /etc emptied (the KVM reset leg caught exactly that — every
+# "fresh" boot minting the same id). The symlink below fixes dbus; the boot-time mechanism that
+# generates (once) and persists both on /data, the single persistence root, fixes the rest.
 COPY os/overlay/pithead-ssh-host-keys.conf /etc/systemd/system/ssh.service.d/pithead-host-keys.conf
 COPY os/overlay/pithead-ssh-host-keys /usr/local/sbin/pithead-ssh-host-keys
 COPY os/overlay/pithead-machine-id.service /etc/systemd/system/pithead-machine-id.service
 COPY os/overlay/pithead-machine-id /usr/local/sbin/pithead-machine-id
+COPY os/overlay/pithead-journal-persist.service /etc/systemd/system/pithead-journal-persist.service
+COPY os/overlay/pithead-journal-persist /usr/local/sbin/pithead-journal-persist
 RUN mkdir -p /etc/ssh/sshd_config.d \
     && printf 'HostKey /data/ssh/ssh_host_ed25519_key\n' > /etc/ssh/sshd_config.d/pithead-host-keys.conf \
     && rm -f /etc/ssh/ssh_host_* \
@@ -340,7 +339,7 @@ RUN mkdir -p /etc/ssh/sshd_config.d \
 RUN mkdir -p /etc/systemd/system-preset \
     && printf 'disable *\n' > /etc/systemd/system-preset/00-pithead.preset \
     && systemctl mask systemd-firstboot.service
-RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-media-config /usr/local/sbin/pithead-hugepages /usr/local/sbin/pithead-data-reset /usr/local/sbin/pithead-ssh-host-keys /usr/local/sbin/pithead-machine-id /usr/lib/systemd/system-generators/pithead-mount-generator
+RUN chmod +x /usr/local/sbin/pithead-sync /usr/local/sbin/pithead-boot /usr/local/sbin/pithead-media-config /usr/local/sbin/pithead-hugepages /usr/local/sbin/pithead-data-reset /usr/local/sbin/pithead-ssh-host-keys /usr/local/sbin/pithead-machine-id /usr/local/sbin/pithead-journal-persist /usr/lib/systemd/system-generators/pithead-mount-generator
 # The updater is chosen per image. RAUC is a Debian package, so it is installed here when
 # selected; leaving PITHEAD_UPDATER empty builds the same rootfs with no updater at all.
 ARG PITHEAD_UPDATER=""
@@ -376,6 +375,7 @@ RUN systemctl enable podman.socket pithead-boot.service pithead-cpu-governor.ser
         systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
         pithead-data-reset.service pithead-machine-id.service pithead-hugepages.service \
+        pithead-journal-persist.service \
     && systemctl disable ssh
 # systemd-repart.service is static — it is pulled in by sysinit.target, and `systemctl enable` on a
 # static unit is an error that would fail the build. Assert it is present instead.

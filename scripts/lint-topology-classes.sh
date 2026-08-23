@@ -98,7 +98,7 @@ ipv4_allow() {
     # pithead's own suggested-alternate-subnet example in explain_subnet_collision()'s warning —
     # not a fallback default, just a second illustrative /24 offered when 172.28.0.0/24 collides.
     172.30.0.0/24) return 0 ;;
-    # the setup wizard's own "Node host" field placeholder hint text (build/dashboard/.../wizard.mjs)
+    # the setup wizard's own "Node host" field placeholder hint text (dashboard/.../wizard.mjs)
     192.168.1.10) return 0 ;;
     # an atypical private literal in the os/quadlet fixture set (fixture.env + the two unit files
     # rendered from it) — not the documented 172.28.* default; a prior audit flagged it for a
@@ -156,7 +156,7 @@ report() { # <class-message> <hits>
 # example per class (see --self-test below) and would otherwise flag themselves on every run.
 EXCL_VENDOR=(':(exclude,glob)**/*.min.js' ':(exclude)scripts/lint-topology-classes.sh')
 
-# Fixture/vendored-doc context: tests/ and docs/ (any depth — build/dashboard/tests/ counts too)
+# Fixture/vendored-doc context: tests/ and docs/ (any depth — dashboard/tests/ counts too)
 # hold synthetic hostnames and third-party research material on purpose; config.reference.json
 # plays the same illustrative role as docs/ (it documents every field with an example value, the
 # same "tari-node.lan" one docs/configuration.md shows).
@@ -164,15 +164,16 @@ EXCL_TESTS_DOCS=(
     ':(exclude,glob)tests/**' ':(exclude,glob)**/tests/**' ':(exclude,glob)docs/**'
     ':(exclude)config.reference.json'
 )
-# The RFC1918 rule additionally clears build/*/entrypoint scripts and config templates (they
-# render the product's own network config) and three repo-root files that use illustrative
-# addresses in prose: the compose file itself (the documented default's home), CHANGELOG.md
-# (release notes narrate past examples the same way docs/ does), and the Makefile (a dev-tooling
-# comment). The CLI (`pithead`) is deliberately NOT path-exempt here — it's the file most likely
-# to grow a real leaked address — so every private literal it carries clears ipv4_allow() by
-# value instead (see the 172.30.0.0/24 entry above).
+# The RFC1918 rule additionally clears build/*/entrypoint scripts (and dashboard/'s, moved out of
+# build/ in #1106) and config templates (they render the product's own network config) and three
+# repo-root files that use illustrative addresses in prose: the compose file itself (the
+# documented default's home), CHANGELOG.md (release notes narrate past examples the same way
+# docs/ does), and the Makefile (a dev-tooling comment). The CLI (`pithead`) is deliberately NOT
+# path-exempt here — it's the file most likely to grow a real leaked address — so every private
+# literal it carries clears ipv4_allow() by value instead (see the 172.30.0.0/24 entry above).
 EXCL_IPV4_EXTRA=(
-    ':(exclude,glob)build/*/*entrypoint*' ':(exclude,glob)build/*/*.template'
+    ':(exclude,glob)build/*/*entrypoint*' ':(exclude,glob)dashboard/*entrypoint*'
+    ':(exclude,glob)build/*/*.template'
     ':(exclude)docker-compose.yml' ':(exclude)CHANGELOG.md' ':(exclude)Makefile'
 )
 

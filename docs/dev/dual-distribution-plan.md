@@ -426,7 +426,7 @@ the #54 matrix per cut, same mandate as the targeted e2e.
 - Security cadence (#833): the appliance's Debian userland has no apt at runtime, so
   **bake cadence is patch cadence** — a merged fix does nothing for a fleet until an
   os-image release ships it. The watchers: Dependabot tracks every base digest
-  (`build/*`, `docker-compose.yml`, `os/rootfs`), the weekly CI sweeps rebuild and
+  (`build/*`, `dashboard/`, `docker-compose.yml`, `os/rootfs`), the weekly CI sweeps rebuild and
   Trivy-scan the stack images (ci.yml) and the rootfs (os-rootfs.yml), and
   pin-watch.yml files an issue when a hand-pinned binary (docker-compose, cosign)
   falls behind upstream. A security-relevant bump landing on the integration branch

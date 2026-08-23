@@ -224,7 +224,7 @@ done
 # The top-level VERSION file is the single source of truth (#44); the dashboard's Python package
 # metadata must stay in lockstep so a release can't ship two different "stack versions".
 ver_file="$(tr -d ' \t\r\n' <"$ROOT/VERSION")"
-ver_pyproject="$(grep -oE '^version = "[^"]+"' "$ROOT/build/dashboard/pyproject.toml" | head -1 | cut -d'"' -f2)"
+ver_pyproject="$(grep -oE '^version = "[^"]+"' "$ROOT/dashboard/pyproject.toml" | head -1 | cut -d'"' -f2)"
 assert_eq "pyproject.toml version matches VERSION (#44)" "$ver_pyproject" "$ver_file"
 
 echo "== unit: release.sh registry read retries GHCR read-after-push lag (#429) =="
@@ -411,8 +411,8 @@ echo "== unit: pull-vs-build mode (#44) =="
 # (Dockerfiles) are present: a source checkout builds locally (:dev, --pull never); a release bundle
 # (only build/tari/ + VERSION) pulls (:vX.Y.Z, --pull missing). Two scratch dirs stand in for each.
 SRCM="$SANDBOX/srcmode"
-mkdir -p "$SRCM/build/dashboard"
-: >"$SRCM/build/dashboard/Dockerfile"
+mkdir -p "$SRCM/dashboard"
+: >"$SRCM/dashboard/Dockerfile"
 printf '0.1.0\n' >"$SRCM/VERSION"
 RELM="$SANDBOX/relmode"
 mkdir -p "$RELM/build/tari"

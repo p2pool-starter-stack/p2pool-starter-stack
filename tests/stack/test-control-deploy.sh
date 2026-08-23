@@ -151,8 +151,8 @@ echo "== black-box: deploy-box layout (#455) =="
 # layout. Proves the default resolution, the apply-time migration, and the upgrade-time
 # symlink end to end through the real CLI (docker/sudo stubbed).
 L="$SANDBOX/boxroot/pithead-v9.9.9"
-mkdir -p "$L/build/tari" "$L/build/dashboard"
-: >"$L/build/dashboard/Dockerfile"
+mkdir -p "$L/build/tari" "$L/dashboard"
+: >"$L/dashboard/Dockerfile"
 cp "$STACK" "$L/pithead"
 make_stubs "$L/bin"
 cp "$ROOT/build/tari/config.toml.template" "$L/build/tari/"

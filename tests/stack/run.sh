@@ -1862,7 +1862,7 @@ source "$HERE/test-release.sh"
 # The XvB tier thresholds are hard-coded in config.py (TIER_DEFAULTS) and stated explicitly in
 # docs/architecture.md. Drift guard: each config value must match the doc's human form, so the
 # user-facing table can't silently fall out of sync if TIER_DEFAULTS ever changes.
-tier_cfg="$ROOT/build/dashboard/mining_dashboard/config/config.py"
+tier_cfg="$ROOT/dashboard/mining_dashboard/config/config.py"
 tier_doc="$ROOT/docs/architecture.md"
 for tier in "donor:1_000:1 kH/s" "vip:10_000:10 kH/s" "whale:100_000:100 kH/s" "mega:1_000_000:1 MH/s"; do
     t_name="${tier%%:*}"
@@ -1894,7 +1894,7 @@ echo "== unit: export_build_provenance (Issue #58) =="
 # Exports the stack version (from the top-level VERSION file, whitespace-trimmed) plus git
 # branch/commit for the dashboard build args — deliberately NOT written into .env, since the
 # volatile commit would otherwise churn `apply`. The sandbox isn't a git repo, so branch/commit
-# come back empty here; the release/dev split is unit-tested in build/dashboard/tests/test_version.py.
+# come back empty here; the release/dev split is unit-tested in dashboard/tests/test_version.py.
 PROV="$SANDBOX/prov"
 mkdir -p "$PROV"
 printf '  9.9.9 \n' >"$PROV/VERSION"
@@ -3740,8 +3740,8 @@ echo "== black-box: upgrade re-renders generated config (#128) =="
 # `upgrade` used to be just `up --build`, leaving the generated .env/Caddyfile/Tari config stale
 # after a git pull. It must now re-render them while preserving secrets.
 U="$SANDBOX/upgrade"
-mkdir -p "$U/build/tari" "$U/build/dashboard" "$U/data/monero" "$U/data/tari" "$U/data/p2pool/stats" "$U/data/tor" "$U/data/dashboard"
-: >"$U/build/dashboard/Dockerfile"
+mkdir -p "$U/build/tari" "$U/dashboard" "$U/data/monero" "$U/data/tari" "$U/data/p2pool/stats" "$U/data/tor" "$U/data/dashboard"
+: >"$U/dashboard/Dockerfile"
 cp "$STACK" "$U/pithead"
 make_stubs "$U/bin"
 cp "$ROOT/build/tari/config.toml.template" "$U/build/tari/"
@@ -3776,8 +3776,8 @@ assert_contains "upgrade pulls non-buildable images first (digest bumps)" "$(cat
 echo "== black-box: apply recovers from a failed 'compose up' (#125) =="
 # A docker stub that fails `compose up -d --remove-orphans` only when FAIL_UP=1 (else succeeds).
 A="$SANDBOX/applyfail"
-mkdir -p "$A/build/tari" "$A/build/dashboard" "$A/bin" "$A/data/monero" "$A/data/tari" "$A/data/p2pool/stats" "$A/data/tor" "$A/data/dashboard"
-: >"$A/build/dashboard/Dockerfile" # source-checkout marker → pithead builds (--pull never), #44
+mkdir -p "$A/build/tari" "$A/dashboard" "$A/bin" "$A/data/monero" "$A/data/tari" "$A/data/p2pool/stats" "$A/data/tor" "$A/data/dashboard"
+: >"$A/dashboard/Dockerfile" # source-checkout marker → pithead builds (--pull never), #44
 cp "$STACK" "$A/pithead"
 cp "$ROOT/build/tari/config.toml.template" "$A/build/tari/"
 cat >"$A/bin/docker" <<'EOF'
@@ -6192,7 +6192,7 @@ echo "== unit: config.reference.json stays a complete superset of every path pit
 # path pithead reads must exist in config.reference.json, or a legitimate config carrying that path
 # is false-rejected on every control-channel commit (a control-plane DoS). Until now the only guard
 # was the single legacy-xmrig_proxy round-trip case above. This walks pithead's own read sites,
-# mirroring the #515 cross-file drift guard's shape (build/dashboard/tests/service/test_control_service.py,
+# mirroring the #515 cross-file drift guard's shape (dashboard/tests/service/test_control_service.py,
 # test_writable_key_allowlist_has_no_intra_repo_drift): a conservative, fixed-shape extractor over
 # the literal read sites that FAILS LOUD on a shape it doesn't recognize (rather than silently
 # skipping it), so a new read shape can't slip through unchecked.
@@ -7694,13 +7694,13 @@ assert_eq "no stratum password -> no pass key at all" \
     "$(jq -r '.pools[0] | has("pass")' "$LMR/rigforge/config.json")" "false"
 assert_eq "no degrade marker -> the full budget is declared as headroom (3072 pages -> 6144 MB)" \
     "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "6144"
-# Degraded box (#977): the boot-time sizing recorded a smaller reservation in the marker, and
-# the render declares THAT — a constant 6144 here had RigForge's grow-only sysctl size the pool
-# to miner-need + 6 GiB on the low-RAM machine, every boot.
+# #1103 superseded this: it used to assert the recorded reservation as headroom (2560 pages ->
+# 5120 MB), the double-count #1103 removes — co-location is now refused outright on this
+# REDUCED tier (no config); the rest of the gate is proven in test_appliance_hugepages.sh.
 printf 'reduced-reservation words\npages=2560\n' >"$LMR/marker"
 PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
-assert_eq "degrade marker -> headroom follows the recorded reservation (2560 pages -> 5120 MB)" \
-    "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "5120"
+[ -f "$LMR/rigforge/config.json" ] && bad "reduced tier -> co-location refused, no config rendered (#1103)" "file exists" ||
+    ok "reduced tier -> co-location refused, no config rendered (#1103)"
 printf 'released-reservation words\npages=0\n' >"$LMR/marker"
 PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
 assert_eq "released reservation -> zero headroom (RigForge sizes for the miner alone)" \
@@ -8959,7 +8959,7 @@ os_reset
 
 # One os-* verb per drain: a second one in the same cycle rejects with a retry hint.
 UOS2="88888888-8888-4888-8888-888888888888"
-rm -f "$OSDIR/in-flight.json" "$OSDIR/.check-stamp" # a fresh dial, not the check throttle
+rm -f "$OSDIR/in-flight.json" "$OSDIR/.check-stamp" "$OSDIR/.check-stamp-short" # a fresh dial, not the check throttle
 os_intent "$UOS" os-check
 sleep 1 # distinct mtimes so the drain order is deterministic (oldest first)
 os_intent "$UOS2" os-check
@@ -8973,11 +8973,11 @@ rm -f "$OSRES/$UOS.json" "$OSRES/$UOS2.json"
 # ignored and the flow stays on the GitHub-over-Tor path. Running unprivileged here, our own
 # file IS owner-matched — assert the redirect engages, which is the seam's whole contract.
 printf 'http://bench.invalid/updates' >"$OSC/os-update-test-base"
-rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp"
+rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp" "$OSDIR/.check-stamp-short"
 os_intent "$UOS" os-check
 osrun >/dev/null
 assert_contains "the test seam redirects the release lookup" "$(cat "$OSC/curl.log")" "bench.invalid/updates/releases-latest.json"
-rm -f "$OSC/os-update-test-base" "$OSRES/$UOS.json"
+rm -f "$OSC/os-update-test-base" "$OSRES/$UOS.json" "$OSDIR/.check-stamp-short" # the stub's exit-22 catch-all makes this bench dial rc 2 too (#1050 review) — clear it or it leaks into the next test
 
 # #1081 reached only the two DIY lookups. The appliance's os-check kept its own `curl -fsS`, and
 # `-f` collapses every non-2xx into one exit code — so a spent GitHub budget came out of the
@@ -8985,7 +8985,7 @@ rm -f "$OSC/os-update-test-base" "$OSRES/$UOS.json"
 # Tor healthy, on a box with no shell to run it from. It goes through the shared fetch now.
 echo "== black-box: a rate-limited os-check names the remedy that works (#1081) =="
 printf '%s' '{"message":"API rate limit exceeded for this IP.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}' >"$OSC/api-403.json"
-rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp"
+rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp" "$OSDIR/.check-stamp-short" # starts clean regardless of what leaked above
 os_reset
 os_intent "$UOS" os-check
 osrun CURL_API_RESPONSE="$OSC/api-403.json" GH_STUB_CODE=403 >/dev/null
@@ -9008,7 +9008,7 @@ esac
 assert_eq "the throttle is still held after a rate-limit refusal" \
     "$([ -f "$OSDIR/.check-stamp" ] && echo held || echo released)" "held"
 os_reset
-rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp"
+rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp" "$OSDIR/.check-stamp-short"
 
 unset -f osrun os_intent os_reset os_restage
 rm -rf "$OSC"
