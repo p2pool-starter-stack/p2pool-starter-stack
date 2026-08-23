@@ -46,7 +46,7 @@ tests/integration/lib.sh	692
 tests/integration/run.sh	2551
 tests/integration/selftest.sh	686
 tests/os/run.sh	3442
-tests/stack/run.sh	6760
+tests/stack/run.sh	6411
 tests/stack/test-backup.sh	523
 tests/stack/test-cli.sh	410
 tests/stack/test_compose.sh	462
@@ -58,4 +58,5 @@ tests/stack/test-monero-tari.sh	582
 tests/stack/test-release.sh	504
 tests/stack/test-release-signing.sh	454
 tests/stack/test-rig-worker.sh	617
+tests/stack/test-secrets.sh	401
 tests/stack/test-tor-network.sh	780
