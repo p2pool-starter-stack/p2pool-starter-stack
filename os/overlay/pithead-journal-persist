@@ -1,0 +1,35 @@
+#!/bin/sh
+# Give the persistent journal (Storage=persistent, os/rootfs/Dockerfile) somewhere real to land
+# (#1030). journald.conf.d already asks for persistent storage, but /var/log/journal sits on
+# the same read-only root as /etc — the same root pithead-machine-id's own comment describes
+# PID 1 bind-mounting a transient machine-id over, because a direct write there fails EROFS.
+# journald hits the same wall silently: it falls back to /run/log/journal (volatile, gone on
+# any hard reset) for the WHOLE boot, and nothing ever promotes it, because the promotion unit
+# (systemd-journal-flush.service) runs before /data is even mounted. So a box that reset
+# mid-first-boot — the #1029/#1030 incident: an interrupted container-image load — left NO
+# journal at all to diagnose it from, even though Storage=persistent was set the entire time.
+#
+# The fix mirrors pithead-ssh-host-keys and pithead-machine-id: put the real directory on /data
+# (survives everything short of a factory reset) and bind-mount it onto the mountpoint the image
+# already bakes at /var/log/journal, so journald's own promotion path (systemd-journal-flush,
+# delayed past data.mount by this unit's ordering — see the .service file) finds a genuinely
+# writable, persistent target instead of the read-only root. A bind mount only needs its target
+# to EXIST as a directory, not be writable, so the baked empty /var/log/journal is enough.
+set -eu
+
+DATA_DIR="${PITHEAD_JOURNAL_DATA_DIR:-/data/pithead/journal}"
+TARGET="${PITHEAD_JOURNAL_TARGET:-/var/log/journal}"
+
+mkdir -p "$DATA_DIR"
+# Same mode systemd-tmpfiles gives /var/log/journal itself (root:systemd-journal, setgid so
+# journald's own directories underneath inherit the group) — matched here so a promoted journal
+# under this mount is exactly as readable as one journald created directly.
+chmod 2755 "$DATA_DIR" 2>/dev/null || true
+
+if mountpoint -q "$TARGET" 2>/dev/null; then
+    echo "pithead-journal-persist: $TARGET is already the persistent mount"
+else
+    mkdir -p "$TARGET"
+    mount --bind "$DATA_DIR" "$TARGET"
+    echo "pithead-journal-persist: bound $TARGET to $DATA_DIR"
+fi
