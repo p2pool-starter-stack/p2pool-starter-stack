@@ -9168,13 +9168,13 @@ assert_eq "no stratum password -> no pass key at all" \
     "$(jq -r '.pools[0] | has("pass")' "$LMR/rigforge/config.json")" "false"
 assert_eq "no degrade marker -> the full budget is declared as headroom (3072 pages -> 6144 MB)" \
     "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "6144"
-# Degraded box (#977): the boot-time sizing recorded a smaller reservation in the marker, and
-# the render declares THAT — a constant 6144 here had RigForge's grow-only sysctl size the pool
-# to miner-need + 6 GiB on the low-RAM machine, every boot.
+# #1103 superseded this: it used to assert the recorded reservation as headroom (2560 pages ->
+# 5120 MB), the double-count #1103 removes — co-location is now refused outright on this
+# REDUCED tier (no config); the rest of the gate is proven in test_appliance_hugepages.sh.
 printf 'reduced-reservation words\npages=2560\n' >"$LMR/marker"
 PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
-assert_eq "degrade marker -> headroom follows the recorded reservation (2560 pages -> 5120 MB)" \
-    "$(jq -r '.hugepages_reserve_extra_mb' "$LMR/rigforge/config.json")" "5120"
+[ -f "$LMR/rigforge/config.json" ] && bad "reduced tier -> co-location refused, no config rendered (#1103)" "file exists" ||
+    ok "reduced tier -> co-location refused, no config rendered (#1103)"
 printf 'released-reservation words\npages=0\n' >"$LMR/marker"
 PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$LMR/marker" run_sourced "$LMR" render_local_miner_config >/dev/null 2>&1
 assert_eq "released reservation -> zero headroom (RigForge sizes for the miner alone)" \
