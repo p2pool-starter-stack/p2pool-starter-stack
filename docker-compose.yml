@@ -573,7 +573,7 @@ services:
   dashboard:
     image: ${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION:-dev}
     build:
-      context: ./build/dashboard
+      context: ./dashboard
       # Stack version baked into the image so the dashboard header can show it (Issue #58).
       # pithead exports these for the build (PITHEAD_VERSION from the top-level VERSION file;
       # git branch/commit for dev builds — see export_build_provenance); empty defaults keep a

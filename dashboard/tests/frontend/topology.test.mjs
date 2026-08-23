@@ -1,7 +1,7 @@
 // Unit tests for the stack-topology diagram geometry (mining_dashboard/web/static/topology.mjs).
 //
 // Run with Node's built-in test runner — no dependencies, no package.json, no build step:
-//     node --test build/dashboard/tests/frontend/
+//     node --test dashboard/tests/frontend/
 // (CI runs exactly this; Node is preinstalled on the runner.)
 //
 // The SVG *component* isn't rendered here (that needs a DOM toolchain the repo avoids); these

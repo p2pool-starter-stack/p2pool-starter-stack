@@ -26,7 +26,7 @@ the app modules and `dashboard.css`. Nothing is inlined and the libraries are ev
 page runs under a strict Content-Security-Policy with no `'unsafe-inline'`/`'unsafe-eval'`.
 
 Testing: the Python API, where the logic and formatting live, is unit-tested. The client-side
-tests run under Node's built-in runner (`node --test build/dashboard/tests/frontend/`) — no
+tests run under Node's built-in runner (`node --test dashboard/tests/frontend/`) — no
 `package.json`/`node_modules`/build step, so the repo stays Node-free. They cover the pure logic
 (`logic.test.mjs`: worker sort, tooltip formatting, hero-KPI selection), the chart helpers
 (`chart.test.mjs`: `withAlpha`, `padYAxis`), the topology geometry (`topology.test.mjs`),
@@ -60,7 +60,7 @@ It is an installable package (`pyproject.toml`): all internal imports are absolu
 ## Development
 
 ```bash
-# from build/dashboard/ — uv creates .venv and installs from the hashed uv.lock (Python 3.11+)
+# from dashboard/ — uv creates .venv and installs from the hashed uv.lock (Python 3.11+)
 uv sync --extra test
 ```
 
@@ -77,7 +77,7 @@ node --test tests/frontend/
 Or from the repo root: `make test-dashboard`. The same Python suite runs in the Docker test stage:
 
 ```bash
-docker build --target test ./build/dashboard
+docker build --target test ./dashboard
 ```
 
 Tests are hermetic: no network, no containers, no real database (an in-memory SQLite is used via

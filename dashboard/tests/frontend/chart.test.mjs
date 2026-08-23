@@ -1,7 +1,7 @@
 // Unit tests for the chart's pure helpers (mining_dashboard/web/static/chart.mjs).
 //
 // Run with Node's built-in test runner (CI runs exactly this):
-//     node --test build/dashboard/tests/frontend/
+//     node --test dashboard/tests/frontend/
 //
 // Only the DOM-free logic is covered here (the Chart.js wiring + canvas gradients need a browser,
 // by the repo's deliberate no-DOM-toolchain policy). withAlpha and padYAxis carry real regression

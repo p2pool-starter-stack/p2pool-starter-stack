@@ -40,7 +40,8 @@ overlay is discarded across reboots and A/B updates, so images stored there woul
 vanish on every update. `ConditionPathIsMountPoint=/data` guards it.
 
 **The appliance must not look like a source checkout.** `is_source_checkout()` probes
-for `build/dashboard/Dockerfile`, so copying the whole `build/` tree made the appliance
+for `dashboard/Dockerfile` (dashboard moved out of `build/` in #1106; it is never copied into
+the image). Copying the whole `build/` tree used to ship it there, which made the appliance
 tag images `:dev`, set the pull policy to `never`, and — the serious one — skip cosign
 verification of release images entirely. Only the three subtrees services bind-mount
 are shipped now.

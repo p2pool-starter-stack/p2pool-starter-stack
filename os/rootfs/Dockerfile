@@ -159,9 +159,9 @@ COPY os/rootfs/BUILD_COMMIT /opt/pithead/BUILD_COMMIT
 COPY pithead pithead-completion.bash VERSION docker-compose.yml \
      config.reference.json config.core-keys.json config.minimal.json /opt/pithead/
 # ONLY the build/ subtrees services bind-mount at runtime (config templates and wrapper
-# entrypoints). Copying the whole tree ships build/dashboard/Dockerfile, which is exactly what
-# is_source_checkout() looks for — the appliance would then think it is a dev checkout, tag its
-# images :dev, set the pull policy to never, and SKIP cosign verification of the release images.
+# entrypoints). dashboard/Dockerfile isn't among them (moved out of build/, #1106; see
+# KNOWN-ISSUES.md) — is_source_checkout() keys off its presence here, so shipping one by accident
+# would make the appliance think it's a dev checkout, tag :dev, never pull, and SKIP cosign.
 COPY build/monero/ /opt/pithead/build/monero/
 COPY build/tari/ /opt/pithead/build/tari/
 COPY build/tari-wallet/ /opt/pithead/build/tari-wallet/

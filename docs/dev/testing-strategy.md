@@ -13,7 +13,7 @@ situation honestly.
 
 | Tier | What it is | Simulates | Where it runs |
 |---|---|---|---|
-| **1 — Unit** | `build/dashboard/tests/` (pytest, mocked clients) and `tests/stack/` (shell, `docker`/`sudo` stubbed) | Decision logic & field mapping: sync-gate, failover, node-health debounce, XvB engine, `/api/state` shapes, `pithead` config/status logic | Every PR (`make test`) |
+| **1 — Unit** | `dashboard/tests/` (pytest, mocked clients) and `tests/stack/` (shell, `docker`/`sudo` stubbed) | Decision logic & field mapping: sync-gate, failover, node-health debounce, XvB engine, `/api/state` shapes, `pithead` config/status logic | Every PR (`make test`) |
 | **2 — Contract** | `tests/integration/fakes/test_contract.py` | The real Monero/Tari **clients** parsing the real daemons' wire format — points the actual clients at controllable fakes | Every PR (docker-free) |
 | **3 — Mini-stack** | `tests/integration/mini-stack/` (real dashboard + docker-control vs fake daemons) | The control plane **end-to-end with real containers**: hold/release and reject/readmit actually stopping/starting `p2pool`/`xmrig-proxy`, driven deterministically | CI with Docker (`make test-mini-stack`) |
 | **4 — Live matrix** | `tests/integration/run.sh` against a real, synced box — and, for the appliance channel, `tests/os/run.sh`, the KVM battery for the flashed image | What only reality proves: real merge-mining, prune/full DB size, Caddy TLS, Tor onions, HugePages, fault injection for real container health verdicts — and, for the image, EFI boot, A/B commit/rollback, install-to-disk | Manual / release gate (`make test-integration`; the battery on the KVM bench) |

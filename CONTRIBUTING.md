@@ -18,13 +18,13 @@ The dashboard uses [uv](https://docs.astral.sh/uv/) for dependency management; a
 lives in the `dev` extra. Install uv, then from the repo root:
 
 ```bash
-uv sync --project build/dashboard --extra dev    # deps + tooling into build/dashboard/.venv, from the lock
-uv run --project build/dashboard pre-commit install
+uv sync --project dashboard --extra dev    # deps + tooling into dashboard/.venv, from the lock
+uv run --project dashboard pre-commit install
 ```
 
 `make test` and `make lint-py` run through uv automatically (no venv to activate); `pre-commit`
 runs `ruff` (plus a few hygiene hooks) on your changed files. If you change dependencies in
-`build/dashboard/pyproject.toml`, run `uv lock` and commit the updated `uv.lock`.
+`dashboard/pyproject.toml`, run `uv lock` and commit the updated `uv.lock`.
 
 ## Development workflow
 
@@ -142,8 +142,8 @@ The Dependabot equivalent of the first check is to group its PRs by `baseRefName
 ## Style
 
 - Match the surrounding code. Shell scripts should pass `shellcheck --severity=warning`;
-  Python is linted and formatted by `ruff` (config in `build/dashboard/pyproject.toml`).
-  Run `make lint-py`, or `cd build/dashboard && ruff format` to apply it.
+  Python is linted and formatted by `ruff` (config in `dashboard/pyproject.toml`).
+  Run `make lint-py`, or `cd dashboard && ruff format` to apply it.
 - Keep commits tidy and messages descriptive.
 
 By contributing, you agree that your contributions are licensed under the project's

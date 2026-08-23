@@ -53,7 +53,7 @@ REGISTRY="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}"
 IMAGE_PREFIX="${PITHEAD_IMAGE_PREFIX:-pithead-}"
 
 # The 5 first-party images, by build-dir / image-name suffix (build context = "build/<suffix>",
-# published image = "$REGISTRY/${IMAGE_PREFIX}<suffix>"). The compose service for "monero" is "monerod".
+# published image = "$REGISTRY/${IMAGE_PREFIX}<suffix>"). The compose service for "monero" is "monerod". dashboard is the one exception — build context "dashboard/" at the repo root (#1106) — see build_images() below.
 IMAGES=(tor monero p2pool xmrig-proxy dashboard)
 
 # Target platform(s) for the published images. linux/amd64 ONLY: the bundled binaries are x86_64
@@ -452,7 +452,7 @@ build_images() {
     ensure_buildx_builder
     local suffix context repo
     for suffix in "${IMAGES[@]}"; do
-        context="build/$suffix"
+        context=$([ "$suffix" = "dashboard" ] && echo "dashboard" || echo "build/$suffix") # #1106
         repo="$(image_for "$suffix")"
         log "Building $repo:$STAGING_TAG  ($PLATFORMS, from $context)"
         local args=(

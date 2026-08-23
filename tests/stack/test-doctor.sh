@@ -214,8 +214,8 @@ echo "== unit: doctor answers 'can this box take an upgrade' (#1108) =="
 # digest-pinned image fetched on demand, and if THAT fetch fails the upgrade reports a *signature*
 # failure — an operator reads tampering where the truth is an image the host could not pull (#1084).
 DVER="$SANDBOX/doctor-verify"
-mkdir -p "$DVER/bin" "$DVER/src/build/dashboard"
-: >"$DVER/src/build/dashboard/Dockerfile"
+mkdir -p "$DVER/bin" "$DVER/src/dashboard"
+: >"$DVER/src/dashboard/Dockerfile"
 printf '1.19.1\n' >"$DVER/VERSION"
 printf '1.19.1\n' >"$DVER/src/VERSION"
 # A docker whose daemon is up; IMAGE_CACHED decides whether the pinned verifier is already here.
@@ -474,8 +474,8 @@ echo "== black-box: doctor's onion report follows node mode (#103) =="
 # correct state — doctor must not send the operator back to `setup` over it. A LOCAL node with no
 # address is still a real problem and must keep warning.
 DOC="$SANDBOX/doctor-onion"
-mkdir -p "$DOC/build/tari" "$DOC/build/dashboard"
-: >"$DOC/build/dashboard/Dockerfile"
+mkdir -p "$DOC/build/tari" "$DOC/dashboard"
+: >"$DOC/dashboard/Dockerfile"
 cp "$STACK" "$DOC/pithead"
 cp "$ROOT/build/tari/config.toml.template" "$DOC/build/tari/"
 make_stubs "$DOC/bin"

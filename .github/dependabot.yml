@@ -14,7 +14,7 @@ updates:
 
   # Dashboard Python deps — bumps the hashed uv.lock + pyproject floors (#283).
   - package-ecosystem: "uv"
-    directory: "/build/dashboard"
+    directory: "/dashboard"
     schedule:
       interval: "weekly"
     groups:
@@ -22,21 +22,22 @@ updates:
         patterns: ["*"]
     ignore:
       # protobuf/grpcio are pinned to what the vendored Tari gRPC stubs assert at import time
-      # (see build/dashboard/pyproject.toml); a major bump needs the stubs regenerated first.
+      # (see dashboard/pyproject.toml); a major bump needs the stubs regenerated first.
       - dependency-name: "protobuf"
         update-types: ["version-update:semver-major"]
       - dependency-name: "grpcio"
         update-types: ["version-update:semver-major"]
 
-  # Base-image digests across every build/* Dockerfile (incl. the uv build image) and the
-  # build/* Dockerfiles (#833). This is the mechanism that clears base-distro CVEs — e.g. the
-  # openssl point-release accepted in .trivyignore. The appliance rootfs is NOT in this list: it
+  # Base-image digests across every build/* Dockerfile (incl. the uv build image) plus
+  # dashboard/Dockerfile (moved out of build/, #1106) (#833). This is the mechanism that clears
+  # base-distro CVEs — e.g. the openssl point-release accepted in .trivyignore. The appliance
+  # rootfs is NOT in this list: it
   # lives on this branch only, which Dependabot never reads, so the entry here did nothing for as
   # long as it existed (#1163). It is covered by the `target-branch` entry further down, which is
   # on `develop` where Dependabot will actually see it.
   - package-ecosystem: "docker"
     directories:
-      - "/build/dashboard"
+      - "/dashboard"
       - "/build/monero"
       - "/build/p2pool"
       - "/build/tor"

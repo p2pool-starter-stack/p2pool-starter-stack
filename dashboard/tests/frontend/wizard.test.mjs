@@ -3,7 +3,7 @@
 // that actually renders them. Uses the repo's dependency-free vnode walker; no DOM.
 //
 // Run with Node's built-in test runner (CI runs exactly this):
-//     node --test build/dashboard/tests/frontend/
+//     node --test dashboard/tests/frontend/
 import assert from "node:assert/strict";
 import { test } from "node:test";
 

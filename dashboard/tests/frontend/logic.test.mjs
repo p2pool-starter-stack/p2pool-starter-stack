@@ -1,7 +1,7 @@
 // Unit tests for the dashboard's pure client logic (mining_dashboard/web/static/logic.mjs).
 //
 // Run with Node's built-in test runner — no dependencies, no package.json, no build step:
-//     node --test build/dashboard/tests/frontend/
+//     node --test dashboard/tests/frontend/
 // (CI runs exactly this; Node is preinstalled on the runner.)
 //
 // Component *rendering* isn't unit-tested here (that needs a DOM/toolchain the repo avoids); it's

@@ -26,9 +26,9 @@ count() { grep -c . 2>/dev/null || true; }
 bullets() { sed 's/^/- /'; }
 
 # --- gather ---------------------------------------------------------------
-PY_DASH_FILES=$(find build/dashboard/tests -name 'test_*.py' | sort)
+PY_DASH_FILES=$(find dashboard/tests -name 'test_*.py' | sort)
 PY_FAKE_FILE="tests/integration/fakes/test_contract.py"
-NODE_FILES=$(find build/dashboard/tests/frontend -name '*.test.mjs' 2>/dev/null | sort)
+NODE_FILES=$(find dashboard/tests/frontend -name '*.test.mjs' 2>/dev/null | sort)
 
 n_py_dash=0
 for f in $PY_DASH_FILES; do n_py_dash=$((n_py_dash + $(py_tests "$f" | count))); done
@@ -93,7 +93,7 @@ EOF
 
 for f in $PY_DASH_FILES; do
     n=$(py_tests "$f" | count)
-    printf '\n#### %s — %s\n' "${f#build/dashboard/}" "$n"
+    printf '\n#### %s — %s\n' "${f#dashboard/}" "$n"
     py_tests "$f" | bullets
 done
 

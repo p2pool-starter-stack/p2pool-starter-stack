@@ -72,7 +72,7 @@ line-length = 100
 # Generated Tari gRPC stubs aren't ours to style — already omitted from coverage too.
 extend-exclude = [
   "mining_dashboard/client/tari/generated",
-  "../../docs/research",
+  "../docs/research",
 ] # research/: verbatim study-record scripts, kept byte-identical to the archived raw copy
 
 [tool.ruff.lint]

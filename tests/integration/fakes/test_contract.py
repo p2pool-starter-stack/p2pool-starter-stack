@@ -6,7 +6,7 @@ This is the proof that the fakes speak the daemons' wire format closely enough f
 MoneroClient / TariClient — and it runs anywhere (no docker, no real chain). If a future
 monerod/Tari change breaks the parser, this goes red here instead of only on the live box.
 
-Run: PYTHONPATH=build/dashboard python3 -m pytest tests/integration/fakes -q
+Run: PYTHONPATH=dashboard python3 -m pytest tests/integration/fakes -q
 """
 
 import asyncio
@@ -18,7 +18,7 @@ import requests
 _HERE = pathlib.Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
 # Make the dashboard package and the fakes importable regardless of how pytest is invoked.
-sys.path.insert(0, str(_REPO / "build" / "dashboard"))
+sys.path.insert(0, str(_REPO / "dashboard"))
 sys.path.insert(0, str(_HERE))
 
 import aiohttp  # noqa: E402
@@ -128,7 +128,7 @@ def test_wallet_no_transfers_yet_reads_empty():
 
 # --- Tari (gRPC BaseNode) ---------------------------------------------------
 # Driven via asyncio.run so they don't depend on pytest-asyncio being active (the dashboard's
-# asyncio_mode=auto only applies when pytest's rootdir is build/dashboard).
+# asyncio_mode=auto only applies when pytest's rootdir is dashboard).
 async def _tari_get_status(state):
     server, bound = await start_server(0, state)
     client = TariClient()

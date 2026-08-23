@@ -23,7 +23,7 @@
 # The covered images, enumerated from the real build/scan setup rather than guessed (ci.yml's
 # build-images matrix + os-rootfs.yml, both cited below):
 #   pithead-os-rootfs    os/rootfs/Dockerfile   (debian:trixie-slim + the golang builder stage)
-#   pithead-dashboard    build/dashboard        (python:3.11-slim, the `production` stage — the
+#   pithead-dashboard    dashboard              (python:3.11-slim, the `production` stage — the
 #                                                 same default target ci.yml's untargeted build uses)
 #   pithead-monero       build/monero           (ubuntu:24.04)
 #   pithead-p2pool       build/p2pool           (ubuntu:24.04)
@@ -79,7 +79,7 @@ build_image() {
         docker build -f "$ROOT/os/rootfs/Dockerfile" -t "$tag" \
             --build-arg PITHEAD_UPDATER=rauc "$ROOT" >&2 || return 1
         ;;
-    pithead-dashboard) docker build -t "$tag" "$ROOT/build/dashboard" >&2 || return 1 ;;
+    pithead-dashboard) docker build -t "$tag" "$ROOT/dashboard" >&2 || return 1 ;;
     pithead-monero) docker build -t "$tag" "$ROOT/build/monero" >&2 || return 1 ;;
     pithead-p2pool) docker build -t "$tag" "$ROOT/build/p2pool" >&2 || return 1 ;;
     pithead-xmrig-proxy) docker build -t "$tag" "$ROOT/build/xmrig-proxy" >&2 || return 1 ;;
