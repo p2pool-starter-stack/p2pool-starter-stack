@@ -29,6 +29,11 @@ check_overlap() {
         return 0
     fi
     for f in "$@"; do
+        case "$f" in
+        # Generated Tari gRPC stubs are coverage-omitted by design (pyproject's omit) — a
+        # rename or regeneration must not read as unmeasured changed code.
+        */client/tari/generated/*) continue ;;
+        esac
         rel="${f#build/dashboard/mining_dashboard/}" # coverage.xml filenames are source-root-relative
         grep -q "filename=\"$rel\"" "$xml" || missing+=("$f")
     done
@@ -73,10 +78,15 @@ if [ "${1:-}" = "--self-test" ]; then
     rc=0
     check_overlap "$tmp/coverage.xml" build/dashboard/mining_dashboard/web/ghost.py >"$tmp/out" || rc=$?
     expect_rc "changed file absent from coverage.xml -> fail" 1 "$rc"
+
     grep -q "ghost.py" "$tmp/out" || {
         echo "  self-test FAIL: failure doesn't name the unmeasured file"
         st_fail=1
     }
+
+    rc=0
+    check_overlap "$tmp/coverage.xml" build/dashboard/mining_dashboard/client/tari/generated/foo_pb2.py >"$tmp/out" || rc=$?
+    expect_rc "generated stub absent from coverage.xml -> still pass (coverage-omitted by design)" 0 "$rc"
 
     [ "$st_fail" -eq 0 ] && {
         echo "patch-coverage self-test OK"
