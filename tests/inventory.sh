@@ -18,8 +18,20 @@ py_tests() {
 }
 # test('name' | test("name") cases in a node test file.
 node_tests() { grep -oE "test\((['\"])[^'\"]+\1" "$1" 2>/dev/null | sed -E "s/^test\(['\"]//; s/['\"]$//"; }
-# `== section ==` headers in a shell suite.
-sh_sections() { grep -oE '== [^=]+ ==' "$1" 2>/dev/null | sed -E 's/^== //; s/ ==$//'; }
+# `== section ==` headers in a shell suite: the whole line that prints one, `echo "== ` through a
+# closing ` =="` at end of line. Both anchors are load-bearing, for opposite reasons.
+# Without the leading one, a bare `== [^=]+ ==` matches anywhere in the file and harvests jq
+# equality expressions — `(.read_only == true) and (.x ==` — which counted 15 phantom sections
+# with unreadable names in test_compose.sh and one more in run.sh.
+# Without `[^"]+` between them, a header whose own text contains an `=` is dropped: the older
+# `[^=]+` silently lost run.sh's `role=rig machine` section. Excluding only the quote, rather than
+# using `.+`, keeps `=` legal while stopping a greedy match from swallowing two headers that share
+# a line into one garbled name. No header carries code after its closing quotes, so ending the
+# match at end-of-line is safe.
+sh_sections() {
+    grep -oE '^[[:space:]]*echo "== [^"]+ =="$' "$1" 2>/dev/null |
+        sed -E 's/^[[:space:]]*echo "== //; s/ =="$//'
+}
 count() { grep -c . 2>/dev/null || true; }
 
 # Print "- name" bullets for each line on stdin.
@@ -35,7 +47,13 @@ for f in $PY_DASH_FILES; do n_py_dash=$((n_py_dash + $(py_tests "$f" | count)));
 n_py_fake=$(py_tests "$PY_FAKE_FILE" | count)
 n_node=0
 for f in $NODE_FILES; do n_node=$((n_node + $(node_tests "$f" | count))); done
-n_stack=$(sh_sections tests/stack/run.sh | count)
+# Every tests/stack suite, not just run.sh — #1105 moves sections out of run.sh into per-domain
+# files, and counting the one file made each split shrink the inventory in silence. See the
+# per-file drift gate below for why the aggregate zero-check never noticed. The glob is iterated
+# directly, never via a word-split string, so a filename containing a space stays one path
+# instead of splitting into two nonexistent ones and reporting phantom drift.
+n_stack=0
+for f in tests/stack/*.sh; do n_stack=$((n_stack + $(sh_sections "$f" | count))); done
 n_selftest=$(sh_sections tests/integration/selftest.sh | count)
 n_scen=$(awk -F'\t' 'NF>1{print $1}' <(sed -n '/scenario_matrix() {/,/^EOF/p' tests/integration/scenarios.sh | grep -E '\t') | count)
 n_axes=$(grep -cE '=' <(sed -n '/axis_coverage() {/,/^EOF/p' tests/integration/scenarios.sh | grep -E '^[a-z].*='))
@@ -56,6 +74,51 @@ for c in n_py_dash n_py_fake n_node n_stack n_selftest n_scen n_axes n_mini; do
         exit 1
     fi
 done
+
+# Per-FILE zero check for the stack suites. The aggregate above cannot see a single suite go
+# dark: 22 files summing to 281 sections stay comfortably non-zero when any one of them drops to
+# nothing, which is exactly the drift a #1105 split causes. Counting only run.sh had already hidden
+# 162 sections before this was caught, and the aggregate never complained once.
+# What this does NOT catch: a file that shrinks without reaching zero. A suite going from 11
+# sections to 1 still passes here.
+# It also cannot catch a file that VANISHES — the glob simply stops matching it — and nothing else
+# catches that either, which is why the source-target check below exists. run.sh runs under
+# `set -uo pipefail` with NO `-e`, so `source` of a missing file prints to stderr and execution
+# CONTINUES with $FAIL still 0; run.sh's tail exits on the $FAIL counter alone, so the suite goes
+# green having silently skipped every assertion in the missing file. Verified, not assumed.
+# Three files carry no section header by design, each for its own reason:
+#   lib.sh                        — a library of fixtures and helpers; it holds no assertions
+#   test_compose.sh               — its cases are jq filters over docker-compose.yml, not sections
+#   test-control-add-only-ssrf.sh — split out of a run.sh section whose header stayed behind
+SECTIONLESS="lib.sh test_compose.sh test-control-add-only-ssrf.sh"
+for f in tests/stack/*.sh; do
+    case " $SECTIONLESS " in *" ${f#tests/stack/} "*) continue ;; esac
+    if [ "$(sh_sections "$f" | count)" -eq 0 ]; then
+        echo "inventory drift: $f has no '== section ==' header — it moved, was renamed, or" \
+            "changed shape; fix the file, or add it to SECTIONLESS with a reason" >&2
+        exit 1
+    fi
+done
+
+# Every domain file run.sh claims to source must exist. This is the only thing standing between a
+# renamed or deleted domain file and a green suite: run.sh's `source` of a missing file does not
+# stop it (see above), and the per-file loop cannot miss what the glob no longer matches. The 18
+# hyphen-named domain files have no standalone CI invocation of their own — the underscore-named
+# test_*.sh suites do, and fail their own step — so for them this check is the whole safety net.
+n_sourced=0
+while read -r want; do
+    n_sourced=$((n_sourced + 1))
+    if [ ! -f "tests/stack/$want" ]; then
+        echo "inventory drift: run.sh sources tests/stack/$want, which does not exist — the file" \
+            "was moved or renamed and the suite would still pass, silently skipping it" >&2
+        exit 1
+    fi
+done < <(grep -oE 'source "\$HERE/[A-Za-z0-9_.-]+\.sh"' tests/stack/run.sh | sed -E 's|source "\$HERE/||; s|"$||')
+if [ "$n_sourced" -eq 0 ]; then # the grep itself going quiet must not read as "all present"
+    echo "inventory drift: no 'source \"\$HERE/...\"' lines found in run.sh — the split's shape" \
+        "changed; update the pattern in tests/inventory.sh" >&2
+    exit 1
+fi
 
 # --- emit -----------------------------------------------------------------
 cat <<EOF
@@ -105,9 +168,14 @@ for f in $NODE_FILES; do node_tests "$f" | bullets; done
 
 cat <<EOF
 
-### \`pithead\` shell suite (tests/stack/run.sh) — ${n_stack} sections
+### \`pithead\` shell suite (tests/stack/) — ${n_stack} sections
 EOF
-sh_sections tests/stack/run.sh | bullets
+for f in tests/stack/*.sh; do
+    n=$(sh_sections "$f" | count)
+    if [ "$n" -eq 0 ]; then continue; fi
+    printf '\n#### %s — %s\n' "${f#tests/stack/}" "$n"
+    sh_sections "$f" | bullets
+done
 
 cat <<EOF
 
