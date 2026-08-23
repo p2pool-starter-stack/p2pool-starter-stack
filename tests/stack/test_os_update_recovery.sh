@@ -2,7 +2,7 @@
 #
 # Tier-1 proof for #1050: three of the four dashboard OS-update dead-end states. The fourth
 # (the idle modal offering Download before any check has run) was already fixed by f617dee and
-# is covered by build/dashboard/tests/frontend/osupdate.test.mjs's "Download with only a
+# is covered by dashboard/tests/frontend/osupdate.test.mjs's "Download with only a
 # passive badge..." tests — not repeated here.
 #
 # tests/stack/run.sh already drives the whole check -> download -> verify -> install -> reboot
