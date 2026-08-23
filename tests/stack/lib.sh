@@ -170,11 +170,23 @@ DEPLOYMENT_COMPLETED=true
 COMPOSE_PROFILES=local_node
 EOF
     }
-    WALLET="$VALID_PRIMARY" # checksum-valid mainnet primary (the XMRig donation address) — #250 gates the type, #829 the checksum
+    # Defaulted, not assigned outright, so a domain file that set its own WALLET before calling
+    # this keeps it. See build_control_sandbox for why both builders default it (#1305).
+    WALLET="${WALLET:-$VALID_PRIMARY}" # checksum-valid mainnet primary (the XMRig donation address) — #250 gates the type, #829 the checksum
 }
 
 # The control-channel sandbox: builds $C, defines CTRL_LOG, seed_control_env, control_config.
 build_control_sandbox() {
+    # control_config() below reads $WALLET, but $WALLET was only ever assigned by
+    # build_val_sandbox(). In run.sh the two calls sit hundreds of lines apart in ONE process and
+    # val happens to run first, so control has always worked by accident of ordering. (No exact
+    # distance here on purpose — every #1105 module moves it, and a number nobody re-measures is
+    # how a comment starts lying.) A domain file
+    # that calls this builder without val — or any section that crosses a process boundary into a
+    # bash-invoked file — would abort on an unbound variable under `set -u`. Defaulting it here
+    # makes this builder self-contained and retires the whole class (#1305); it fails loud rather
+    # than writing a broken config.json, but it should not fail at all.
+    WALLET="${WALLET:-$VALID_PRIMARY}"
     C="$SANDBOX/control"
     mkdir -p "$C/build/tari" "$C/dashboard" \
         "$C/data/monero" "$C/data/tari" "$C/data/p2pool/stats" "$C/data/tor" "$C/data/dashboard"
