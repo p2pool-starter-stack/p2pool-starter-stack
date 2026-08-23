@@ -6593,7 +6593,7 @@ GH_RELEASE_JSON=""
 # caller's own derivation, and `set -u` then killed the runner at its first download — the upgrade
 # result sat at "running" for ever with a single dial in the log. One derivation, one truth.
 GH_SOCKS=""
-gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure
+gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure; rc 2 = never reached the server at all (#1050)
     local repo="$1" prefix out code retry_hint
     prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
     [ -n "$prefix" ] || prefix="172.28.0"
@@ -6617,7 +6617,14 @@ gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE
         --socks5-hostname "$GH_SOCKS" -H 'Accept: application/vnd.github+json' \
         "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null); then
         GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. $retry_hint"
-        return 1
+        # rc 2, not 1: no HTTP response came back from GitHub, so this is distinct from every
+        # failure below, which DID reach the server and keeps the ordinary rc 1. rc 2 does NOT
+        # mean no real attempt happened, though — through Tor a circuit-build timeout or an
+        # exit-relay refusal returns this exact same curl exit for a dial that genuinely went
+        # out on the wire, indistinguishable here from a purely local "Tor daemon down" (#1050).
+        # A caller that throttles on this rc must bound the retry rate with a short cooldown,
+        # not skip the cooldown outright.
+        return 2
     fi
     code=${out##*$'\n'}
     out=${out%$'\n'*}
@@ -10860,7 +10867,7 @@ os_update_test_base() {
 # one). Only the bench seam keeps its own dial: it points at a local URL with no Tor in the path.
 # Sets GH_RELEASE_JSON on success and GH_RELEASE_HINT on failure, like the shared fetch, so the
 # caller must run it as a plain command — a command substitution is a subshell and would discard
-# both.
+# both. rc 2 = never reached the server at all, same convention as gh_release_fetch (#1050).
 os_release_fetch() {
     local base
     if base=$(os_update_test_base); then
@@ -10869,7 +10876,7 @@ os_release_fetch() {
         if ! GH_RELEASE_JSON=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" \
             "$base/releases-latest.json" 2>/dev/null); then
             GH_RELEASE_HINT="could not reach the release API — nothing was changed."
-            return 1
+            return 2
         fi
         return 0
     fi
@@ -10973,21 +10980,47 @@ control_os_check() { # <claimed-file> <id> <actor> <control-dir>
     local file="$1" id="$2" actor="$3" cdir="$4"
     control_os_gate "$cdir" "$id" "$actor" "os-check" || return 0
     control_audit "$cdir/audit/control.log" "$id" "$actor" "os-check" "started"
-    local osdir tagf stampf tag size notes rel
+    local osdir tagf stampf shortstampf tag size notes rel
     osdir=$(os_update_staging_dir)
     mkdir -p "$osdir"
     tagf=$(os_update_target_file)
     stampf="$osdir/.check-stamp"
+    shortstampf="$osdir/.check-stamp-short"
     if [ -z "$(find "$tagf" -mmin -10 2>/dev/null)" ]; then
         if [ -n "$(find "$stampf" -mmin -10 2>/dev/null)" ]; then
             control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "an update check ran less than 10 minutes ago — retry in a few minutes."
             return 0
         fi
-        touch "$stampf"
-        if ! os_release_fetch; then
+        if [ -n "$(find "$shortstampf" -mmin -1 2>/dev/null)" ]; then
+            control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "the last check could not confirm it reached the network — retry in about a minute."
+            return 0
+        fi
+        # The throttle stamp is claimed AFTER the dial, and its window depends on whether the
+        # dial confirmed it reached the release API (#1050, revised after review). rc 2 from
+        # os_release_fetch does NOT mean "no real attempt": through Tor a circuit-build
+        # timeout, an exit-relay refusal, or a mid-handshake TLS failure comes back as the
+        # exact same curl nonzero as a purely local "no route" — and those DID put a real dial
+        # on the wire. So rc 2 still claims a stamp, just a SHORT one (60s, "$shortstampf")
+        # instead of the full 10 minutes: this bounds how often a dashboard-authenticated actor
+        # can force another real Tor dial while the transport is degraded, without making an
+        # operator who fixes a genuinely-down Tor daemon wait a full 10 minutes to find out. A
+        # fetch that DID definitively reach GitHub — success, or a definitive refusal like the
+        # rate limit below — still claims the full stamp exactly as before; that dial happened
+        # and #1081 relies on it staying throttled (releasing it there would restore the
+        # unthrottled beacon that guard exists to stop). Every other nonzero rc reached the
+        # server.
+        local fetch_rc=0
+        os_release_fetch || fetch_rc=$?
+        if [ "$fetch_rc" -ne 0 ]; then
+            if [ "$fetch_rc" -eq 2 ]; then
+                touch "$shortstampf"
+            else
+                touch "$stampf"
+            fi
             control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "$GH_RELEASE_HINT"
             return 0
         fi
+        touch "$stampf"
         rel=$GH_RELEASE_JSON
         tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
         if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -11234,6 +11267,12 @@ control_os_install() { # <claimed-file> <id> <actor> <control-dir>
         warn "OS install failed (rc=$rc); log tail: $(tail -c 500 "$logf" 2>/dev/null | tr -d '[:cntrl:]')"
         control_os_refuse "$cdir" "$id" "$actor" "os-install" failed "the install did not complete — the running system is untouched and mining continues.${detail:+ $detail} The full install log is in the host journal."
         rm -f "$logf"
+        # #1050: a terminal-failure transition. Without this the persisted step stayed
+        # "installing" forever — nothing ever moved it off that value on a failed install — so
+        # the dashboard kept showing an install in progress that had already ended and would
+        # never finish or fail again. idle matches the state a fresh appliance starts in: Check
+        # and Download are offered again on the next open.
+        os_state_write "$cdir" '{"step":"idle"}'
         return 0
     fi
     local bundle_version
@@ -11268,7 +11307,15 @@ control_os_reboot() { # <claimed-file> <id> <actor> <control-dir>
     armed_ts=$(jq -r '.ts // 0' "$(os_update_inflight_file)" 2>/dev/null) || armed_ts=0
     printf '%s' "$armed_ts" | grep -qE '^[0-9]+$' || armed_ts=0
     if [ "$armed_ts" -le 0 ] || [ $(($(date +%s) - armed_ts)) -gt 86400 ]; then
-        control_os_refuse "$cdir" "$id" "$actor" "os-reboot" rejected "the installed update has been waiting more than a day — run the update again; a fresh verify and install re-arms the reboot."
+        # #1050: the re-arm transition the comment above always promised but never performed.
+        # The flag alone used to survive this refusal, so the persisted step stayed
+        # "reboot-pending" forever — the dashboard kept offering only "Reboot now", which kept
+        # refusing, with no button that ever led back to Check/Download. Clearing the expired
+        # flag and the step together is what actually re-arms it: the next open finds an
+        # ordinary idle appliance, exactly as the message already claimed.
+        rm -f "$(os_update_inflight_file)"
+        os_state_write "$cdir" '{"step":"idle"}'
+        control_os_refuse "$cdir" "$id" "$actor" "os-reboot" rejected "the installed update has been waiting more than a day and has expired — check for updates again; a fresh verify and install re-arms the reboot."
         return 0
     fi
     # The result must land BEFORE the reboot order or the page never learns the reboot is real.

@@ -8959,7 +8959,7 @@ os_reset
 
 # One os-* verb per drain: a second one in the same cycle rejects with a retry hint.
 UOS2="88888888-8888-4888-8888-888888888888"
-rm -f "$OSDIR/in-flight.json" "$OSDIR/.check-stamp" # a fresh dial, not the check throttle
+rm -f "$OSDIR/in-flight.json" "$OSDIR/.check-stamp" "$OSDIR/.check-stamp-short" # a fresh dial, not the check throttle
 os_intent "$UOS" os-check
 sleep 1 # distinct mtimes so the drain order is deterministic (oldest first)
 os_intent "$UOS2" os-check
@@ -8973,11 +8973,11 @@ rm -f "$OSRES/$UOS.json" "$OSRES/$UOS2.json"
 # ignored and the flow stays on the GitHub-over-Tor path. Running unprivileged here, our own
 # file IS owner-matched — assert the redirect engages, which is the seam's whole contract.
 printf 'http://bench.invalid/updates' >"$OSC/os-update-test-base"
-rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp"
+rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp" "$OSDIR/.check-stamp-short"
 os_intent "$UOS" os-check
 osrun >/dev/null
 assert_contains "the test seam redirects the release lookup" "$(cat "$OSC/curl.log")" "bench.invalid/updates/releases-latest.json"
-rm -f "$OSC/os-update-test-base" "$OSRES/$UOS.json"
+rm -f "$OSC/os-update-test-base" "$OSRES/$UOS.json" "$OSDIR/.check-stamp-short" # the stub's exit-22 catch-all makes this bench dial rc 2 too (#1050 review) — clear it or it leaks into the next test
 
 # #1081 reached only the two DIY lookups. The appliance's os-check kept its own `curl -fsS`, and
 # `-f` collapses every non-2xx into one exit code — so a spent GitHub budget came out of the
@@ -8985,7 +8985,7 @@ rm -f "$OSC/os-update-test-base" "$OSRES/$UOS.json"
 # Tor healthy, on a box with no shell to run it from. It goes through the shared fetch now.
 echo "== black-box: a rate-limited os-check names the remedy that works (#1081) =="
 printf '%s' '{"message":"API rate limit exceeded for this IP.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}' >"$OSC/api-403.json"
-rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp"
+rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp" "$OSDIR/.check-stamp-short" # starts clean regardless of what leaked above
 os_reset
 os_intent "$UOS" os-check
 osrun CURL_API_RESPONSE="$OSC/api-403.json" GH_STUB_CODE=403 >/dev/null
@@ -9008,7 +9008,7 @@ esac
 assert_eq "the throttle is still held after a rate-limit refusal" \
     "$([ -f "$OSDIR/.check-stamp" ] && echo held || echo released)" "held"
 os_reset
-rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp"
+rm -f "$OSDIR/target.json" "$OSDIR/.check-stamp" "$OSDIR/.check-stamp-short"
 
 unset -f osrun os_intent os_reset os_restage
 rm -rf "$OSC"

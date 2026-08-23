@@ -261,6 +261,59 @@ test("the reboot gate requires the typed REBOOT and says mining pauses", () => {
   assert.doesNotMatch(renderToString(c.render()), /disabled.*Reboot now/);
 });
 
+test("reboot() surfaces a host rejection instead of silently reconnecting (#1050)", async () => {
+  // The 24h install-authorization window can expire between the modal opening and the click.
+  // The host refuses (and, since the #1050 fix, re-arms its own persisted state) — but the
+  // machine never went down, so blindly reconnecting used to reload straight back into the
+  // exact same "reboot-pending" modal with no explanation at all.
+  // setState on an unmounted component lands in _nextState, not this.state (same caveat the
+  // download tests above already work around), so this spies on fail()/reconnect() directly
+  // rather than reading state back off the instance.
+  const c = inst({ os: { step: "reboot-pending", version: "1.19.0" }, enabled: true });
+  c.state.phase = "reboot-pending";
+  let reconnectCalled = false;
+  let failedWith = null;
+  c.reconnect = () => {
+    reconnectCalled = true;
+  };
+  c.fail = (e) => {
+    failedWith = String((e && e.message) || e);
+  };
+  await withFastPoll(
+    async (url, opts) => {
+      if (opts && opts.method === "POST") {
+        return { status: 202, ok: false, json: async () => ({ id: ID, status: "pending" }) };
+      }
+      return okResult({
+        status: "rejected",
+        error: "the installed update has been waiting more than a day and has expired — check for updates again; a fresh verify and install re-arms the reboot.",
+      });
+    },
+    () => c.reboot(),
+  );
+  assert.equal(reconnectCalled, false);
+  assert.match(failedWith, /re-arms the reboot/);
+});
+
+test("reboot() still reconnects when the host actually accepts the reboot", async () => {
+  const c = inst({ os: { step: "reboot-pending", version: "1.19.0" }, enabled: true });
+  c.state.phase = "reboot-pending";
+  let reconnectCalled = false;
+  c.reconnect = () => {
+    reconnectCalled = true;
+  };
+  await withFastPoll(
+    async (url, opts) => {
+      if (opts && opts.method === "POST") {
+        return { status: 202, ok: false, json: async () => ({ id: ID, status: "pending" }) };
+      }
+      return okResult({ status: "rebooting" });
+    },
+    () => c.reboot(),
+  );
+  assert.equal(reconnectCalled, true);
+});
+
 test("Download with only a passive badge asks the host to check before it downloads", async () => {
   // The first thing a fresh appliance ever does with this feature. target.json is written only by
   // os-check, so a download posted straight off the passive badge is refused by the host and the
