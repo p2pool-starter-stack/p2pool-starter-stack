@@ -1120,7 +1120,7 @@ run_lifecycle() {
     # Piggybacks the pool-flip apply below, which always runs ensure_directories -> ensure_owner.
     # Local mode only (has data dirs); a stub can't create a foreign-uid inode, so this is tier-4.
     local own_dir own_probe=""
-    if [ "$(env_on_box COMPOSE_PROFILES)" = "local_node" ]; then
+    if has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         own_dir="$(env_on_box DASHBOARD_DATA_DIR)"
         if [ -n "$own_dir" ]; then
             own_probe="$own_dir/.itest-owner-probe"
@@ -1145,7 +1145,7 @@ run_lifecycle() {
 
     # Node-down failover (#31): stop monerod -> status non-zero (node down), dashboard rejects
     # workers (xmrig-proxy stopped) -> start monerod -> readmitted -> status 0 again.
-    if [ "$(env_on_box COMPOSE_PROFILES)" = "local_node" ]; then
+    if has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_step "stopping monerod to exercise node-down failover…"
         rx "docker compose stop monerod" >/dev/null 2>&1
         wait_for 120 5 "status to report node down" _pred_status_down || true
@@ -1427,7 +1427,7 @@ run_fault_injection() {
     IT_CURRENT_SCENARIO="fault-injection"
     echo ""
     it_log "── fault-injection phase ───────────────────────────"
-    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+    if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_warn "skipping fault injection (remote mode: no local monerod to break)"
         return 0
     fi
@@ -1588,7 +1588,7 @@ run_hardening() {
     echo ""
     it_log "── v1.4 hardening phase (#377/#33/#424) ────────────"
 
-    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+    if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_warn "skipping hardening phase (remote mode: no local containers/systemd to exercise)"
         return 0
     fi
@@ -2009,7 +2009,7 @@ run_subnet_scenario() {
         it_warn "skipping moved-subnet phase (needs local mode: it brings the stack down/up and inspects the live docker network)"
         return 0
     fi
-    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+    if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_warn "skipping moved-subnet phase (remote mode: monerod's moved-prefix proxy is one of the named checks)"
         return 0
     fi
@@ -2104,7 +2104,7 @@ run_rigforge_control() {
         it_warn "skipping rigforge-control (needs local mode: it edits config.json + dials the rig on the mining LAN)"
         return 0
     fi
-    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+    if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_warn "skipping rigforge-control (remote mode: no local dashboard container to drive)"
         return 0
     fi
