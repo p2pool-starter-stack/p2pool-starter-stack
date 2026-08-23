@@ -21,9 +21,21 @@ DATA_DIR="${PITHEAD_JOURNAL_DATA_DIR:-/data/pithead/journal}"
 TARGET="${PITHEAD_JOURNAL_TARGET:-/var/log/journal}"
 
 mkdir -p "$DATA_DIR"
-# Same mode systemd-tmpfiles gives /var/log/journal itself (root:systemd-journal, setgid so
-# journald's own directories underneath inherit the group) — matched here so a promoted journal
-# under this mount is exactly as readable as one journald created directly.
+# Same owner+mode systemd-tmpfiles gives /var/log/journal itself (root:systemd-journal, setgid
+# so journald's own directories underneath inherit the group) — matched here so a promoted
+# journal under this mount is exactly as GROUP-readable as one journald created directly. The
+# parent chain here is root:root, and setgid propagates the DIRECTORY's own group, not its
+# parent's — without the chown, a persisted journal would end up group root, and a non-root
+# member of systemd-journal could mkdir it but never journalctl-read it back.
+#
+# The systemd-journal group is expected to exist by now: it comes from systemd's own
+# sysusers.d, which upstream orders Before=systemd-journald.service, and journald is already
+# running well before this unit gets its turn (this file's header: "journald starts far
+# earlier than /data can be mounted"). chown still tolerates failure exactly like chmod below,
+# rather than hard-failing first boot over a directory that keeps working either way — just
+# root-only-readable until a later boot's systemd-tmpfiles pass catches up — which is also what
+# happens off the appliance (a plain sandbox with no such group at all).
+chown root:systemd-journal "$DATA_DIR" 2>/dev/null || true
 chmod 2755 "$DATA_DIR" 2>/dev/null || true
 
 if mountpoint -q "$TARGET" 2>/dev/null; then

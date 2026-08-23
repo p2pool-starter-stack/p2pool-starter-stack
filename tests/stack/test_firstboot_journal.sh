@@ -24,7 +24,9 @@ echo "== unit: pithead-journal-persist binds /data onto the journal mountpoint (
 JP="$SANDBOX/journal-persist"
 mkdir -p "$JP/bin" "$JP/data-dir-parent" "$JP/target-parent"
 MOUNT_LOG="$JP/mount.log"
+CHOWN_LOG="$JP/chown.log"
 : >"$MOUNT_LOG"
+: >"$CHOWN_LOG"
 cat >"$JP/bin/mount" <<EOF
 #!/usr/bin/env bash
 echo "mount \$*" >>"$MOUNT_LOG"
@@ -37,7 +39,16 @@ cat >"$JP/bin/mountpoint" <<EOF
 [ -f "$JP/already-mounted" ] && exit 0
 exit 1
 EOF
-chmod +x "$JP/bin/mount" "$JP/bin/mountpoint"
+# chown is stubbed (not just tolerated) so the assertion below can PROVE the call was made with
+# the right owner, not just that the real chown's failure was swallowed — real chown(1) as this
+# test's unprivileged user would fail either way, with or without the fix, so leaving it
+# unstubbed would prove nothing.
+cat >"$JP/bin/chown" <<EOF
+#!/usr/bin/env bash
+echo "chown \$*" >>"$CHOWN_LOG"
+exit 0
+EOF
+chmod +x "$JP/bin/mount" "$JP/bin/mountpoint" "$JP/bin/chown"
 
 DATA_DIR="$JP/data-dir-parent/journal"
 TARGET="$JP/target-parent/journal"
@@ -47,6 +58,11 @@ out=$(PATH="$JP/bin:$PATH" PITHEAD_JOURNAL_DATA_DIR="$DATA_DIR" PITHEAD_JOURNAL_
 assert_eq "the /data-side directory is created" "$([ -d "$DATA_DIR" ] && echo yes || echo no)" "yes"
 assert_eq "the mountpoint directory is created (a bind mount needs an existing target)" \
     "$([ -d "$TARGET" ] && echo yes || echo no)" "yes"
+# MUTATION KILL (#1030 review): drop the chown line and this goes red — chown.log stays empty,
+# the exact gap the review finding pointed at (the comment claimed root:systemd-journal but
+# nothing ever set it, leaving the persisted journal group root under a root:root parent).
+assert_contains "the data directory is chowned to root:systemd-journal" \
+    "$(cat "$CHOWN_LOG")" "root:systemd-journal $DATA_DIR"
 assert_contains "mount --bind ran with the real (/data) source and the baked target" \
     "$(cat "$MOUNT_LOG")" "--bind $DATA_DIR $TARGET"
 assert_contains "the script says what it bound" "$out" "bound $TARGET to $DATA_DIR"

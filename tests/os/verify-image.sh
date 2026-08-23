@@ -315,6 +315,12 @@ chk "persistent-journald config baked" \
 chk "the /data-backed journal mountpoint is baked (must pre-exist: a bind mount cannot mkdir a read-only root)" \
     '[ -d "$ROOT/var/log/journal" ]'
 chk "journal-persist script baked and executable" '[ -x "$ROOT/usr/local/sbin/pithead-journal-persist" ]'
+# #1030 review: the baked script must actually chown the persisted directory to
+# root:systemd-journal, not just claim to in a comment — the parent chain under /data is
+# root:root, and setgid alone only propagates the DIRECTORY's own group, so a promoted journal
+# without this line ends up group root and unreadable by non-root systemd-journal members.
+chk "journal-persist chowns the persisted directory to root:systemd-journal" \
+    'grep -q "chown root:systemd-journal" "$ROOT/usr/local/sbin/pithead-journal-persist"'
 chk "journal-persist unit enabled" \
     'test -L "$ROOT/etc/systemd/system/sysinit.target.wants/pithead-journal-persist.service"'
 chk "journal-persist orders before the journal flush it exists to feed" \
