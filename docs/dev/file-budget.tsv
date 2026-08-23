@@ -18,7 +18,7 @@ dashboard/mining_dashboard/web/static/dashboard.css	1579
 dashboard/mining_dashboard/web/static/logic.mjs	609
 dashboard/mining_dashboard/web/static/osupdate.mjs	415
 dashboard/mining_dashboard/web/static/wizard.mjs	889
-dashboard/mining_dashboard/web/static/workerview.mjs	480
+dashboard/mining_dashboard/web/static/workerview.mjs	479
 dashboard/mining_dashboard/web/views.py	2339
 dashboard/mining_dashboard/wizard.py	674
 dashboard/tests/client/test_xmrig_client.py	537
@@ -46,6 +46,10 @@ tests/integration/lib.sh	692
 tests/integration/run.sh	2551
 tests/integration/selftest.sh	686
 tests/os/run.sh	3442
-tests/stack/run.sh	10352
+tests/stack/run.sh	10351
 tests/stack/test-cli.sh	410
 tests/stack/test_compose.sh	462
+tests/stack/test-control-upgrade.sh	795
+tests/stack/test-doctor.sh	507
+tests/stack/test-release.sh	504
+tests/stack/test-release-signing.sh	454

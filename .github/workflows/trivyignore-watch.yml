@@ -1,0 +1,92 @@
+name: Trivyignore mute watch
+
+# Weekly obsolete-mute report (#1174). REPORT-ONLY — the pin-watch.sh posture: never a gate,
+# because a cleared mute is housekeeping, not a build failure. The script never edits
+# `.trivyignore` and never opens a PR; this workflow's one output is a tracking issue.
+#
+# Why this exists at all: the weekly CVE sweep (#833) scans WITH `.trivyignore` applied, so a
+# muted finding is invisible to it by construction — a mute that outlives its finding rots
+# silently. scripts/trivyignore-watch.sh rebuilds every covered image exactly the way the gate
+# does, scans them with NO ignore file, and names an ID obsolete only when it is absent from ALL
+# of them (a per-image check confidently deletes live mutes — the trap in the script header).
+#
+# This file lives on the DEFAULT branch on purpose: a `schedule:` is read from the default branch
+# only — pin-watch.yml's header carries the history of learning that the hard way (#1048, #1064,
+# #1146). The JOB checks out `develop-v2` explicitly: the script and two of its covered images
+# (the appliance rootfs, and the `.trivyignore` block that documents it) exist only on that lane,
+# while every dashboard/monero/p2pool/xmrig-proxy/tor mute is shared — so the appliance lane's
+# tree is the one place the whole covered set can be built and the union check is honest.
+on:
+  schedule:
+    # Mondays 07:00 UTC, after the 05:00/06:00/06:30 sweeps. The registration was PROVEN before
+    # this slot was set: the first cron was a near-term proof slot, and run 32606070407
+    # (event=schedule, success) is on record on #1257 — the YAML existing proves nothing (the
+    # false-green trap above), so any future move of this line owes the same proof again.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+# Least privilege (#282): issues.write is the job's one output — it never pushes or publishes.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  mute-watch:
+    name: Scan every covered image with no ignore file — report mutes nothing still reports
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The appliance lane: the one tree holding the script AND every image the shared
+          # `.trivyignore` covers (see the header). NOT the ref that triggered the run.
+          ref: develop-v2
+          persist-credentials: false
+      - name: Build and scan the covered images, no ignore file applied
+        id: report
+        run: |
+          set -uo pipefail
+          # NOT `set -e`: a broken run is a result to publish, not a reason to skip publishing
+          # it. The script itself refuses to name anything obsolete off an incomplete run and
+          # exits 1; the exit code is carried to the last step so the run still fails loudly.
+          bash scripts/trivyignore-watch.sh >report.md
+          rc=$?
+          # An empty report is itself a failure to report — never publish silence.
+          [ -s report.md ] || { echo "The mute watch produced no report at all — see the run log." >report.md; rc=1; }
+          echo "rc=$rc" >>"$GITHUB_OUTPUT"
+      - name: Publish it to the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "Obsolete .trivyignore mutes (weekly report)"
+          RC: ${{ steps.report.outputs.rc }}
+        run: |
+          set -Eeuo pipefail
+          body=$(cat report.md)
+          # The report table carries no date of its own, so the liveness line lives here: a
+          # successful run stamps today, a failed run carries the previous stamp forward — that
+          # date is the only thing separating "failed once this morning" from "dead for six
+          # weeks" (the pin-watch pattern, same reasoning).
+          # Exact title match over the open list, NOT `--search`: the search index lags issue
+          # creation by minutes, so a search-based dedup files a second issue on the very next
+          # run and then keeps both stale.
+          n=$(gh issue list --state open --limit 200 --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          if [ "$RC" = "0" ]; then
+            body="$body"$'\n\n'"_Last fully successful check: $(date -u +%F)_"
+          elif [ -n "$n" ]; then
+            prev=$(gh issue view "$n" --json body --jq .body | grep -a "^_Last fully successful check:" || true)
+            if [ -n "$prev" ]; then
+              body="$body"$'\n\n'"$prev (this run could not complete)"
+            fi
+          fi
+          if [ -n "$n" ]; then
+            gh issue edit "$n" --body "$body"
+            echo "updated #$n"
+          else
+            gh issue create --title "$TITLE" --label infra --body "$body"
+          fi
+      - name: Fail the run if the scan could not do its job
+        if: steps.report.outputs.rc != '0'
+        run: |
+          echo "::error::the mute watch could not scan every covered image — the mutes are UNCHECKED, not clean"
+          exit 1
