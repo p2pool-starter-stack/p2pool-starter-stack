@@ -2218,6 +2218,11 @@ load_baked_images() { # $1 (optional): image ref whose absence forces a load des
         wait "$load_pid" 2>/dev/null || true
         if [ "$load_rc" -eq 0 ]; then
             printf '%s' "$sha" >"$rec" 2>/dev/null || true # unrecorded -> reloads next boot
+            # #1030: the bracket the heartbeat above was missing. A journal that only ever shows
+            # "Loading..." with no matching finish line, right up to the moment a boot resets, IS
+            # the record that this archive is what a mid-load interrupt hit — but only if the
+            # journal itself survives to be read (pithead-journal-persist.service).
+            _console "Finished loading $(basename "$archive") in $(($(date +%s) - t0))s."
         else
             # No record on failure, on purpose: the next boot must retry, not skip.
             warn "Could not load the baked image archive $(basename "$archive")."
