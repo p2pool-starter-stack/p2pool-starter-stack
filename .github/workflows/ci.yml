@@ -260,7 +260,9 @@ jobs:
         # Pure-logic checks for the tests/integration/ harness (config rendering, matrix
         # coverage, redaction). The LIVE matrix (tests/integration/run.sh) needs a real test
         # server and runs as a gated/manual release gate (#54), not on every PR.
-        run: bash tests/integration/selftest.sh
+        run: |
+          bash tests/integration/selftest.sh
+          bash tests/integration/selftest-compose-profiles.sh
 
   compose:
     name: Compose config + security hardening
