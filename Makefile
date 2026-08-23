@@ -25,6 +25,7 @@ test-compose: ## Validate docker-compose.yml interpolation + hardening invariant
 
 test-integration-selftest: ## Integration harness pure-logic self-test (no server needed)
 	bash tests/integration/selftest.sh
+	bash tests/integration/selftest-rigforge-apply-settle.sh
 	bash tests/integration/selftest-compose-profiles.sh
 
 test-fakes: ## Fake-daemon contract test — real dashboard clients vs controllable fakes (no docker)

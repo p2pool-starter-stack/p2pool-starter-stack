@@ -274,6 +274,7 @@ jobs:
         # server and runs as a gated/manual release gate (#54), not on every PR.
         run: |
           bash tests/integration/selftest.sh
+          bash tests/integration/selftest-rigforge-apply-settle.sh
           bash tests/integration/selftest-compose-profiles.sh
 
   compose:
