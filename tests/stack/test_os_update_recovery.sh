@@ -85,37 +85,61 @@ export PITHEAD_RAUC_SYSTEM_CONF="$OSB/system.conf" PITHEAD_VARIANT_FILE="$OSB/va
 export CURL_API_RESPONSE="$OSB/api.json"
 UOS="66666666-6666-4666-8666-666666666666"
 
-echo "== unit: control_os_check claims the throttle only when the dial reaches the server (#1050) =="
+echo "== unit: control_os_check claims a SHORT cooldown (not zero, not the full 10m) when the dial never confirms it reached the server (#1050 review) =="
 : >"$OSB/curl.log"
-rm -f "$OSB/osdir/target.json" "$OSB/osdir/.check-stamp"
+rm -f "$OSB/osdir/target.json" "$OSB/osdir/.check-stamp" "$OSB/osdir/.check-stamp-short"
 CURL_CONNFAIL=1 run_sourced "$OSB" control_os_check "" "$UOS" admin "$OSB/cdir" >/dev/null 2>&1
 assert_eq "a transport failure is rejected" "$(jq -r '.status' "$OSB/cdir/results/$UOS.json" 2>/dev/null)" "rejected"
 assert_contains "the refusal names Tor, not a server answer" "$(jq -r '.error' "$OSB/cdir/results/$UOS.json" 2>/dev/null)" "could not reach"
-[ -f "$OSB/osdir/.check-stamp" ] && bad "a connectivity failure does not claim the throttle" "stamp exists" ||
-    ok "a connectivity failure does not claim the throttle"
+[ -f "$OSB/osdir/.check-stamp" ] && bad "a connectivity failure does not claim the FULL 10-minute throttle" "long stamp exists" ||
+    ok "a connectivity failure does not claim the FULL 10-minute throttle"
+[ -f "$OSB/osdir/.check-stamp-short" ] && ok "a connectivity failure DOES claim a short cooldown" ||
+    bad "a connectivity failure DOES claim a short cooldown" "short stamp missing"
 rm -f "$OSB/cdir/results/$UOS.json"
-# The operator fixes their connectivity and retries immediately — must NOT be told to wait,
-# because the failed attempt above never actually claimed the window.
-run_sourced "$OSB" control_os_check "" "$UOS" admin "$OSB/cdir" >/dev/null 2>&1
-assert_eq "an immediate retry after a connectivity failure is NOT throttled" \
-    "$(jq -r '.status' "$OSB/cdir/results/$UOS.json" 2>/dev/null)" "checked"
-rm -f "$OSB/cdir/results/$UOS.json" "$OSB/osdir/target.json" "$OSB/osdir/.check-stamp"
+# MUTATION KILL: on the zero-cooldown version this immediately-following check dialed again —
+# through a degraded Tor transport (circuit-build timeouts, exit-relay refusals, mid-handshake
+# TLS failures all return the same curl rc as a purely local "Tor down"), that was a real dial
+# per drain with NO cooldown at all, eroding #1081's anti-beacon guarantee. The short stamp must
+# throttle this retry BEFORE os_release_fetch (and therefore curl) ever runs again — proven by
+# the dial count below, not just the outward "rejected" status (a re-dial that fails again is
+# also "rejected", so the status alone cannot tell a throttled retry from a re-attempted one).
+dial_count_before=$(wc -l <"$OSB/curl.log" | tr -d ' ')
+CURL_CONNFAIL=1 run_sourced "$OSB" control_os_check "" "$UOS" admin "$OSB/cdir" >/dev/null 2>&1
+assert_eq "an immediate retry after a connectivity failure IS throttled (short cooldown, #1050 review)" \
+    "$(jq -r '.status' "$OSB/cdir/results/$UOS.json" 2>/dev/null)" "rejected"
+assert_contains "and the refusal reads as a short wait, not the 10-minute one" \
+    "$(jq -r '.error' "$OSB/cdir/results/$UOS.json" 2>/dev/null)" "about a minute"
+assert_eq "and no second dial actually fired — the throttle bites before curl runs" \
+    "$(wc -l <"$OSB/curl.log" | tr -d ' ')" "$dial_count_before"
+rm -f "$OSB/cdir/results/$UOS.json"
 
-# A rate-limited check DID reach GitHub (#1081) — the throttle must stay held, exactly as
-# before. This is the regression guard: a naive "never touch the stamp on failure" fix would
-# have broken this deliberate #1081 behaviour.
+# The short cooldown must be genuinely SHORTER than the 10-minute one: back-date the short stamp
+# past its own 1-minute window (but still well inside a 10-minute one) and the very next check
+# must dial again rather than staying throttled — proving the two windows are not the same stamp
+# wearing a different name.
+touch -t "$(date -d '2 minutes ago' +%Y%m%d%H%M 2>/dev/null || date -v-2M +%Y%m%d%H%M)" "$OSB/osdir/.check-stamp-short"
+run_sourced "$OSB" control_os_check "" "$UOS" admin "$OSB/cdir" >/dev/null 2>&1
+assert_eq "a 2-minute-old short stamp has already expired — the check dials again" \
+    "$(jq -r '.status' "$OSB/cdir/results/$UOS.json" 2>/dev/null)" "checked"
+rm -f "$OSB/cdir/results/$UOS.json" "$OSB/osdir/target.json" "$OSB/osdir/.check-stamp" "$OSB/osdir/.check-stamp-short"
+
+# A rate-limited check DID reach GitHub (#1081) — the throttle must stay held at the FULL 10
+# minutes, exactly as before. This is the regression guard: a naive "always use the short
+# cooldown on any failure" fix would have broken this deliberate #1081 behaviour.
 CURL_API_RESPONSE="$OSB/api-403.json" GH_STUB_CODE=403 \
     run_sourced "$OSB" control_os_check "" "$UOS" admin "$OSB/cdir" >/dev/null 2>&1
 assert_eq "a rate-limited check is rejected" "$(jq -r '.status' "$OSB/cdir/results/$UOS.json" 2>/dev/null)" "rejected"
-[ -f "$OSB/osdir/.check-stamp" ] && ok "a rate-limited check still claims the throttle (#1081, unchanged)" ||
-    bad "a rate-limited check still claims the throttle (#1081, unchanged)" "stamp missing"
+[ -f "$OSB/osdir/.check-stamp" ] && ok "a rate-limited check still claims the FULL throttle (#1081, unchanged)" ||
+    bad "a rate-limited check still claims the FULL throttle (#1081, unchanged)" "stamp missing"
+[ -f "$OSB/osdir/.check-stamp-short" ] && bad "a rate-limited check does not ALSO claim the short stamp" "short stamp exists" ||
+    ok "a rate-limited check does not ALSO claim the short stamp"
 rm -f "$OSB/cdir/results/$UOS.json"
 run_sourced "$OSB" control_os_check "" "$UOS" admin "$OSB/cdir" >/dev/null 2>&1
 assert_eq "immediately retrying a REACHED failure is still throttled" \
     "$(jq -r '.status' "$OSB/cdir/results/$UOS.json" 2>/dev/null)" "rejected"
 assert_contains "and the refusal names the throttle window" \
     "$(jq -r '.error' "$OSB/cdir/results/$UOS.json" 2>/dev/null)" "10 minutes"
-rm -f "$OSB/cdir/results/$UOS.json" "$OSB/osdir/target.json" "$OSB/osdir/.check-stamp"
+rm -f "$OSB/cdir/results/$UOS.json" "$OSB/osdir/target.json" "$OSB/osdir/.check-stamp" "$OSB/osdir/.check-stamp-short"
 
 echo "== unit: control_os_install writes a terminal-failure state, not a stuck 'installing' (#1050) =="
 jq -n '{tag:"v9.9.9",size:1000,notes:"",ts:(now|floor)}' >"$OSB/osdir/target.json"
