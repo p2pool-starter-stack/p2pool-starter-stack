@@ -46,14 +46,31 @@ test-integration: ## Run the live config-matrix integration suite (requires a te
 
 lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-file-budget lint-proto lint-toml ## Lint/format-check every surface
 
+# Two shellcheck invocations, not one, and the split is load-bearing. shellcheck resolves a
+# `# shellcheck source=` directive only when the sourced file is ALSO named on the same command
+# line, and it then inlines that file into the sourcing script's analysis. Listing run.sh beside
+# the 18 files it sources therefore built ONE merged root of ~730 KB costing over 6 GB — which is
+# what got the CI step killed (#1333) and what OOMs local dev (#1206). Peak is the largest single
+# ROOT, not the sum: all 17 domain files plus lib.sh together come to 125 MB, while run.sh alone
+# is ~3.8 GB. Holding run.sh out on its own keeps every cross-file resolution that matters and
+# caps the whole target at that one analysis — which now shrinks with every #1105 module instead
+# of being conserved by the split. The file SET is unchanged: every path below was in the old
+# single invocation, and none is listed twice.
 lint-sh: ## shellcheck + shfmt over the CLI, build/* + dashboard/ container scripts, release + test scripts
-	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh dashboard/*.sh tests/stack/run.sh tests/stack/lib.sh tests/stack/test-*.sh tests/stack/test_compose.sh tests/stack/test_data_reset.sh tests/stack/test_os_update_recovery.sh tests/stack/test_firstboot_journal.sh tests/stack/test_appliance_hugepages.sh \
+	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh dashboard/*.sh \
+		tests/stack/lib.sh tests/stack/test-*.sh tests/stack/test_compose.sh tests/stack/test_data_reset.sh \
+		tests/stack/test_os_update_recovery.sh tests/stack/test_firstboot_journal.sh tests/stack/test_appliance_hugepages.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh \
-		os/installer/pithead-install os/build-image.sh os/rauc/*.sh os/overlay/pithead-sync os/overlay/pithead-boot \
+		os/installer/pithead-install os/build-image.sh os/rauc/*.sh os/overlay/pithead-sync \
 		os/overlay/pithead-data-reset os/overlay/pithead-mount-generator os/overlay/pithead-ssh-host-keys \
 		os/overlay/pithead-machine-id os/overlay/pithead-media-config os/overlay/pithead-hugepages \
 		os/overlay/pithead-journal-persist \
 		tests/os/run.sh tests/os/verify-image.sh tests/os/hugepages-boot-verdict.sh
+# run.sh by itself, keeping company only with the one file outside tests/stack that it sources:
+# os/overlay/pithead-boot, whose gate_ready and os_update_rollback_verdict read three globals
+# run.sh sets for them. Drop pithead-boot from this line and those three report as SC2034 — it
+# costs ~300 lines to keep here, not the 294 KB of domain files.
+	shellcheck --severity=warning tests/stack/run.sh os/overlay/pithead-boot
 	shfmt -i 4 -d pithead pithead-completion.bash os/installer/pithead-install $(shell git ls-files '*.sh' | grep -v '^docs/research/')
 
 lint-py: ## ruff lint + format check on all repo Python (ruff runs via uv from the locked dev extra)
