@@ -75,6 +75,21 @@ test("AdoptRigForm: a malformed host is refused before any fetch happens", async
   assert.equal(inst.state.result.status, "error");
 });
 
+test("AdoptRigForm: a host resolving inside the stack's own network is refused after the config fetch, before preview", async () => {
+  // The critical SSRF case: charset-valid, so validateAdoptFields alone wouldn't catch it — this
+  // needs the live config (network.subnet) to classify, hence the check runs post-fetch.
+  const inst = adoptForm();
+  inst.state.host = "127.0.0.1";
+  inst.state.token = "tok-123";
+  await withFetchSequence([{ body: { network: { subnet: "172.28.0.0/24" } } }], async (calls) => {
+    await inst.adopt();
+    assert.equal(calls.length, 1); // only the /api/config read — never reached preview
+    assert.equal(calls[0].url, "/api/config");
+  });
+  assert.equal(inst.state.result.status, "error");
+  assert.match(inst.state.result.error, /own network/);
+});
+
 // --- The full preview -> commit round trip -----------------------------------------------------
 
 test("AdoptRigForm: a well-formed submission previews then commits through the control path", async () => {

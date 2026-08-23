@@ -38,6 +38,30 @@ export function validateAdoptFields(host, controlPort, token) {
 }
 
 /**
+ * Client-side mirror of the host's SSRF floor on a NEW workers.list[] entry (pithead's
+ * ``_control_host_is_internal`` / the dashboard's ``worker_adopt.host_is_internal``): loopback,
+ * unspecified, link-local, multicast/reserved, "localhost", or the stack's own docker-bridge
+ * subnet. UX only — a fast, clear refusal before the round trip; the host-side gate (and its own
+ * dashboard-side mirror, checked at preview) is what actually enforces this.
+ */
+export function hostIsInternal(host, subnet) {
+  const h = (host || "").trim().toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false; // a hostname clears this class; DNS resolution isn't re-checked here
+  const octets = m.slice(1, 5).map(Number);
+  if (octets.some((o) => o > 255)) return false;
+  const [a, b, c] = octets;
+  if (a === 0 || a === 127) return true; // this-network / loopback
+  if (a === 169 && b === 254) return true; // link-local (cloud metadata included)
+  if (a >= 224) return true; // multicast (224-239) + reserved (240-255)
+  const bridge = (subnet || "172.28.0.0/24").match(
+    /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}\/24$/,
+  );
+  return !!bridge && `${a}.${b}.${c}` === bridge.slice(1, 4).join(".");
+}
+
+/**
  * The proposed config a successful adopt submits: ``liveConfig`` (as fetched from /api/config)
  * with one new descriptor appended to ``workers.list[]``. Every other key rides through untouched
  * — the host's add-only gate requires every already-live entry to reappear byte-for-byte, so this

@@ -109,6 +109,24 @@ class TestAdoptGuardOnPreview:
         # Refused before it ever reached the spool — the requests/ dir stays empty.
         assert list((control_spool / "requests").glob("*.json")) == []
 
+    async def test_new_rig_pointed_at_loopback_refused_before_spooling(
+        self, control_client, control_spool
+    ):
+        # The critical SSRF case (a well-formed but internally-addressed entry): a compromised
+        # dashboard could otherwise append a phantom descriptor at 127.0.0.1 and immediately dial
+        # it via /api/control/worker-apply, which resolves strictly from the host's own
+        # config.json — this guard must catch it here, before anything reaches the spool.
+        proposed = _proposed(
+            [LIVE_RIG1],
+            {"name": "evil", "host": "127.0.0.1", "control_port": 8000, "token": "attacker"},
+        )
+        resp = await control_client.post(
+            "/api/control/preview", json={"config": proposed}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400
+        assert "evil" in await resp.text()
+        assert list((control_spool / "requests").glob("*.json")) == []
+
     async def test_new_rig_missing_token_refused(self, control_client, control_spool):
         proposed = _proposed([LIVE_RIG1], {"name": "rig2", "host": "10.0.0.10"})
         resp = await control_client.post(

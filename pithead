@@ -9673,6 +9673,44 @@ CONTROL_DASHBOARD_CONFIRM_KEYS='MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DA
     STRATUM_PORT MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC MONERO_PRUNE
     MONERO_OUT_PEERS'
 
+# True if $1 — a workers.list[] host the add-only exception is about to let a commit introduce —
+# resolves inside THIS host's own reach: loopback, unspecified ("this network"), link-local,
+# multicast/reserved, the literal name "localhost", or the stack's own docker-bridge subnet
+# (network.subnet). Mirrors the READ-path SSRF guard a miner-claimed IP already gets
+# (_safe_probe_host, dashboard/mining_dashboard/client/xmrig_client.py, #122) for the WRITE path:
+# an add-only append is DASHBOARD-chosen (the operator confirms it in the browser, but the actual
+# HTTP request is built and sent by the — possibly compromised — dashboard container), so without
+# this a malicious/compromised dashboard could append a phantom descriptor pointed at its own
+# host's loopback services or a sibling container, then immediately dial it (with an
+# attacker-chosen bearer) via the pre-existing worker-apply/worker-upgrade path, which resolves and
+# dials strictly from the HOST's own config — the exact escalation resolve_worker_target's own
+# doc comment assumes workers.list[] can never carry (it predates the dashboard having ANY write
+# access to that array). An ordinary LAN or public rig address is unaffected.
+_control_host_is_internal() {
+    local host a b prefix
+    host=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+    case "$host" in
+    localhost | *.localhost) return 0 ;;
+    esac
+    is_ipv4 "$host" || return 1 # a hostname clears this class; DNS resolution isn't re-checked here
+    IFS=. read -r a b _ _ <<<"$host"
+    case "$a" in
+    0 | 127) return 0 ;;                 # this-network / loopback
+    169) [ "$b" = 254 ] && return 0 ;;    # link-local (also covers cloud metadata, 169.254.169.254)
+    esac
+    [ "$a" -ge 224 ] && return 0 # multicast (224-239) and reserved (240-255)
+    # The stack's own docker-bridge /24 (network.subnet, default 172.28.0.0/24) — read from the
+    # LIVE config, never the staged proposal: a same-commit network.subnet change would already be
+    # refused above (NETWORK_SUBNET is on neither editable allowlist), so the live value is the
+    # honest baseline either way.
+    prefix=$(jq -r '.network.subnet // "172.28.0.0/24"' "$CONFIG_FILE" 2>/dev/null)
+    case "$prefix" in
+    *.0/24) prefix="${prefix%.0/24}" ;;
+    *) prefix="172.28.0" ;;
+    esac
+    [ "${host%.*}" = "$prefix" ]
+}
+
 control_approval_gate() { # <staged-file> [confirm-token]
     local staged="$1" confirm="${2:-}" porcelain
     # Fail closed if we cannot re-derive the change set (the staged config was validated at
@@ -9712,6 +9750,19 @@ control_approval_gate() { # <staged-file> [confirm-token]
         printf 'this change alters an existing per-worker descriptor (workers.list[] / dashboard.workers[], a per-rig host/token) rather than only adding a new one, which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
     fi
+    # SSRF floor on what an add-only append may point at (see _control_host_is_internal): every
+    # NEWLY appended entry's host — never an already-live one, already covered above — must clear
+    # this host's own loopback/link-local/internal-bridge reach. Read the live length fresh (not
+    # cached from the check above) so this stays correct however the prefix check above evolves.
+    local live_n new_host
+    live_n=$(jq -r --slurpfile live "$CONFIG_FILE" '($live[0].workers.list // []) | length' "$staged" 2>/dev/null) || live_n=0
+    while IFS= read -r new_host; do
+        [ -n "$new_host" ] || continue
+        if _control_host_is_internal "$new_host"; then
+            printf 'a new worker descriptor points at %s, which resolves inside this host'"'"'s own network — a rig'"'"'s control address must be a distinct machine on your LAN, not this host or one of its own containers.' "$new_host"
+            return 1
+        fi
+    done < <(jq -r --argjson n "${live_n:-0}" '(.workers.list // [])[$n:] | .[] | select(has("host")) | .host' "$staged" 2>/dev/null)
     # Closed-schema guard (#33 hardening). A config.json key the stack doesn't recognize renders to
     # NO env var, so it emits zero porcelain rows and slips past the allowlist below — yet the
     # commit's `cp "$staged" "$CONFIG_FILE"` would still persist it. So refuse any staged path that

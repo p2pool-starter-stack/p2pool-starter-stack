@@ -17,6 +17,7 @@ import { Component, html } from "./preact.mjs";
 import {
   buildAdoptedConfig,
   DEFAULT_CONTROL_PORT,
+  hostIsInternal,
   validateAdoptFields,
 } from "./workeradoptlogic.mjs";
 
@@ -45,13 +46,19 @@ export class AdoptRigForm extends Component {
     try {
       const cfgRes = await fetch("/api/config");
       if (!cfgRes.ok) throw new Error(`HTTP ${cfgRes.status}`);
-      const proposed = buildAdoptedConfig(
-        await cfgRes.json(),
-        this.props.name,
-        host,
-        controlPort,
-        token,
-      );
+      const liveConfig = await cfgRes.json();
+      if (hostIsInternal(host, liveConfig?.network?.subnet)) {
+        this.setState({
+          busy: false,
+          result: {
+            status: "error",
+            error:
+              "That address resolves inside this stack's own network — a rig's control address must be a distinct machine on your LAN.",
+          },
+        });
+        return;
+      }
+      const proposed = buildAdoptedConfig(liveConfig, this.props.name, host, controlPort, token);
       let res = await fetch("/api/control/preview", {
         method: "POST",
         headers: CONTROL_HEADERS,

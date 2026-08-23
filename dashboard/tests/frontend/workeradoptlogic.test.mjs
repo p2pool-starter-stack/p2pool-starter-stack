@@ -14,6 +14,7 @@ import { test } from "node:test";
 import {
   buildAdoptedConfig,
   DEFAULT_CONTROL_PORT,
+  hostIsInternal,
   validateAdoptFields,
 } from "../../mining_dashboard/web/static/workeradoptlogic.mjs";
 
@@ -61,6 +62,26 @@ test("validateAdoptFields: a blank token is refused (bearer-mandatory)", () => {
 
 test("validateAdoptFields: a token with a space is refused", () => {
   assert.notEqual(validateAdoptFields("10.0.0.9", "8082", "has space"), "");
+});
+
+// --- hostIsInternal (the #122 SSRF floor on a NEW entry) --------------------------------------
+
+test("hostIsInternal: loopback, localhost, link-local, multicast and reserved are internal", () => {
+  for (const h of ["127.0.0.1", "localhost", "LOCALHOST", "sub.localhost", "0.0.0.0", "169.254.169.254", "224.0.0.1", "240.0.0.1"]) {
+    assert.equal(hostIsInternal(h), true, h);
+  }
+});
+
+test("hostIsInternal: ordinary LAN/public addresses and hostnames are not internal", () => {
+  for (const h of ["192.168.1.50", "10.0.0.9", "8.8.8.8", "rig1.example.com"]) {
+    assert.equal(hostIsInternal(h), false, h);
+  }
+});
+
+test("hostIsInternal: the stack's own docker-bridge subnet is internal, default and custom", () => {
+  assert.equal(hostIsInternal("172.28.0.5"), true); // default subnet, no override passed
+  assert.equal(hostIsInternal("172.28.0.5", "172.30.0.0/24"), false); // off the CUSTOM subnet
+  assert.equal(hostIsInternal("172.30.0.5", "172.30.0.0/24"), true);
 });
 
 // --- buildAdoptedConfig ----------------------------------------------------------------------

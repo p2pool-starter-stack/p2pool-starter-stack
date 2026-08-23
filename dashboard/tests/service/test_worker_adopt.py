@@ -12,14 +12,46 @@ specific broken test, not a vague coverage drop:
     kill that.
 """
 
+import pytest
+
 from mining_dashboard.service.worker_adopt import (
     DEFAULT_CONTROL_PORT,
+    HOST_RE,
+    NAME_RE,
+    TOKEN_RE,
+    host_is_internal,
     new_worker_entries,
     validate_new_worker_entries,
     validate_worker_descriptor,
 )
 
 VALID_ENTRY = {"name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-123"}
+
+
+def test_regexes_have_no_intra_repo_drift():
+    """This module's docstring claims its host/name/token charset guards mirror pithead's own
+    ``validate_worker_endpoints`` byte for byte (the #122 SSRF guard in particular) — prove it
+    instead of trusting the comment. Same pattern as ``test_control_service.py``'s
+    ``test_writable_key_allowlist_has_no_intra_repo_drift``: skip where the CLI isn't checked out
+    (the dashboard-only Docker test image), verify where it is."""
+    from pathlib import Path
+
+    here = Path(__file__).resolve()
+    pithead_path = next((p / "pithead" for p in here.parents if (p / "pithead").is_file()), None)
+    if pithead_path is None:
+        pytest.skip("pithead CLI not present in this test context (dashboard-only image)")
+    pithead = pithead_path.read_text()
+
+    def _find(needle):
+        idx = pithead.find(needle)
+        assert idx != -1, f"could not find {needle!r} in pithead's validate_worker_endpoints"
+
+    # The literal jq test() regex source strings, unmodified from pithead's own guard.
+    _find('test("^[!-~]{1,128}$")')  # name AND token both use this charset (checked separately)
+    _find('test("^[A-Za-z0-9._-]{1,253}$")')  # the #122 host charset guard
+    assert NAME_RE.pattern == r"^[!-~]{1,128}$"
+    assert TOKEN_RE.pattern == r"^[!-~]{1,128}$"
+    assert HOST_RE.pattern == r"^[A-Za-z0-9._-]{1,253}$"
 
 
 class TestValidateWorkerDescriptor:
@@ -139,3 +171,74 @@ class TestValidateNewWorkerEntries:
         live = {"workers": {"list": [VALID_ENTRY]}}
         staged = {"workers": {"list": [VALID_ENTRY, bad]}}
         assert validate_new_worker_entries(live, staged) != ""
+
+    def test_new_entry_pointed_at_loopback_refused(self):
+        # The critical SSRF case: a well-SHAPED but internally-addressed new entry must still be
+        # refused, not just a malformed-charset one — a compromised dashboard could otherwise
+        # append a phantom descriptor at its own host's loopback services and immediately dial it
+        # via worker-apply/worker-upgrade (resolve_worker_target resolves strictly from config.json,
+        # so whatever lands here becomes a real dial target).
+        evil = {"name": "evil", "host": "127.0.0.1", "control_port": 8000, "token": "attacker"}
+        live = {"workers": {"list": [VALID_ENTRY]}}
+        staged = {"workers": {"list": [VALID_ENTRY, evil]}}
+        err = validate_new_worker_entries(live, staged)
+        assert err != "" and "evil" in err
+
+    def test_new_entry_pointed_at_the_stacks_own_docker_bridge_refused(self):
+        # Same class of escalation, aimed at a SIBLING container (monerod, the docker-proxy socket,
+        # tor) instead of the host's own loopback.
+        evil = {"name": "evil", "host": "172.28.0.5", "control_port": 18081, "token": "attacker"}
+        live = {"workers": {"list": [VALID_ENTRY]}, "network": {"subnet": "172.28.0.0/24"}}
+        staged = {
+            "workers": {"list": [VALID_ENTRY, evil]},
+            "network": {"subnet": "172.28.0.0/24"},
+        }
+        assert validate_new_worker_entries(live, staged) != ""
+
+    def test_new_entry_on_ordinary_lan_address_is_unaffected(self):
+        # The fix must not break the feature: a real rig at a real LAN address still adopts fine.
+        rig2 = {"name": "rig2", "host": "192.168.1.50", "token": "tok-456"}
+        live = {"workers": {"list": [VALID_ENTRY]}}
+        staged = {"workers": {"list": [VALID_ENTRY, rig2]}}
+        assert validate_new_worker_entries(live, staged) == ""
+
+
+class TestHostIsInternal:
+    """Mirrors pithead's ``_control_host_is_internal`` — see
+    ``test_regexes_have_no_intra_repo_drift``-style intent, but this class is a semantic mirror
+    (bash has no ``ipaddress`` module to diff against byte-for-byte); the bash-side battery of
+    cases was hand-verified during development (see the PR description)."""
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "127.0.0.1",
+            "localhost",
+            "LOCALHOST",
+            "sub.localhost",
+            "0.0.0.0",
+            "169.254.169.254",  # cloud-metadata-shaped link-local
+            "224.0.0.1",  # multicast
+            "240.0.0.1",  # reserved
+            "::1",  # loopback, IPv6
+        ],
+    )
+    def test_internal_classes_refused(self, host):
+        assert host_is_internal(host, {}) is True
+
+    @pytest.mark.parametrize("host", ["192.168.1.50", "10.0.0.9", "8.8.8.8", "rig1.example.com"])
+    def test_ordinary_addresses_and_hostnames_pass(self, host):
+        assert host_is_internal(host, {}) is False
+
+    def test_default_docker_bridge_subnet_refused_with_no_network_config(self):
+        assert host_is_internal("172.28.0.5", {}) is True
+
+    def test_custom_docker_bridge_subnet_is_read_from_live_config(self):
+        live = {"network": {"subnet": "172.30.0.0/24"}}
+        assert host_is_internal("172.30.0.5", live) is True
+        # Off the CUSTOM subnet, the default's own range is no longer special on this install.
+        assert host_is_internal("172.28.0.5", live) is False
+
+    def test_malformed_subnet_in_live_config_fails_closed_to_the_default(self):
+        live = {"network": {"subnet": "not-a-subnet"}}
+        assert host_is_internal("172.28.0.5", live) is True

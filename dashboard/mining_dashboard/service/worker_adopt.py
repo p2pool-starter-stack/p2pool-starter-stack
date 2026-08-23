@@ -18,6 +18,7 @@ miner-advertised value auto-trusted: the host field the operator confirms is sti
 PREFILL, and every field here is exactly what the operator typed or edited in the adopt form.
 """
 
+import ipaddress
 import re
 
 # Mirrors pithead's per-entry regexes (``validate_worker_endpoints``, pithead ~L5901) byte for
@@ -65,6 +66,35 @@ def validate_worker_descriptor(entry):
     return ""
 
 
+_DEFAULT_SUBNET = "172.28.0.0/24"
+
+
+def host_is_internal(host, live_cfg):
+    """Mirrors pithead's ``_control_host_is_internal`` (the host-side SSRF floor an add-only
+    append's host must clear, #122): loopback, unspecified, link-local, multicast/reserved,
+    ``localhost``, or the stack's own docker-bridge subnet (``network.subnet``, read from the SAME
+    live config the caller already has — never the staged proposal, matching the bash gate's own
+    reasoning: a same-commit ``network.subnet`` change is refused by the generic allowlist gate
+    before this would ever matter). An ordinary LAN/public rig address is unaffected."""
+    h = host.strip().lower()
+    if h == "localhost" or h.endswith(".localhost"):
+        return True
+    try:
+        addr = ipaddress.ip_address(h)
+    except ValueError:
+        return False  # a hostname clears this class; DNS resolution isn't re-checked here
+    if addr.is_loopback or addr.is_link_local or addr.is_unspecified or addr.is_multicast:
+        return True
+    if addr.is_reserved:
+        return True
+    subnet = ((live_cfg or {}).get("network") or {}).get("subnet") or _DEFAULT_SUBNET
+    try:
+        network = ipaddress.ip_network(subnet, strict=False)
+    except ValueError:
+        network = ipaddress.ip_network(_DEFAULT_SUBNET)
+    return addr.version == network.version and addr in network
+
+
 def new_worker_entries(live_cfg, staged_cfg):
     """The entries a staged config would ADD to ``workers.list[]``, or ``[]`` if the staged list
     isn't a pure append of the live one (a non-append change is left for the host's own add-only
@@ -82,9 +112,17 @@ def new_worker_entries(live_cfg, staged_cfg):
 
 def validate_new_worker_entries(live_cfg, staged_cfg):
     """The first validation error among the entries a staged config would newly append to
-    ``workers.list[]``, or ``""`` if every new entry is well-formed (including "no new entries")."""
+    ``workers.list[]``, or ``""`` if every new entry is well-formed (including "no new entries").
+    Shape first (``validate_worker_descriptor``), then the #122 SSRF floor (``host_is_internal``)
+    — a malformed entry gets the more specific shape message even if it also happens to parse as
+    an internal address."""
     for entry in new_worker_entries(live_cfg, staged_cfg):
         err = validate_worker_descriptor(entry)
         if err:
             return err
+        if host_is_internal(entry["host"], live_cfg):
+            return (
+                f"worker '{entry['name']}': host '{entry['host']}' resolves inside this host's "
+                "own network — a rig's control address must be a distinct machine on your LAN."
+            )
     return ""
