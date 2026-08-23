@@ -9690,12 +9690,26 @@ control_approval_gate() { # <staged-file> [confirm-token]
     #
     # The per-worker descriptors — workers.list[] (#506) or its deprecated fallback
     # dashboard.workers[] (#172) — carry per-rig hosts and API tokens (exactly the "free-form string
-    # that reaches a URL or credential" class the allowlist exists to keep host-CLI-only), so refuse
-    # a change to EITHER shape explicitly.
+    # that reaches a URL or credential" class the allowlist exists to keep host-CLI-only). The
+    # legacy dashboard.workers[] shape stays refused outright, whatever it changes to: any commit
+    # touching it goes back to a host edit.
+    #
+    # workers.list[] gets ONE narrow ADD-ONLY exception (the click-to-adopt flow): a commit may
+    # APPEND a brand-new descriptor to the end of the array, but every entry already live must
+    # reappear byte-for-byte, in the same order — so an adopt commit can add rig #4 without ever
+    # being able to repoint rig #1's host or token. That asymmetry is deliberate: first adoption
+    # gets a human confirming a freshly-observed address (the miner-advertised value is a PREFILL
+    # only), but a REPOINT of an already-trusted descriptor is the #122-class escalation an adopt
+    # confirmation was never designed to cover, so it stays a host edit like any other change here.
+    # Checked as a prefix match: staged.workers.list, cut back to live's own length, must equal
+    # live.workers.list exactly. An empty live list makes every staged entry "new" by definition
+    # (first adoption); a shorter/reordered/edited staged list can never match and is refused.
     if ! jq -e --slurpfile live "$CONFIG_FILE" '
         (.dashboard.workers // []) == ($live[0].dashboard.workers // [])
-        and (.workers.list // []) == ($live[0].workers.list // [])' "$staged" >/dev/null 2>&1; then
-        printf 'this change alters the per-worker descriptors (workers.list[] / dashboard.workers[], per-rig hosts/tokens, #172/#506), which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+        and ((($live[0].workers.list // []) | length) as $n
+             | (.workers.list // [])[0:$n] == ($live[0].workers.list // []))
+        ' "$staged" >/dev/null 2>&1; then
+        printf 'this change alters an existing per-worker descriptor (workers.list[] / dashboard.workers[], a per-rig host/token) rather than only adding a new one, which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
     fi
     # Closed-schema guard (#33 hardening). A config.json key the stack doesn't recognize renders to

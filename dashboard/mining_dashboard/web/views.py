@@ -2103,10 +2103,10 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     return {
         "name": name,
         "found": worker is not None,
-        # A worker is editable only if the operator pinned its host in config.json — never a
-        # miner-advertised address (#122). control_enabled gates whether the write path exists at all.
+        # Editable needs an operator-pinned host in config.json, never a miner-advertised one (#122).
         "editable": bool(descriptor and descriptor.get("host")),
         "control_enabled": config.DASHBOARD_CONTROL_ENABLED,
+        "ip": worker.get("ip") if worker else None,  # OBSERVED only — the adopt-form prefill (#893)
         "status": worker.get("status") if worker else None,
         "hashrate": format_hashrate(worker.get("h60", 0)) if worker else None,
         "rigforge": _rigforge_display(worker.get("rigforge")) if worker else None,

@@ -333,7 +333,9 @@ offline. Point the rig's descriptor at the enriched feed to turn this on — see
 
 With `dashboard.check_for_updates` on, a rig reporting a RigForge version older than the latest
 published release also gets a clickable `rf vX.Y.Z available ↗` badge — the per-worker twin of the
-header's new-release badge, notify-only, linking to the RigForge release notes. See
+header's new-release badge. Clicking it opens [Worker Inspect](#worker-inspect), where the
+one-click upgrade lives (or the [adopt flow](#worker-inspect) that enables it); the release-notes
+link moves inside that dialog as a secondary action. See
 [Connecting Miners › RigForge new-release badge](workers.md#rigforge-new-release-badge).
 
 Each rig shows accepted and rejected share counts (invalid shares folded into the rejected column as
@@ -390,8 +392,21 @@ doesn't come back to a live hashrate — rolls it back on its own. The panel sho
 path broke) and appends it to the history.
 
 To make a rig editable, give it `host`, `token`, and (unless it's the default `8082`) `control_port`
-in its [`workers.list[]`](configuration.md#configuration-reference) descriptor. Without a host, or
-without a token, the rig isn't a write target and the panel says so.
+in its [`workers.list[]`](configuration.md#configuration-reference) descriptor. A rig with neither
+yet shows an **adopt form** instead of the editor: the control address prefilled from the IP the
+proxy observed, `control_port` defaulted to `8082`, and a blank token field. The prefilled address
+is a suggestion, not a fact — confirm or correct it before submitting; the rig's own name is not
+enough proof of who is actually listening there. Submitting writes the descriptor through the same
+control channel [the Configuration view uses](#configuration-view) (preview, then commit) — no
+separate write path, and it can only ADD a new descriptor: it can never change the host or token of
+a rig that already has one, so adopting rig #4 can't be used to repoint rig #1. A rig with no host
+yet, or the control channel off, still gets a plain explanation instead of the form.
+
+The write is durable immediately, but a rig descriptor renders to no `.env` key, so adopting alone
+never recreates any container — the dashboard reads its worker list once at process start, so this
+editor may not appear until the dashboard itself restarts. The next config apply, a stack upgrade,
+or a manual `./pithead restart` all pick it up; there is no faster dashboard-only way to force it
+yet.
 
 When the rig's [new-release badge](#workers-alive) shows and the rig is editable, an **Upgrade
 rig…** button appears beside it: arm it, confirm, and the rig upgrades its own RigForge to the

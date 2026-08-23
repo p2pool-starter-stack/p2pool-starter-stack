@@ -1097,15 +1097,19 @@ function RigForgeChips({ rf }) {
   )}`;
 }
 
-// Per-worker RigForge new-release callout (#596) — the worker-level twin of UpdateBadge. Shown
-// only when the server derived that this rig's reported RigForge version is older than the latest
-// release (same dashboard.check_for_updates gate). Notify-only — a link to the release notes; the
-// one-click rig upgrade is the separate #597.
-const RigUpdateBadge = ({ up }) =>
-  up && up.available && up.url
-    ? html` <a class="badge badge-accent" href=${up.url} target="_blank" rel="noopener noreferrer"
-              title=${"A newer RigForge release is available: " + up.latest}>rf ${up.latest} available ↗</a>`
+// Per-worker RigForge new-release callout (#596) — the worker-level twin of UpdateBadge. Opens
+// Worker Inspect (#893) so the gated/upgrade state can explain itself; the release-notes link
+// moves inside the dialog. No dialog (control channel off) falls back to the old link-only badge.
+const RigUpdateBadge = ({ up, name, onInspect }) => {
+  if (!up || !up.available) return null;
+  const title = "A newer RigForge release is available: " + up.latest,
+    label = html`rf ${up.latest} available ↗`;
+  if (onInspect)
+    return html` <button type="button" class="badge badge-accent" onClick=${() => onInspect(name)} title=${title}>${label}</button>`;
+  return up.url
+    ? html` <a class="badge badge-accent" href=${up.url} target="_blank" rel="noopener noreferrer" title=${title}>${label}</a>`
     : null;
+};
 
 // Pool-wide proxy share totals (Issue #82) — a footer under the table. Hidden until the proxy
 // has reported any shares so it isn't an all-zero line on a fresh start.
@@ -1123,9 +1127,8 @@ const ProxyTotals = ({ summary }) => {
 };
 
 function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onInspect }) {
-  // First-run empty state (#385): until the proxy has ever reported a worker, the table would be
-  // eight headers over nothing — show the one action the operator must take instead. `workers`
-  // includes offline rigs, so a fleet that is temporarily all-offline keeps its (red) table.
+  // First-run empty state (#385): show the one action to take instead of empty headers.
+  // `workers` includes offline rigs, so a temporarily all-offline fleet keeps its (red) table.
   if ((workers || []).length === 0) {
     const addr = hostIp && hostIp !== "Unknown Host" ? hostIp : "YOUR_STACK_IP";
     const port = stratumPort || 3333; // configurable via p2pool.stratum_port (#172)
@@ -1149,9 +1152,8 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onIns
                 <thead>
                     <tr>${WORKER_COLUMNS.map(
                       // Sorted column carries the direction, visibly (arrow) and for AT (aria-sort);
-                      // the title makes clickability discoverable without hovering rows (#656).
-                      // The click target is a real <button> so keyboard users can sort too (#671):
-                      // native buttons are focusable and activate on Enter/Space without extra wiring.
+                      // the title makes clickability discoverable (#656). A real <button> click
+                      // target so keyboard users can sort too (#671), focusable without extra wiring.
                       (c, i) => html`<th
                             class=${i === ui.sortIndex ? "sorted" : null}
                             aria-sort=${i === ui.sortIndex ? (ui.sortAsc ? "ascending" : "descending") : null}><button
@@ -1176,7 +1178,7 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onIns
                               w.api_ok === false
                                 ? html` <span class="badge badge-bad" title="The dashboard couldn't read this worker's xmrig API, so uptime and per-miner hashrate are unavailable (it still mines — figures come from the proxy). Check workers.api_auth / api_port, or the miner's xmrig http settings.">api ⚠</span>`
                                 : null
-                            }<${RigForgeChips} rf=${w.rigforge} /><${RigUpdateBadge} up=${w.rigforge_update} /></td>
+                            }<${RigForgeChips} rf=${w.rigforge} /><${RigUpdateBadge} up=${w.rigforge_update} name=${w.name} onInspect=${onInspect} /></td>
                             <td>${w.ip}</td>
                             <td>${uptimeCell(w)}</td>
                             <td>${w.h60_str}</td>
@@ -1246,12 +1248,10 @@ function ComponentHealth({ topology, egress }) {
     </div>`;
 }
 
-// One-time discoverability hint (#425). The earnings + XvB tier calculators are Advanced-view
-// cards, so an operator on the default Simple view never sees them and concludes they don't
-// exist. This banner points at Advanced view until the operator acts on it: the inline button
-// switches views (dashboard.js retires the hint on any visit to Advanced), and the × dismisses
-// it outright. `ui.hintDismissed` is persisted in localStorage by dashboard.js like the other
-// UI state, so the hint shows once per browser, not once per reload.
+// One-time discoverability hint (#425): the earnings + XvB tier calculators are Advanced-view
+// cards, invisible from the default Simple view. Points at Advanced until the operator acts on
+// it (the inline button switches views; dashboard.js retires the hint on any Advanced visit) or
+// dismisses it outright; `ui.hintDismissed` persists in localStorage, so it shows once per browser.
 function AdvancedHint({ ui, onView, onDismissHint }) {
   if (ui.view !== "simple" || ui.hintDismissed) return null;
   return html`
