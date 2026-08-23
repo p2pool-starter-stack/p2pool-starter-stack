@@ -250,6 +250,10 @@ jobs:
         # Real ext4 damage against the product's own repair escalation (#1062). Unprivileged —
         # e2fsprogs on plain files — and it hard-fails rather than skips when CI lacks the tools.
         run: bash tests/stack/test_data_reset.sh
+      - name: Run OS-update recovery suite
+        # #1050 dead-end states re-arm and report; standalone suite wired here because the shell-tests job runs each
+        # standalone file explicitly (Makefile test-stack alone never runs in CI).
+        run: bash tests/stack/test_os_update_recovery.sh
       - name: Test-inventory drift check
         # The inventory generator is grep-based; it exits non-zero when any suite it
         # enumerates counts zero — i.e. a suite moved or changed shape and the inventory
