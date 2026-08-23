@@ -1,0 +1,30 @@
+[Unit]
+Description=Bind the persistent journal onto /data before it is ever flushed there (#1030)
+# Ordering mirrors pithead-machine-id.service exactly, and for the same reasons:
+#   - RequiresMountsFor=/data pulls in and orders after data.mount automatically.
+#   - DefaultDependencies=no + WantedBy=sysinit.target/Before=sysinit.target keeps this in the
+#     EARLY boot transaction, alongside pithead-data-reset and pithead-machine-id, rather than
+#     waiting for basic.target/multi-user.target.
+#   - Before=systemd-journal-flush.service: that unit is what promotes journald's runtime ring
+#     buffer (/run/log/journal, volatile) into persistent storage AND switches journald to write
+#     new entries there for the rest of the boot. Without this ordering it would run — and find
+#     /var/log/journal still on the read-only root — before /data, and therefore this unit's
+#     bind mount, ever existed.
+# Deliberately NOT Before=systemd-journald.service itself: journald starts far earlier than
+# /data can be mounted, so its OWN early boot messages are unavoidably lost on a reset before
+# this point regardless of ordering — the same limit pithead-machine-id documents for the DHCP
+# DUID. What this unit buys back is everything from here on, which is where first boot's slow,
+# crash-prone work (loading the container images) actually happens.
+DefaultDependencies=no
+RequiresMountsFor=/data
+Before=sysinit.target systemd-journal-flush.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/pithead-journal-persist
+
+[Install]
+WantedBy=sysinit.target

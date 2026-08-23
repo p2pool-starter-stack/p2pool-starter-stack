@@ -1030,6 +1030,18 @@ check_hugepages_degraded() {
     dr_warn "$(head -n 1 "$marker" | tr '\t' ' ')"
 }
 
+# #1103: on the REDUCED tier, render_local_miner_config and provision_local_miner both refuse to
+# co-locate the built-in miner even though local_miner.enabled is on (see the comment above
+# local_miner_hugepages_blocked for why no headroom value could make that safe). Say so here too,
+# the same way the reduced reservation itself is announced above — an operator staring at an empty
+# Workers view otherwise has nothing telling them the opt-in was refused rather than just slow.
+check_local_miner_hugepages_blocked() {
+    is_appliance || return 0
+    [ "$(config_bool '.local_miner.enabled' false 2>/dev/null || echo false)" = "true" ] || return 0
+    local_miner_hugepages_blocked || return 0
+    dr_warn "Local mining opt-in is ON, but this machine's reduced HugePages reservation cannot also fit a co-located miner — the built-in RigForge worker is not started. Use a 16 GB machine for the built-in miner."
+}
+
 # True (rc 0) when the host CPU advertises AVX2 — RandomX wants it, but it's performance-only,
 # not fatal. Linux reads /proc/cpuinfo; macOS reads sysctl's machdep CPU features.
 cpu_has_avx2() {
@@ -1191,6 +1203,7 @@ doctor() {
             dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run './pithead setup' (kernel optimization) to reserve them."
         fi
         check_hugepages_degraded
+        check_local_miner_hugepages_blocked
 
         # Runtime counterpart to setup's capacity pre-flight: preflight_resources checks MemTotal
         # (does the host have enough RAM at all), this checks MemAvailable (is enough free right
@@ -2205,6 +2218,11 @@ load_baked_images() { # $1 (optional): image ref whose absence forces a load des
         wait "$load_pid" 2>/dev/null || true
         if [ "$load_rc" -eq 0 ]; then
             printf '%s' "$sha" >"$rec" 2>/dev/null || true # unrecorded -> reloads next boot
+            # #1030: the bracket the heartbeat above was missing. A journal that only ever shows
+            # "Loading..." with no matching finish line, right up to the moment a boot resets, IS
+            # the record that this archive is what a mid-load interrupt hit — but only if the
+            # journal itself survives to be read (pithead-journal-persist.service).
+            _console "Finished loading $(basename "$archive") in $(($(date +%s) - t0))s."
         else
             # No record on failure, on purpose: the next boot must retry, not skip.
             warn "Could not load the baked image archive $(basename "$archive")."
@@ -2778,7 +2796,13 @@ announce_local_miner() {
     # On the appliance the miner is built in: pithead renders RigForge's config and the boot path
     # runs its setup, so there is nothing to install and no values to copy.
     if is_appliance; then
-        log "Local mining is ON: this machine also mines with its own CPU. The built-in RigForge worker points at the stack's own stratum and appears in the dashboard's Workers view."
+        if local_miner_hugepages_blocked; then
+            # #1103: opted in, but reduced HugePages means the built-in miner never actually
+            # starts (provision_local_miner refuses it) — say that instead of claiming it runs.
+            warn "Local mining is opted in, but this machine's reduced HugePages reservation cannot also fit a co-located miner — the built-in RigForge worker is not started. Use a 16 GB machine for the built-in miner."
+        else
+            log "Local mining is ON: this machine also mines with its own CPU. The built-in RigForge worker points at the stack's own stratum and appears in the dashboard's Workers view."
+        fi
         return 0
     fi
     local bind port host secret
@@ -2849,6 +2873,24 @@ rigforge_dir() { printf '%s' "${PITHEAD_RIGFORGE_DIR:-/data/rigforge}"; }
 # `apply` re-renders after RigForge has already grown the pool, and handing the grown pool
 # back as headroom would ratchet it up on every apply. Healthy hardware has no marker, so the
 # declared value is the same 6144 MB it has always been.
+
+# #1103's product decision: on the REDUCED tier, do not co-locate the built-in miner at all.
+# The tier's 2560 pages were budgeted for the stack's own two RandomX datasets alone, with no
+# co-resident miner in the sum, and no headroom value declared here can fix that — RigForge's
+# grow-only pool write counts the stack's already-held pages as unavailable while this same
+# headroom sits inside its own requirement, so the co-resident's pages are counted twice and the
+# result is unbounded (see the comment above render_local_miner_config for the arithmetic). The
+# RELEASED tier (0 pages) is not affected: it declares zero headroom, so there is nothing left to
+# double-count, and the full tier is the measured, supported case this was never wrong for.
+# Blocking co-location is therefore scoped to exactly the tier where the double-count is real —
+# never the two tiers either side of it, so a normal 16 GB box keeps its full reservation and a
+# released box keeps mining solo exactly as it does today.
+local_miner_hugepages_blocked() {
+    local pages
+    pages=$(hugepages_decision_pages)
+    [ "$pages" -gt 0 ] && [ "$pages" -lt "$PITHEAD_HUGEPAGES" ]
+}
+
 render_local_miner_config() {
     is_appliance || return 0
     # Not on a rig, ever. This function's "switched off" branch DELETES the miner's config, and
@@ -2860,6 +2902,13 @@ render_local_miner_config() {
     if [ "$(config_bool '.local_miner.enabled' false 2>/dev/null || echo false)" != "true" ]; then
         # Derived means derived: switched off, the config goes away — the boot leg then has
         # nothing to start, and a stale stratum password does not linger on /data.
+        rm -f "$dir/config.json"
+        return 0
+    fi
+    if local_miner_hugepages_blocked; then
+        # Same treatment as switched off (#1103): a reduced-RAM box cannot also fit a co-located
+        # miner without double-counting the stack's own reservation. provision_local_miner is
+        # the one that warns the operator; this only keeps the derived file from existing.
         rm -f "$dir/config.json"
         return 0
     fi
@@ -2919,6 +2968,15 @@ provision_local_miner() {
         # Switched off: stop a still-running miner now rather than waiting for the reboot that
         # would drop its runtime unit anyway. Best-effort — absent unit, absent systemctl (tests)
         # and DIY hosts all land in the same quiet no-op.
+        systemctl stop xmrig.service >/dev/null 2>&1 || true
+        return 0
+    fi
+    if local_miner_hugepages_blocked; then
+        # #1103: this machine's reduced HugePages reservation cannot also fit a co-located
+        # miner without double-counting the stack's own share — refuse to start it, the same
+        # way a switched-off opt-in does, rather than let RigForge's grow-only sysctl chase an
+        # unbounded target on hardware already running squeezed.
+        warn "Local mining opt-in is ON, but this machine's reduced HugePages reservation cannot also fit a co-located miner without risking the stack itself — the built-in miner is not started. Use a 16 GB machine for the built-in miner."
         systemctl stop xmrig.service >/dev/null 2>&1 || true
         return 0
     fi

@@ -119,3 +119,21 @@ scenario_names() {
         [ -n "$name" ] && printf '%s\n' "$name"
     done < <(scenario_matrix)
 }
+
+# Pure membership test on a comma-separated Compose profiles list (#1301) — the runtime
+# counterpart of this file's monero.mode/tari.mode axes: render_env (pithead's env writer) turns
+# the local/remote choice above into COMPOSE_PROFILES by APPENDING tokens (local_node, then
+# local_tari/payout_confirm/tari_payout_confirm as those features turn on), so a standard local
+# box's COMPOSE_PROFILES reads "local_node,local_tari,payout_confirm", never the bare token
+# alone. A strict string-equality comparison against one literal token therefore only ever
+# matches when that token is the ONLY active profile — not a configuration run.sh's six
+# local-mode gates were ever meant to require, so they silently read every standard local box as
+# remote mode. Mirrors pithead's own membership idiom (remove_deactivated_profile_containers in
+# the `pithead` CLI). Sourced (via this file) by run.sh; selftest-compose-profiles.sh proves the
+# mutation this guards against: reverting to a literal `[ "$1" = "$2" ]` comparison must go red.
+has_compose_profile() { # <profiles-csv> <token>
+    case ",$1," in
+    *",$2,"*) return 0 ;;
+    *) return 1 ;;
+    esac
+}
