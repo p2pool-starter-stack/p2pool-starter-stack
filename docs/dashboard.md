@@ -16,8 +16,8 @@ node is still catching up. A `Syncing...` badge appears next to the hostname, th
 *"System is currently synchronizing with the network,"* and no hashrate is routed yet.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/launch/sync.png">
-  <img alt="Sync Mode" src="../images/launch/sync-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="./images/launch/sync.png">
+  <img alt="Sync Mode" src="./images/launch/sync-light.png">
 </picture>
 
 Sync Mode gives each chain its own progress card:
@@ -69,8 +69,8 @@ the node logs directly:
 Once both nodes are synced, the dashboard shows the operational view.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/launch/simple.png">
-  <img alt="Operational dashboard — Simple view" src="../images/launch/simple-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="./images/launch/simple.png">
+  <img alt="Operational dashboard — Simple view" src="./images/launch/simple-light.png">
 </picture>
 
 The page updates every 30 seconds, refreshing each panel in place rather than reloading. Scroll
@@ -454,8 +454,8 @@ shows a one-time banner pointing there; it goes away once you dismiss it or open
 stays away across reloads.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../images/launch/advanced.png">
-  <img alt="Dashboard — Advanced view" src="../images/launch/advanced-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="./images/launch/advanced.png">
+  <img alt="Dashboard — Advanced view" src="./images/launch/advanced-light.png">
 </picture>
 
 ### P2Pool Earnings (estimated)

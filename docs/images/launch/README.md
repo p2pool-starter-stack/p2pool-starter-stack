@@ -19,8 +19,8 @@ wallet/host values are fabricated for presentation. No real wallet, host, or ope
 in any of them (wallet fields are obvious `EXAMPLE` placeholders).
 
 Static views rendered at retina 2× (`hero*` 2880×600; `sync*` 2880×1336; `simple*`/`advanced*`
-full-page). Used in the [README](../../README.md) (hero + demo GIF) and
-[docs/dashboard.md](../../docs/dashboard.md) (Simple / Advanced / Sync).
+full-page). Used in the [README](../../../README.md) (hero + demo GIF) and
+[docs/dashboard.md](../../dashboard.md) (Simple / Advanced / Sync).
 
 > NOTE: `social-preview.png` is not wired up automatically. GitHub's repo social-preview image can
 > only be set from the web UI: repo → Settings → General → Social preview → Edit → upload

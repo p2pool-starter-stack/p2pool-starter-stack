@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./images/pithead-mark.svg" alt="Pithead" width="120">
+<img src="./docs/images/pithead-mark.svg" alt="Pithead" width="120">
 
 # Pithead
 
@@ -18,8 +18,8 @@ It ships two ways: **Pithead OS**, a bootable appliance image for a machine you 
 mining, and the **Compose stack** you run on a host you manage.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./images/launch/hero.png">
-  <img alt="Pithead — live mining dashboard" src="./images/launch/hero-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/images/launch/hero.png">
+  <img alt="Pithead — live mining dashboard" src="./docs/images/launch/hero-light.png">
 </picture>
 
 </div>
@@ -121,7 +121,7 @@ addresses, provisions Tor, tunes HugePages for RandomX, and offers to start the 
    tuned worker in one command.
 
 <div align="center">
-  <img src="./images/launch/demo.gif" alt="Pithead — live mining dashboard tour" width="85%">
+  <img src="./docs/images/launch/demo.gif" alt="Pithead — live mining dashboard tour" width="85%">
 </div>
 
 Full walkthrough: [docs/getting-started.md](docs/getting-started.md)
