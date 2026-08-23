@@ -32,8 +32,8 @@ echo "== black-box: doctor --json + support-bundle (#77 phase 1) =="
 # file is sourced from. Mirrors build_val_sandbox's body under a non-colliding name instead — the
 # same re-derive-locally move module 8 makes for the shared control sandbox.
 DJ="$SANDBOX/doctor-json"
-mkdir -p "$DJ/build/tari" "$DJ/build/dashboard"
-: >"$DJ/build/dashboard/Dockerfile"
+mkdir -p "$DJ/build/tari" "$DJ/dashboard"
+: >"$DJ/dashboard/Dockerfile"
 cp "$STACK" "$DJ/pithead"
 make_stubs "$DJ/bin"
 cp "$ROOT/build/tari/config.toml.template" "$DJ/build/tari/"

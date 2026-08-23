@@ -1,6 +1,6 @@
 """Generate a representative /api/state payload fixture for the frontend render tests.
 
-Run from build/dashboard:  uv run --extra test python tests/frontend/fixtures/_gen_state.py
+Run from dashboard:  uv run --extra test python tests/frontend/fixtures/_gen_state.py
 Writes tests/frontend/fixtures/state.json — a real build_state() payload (the exact contract the
 Preact client renders), so the JS smoke tests run against the true server shape rather than a
 hand-built guess. Regenerate when the payload contract changes.

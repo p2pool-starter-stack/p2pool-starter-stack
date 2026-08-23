@@ -366,12 +366,13 @@ install in place. `config.json`, `.env`, the Tor onion keys, and data directorie
 ./pithead backup -y          # safety snapshot: config.json, .env, onion keys, dashboard db (chains excluded)
 # overlay the published release files — leaves config.json, .env, .git, and your data dirs untouched:
 curl -fsSL https://github.com/p2pool-starter-stack/pithead/releases/latest/download/pithead.tar.gz | tar xz --strip-components=1
-rm -f build/*/Dockerfile     # remove the image Dockerfiles → pithead switches from build to pull
+rm -f build/*/Dockerfile dashboard/Dockerfile   # remove the image Dockerfiles → pithead switches from build to pull
 ./pithead upgrade            # re-render config, pull :vX.Y.Z, recreate
 ```
 
-`pithead` chooses build-vs-pull by whether the image Dockerfiles are present (`build/<svc>/Dockerfile`).
-Deleting them flips it from building `:dev` locally to pulling the published `:vX.Y.Z`. To go back to
+`pithead` chooses build-vs-pull by whether `dashboard/Dockerfile` is present (the one Dockerfile
+`is_source_checkout` keys off). Deleting the Dockerfiles flips it from building `:dev` locally to
+pulling the published `:vX.Y.Z`. To go back to
 building from source, `git checkout vX.Y.Z` (or `git pull`) restores the Dockerfiles, then
 `./pithead upgrade` rebuilds locally. `upgrade` refuses to start on a non-primary Monero payout address,
 so confirm yours is a `4…`/95-char address first (see [Configuration](configuration.md)).
@@ -663,5 +664,5 @@ unaffected). Pass `-y` / `--yes` to skip the confirmation prompt.
 
 - **Run the test suites locally** (mirrors CI): `make test`, or individually `make
   test-dashboard`, `make test-stack`, `make test-compose`, `make lint`.
-- **Dashboard development**: see [`build/dashboard/README.md`](../build/dashboard/README.md) for
+- **Dashboard development**: see [`dashboard/README.md`](../dashboard/README.md) for
   the package layout, local dev setup, and the hermetic test suite.

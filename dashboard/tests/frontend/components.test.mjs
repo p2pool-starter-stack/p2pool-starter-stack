@@ -1,7 +1,7 @@
 // Render smoke tests for the dashboard's Preact components (mining_dashboard/web/static/components.mjs).
 //
 // Run with Node's built-in test runner (CI runs exactly this):
-//     node --test build/dashboard/tests/frontend/
+//     node --test dashboard/tests/frontend/
 //
 // components.mjs exports only the App root by design, so these drive every card *through* App —
 // varying the /api/state fixture to reach each branch (loading / syncing / operational) and edge

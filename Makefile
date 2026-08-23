@@ -4,11 +4,11 @@
 test: lint test-dashboard test-frontend test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
 test-dashboard: ## Dashboard unit/component tests with coverage gate (deps from uv.lock); emits coverage.xml
-	cd build/dashboard && uv run --locked --extra test python -m pytest \
+	cd dashboard && uv run --locked --extra test python -m pytest \
 		--cov=mining_dashboard --cov-report=term-missing --cov-report=xml --cov-fail-under=80
 
 test-frontend: ## Frontend logic tests with Node's built-in runner (#632; same invocation as CI)
-	node --test build/dashboard/tests/frontend/*.test.mjs
+	node --test dashboard/tests/frontend/*.test.mjs
 
 test-patch-coverage: ## diff-cover (#286) minus its vacuous pass (#1000): >=90% on changed lines (run after test-dashboard)
 	bash scripts/patch-coverage.sh
@@ -24,7 +24,7 @@ test-integration-selftest: ## Integration harness pure-logic self-test (no serve
 	bash tests/integration/selftest.sh
 
 test-fakes: ## Fake-daemon contract test — real dashboard clients vs controllable fakes (no docker)
-	uv run --locked --project build/dashboard --extra test python -m pytest tests/integration/fakes -q
+	uv run --locked --project dashboard --extra test python -m pytest tests/integration/fakes -q
 
 test-mini-stack: ## Fake-daemon docker mini-stack end-to-end (needs docker; CI)
 	bash tests/integration/mini-stack/run-mini-stack.sh
@@ -41,8 +41,8 @@ test-integration: ## Run the live config-matrix integration suite (requires a te
 
 lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-file-budget lint-proto lint-toml ## Lint/format-check every surface
 
-lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release + test scripts
-	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/lib.sh tests/stack/test-*.sh tests/stack/test_compose.sh tests/stack/test_data_reset.sh \
+lint-sh: ## shellcheck + shfmt over the CLI, build/* + dashboard/ container scripts, release + test scripts
+	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh dashboard/*.sh tests/stack/run.sh tests/stack/lib.sh tests/stack/test-*.sh tests/stack/test_compose.sh tests/stack/test_data_reset.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh \
 		os/installer/pithead-install os/build-image.sh os/rauc/*.sh os/overlay/pithead-sync os/overlay/pithead-boot \
 		os/overlay/pithead-data-reset os/overlay/pithead-mount-generator os/overlay/pithead-ssh-host-keys \
@@ -51,8 +51,8 @@ lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release 
 	shfmt -i 4 -d pithead pithead-completion.bash os/installer/pithead-install $(shell git ls-files '*.sh' | grep -v '^docs/research/')
 
 lint-py: ## ruff lint + format check on all repo Python (ruff runs via uv from the locked dev extra)
-	uv run --locked --project build/dashboard --extra dev ruff check .
-	uv run --locked --project build/dashboard --extra dev ruff format --check .
+	uv run --locked --project dashboard --extra dev ruff check .
+	uv run --locked --project dashboard --extra dev ruff format --check .
 
 lint-js: ## Biome lint + format check on the static frontend (config: biome.json)
 	npx --yes @biomejs/biome@2.5.0 check .
@@ -79,7 +79,7 @@ lint-file-budget: ## Fail if a tracked file crosses the 800-line hard ceiling, o
 	bash scripts/lint-file-budget.sh
 
 lint-proto: ## buf lint + build on the vendored Tari protos (config: .../tari/proto/buf.yaml)
-	cd build/dashboard/mining_dashboard/client/tari/proto && \
+	cd dashboard/mining_dashboard/client/tari/proto && \
 		docker run --rm -v "$$PWD":/workspace --workdir /workspace bufbuild/buf:1.71.0 lint && \
 		docker run --rm -v "$$PWD":/workspace --workdir /workspace bufbuild/buf:1.71.0 build
 

@@ -188,9 +188,9 @@ then
 fi
 
 # The static frontend, minus the *.min.js bundles.
-files=$(git ls-files 'build/dashboard/mining_dashboard/web/static/*.mjs' \
-    'build/dashboard/mining_dashboard/web/static/*.js' \
-    'build/dashboard/mining_dashboard/web/templates/*.html' | grep -v '\.min\.js$' || true)
+files=$(git ls-files 'dashboard/mining_dashboard/web/static/*.mjs' \
+    'dashboard/mining_dashboard/web/static/*.js' \
+    'dashboard/mining_dashboard/web/templates/*.html' | grep -v '\.min\.js$' || true)
 if [ -n "$files" ]; then
     # shellcheck disable=SC2086
     if

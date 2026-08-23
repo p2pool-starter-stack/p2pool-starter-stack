@@ -177,7 +177,7 @@ explain_subnet_collision() {
 # locally; a release install ships only the runtime bits (compose, pithead, and build/tari/'s config
 # template that inject_service_configs renders at setup) and pulls the published images. Key off a
 # Dockerfile, NOT `build/` — a release bundle still contains build/tari/, so `[ -d build ]` is true (#44).
-is_source_checkout() { [ -f build/dashboard/Dockerfile ]; }
+is_source_checkout() { [ -f dashboard/Dockerfile ]; }
 
 # `docker compose up` pull policy (#44): a source checkout builds the first-party images locally —
 # `never`, so up doesn't attempt (and warn about) a registry pull for an unpublished `:dev` tag —
@@ -6120,7 +6120,7 @@ parse_and_validate_config() {
     fi
     # Tor guard self-heal (#424); OPT-IN, default off — a tor restart drops all circuits, so the
     # stack never restarts its privacy boundary unbidden. Renders to .env for the dashboard,
-    # which owns the probe/restart loop (build/dashboard .../service/tor_heal.py).
+    # which owns the probe/restart loop (dashboard .../service/tor_heal.py).
     TOR_AUTO_HEAL=$(normalize_bool "$(config_bool '.tor.auto_heal' false)")
     # Surfaced for the dashboard's egress-posture panel (#170); mirrors what p2pool_outbound_flags reads.
     P2POOL_CLEARNET=$(normalize_bool "$(config_bool '.p2pool.clearnet' false)")
@@ -7326,7 +7326,7 @@ render_env() {
     # false. The dashboard is an observability layer, not the mining datapath, so the default is
     # alert-only (loud Telegram/Healthchecks alert + badge; mining continues). true reuses the #35
     # sync-gate's own hold to stop p2pool+xmrig-proxy until a DB-recovery failure or a
-    # crash-looping dashboard container clears — see build/dashboard .../service/data_service.py
+    # crash-looping dashboard container clears — see dashboard .../service/data_service.py
     # DataService._apply_fail_closed_gate for the exact "unrecoverable" set.
     local fail_closed
     fail_closed=$(normalize_bool "$(config_bool '.dashboard.fail_closed' false)")
@@ -9565,7 +9565,7 @@ run_chain() {
 #
 # NOTE (2026-08 audit): TELEGRAM_EVENT_RAFFLE_WIN was missing from this list for a while — the one
 # event toggle out of step with its 24 siblings, all otherwise editable. If you add a new event
-# toggle, list it here AND in control_service.EDITABLE_ENV_KEY_PATHS (build/dashboard) — the drift
+# toggle, list it here AND in control_service.EDITABLE_ENV_KEY_PATHS (dashboard) — the drift
 # guard only catches a mismatch between the two, not an omission from both.
 CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
     XVB_ENABLED XVB_DONATION_LEVEL TARI_REQUIRED DASHBOARD_FAIL_CLOSED

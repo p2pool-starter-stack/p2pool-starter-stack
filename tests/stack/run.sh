@@ -1862,7 +1862,7 @@ source "$HERE/test-release.sh"
 # The XvB tier thresholds are hard-coded in config.py (TIER_DEFAULTS) and stated explicitly in
 # docs/architecture.md. Drift guard: each config value must match the doc's human form, so the
 # user-facing table can't silently fall out of sync if TIER_DEFAULTS ever changes.
-tier_cfg="$ROOT/build/dashboard/mining_dashboard/config/config.py"
+tier_cfg="$ROOT/dashboard/mining_dashboard/config/config.py"
 tier_doc="$ROOT/docs/architecture.md"
 for tier in "donor:1_000:1 kH/s" "vip:10_000:10 kH/s" "whale:100_000:100 kH/s" "mega:1_000_000:1 MH/s"; do
     t_name="${tier%%:*}"
@@ -1894,7 +1894,7 @@ echo "== unit: export_build_provenance (Issue #58) =="
 # Exports the stack version (from the top-level VERSION file, whitespace-trimmed) plus git
 # branch/commit for the dashboard build args — deliberately NOT written into .env, since the
 # volatile commit would otherwise churn `apply`. The sandbox isn't a git repo, so branch/commit
-# come back empty here; the release/dev split is unit-tested in build/dashboard/tests/test_version.py.
+# come back empty here; the release/dev split is unit-tested in dashboard/tests/test_version.py.
 PROV="$SANDBOX/prov"
 mkdir -p "$PROV"
 printf '  9.9.9 \n' >"$PROV/VERSION"
@@ -3740,8 +3740,8 @@ echo "== black-box: upgrade re-renders generated config (#128) =="
 # `upgrade` used to be just `up --build`, leaving the generated .env/Caddyfile/Tari config stale
 # after a git pull. It must now re-render them while preserving secrets.
 U="$SANDBOX/upgrade"
-mkdir -p "$U/build/tari" "$U/build/dashboard" "$U/data/monero" "$U/data/tari" "$U/data/p2pool/stats" "$U/data/tor" "$U/data/dashboard"
-: >"$U/build/dashboard/Dockerfile"
+mkdir -p "$U/build/tari" "$U/dashboard" "$U/data/monero" "$U/data/tari" "$U/data/p2pool/stats" "$U/data/tor" "$U/data/dashboard"
+: >"$U/dashboard/Dockerfile"
 cp "$STACK" "$U/pithead"
 make_stubs "$U/bin"
 cp "$ROOT/build/tari/config.toml.template" "$U/build/tari/"
@@ -3776,8 +3776,8 @@ assert_contains "upgrade pulls non-buildable images first (digest bumps)" "$(cat
 echo "== black-box: apply recovers from a failed 'compose up' (#125) =="
 # A docker stub that fails `compose up -d --remove-orphans` only when FAIL_UP=1 (else succeeds).
 A="$SANDBOX/applyfail"
-mkdir -p "$A/build/tari" "$A/build/dashboard" "$A/bin" "$A/data/monero" "$A/data/tari" "$A/data/p2pool/stats" "$A/data/tor" "$A/data/dashboard"
-: >"$A/build/dashboard/Dockerfile" # source-checkout marker → pithead builds (--pull never), #44
+mkdir -p "$A/build/tari" "$A/dashboard" "$A/bin" "$A/data/monero" "$A/data/tari" "$A/data/p2pool/stats" "$A/data/tor" "$A/data/dashboard"
+: >"$A/dashboard/Dockerfile" # source-checkout marker → pithead builds (--pull never), #44
 cp "$STACK" "$A/pithead"
 cp "$ROOT/build/tari/config.toml.template" "$A/build/tari/"
 cat >"$A/bin/docker" <<'EOF'
@@ -6192,7 +6192,7 @@ echo "== unit: config.reference.json stays a complete superset of every path pit
 # path pithead reads must exist in config.reference.json, or a legitimate config carrying that path
 # is false-rejected on every control-channel commit (a control-plane DoS). Until now the only guard
 # was the single legacy-xmrig_proxy round-trip case above. This walks pithead's own read sites,
-# mirroring the #515 cross-file drift guard's shape (build/dashboard/tests/service/test_control_service.py,
+# mirroring the #515 cross-file drift guard's shape (dashboard/tests/service/test_control_service.py,
 # test_writable_key_allowlist_has_no_intra_repo_drift): a conservative, fixed-shape extractor over
 # the literal read sites that FAILS LOUD on a shape it doesn't recognize (rather than silently
 # skipping it), so a new read shape can't slip through unchecked.

@@ -16,7 +16,7 @@ echo "== black-box: verify_release_images fail-closed gate (#376) =="
 # container, so the stub is `docker`, not `cosign`: it answers the availability probe, pretends the
 # pinned image is already present, and logs the cosign argv that follows the image ref — which keeps
 # every assertion below reading exactly as it did when cosign was a host binary. A release install
-# is a dir without build/dashboard/Dockerfile.
+# is a dir without dashboard/Dockerfile.
 VRI="$SANDBOX/verify376"
 write_fake_docker "$VRI/bin"
 write_unreachable_docker "$VRI/nodocker"
@@ -101,8 +101,8 @@ assert_contains "un-pinned + key, real errexit -> crafted message still reaches 
     "$out557_vri" "not digest-pinned"
 
 # Source checkout: locally built images are unsigned by design — skipped, silently and completely.
-mkdir -p "$VRI/build/dashboard"
-touch "$VRI/build/dashboard/Dockerfile"
+mkdir -p "$VRI/dashboard"
+touch "$VRI/dashboard/Dockerfile"
 : >"$VRI/cosign.log"
 out="$(PATH="$VRI/bin:/usr/bin:/bin" COSIGN_RC=1 COSIGN_LOG="$VRI/cosign.log" run_sourced "$VRI" verify_release_images 2>&1)"
 assert_rc "source checkout -> verification skipped" "$?" "0"

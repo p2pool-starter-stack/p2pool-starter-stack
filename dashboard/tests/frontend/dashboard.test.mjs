@@ -1,7 +1,7 @@
 // Tier-1 tests for the dashboard entry point (mining_dashboard/web/static/dashboard.js).
 //
 // Run with Node's built-in test runner (CI runs exactly this):
-//     node --test build/dashboard/tests/frontend/
+//     node --test dashboard/tests/frontend/
 //
 // dashboard.js owns the client's refresh loop and UI-state dispatch: the 30s poll with the
 // Tor-hang abort (#382), the connected/disconnected flag, preference seeding from the URL and

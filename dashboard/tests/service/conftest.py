@@ -1,4 +1,4 @@
-"""Shared fixtures for build/dashboard/tests/service/. Currently just ``algo``, used by
+"""Shared fixtures for dashboard/tests/service/. Currently just ``algo``, used by
 AlgoService's tests, split across test_algo_service.py and test_projected_steering.py (#1285)."""
 
 from unittest.mock import MagicMock

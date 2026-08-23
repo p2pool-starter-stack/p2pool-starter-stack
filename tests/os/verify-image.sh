@@ -13,7 +13,7 @@
 set -uo pipefail
 
 # Directory-independent: this script assumes cwd == repo root for the relative paths later on
-# (./pithead, build/dashboard/...), so resolve the shared helper from the script's own location
+# (./pithead, dashboard/...), so resolve the shared helper from the script's own location
 # instead of adding a cd that would change those.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=os/rauc/loop-wait.sh
@@ -246,7 +246,7 @@ fi
 # above, and behaved like the previous build on a bench. The stamp catches a stale TREE; these
 # catch a stale ARTIFACT — the program and the baked container image are compared against the
 # very files this checkout holds. Skipped when run outside the repo.
-if [ -f ./pithead ] && [ -f build/dashboard/mining_dashboard/wizard.py ]; then
+if [ -f ./pithead ] && [ -f dashboard/mining_dashboard/wizard.py ]; then
     echo "==> the artifact matches the tree it was built from"
     chk "shipped pithead is the tree's pithead" 'cmp -s "$ROOT/opt/pithead/pithead" ./pithead'
     chk "shipped compose file matches" 'cmp -s "$ROOT/opt/pithead/docker-compose.yml" ./docker-compose.yml'
@@ -270,7 +270,7 @@ if [ -f ./pithead ] && [ -f build/dashboard/mining_dashboard/wizard.py ]; then
         done
     fi
     chk "the baked wizard image contains the tree's wizard.py" \
-        '[ -n "$WIZ_SHIPPED" ] && cmp -s "$WIZ_SHIPPED" build/dashboard/mining_dashboard/wizard.py'
+        '[ -n "$WIZ_SHIPPED" ] && cmp -s "$WIZ_SHIPPED" dashboard/mining_dashboard/wizard.py'
     rm -rf "$WIZ_TMP"
 else
     skip "the artifact matches the tree it was built from" "not run from the repo root"

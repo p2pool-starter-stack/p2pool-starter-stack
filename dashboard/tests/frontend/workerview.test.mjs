@@ -7,7 +7,7 @@
 // configview.test.mjs uses for ConfigView's poll()/save() — no DOM, no npm deps.
 //
 // Run with Node's built-in test runner (CI runs exactly this):
-//     node --test build/dashboard/tests/frontend/
+//     node --test dashboard/tests/frontend/
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";

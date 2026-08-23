@@ -3,7 +3,7 @@
 // and folding edits back into the proposed config (secret sentinel semantics included).
 //
 // Run with Node's built-in test runner (CI runs exactly this):
-//     node --test build/dashboard/tests/frontend/
+//     node --test dashboard/tests/frontend/
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -124,7 +124,7 @@ test("buildSections: nested underscore-prefixed docs keys (any depth) are skippe
 // walks the exact same shape the live merged config does.
 test("buildSections: every config.reference.json leaf path resolves to a REAL logical group, not Other", () => {
   const reference = JSON.parse(
-    readFileSync(new URL("../../../../config.reference.json", import.meta.url)),
+    readFileSync(new URL("../../../config.reference.json", import.meta.url)),
   );
   const fields = buildSections(reference).flatMap((s) => s.fields);
   assert.ok(fields.length > 50, "sanity: the reference should produce many fields");

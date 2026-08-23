@@ -4,7 +4,7 @@
 // covered by configview.test.mjs; these tests only check BackupPanel drives it correctly.
 //
 // Run with Node's built-in test runner:
-//     node --test build/dashboard/tests/frontend/*.test.mjs
+//     node --test dashboard/tests/frontend/*.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
 

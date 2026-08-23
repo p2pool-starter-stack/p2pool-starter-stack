@@ -7,7 +7,7 @@
 // the control channel is off (audit: null).
 //
 // Run with Node's built-in test runner:
-//     node --test build/dashboard/tests/frontend/*.test.mjs
+//     node --test dashboard/tests/frontend/*.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 

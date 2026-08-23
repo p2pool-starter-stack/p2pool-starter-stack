@@ -8,7 +8,7 @@
 //
 // Run with Node's built-in test runner (CI runs exactly this — the *.test.mjs glob; pointing
 // node --test at the bare directory fails, it tries to run non-test helpers too):
-//     node --test build/dashboard/tests/frontend/*.test.mjs
+//     node --test dashboard/tests/frontend/*.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
 

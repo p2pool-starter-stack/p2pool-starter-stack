@@ -153,8 +153,8 @@ file_uid() { stat -c %u "$1" 2>/dev/null || stat -f %u "$1" 2>/dev/null; }
 # seed_env heredoc keeps its column-0 terminator).
 build_val_sandbox() {
     V="$SANDBOX/val"
-    mkdir -p "$V/build/tari" "$V/build/dashboard"
-    : >"$V/build/dashboard/Dockerfile"
+    mkdir -p "$V/build/tari" "$V/dashboard"
+    : >"$V/dashboard/Dockerfile"
     cp "$STACK" "$V/pithead"
     make_stubs "$V/bin"
     cp "$ROOT/build/tari/config.toml.template" "$V/build/tari/"
@@ -176,9 +176,9 @@ EOF
 # The control-channel sandbox: builds $C, defines CTRL_LOG, seed_control_env, control_config.
 build_control_sandbox() {
     C="$SANDBOX/control"
-    mkdir -p "$C/build/tari" "$C/build/dashboard" \
+    mkdir -p "$C/build/tari" "$C/dashboard" \
         "$C/data/monero" "$C/data/tari" "$C/data/p2pool/stats" "$C/data/tor" "$C/data/dashboard"
-    : >"$C/build/dashboard/Dockerfile"
+    : >"$C/dashboard/Dockerfile"
     cp "$STACK" "$C/pithead"
     # The control gate reads config.reference.json (the closed schema) from beside the script; it ships
     # in the bundle + checkout root, so mirror it into the sandbox.

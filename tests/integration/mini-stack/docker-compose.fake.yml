@@ -24,7 +24,7 @@ services:
   # so scenarios converge in seconds. Binds 127.0.0.1:8000 inside the container; the runner
   # reads /api/state via `compose exec`, so no published port is needed.
   dashboard:
-    build: ../../../build/dashboard
+    build: ../../../dashboard
     image: *fake_image
     container_name: itest-dashboard
     networks: [itestnet]

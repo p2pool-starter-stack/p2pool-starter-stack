@@ -3,7 +3,7 @@
 // judgment — these tests only check the client sequences the asks and renders the answers.
 //
 // Run with Node's built-in test runner:
-//     node --test build/dashboard/tests/frontend/*.test.mjs
+//     node --test dashboard/tests/frontend/*.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
 

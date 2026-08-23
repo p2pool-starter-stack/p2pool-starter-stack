@@ -182,8 +182,8 @@ echo "== black-box: 'pithead setup' completes end-to-end from a wizard-produced 
 # black-box tests above; --skip-deps/--skip-optimize keep it host-safe (no apt/GRUB/sysctl edits);
 # declining "start now?" stops short of actually bringing containers up.
 SU="$SANDBOX/setup-e2e"
-mkdir -p "$SU/build/tari" "$SU/build/dashboard"
-: >"$SU/build/dashboard/Dockerfile"
+mkdir -p "$SU/build/tari" "$SU/dashboard"
+: >"$SU/dashboard/Dockerfile"
 cp "$STACK" "$SU/pithead"
 cp "$ROOT/build/tari/config.toml.template" "$SU/build/tari/"
 make_stubs "$SU/bin"
@@ -221,8 +221,8 @@ echo "== black-box: a restored coordinator's carried DEPLOYMENT_COMPLETED does n
 # on THIS hardware — fixes both without touching setup()'s guard, which must keep refusing an
 # operator re-running setup on a genuinely live box (proven immediately above, and again below).
 RT="$SANDBOX/restore-stranding"
-mkdir -p "$RT/build/tari" "$RT/build/dashboard" "$RT/data/tor" "$RT/data/dashboard"
-: >"$RT/build/dashboard/Dockerfile"
+mkdir -p "$RT/build/tari" "$RT/dashboard" "$RT/data/tor" "$RT/data/dashboard"
+: >"$RT/dashboard/Dockerfile"
 cp "$STACK" "$RT/pithead"
 cp "$ROOT/build/tari/config.toml.template" "$RT/build/tari/"
 make_stubs "$RT/bin"
@@ -287,8 +287,8 @@ echo "== black-box: 'pithead setup' with stratum_tls in a hand-written config ge
 # hand-written config.json with stratum_tls:true at FIRST setup must still get its cert + the
 # fingerprint announcement (verifier catch: only the apply path was covered).
 SUT="$SANDBOX/setup-tls"
-mkdir -p "$SUT/build/tari" "$SUT/build/dashboard"
-: >"$SUT/build/dashboard/Dockerfile"
+mkdir -p "$SUT/build/tari" "$SUT/dashboard"
+: >"$SUT/dashboard/Dockerfile"
 cp "$STACK" "$SUT/pithead"
 cp "$ROOT/build/tari/config.toml.template" "$SUT/build/tari/"
 make_stubs "$SUT/bin"

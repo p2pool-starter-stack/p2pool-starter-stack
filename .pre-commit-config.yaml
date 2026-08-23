@@ -1,6 +1,6 @@
 # Pre-commit hooks (Wave 7 tooling, #280). Local == CI: these mirror `make lint` + the CI lint
 # jobs, so issues are caught before they reach a PR. Set up once with:
-#   uv sync --project build/dashboard --extra dev && uv run --project build/dashboard pre-commit install
+#   uv sync --project dashboard --extra dev && uv run --project dashboard pre-commit install
 repos:
   # Secret scanning (#282) — stop a key reaching history in the first place. Uses .gitleaks.toml.
   - repo: https://github.com/gitleaks/gitleaks
@@ -16,29 +16,29 @@ repos:
       - id: check-added-large-files
       # Skip generated gRPC stubs and vendored/minified third-party assets — not ours to reformat.
       - id: end-of-file-fixer
-        exclude: '^build/dashboard/mining_dashboard/(client/tari/generated/|web/static/vendor/)'
+        exclude: '^dashboard/mining_dashboard/(client/tari/generated/|web/static/vendor/)'
       - id: trailing-whitespace
         # Also skip Markdown — two trailing spaces are a hard line break (see .editorconfig).
-        exclude: '(^build/dashboard/mining_dashboard/(client/tari/generated/|web/static/vendor/)|\.md$)'
+        exclude: '(^dashboard/mining_dashboard/(client/tari/generated/|web/static/vendor/)|\.md$)'
 
   # Per-surface lint/format (#281). These delegate to the Makefile targets so tool versions and file
   # lists stay single-sourced (no drift between local, pre-commit, and CI). They need the relevant
   # tools available (shellcheck, shfmt, node/npx, uv, docker) — see CONTRIBUTING.md.
   - repo: local
     hooks:
-      # ruff via the locked dev extra — the pin lives ONLY in build/dashboard/pyproject.toml, so
+      # ruff via the locked dev extra — the pin lives ONLY in dashboard/pyproject.toml, so
       # local, pre-commit, and CI all run one version and Dependabot's uv updates cover it (#415).
       # A pinned ruff-pre-commit `rev` used to drift against the pyproject pin on every release.
       # --force-exclude keeps extend-exclude (generated Tari stubs) effective when pre-commit
       # passes explicit filenames.
       - id: ruff-check
         name: ruff check (locked dev-extra pin)
-        entry: uv run --locked --project build/dashboard --extra dev ruff check --fix --force-exclude
+        entry: uv run --locked --project dashboard --extra dev ruff check --fix --force-exclude
         language: system
         types_or: [python, pyi]
       - id: ruff-format
         name: ruff format (locked dev-extra pin)
-        entry: uv run --locked --project build/dashboard --extra dev ruff format --force-exclude
+        entry: uv run --locked --project dashboard --extra dev ruff format --force-exclude
         language: system
         types_or: [python, pyi]
       - id: lint-sh
@@ -51,7 +51,7 @@ repos:
         name: biome (static frontend)
         entry: make lint-js
         language: system
-        files: ^build/dashboard/mining_dashboard/web/static/.*\.(js|mjs|css)$
+        files: ^dashboard/mining_dashboard/web/static/.*\.(js|mjs|css)$
         pass_filenames: false
       - id: lint-yaml
         name: yamllint
