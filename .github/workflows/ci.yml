@@ -254,6 +254,10 @@ jobs:
         # #1050 dead-end states re-arm and report; standalone suite wired here because the shell-tests job runs each
         # standalone file explicitly (Makefile test-stack alone never runs in CI).
         run: bash tests/stack/test_os_update_recovery.sh
+      - name: Run appliance hugepages suite
+        # #1103 co-location refusal on the reduced tier; standalone suite wired here because the shell-tests job runs each
+        # standalone file explicitly (Makefile test-stack alone never runs in CI).
+        run: bash tests/stack/test_appliance_hugepages.sh
       - name: Test-inventory drift check
         # The inventory generator is grep-based; it exits non-zero when any suite it
         # enumerates counts zero — i.e. a suite moved or changed shape and the inventory
