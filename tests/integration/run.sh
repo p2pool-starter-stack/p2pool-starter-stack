@@ -24,6 +24,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
 # shellcheck source=tests/integration/scenarios.sh
 source "$HERE/scenarios.sh"
+source "$HERE/rigforge-apply-settle.sh"
 
 # --- Defaults / globals -----------------------------------------------------
 IT_MODE="ssh"
@@ -1120,7 +1121,7 @@ run_lifecycle() {
     # Piggybacks the pool-flip apply below, which always runs ensure_directories -> ensure_owner.
     # Local mode only (has data dirs); a stub can't create a foreign-uid inode, so this is tier-4.
     local own_dir own_probe=""
-    if [ "$(env_on_box COMPOSE_PROFILES)" = "local_node" ]; then
+    if has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         own_dir="$(env_on_box DASHBOARD_DATA_DIR)"
         if [ -n "$own_dir" ]; then
             own_probe="$own_dir/.itest-owner-probe"
@@ -1145,7 +1146,7 @@ run_lifecycle() {
 
     # Node-down failover (#31): stop monerod -> status non-zero (node down), dashboard rejects
     # workers (xmrig-proxy stopped) -> start monerod -> readmitted -> status 0 again.
-    if [ "$(env_on_box COMPOSE_PROFILES)" = "local_node" ]; then
+    if has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_step "stopping monerod to exercise node-down failover…"
         rx "docker compose stop monerod" >/dev/null 2>&1
         wait_for 120 5 "status to report node down" _pred_status_down || true
@@ -1427,7 +1428,7 @@ run_fault_injection() {
     IT_CURRENT_SCENARIO="fault-injection"
     echo ""
     it_log "── fault-injection phase ───────────────────────────"
-    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+    if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_warn "skipping fault injection (remote mode: no local monerod to break)"
         return 0
     fi
@@ -1588,7 +1589,7 @@ run_hardening() {
     echo ""
     it_log "── v1.4 hardening phase (#377/#33/#424) ────────────"
 
-    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+    if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_warn "skipping hardening phase (remote mode: no local containers/systemd to exercise)"
         return 0
     fi
@@ -2009,7 +2010,7 @@ run_subnet_scenario() {
         it_warn "skipping moved-subnet phase (needs local mode: it brings the stack down/up and inspects the live docker network)"
         return 0
     fi
-    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+    if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_warn "skipping moved-subnet phase (remote mode: monerod's moved-prefix proxy is one of the named checks)"
         return 0
     fi
@@ -2104,7 +2105,7 @@ run_rigforge_control() {
         it_warn "skipping rigforge-control (needs local mode: it edits config.json + dials the rig on the mining LAN)"
         return 0
     fi
-    if [ "$(env_on_box COMPOSE_PROFILES)" != "local_node" ]; then
+    if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
         it_warn "skipping rigforge-control (remote mode: no local dashboard container to drive)"
         return 0
     fi
@@ -2194,7 +2195,7 @@ run_rigforge_control() {
     # enriched feed echoes (watchdog Temp/max), so read the current ceiling from the feed FIRST — if
     # the rig's watchdog isn't reporting it we can't safely restore it, so skip the write rather than
     # leave the rig mis-tuned.
-    local orig_maxt new_maxt res status ckeys
+    local orig_maxt new_maxt res status ckeys change_id
     orig_maxt="$(printf '%s' "$st" | jq -r --arg n "$rig" 'first(.workers[]? | select(.name==$n) | .rigforge.stats[]? | select(.label=="Temp / max") | .value) // empty' 2>/dev/null | sed -n 's#.*/ *\([0-9][0-9]*\).*#\1#p')"
     if [ -z "$orig_maxt" ]; then
         it_warn "rig '$rig' watchdog isn't reporting a max_temp_c in the feed — skipping the reversible write leg (can't read the original to restore it) (#513)"
@@ -2202,17 +2203,16 @@ run_rigforge_control() {
         new_maxt=$((orig_maxt + 1))
         it_step "Worker Inspect edit: max_temp_c $orig_maxt -> $new_maxt via /api/control/worker-apply…"
         res="$(_worker_apply "$rig" "{\"max_temp_c\":$new_maxt}")"
-        status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
-        ckeys="$(printf '%s' "$res" | jq -r '(.changed_keys // []) | join(",")' 2>/dev/null)"
+        IFS='|' read -r status ckeys change_id <<<"$(_settle_worker_apply_maxt "$rig" "$new_maxt" "$res")"
         assert_eq "Worker Inspect edit applied on the rig (#513)" "$status" "applied"
         assert_contains "the rig's /status confirms max_temp_c changed (#513)" "$ckeys" "max_temp_c"
-        # The dashboard recorded it in the per-worker config history (#185).
+        # Matched by change_id, not "the newest row" — #579/#604's reconciler (rigforge-apply-settle.sh).
         assert_eq "worker-apply recorded in the per-worker history (#185)" \
-            "$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null | jq -r 'first(.history[]?) | .status // empty' 2>/dev/null)" "applied"
+            "$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null | jq -r --arg c "$change_id" 'first(.history[]? | select(.change_id==$c)) | .status // empty' 2>/dev/null)" "applied"
         it_step "reverting max_temp_c $new_maxt -> $orig_maxt…"
         res="$(_worker_apply "$rig" "{\"max_temp_c\":$orig_maxt}")"
-        assert_eq "reversible edit reverted on the rig (#513)" \
-            "$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)" "applied"
+        IFS='|' read -r status _ _ <<<"$(_settle_worker_apply_maxt "$rig" "$orig_maxt" "$res")"
+        assert_eq "reversible edit reverted on the rig (#513)" "$status" "applied"
     fi
 
     # ---- #1002b: a second writable key (pools) proves the edit isn't max_temp_c-specific ----

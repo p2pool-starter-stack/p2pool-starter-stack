@@ -263,8 +263,8 @@ export class OsUpdateControl extends Component {
     this.setState({ phase: "rebooting", error: "" });
     try {
       const id = await osAction("reboot");
-      // Only wait long enough to see the host acknowledge; the machine goes away right after.
-      await pollOsResult(id, null, 30).catch(() => null);
+      const out = await pollOsResult(id, null, 30).catch(() => null); // rejected -> never rebooted
+      if (out?.status === "rejected") return this.fail(out.error || "The reboot was refused.");
     } catch {
       /* the reboot may cut the answer off — the reconnect poll below is the real signal */
     }
