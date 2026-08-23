@@ -84,6 +84,39 @@ test("hostIsInternal: the stack's own docker-bridge subnet is internal, default 
   assert.equal(hostIsInternal("172.30.0.5", "172.30.0.0/24"), true);
 });
 
+test("hostIsInternal: alternate IP encodings are refused, not waved through as hostnames", () => {
+  // The actual bypass a security review found: each of these fails the naive 4-octet regex, and
+  // the original bug then treated "not a recognized dotted-decimal" as "must be a hostname,
+  // therefore safe" — exactly the class this stack's own dial (curl) still resolves to a real,
+  // dangerous address (all verified against a real curl build during development).
+  for (const h of [
+    "2130706433", // bare decimal == 127.0.0.1
+    "2852039166", // bare decimal == 169.254.169.254 (cloud metadata)
+    "0177.0.0.1", // octal-leading-zero octet == 127.0.0.1
+    "0x7f000001", // hex == 127.0.0.1
+    "0x7f.0x0.0x0.0x1", // per-octet hex == 127.0.0.1
+    "127.1", // short/collapsed form == 127.0.0.1
+    "010.0.0.1", // octal-leading-zero first octet == 8.0.0.1; refused outright either way
+    "000.1.2.3",
+  ]) {
+    assert.equal(hostIsInternal(h), true, h);
+  }
+});
+
+test("hostIsInternal: the 0.0.0.0/8 'this network' block is refused beyond the bare address", () => {
+  assert.equal(hostIsInternal("0.1.2.3"), true);
+});
+
+test("hostIsInternal: a hex literal is refused even though it contains letters", () => {
+  assert.equal(hostIsInternal("0xc0.0xa8.0x01.0x32"), true);
+});
+
+test("hostIsInternal: ordinary hostnames with digits still pass", () => {
+  for (const h of ["rig-1.lan", "a.b.c.d", "rig01.example.com"]) {
+    assert.equal(hostIsInternal(h), false, h);
+  }
+});
+
 // --- buildAdoptedConfig ----------------------------------------------------------------------
 
 test("buildAdoptedConfig: appends the new descriptor to an empty workers.list[]", () => {

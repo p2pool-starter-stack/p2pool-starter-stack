@@ -37,20 +37,36 @@ export function validateAdoptFields(host, controlPort, token) {
   return "";
 }
 
+// Exactly a canonical dotted-decimal octet: "0", or 1-3 digits with no leading zero. A host that
+// is digits-and-dots-only but does NOT match this shape four times over (a bare integer, an
+// octal-leading-zero octet, a short/collapsed form) is a numeric-address ATTEMPT that failed
+// strict parsing — see hostIsInternal below for why that must refuse, not clear the class.
+const CANONICAL_IPV4_RE =
+  /^(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})$/;
+
 /**
  * Client-side mirror of the host's SSRF floor on a NEW workers.list[] entry (pithead's
  * ``_control_host_is_internal`` / the dashboard's ``worker_adopt.host_is_internal``): loopback,
- * unspecified, link-local, multicast/reserved, "localhost", or the stack's own docker-bridge
+ * "this network", link-local, multicast/reserved, "localhost", or the stack's own docker-bridge
  * subnet. UX only — a fast, clear refusal before the round trip; the host-side gate (and its own
  * dashboard-side mirror, checked at preview) is what actually enforces this.
+ *
+ * A host this stack's own dial would treat as numeric must be recognized as one here too, or an
+ * alternate encoding of the very addresses above — a bare decimal integer ("2130706433"), an
+ * octal-leading-zero octet ("0177.0.0.1"), hex ("0x7f000001"), or a short/collapsed form
+ * ("127.1") — sails through misclassified as "just a hostname". So: any letter (other than a
+ * literal "0x" hex marker) means a real hostname, never re-resolved here (the same accepted,
+ * pre-existing limit the read-path guard has); anything else is a numeric-address ATTEMPT and is
+ * refused outright unless it is the exact canonical form. Ambiguous never means "safe".
  */
 export function hostIsInternal(host, subnet) {
   const h = (host || "").trim().toLowerCase();
   if (h === "localhost" || h.endsWith(".localhost")) return true;
-  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false; // a hostname clears this class; DNS resolution isn't re-checked here
+  if (/[a-z]/.test(h)) return h.includes("0x"); // a hex literal, or a genuine hostname
+  const m = h.match(CANONICAL_IPV4_RE);
+  if (!m) return true; // numeric-shaped (digits/dots only) but not the exact canonical form
   const octets = m.slice(1, 5).map(Number);
-  if (octets.some((o) => o > 255)) return false;
+  if (octets.some((o) => o > 255)) return true;
   const [a, b, c] = octets;
   if (a === 0 || a === 127) return true; // this-network / loopback
   if (a === 169 && b === 254) return true; // link-local (cloud metadata included)

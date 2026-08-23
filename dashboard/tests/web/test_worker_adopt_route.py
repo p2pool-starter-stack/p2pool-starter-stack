@@ -127,6 +127,25 @@ class TestAdoptGuardOnPreview:
         assert "evil" in await resp.text()
         assert list((control_spool / "requests").glob("*.json")) == []
 
+    @pytest.mark.parametrize(
+        "host", ["2130706433", "0177.0.0.1", "0x7f000001", "127.1", "010.0.0.1"]
+    )
+    async def test_new_rig_with_an_alternate_ip_encoding_of_loopback_refused(
+        self, control_client, control_spool, host
+    ):
+        # The bypass a security review found: each of these clears HOST_RE's charset (digits,
+        # dots, and — for the hex case — letters, all allowed) and is what curl's own
+        # numeric-address parser resolves to 127.0.0.1/8.0.0.1, exactly like the literal form
+        # above — the route-level guard must refuse all of them, not just the obvious spelling.
+        proposed = _proposed(
+            [LIVE_RIG1], {"name": "evil", "host": host, "control_port": 8000, "token": "attacker"}
+        )
+        resp = await control_client.post(
+            "/api/control/preview", json={"config": proposed}, headers=CONTROL_HEADERS
+        )
+        assert resp.status == 400, host
+        assert list((control_spool / "requests").glob("*.json")) == []
+
     async def test_new_rig_missing_token_refused(self, control_client, control_spool):
         proposed = _proposed([LIVE_RIG1], {"name": "rig2", "host": "10.0.0.10"})
         resp = await control_client.post(

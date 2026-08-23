@@ -9673,6 +9673,20 @@ CONTROL_DASHBOARD_CONFIRM_KEYS='MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DA
     STRATUM_PORT MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC MONERO_PRUNE
     MONERO_OUT_PEERS'
 
+# True if $1 is EXACTLY a canonical dotted-decimal IPv4 literal — four decimal octets 0-255, none
+# with a leading zero (a bare "0" is fine; "010"/"0177" are not). curl/glibc's numeric-address
+# parsing also accepts a bare decimal integer ("2130706433"), octal per-octet ("0177.0.0.1", AND
+# bash's own arithmetic tests would misread "010" as octal 8), hex ("0x7f000001"), and
+# short/collapsed forms ("127.1" == 127.0.0.1) — none of those are "canonical" by this definition,
+# on purpose: see _control_host_is_internal, which refuses rather than accepts anything
+# numeric-shaped that isn't this exact form.
+_is_canonical_ipv4() {
+    [[ "$1" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]] || return 1
+    local o
+    for o in "${BASH_REMATCH[@]:1}"; do [ "$o" -le 255 ] || return 1; done
+    return 0
+}
+
 # True if $1 — a workers.list[] host the add-only exception is about to let a commit introduce —
 # resolves inside THIS host's own reach: loopback, unspecified ("this network"), link-local,
 # multicast/reserved, the literal name "localhost", or the stack's own docker-bridge subnet
@@ -9686,13 +9700,29 @@ CONTROL_DASHBOARD_CONFIRM_KEYS='MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DA
 # dials strictly from the HOST's own config — the exact escalation resolve_worker_target's own
 # doc comment assumes workers.list[] can never carry (it predates the dashboard having ANY write
 # access to that array). An ordinary LAN or public rig address is unaffected.
+#
+# A string this host's curl dial would treat as numeric MUST be recognized as one here too, or an
+# alternate encoding of the very addresses above (decimal, octal, hex, short-form — see
+# _is_canonical_ipv4) sails through misclassified as "just a hostname". So: a letter anywhere
+# (other than a literal "0x"/"0X" hex marker) means a real hostname, never re-resolved here (the
+# same accepted, pre-existing limit the read-path guard has); anything else — digits, dots, or a
+# hex marker — is a numeric-address ATTEMPT and is refused outright unless it is the exact
+# canonical form checked below. Ambiguous never means "safe" in this function.
 _control_host_is_internal() {
     local host a b prefix
     host=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
     case "$host" in
     localhost | *.localhost) return 0 ;;
     esac
-    is_ipv4 "$host" || return 1 # a hostname clears this class; DNS resolution isn't re-checked here
+    case "$host" in
+    *[a-z]*)
+        case "$host" in
+        *0x*) return 0 ;; # hex-encoded literal — still numeric-shaped despite the letters
+        esac
+        return 1 # a genuine hostname; DNS resolution isn't re-checked here
+        ;;
+    esac
+    _is_canonical_ipv4 "$host" || return 0 # numeric-shaped but not the exact canonical form
     IFS=. read -r a b _ _ <<<"$host"
     case "$a" in
     0 | 127) return 0 ;;                 # this-network / loopback

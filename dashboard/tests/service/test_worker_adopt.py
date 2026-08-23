@@ -242,3 +242,44 @@ class TestHostIsInternal:
     def test_malformed_subnet_in_live_config_fails_closed_to_the_default(self):
         live = {"network": {"subnet": "not-a-subnet"}}
         assert host_is_internal("172.28.0.5", live) is True
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "2130706433",  # bare decimal integer == 127.0.0.1; curl dials it as loopback
+            "2852039166",  # bare decimal integer == 169.254.169.254 (cloud metadata)
+            "0177.0.0.1",  # octal-leading-zero octet == 127.0.0.1
+            "0x7f000001",  # hex == 127.0.0.1
+            "0x7f.0x0.0x0.0x1",  # per-octet hex == 127.0.0.1
+            "127.1",  # short/collapsed form == 127.0.0.1
+            "010.0.0.1",  # octal-leading-zero first octet == 8.0.0.1 (still refused: numeric-shaped
+            # but non-canonical, refused outright rather than resolved)
+            "000.1.2.3",
+        ],
+    )
+    def test_alternate_ip_encodings_are_refused_not_waved_through_as_hostnames(self, host):
+        # The actual bypass a security review found: is_ipv4-style strict parsing correctly
+        # refuses each of these AS an address, but the original bug then fell through to "must be
+        # a hostname, therefore safe" — exactly the class curl's own numeric-address parser (and
+        # bash's leading-zero-as-octal arithmetic) still resolves to a real, dangerous address.
+        # Refusing outright (never "clears the class") is what this test pins.
+        assert host_is_internal(host, {}) is True
+
+    def test_this_network_block_refused_beyond_the_single_unspecified_address(self):
+        # ipaddress.is_unspecified only covers the literal 0.0.0.0 — the whole 0.0.0.0/8
+        # "this network" block needs its own check, or 0.1.2.3 sails through unclassified.
+        assert host_is_internal("0.1.2.3", {}) is True
+
+    def test_hex_literal_is_refused_even_though_it_contains_letters(self):
+        # The "contains a letter -> real hostname" shortcut must not blanket-clear a hex IP
+        # attempt just because hex digits look alphabetic.
+        assert host_is_internal("0xc0.0xa8.0x01.0x32", {}) is True
+
+    @pytest.mark.parametrize("host", ["rig-1.lan", "a.b.c.d", "rig01.example.com"])
+    def test_ordinary_hostnames_with_digits_still_pass(self, host):
+        assert host_is_internal(host, {}) is False
+
+    def test_hostname_containing_a_literal_0x_substring_is_an_accepted_false_positive(self):
+        # A vanishingly rare real hostname that happens to contain "0x" gets refused too — a
+        # deliberate, accepted trade-off (no one names a rig "my0x1"), not a regression to chase.
+        assert host_is_internal("my0x1.example.com", {}) is True

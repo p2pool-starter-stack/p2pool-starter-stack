@@ -67,25 +67,39 @@ def validate_worker_descriptor(entry):
 
 
 _DEFAULT_SUBNET = "172.28.0.0/24"
+_THIS_NETWORK = ipaddress.ip_network("0.0.0.0/8")
 
 
 def host_is_internal(host, live_cfg):
     """Mirrors pithead's ``_control_host_is_internal`` (the host-side SSRF floor an add-only
-    append's host must clear, #122): loopback, unspecified, link-local, multicast/reserved,
+    append's host must clear, #122): loopback, "this network", link-local, multicast/reserved,
     ``localhost``, or the stack's own docker-bridge subnet (``network.subnet``, read from the SAME
     live config the caller already has — never the staged proposal, matching the bash gate's own
     reasoning: a same-commit ``network.subnet`` change is refused by the generic allowlist gate
-    before this would ever matter). An ordinary LAN/public rig address is unaffected."""
+    before this would ever matter). An ordinary LAN/public rig address is unaffected.
+
+    A string this host's own dial (curl, in the runner) would treat as numeric must be recognized
+    as one here too, or an alternate encoding of the very addresses above — a bare decimal integer
+    ("2130706433"), an octal-leading-zero octet ("0177.0.0.1"), hex ("0x7f000001"), or a
+    short/collapsed form ("127.1") all resolve to a real address curl accepts — sails through
+    misclassified as "just a hostname". So: any letter (other than a literal "0x"/"0X" hex marker)
+    means a real hostname, never re-resolved here (the same accepted, pre-existing limit the
+    read-path guard has, ``_safe_probe_host``); anything else — digits, dots, or a hex marker — is
+    a numeric-address ATTEMPT, and Python's own strict ``ipaddress`` parse (which, unlike curl,
+    already refuses all of the ambiguous forms above) failing to recognize it means REFUSE, never
+    "must be a hostname after all"."""
     h = host.strip().lower()
     if h == "localhost" or h.endswith(".localhost"):
         return True
+    if any(c.isalpha() for c in h):
+        return "0x" in h  # a hex literal is still numeric-shaped; anything else is a real hostname
     try:
         addr = ipaddress.ip_address(h)
     except ValueError:
-        return False  # a hostname clears this class; DNS resolution isn't re-checked here
+        return True  # numeric-shaped (digits/dots only) but not a valid canonical address
     if addr.is_loopback or addr.is_link_local or addr.is_unspecified or addr.is_multicast:
         return True
-    if addr.is_reserved:
+    if addr.is_reserved or (addr.version == 4 and addr in _THIS_NETWORK):
         return True
     subnet = ((live_cfg or {}).get("network") or {}).get("subnet") or _DEFAULT_SUBNET
     try:
