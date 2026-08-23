@@ -6535,7 +6535,7 @@ GH_RELEASE_JSON=""
 # caller's own derivation, and `set -u` then killed the runner at its first download — the upgrade
 # result sat at "running" for ever with a single dial in the log. One derivation, one truth.
 GH_SOCKS=""
-gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure
+gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE_HINT on failure; rc 2 = never reached the server at all (#1050)
     local repo="$1" prefix out code retry_hint
     prefix=$(env_get NETWORK_PREFIX 2>/dev/null) || true
     [ -n "$prefix" ] || prefix="172.28.0"
@@ -6559,7 +6559,10 @@ gh_release_fetch() { # <owner/repo>; sets GH_RELEASE_JSON on success, GH_RELEASE
         --socks5-hostname "$GH_SOCKS" -H 'Accept: application/vnd.github+json' \
         "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null); then
         GH_RELEASE_HINT="could not reach the GitHub release API over Tor — nothing was changed. $retry_hint"
-        return 1
+        # rc 2, not 1: no dial reached GitHub at all, so nothing here should look like a real
+        # attempt to a caller that throttles on one (#1050) — every other failure below DID
+        # reach the server and keeps the ordinary rc 1.
+        return 2
     fi
     code=${out##*$'\n'}
     out=${out%$'\n'*}
@@ -10802,7 +10805,7 @@ os_update_test_base() {
 # one). Only the bench seam keeps its own dial: it points at a local URL with no Tor in the path.
 # Sets GH_RELEASE_JSON on success and GH_RELEASE_HINT on failure, like the shared fetch, so the
 # caller must run it as a plain command — a command substitution is a subshell and would discard
-# both.
+# both. rc 2 = never reached the server at all, same convention as gh_release_fetch (#1050).
 os_release_fetch() {
     local base
     if base=$(os_update_test_base); then
@@ -10811,7 +10814,7 @@ os_release_fetch() {
         if ! GH_RELEASE_JSON=$(curl -fsS --max-time 60 --max-filesize "$CURL_CAP_SMALL" \
             "$base/releases-latest.json" 2>/dev/null); then
             GH_RELEASE_HINT="could not reach the release API — nothing was changed."
-            return 1
+            return 2
         fi
         return 0
     fi
@@ -10925,11 +10928,22 @@ control_os_check() { # <claimed-file> <id> <actor> <control-dir>
             control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "an update check ran less than 10 minutes ago — retry in a few minutes."
             return 0
         fi
-        touch "$stampf"
-        if ! os_release_fetch; then
+        # The throttle stamp is claimed AFTER the dial, not before it, and only when the dial
+        # actually reached the release API (#1050): a fetch that never left the box (Tor down,
+        # no route) must not cost the operator a 10-minute wait once they fix it. A fetch that
+        # DID reach GitHub — success, or a definitive refusal like the rate limit below — still
+        # claims the stamp exactly as before; that dial happened and #1081 relies on it staying
+        # throttled (releasing it there would restore the unthrottled beacon that guard exists
+        # to stop). os_release_fetch's rc 2 is the one signal for "never reached"; every other
+        # nonzero rc reached the server.
+        local fetch_rc=0
+        os_release_fetch || fetch_rc=$?
+        if [ "$fetch_rc" -ne 0 ]; then
+            [ "$fetch_rc" -eq 2 ] || touch "$stampf"
             control_os_refuse "$cdir" "$id" "$actor" "os-check" rejected "$GH_RELEASE_HINT"
             return 0
         fi
+        touch "$stampf"
         rel=$GH_RELEASE_JSON
         tag=$(printf '%s' "$rel" | jq -r '.tag_name // ""' 2>/dev/null)
         if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -11176,6 +11190,12 @@ control_os_install() { # <claimed-file> <id> <actor> <control-dir>
         warn "OS install failed (rc=$rc); log tail: $(tail -c 500 "$logf" 2>/dev/null | tr -d '[:cntrl:]')"
         control_os_refuse "$cdir" "$id" "$actor" "os-install" failed "the install did not complete — the running system is untouched and mining continues.${detail:+ $detail} The full install log is in the host journal."
         rm -f "$logf"
+        # #1050: a terminal-failure transition. Without this the persisted step stayed
+        # "installing" forever — nothing ever moved it off that value on a failed install — so
+        # the dashboard kept showing an install in progress that had already ended and would
+        # never finish or fail again. idle matches the state a fresh appliance starts in: Check
+        # and Download are offered again on the next open.
+        os_state_write "$cdir" '{"step":"idle"}'
         return 0
     fi
     local bundle_version
@@ -11210,7 +11230,15 @@ control_os_reboot() { # <claimed-file> <id> <actor> <control-dir>
     armed_ts=$(jq -r '.ts // 0' "$(os_update_inflight_file)" 2>/dev/null) || armed_ts=0
     printf '%s' "$armed_ts" | grep -qE '^[0-9]+$' || armed_ts=0
     if [ "$armed_ts" -le 0 ] || [ $(($(date +%s) - armed_ts)) -gt 86400 ]; then
-        control_os_refuse "$cdir" "$id" "$actor" "os-reboot" rejected "the installed update has been waiting more than a day — run the update again; a fresh verify and install re-arms the reboot."
+        # #1050: the re-arm transition the comment above always promised but never performed.
+        # The flag alone used to survive this refusal, so the persisted step stayed
+        # "reboot-pending" forever — the dashboard kept offering only "Reboot now", which kept
+        # refusing, with no button that ever led back to Check/Download. Clearing the expired
+        # flag and the step together is what actually re-arms it: the next open finds an
+        # ordinary idle appliance, exactly as the message already claimed.
+        rm -f "$(os_update_inflight_file)"
+        os_state_write "$cdir" '{"step":"idle"}'
+        control_os_refuse "$cdir" "$id" "$actor" "os-reboot" rejected "the installed update has been waiting more than a day and has expired — check for updates again; a fresh verify and install re-arms the reboot."
         return 0
     fi
     # The result must land BEFORE the reboot order or the page never learns the reboot is real.

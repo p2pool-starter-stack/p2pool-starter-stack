@@ -16,6 +16,7 @@ test-patch-coverage: ## diff-cover (#286) minus its vacuous pass (#1000): >=90% 
 test-stack: ## pithead shell test suite
 	bash tests/stack/run.sh
 	bash tests/stack/test_data_reset.sh
+	bash tests/stack/test_os_update_recovery.sh
 
 test-compose: ## Validate docker-compose.yml interpolation + hardening invariants (#90)
 	bash tests/stack/test_compose.sh
@@ -42,7 +43,7 @@ test-integration: ## Run the live config-matrix integration suite (requires a te
 lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-file-budget lint-proto lint-toml ## Lint/format-check every surface
 
 lint-sh: ## shellcheck + shfmt over the CLI, build/* container scripts, release + test scripts
-	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/lib.sh tests/stack/test-*.sh tests/stack/test_compose.sh tests/stack/test_data_reset.sh \
+	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh tests/stack/run.sh tests/stack/lib.sh tests/stack/test-*.sh tests/stack/test_compose.sh tests/stack/test_data_reset.sh tests/stack/test_os_update_recovery.sh \
 		tests/inventory.sh tests/integration/*.sh tests/integration/mini-stack/*.sh \
 		os/installer/pithead-install os/build-image.sh os/rauc/*.sh os/overlay/pithead-sync os/overlay/pithead-boot \
 		os/overlay/pithead-data-reset os/overlay/pithead-mount-generator os/overlay/pithead-ssh-host-keys \
