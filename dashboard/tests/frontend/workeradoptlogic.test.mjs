@@ -138,6 +138,16 @@ test("hostIsInternal: ordinary hostnames with digits still pass", () => {
   }
 });
 
+test("hostIsInternal: a hostname that would resolve elsewhere is not caught here by design", () => {
+  // This function is best-effort, in-browser UX, not the security boundary — it does no DNS
+  // resolution, so a hostname that isn't a known loopback alias passes here even if it would
+  // actually resolve to loopback (this host's own machine-name self-entry, or an
+  // attacker-controlled DNS name). Pinned as a test so a future change can't silently start
+  // claiming a guarantee this file cannot keep. The real enforcement resolves at commit time on
+  // the host (pithead's _control_host_is_internal) — see tests/stack/test-control-add-only-ssrf.sh.
+  assert.equal(hostIsInternal("a-hostname-that-is-not-a-known-alias"), false);
+});
+
 // --- buildAdoptedConfig ----------------------------------------------------------------------
 
 test("buildAdoptedConfig: appends the new descriptor to an empty workers.list[]", () => {

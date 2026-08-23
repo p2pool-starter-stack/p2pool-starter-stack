@@ -204,10 +204,12 @@ class TestValidateNewWorkerEntries:
 
 
 class TestHostIsInternal:
-    """Mirrors pithead's ``_control_host_is_internal`` — see
-    ``test_regexes_have_no_intra_repo_drift``-style intent, but this class is a semantic mirror
-    (bash has no ``ipaddress`` module to diff against byte-for-byte); the bash-side battery of
-    cases was hand-verified during development (see the PR description)."""
+    """A partial, best-effort mirror of pithead's ``_control_host_is_internal`` — see
+    ``test_regexes_have_no_intra_repo_drift``-style intent for the literal/numeric cases, but
+    since #893 round 5 the bash side does real DNS resolution and this one deliberately does not
+    (see ``host_is_internal``'s own docstring); ``test_a_hostname_that_would_resolve_elsewhere_is_not_caught_here_by_design``
+    below pins exactly where the mirror stops. The bash-side battery of cases was hand-verified
+    during development (see the PR description)."""
 
     @pytest.mark.parametrize(
         "host",
@@ -310,3 +312,15 @@ class TestHostIsInternal:
         # A vanishingly rare real hostname that happens to contain "0x" gets refused too — a
         # deliberate, accepted trade-off (no one names a rig "my0x1"), not a regression to chase.
         assert host_is_internal("my0x1.example.com", {}) is True
+
+    def test_a_hostname_that_would_resolve_elsewhere_is_not_caught_here_by_design(self):
+        # #893 round 5: this function is BEST-EFFORT UX, not the security boundary — it does no
+        # DNS resolution, so a hostname that ISN'T one of the known loopback aliases passes here
+        # even if it would actually resolve to this host's own loopback (e.g. a machine's own
+        # Debian self-entry, or an attacker-controlled DNS name). This is pinned as a test, not
+        # left as a comment-only claim, so a future "let's make this smarter" change has to
+        # consciously decide to add resolution here rather than silently drift into claiming a
+        # guarantee this module cannot keep. The REAL enforcement — resolve, then check every
+        # returned address — lives in pithead's `_control_host_is_internal` and runs at commit
+        # time on the host; see tests/stack/test-control-add-only-ssrf.sh for that coverage.
+        assert host_is_internal("a-hostname-that-is-not-a-known-alias", {}) is False

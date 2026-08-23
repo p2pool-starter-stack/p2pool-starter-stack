@@ -76,13 +76,28 @@ _LOOPBACK_ALIASES = frozenset(
 
 
 def host_is_internal(host, live_cfg):
-    """Mirrors pithead's ``_control_host_is_internal`` (the host-side SSRF floor an add-only
-    append's host must clear, #122): loopback, "this network", link-local, multicast/reserved,
+    """BEST-EFFORT, PREVIEW-TIME UX ONLY — this is NOT the security boundary. #893 round 5: an
+    earlier version of this function (and its bash/JS mirrors) classified a host purely by STRING
+    SHAPE, and an independent review found that a spelling denylist can never answer "does this
+    hostname resolve to my own loopback": this host's own machine-name self-entry (Debian gives
+    every box's own hostname a loopback ``/etc/hosts`` entry, e.g. ``127.0.1.1``) and an
+    attacker-controlled DNS name pointed at ``127.0.0.1`` both looked like "a genuine hostname,
+    therefore safe" — verified live with curl. The actual fix is RESOLVE-AND-CHECK, but that needs
+    a real (and here, synchronous-request-blocking) DNS round trip, which does not belong in this
+    module's fast, synchronous, dependency-free preview-time validation path. So this function
+    keeps doing what it always could: refuse a value that is ALREADY numeric (an IP literal,
+    including the ambiguous encodings below) or matches a KNOWN loopback spelling, purely to give
+    the operator immediate, in-browser feedback on the obvious cases. A hostname it doesn't
+    recognize — including ``gouda`` or any other name that would resolve to loopback — passes HERE
+    and is still caught by the actual authority: ``pithead``'s ``_control_host_is_internal``, which
+    runs at commit time on the host and genuinely resolves the name before deciding (see
+    ``tests/service/test_worker_adopt.py``'s ``test_a_hostname_that_would_resolve_elsewhere_is_not_caught_here_by_design``,
+    which pins this limitation as a test rather than leaving it as a comment-only claim).
+
+    What IS still caught here: loopback, "this network", link-local, multicast/reserved,
     ``localhost`` (and its standard ``/etc/hosts`` aliases and root-terminated spelling — see
     below), or the stack's own docker-bridge subnet (``network.subnet``, read from the SAME live
-    config the caller already has — never the staged proposal, matching the bash gate's own
-    reasoning: a same-commit ``network.subnet`` change is refused by the generic allowlist gate
-    before this would ever matter). An ordinary LAN/public rig address is unaffected.
+    config the caller already has). An ordinary LAN/public rig address is unaffected.
 
     A trailing dot is DNS's "FQDN root" marker — resolvers (and curl) treat ``localhost.`` exactly
     like ``localhost`` — so it is stripped before any hostname comparison, or the root-terminated

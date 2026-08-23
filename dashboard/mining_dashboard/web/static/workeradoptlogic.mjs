@@ -52,12 +52,23 @@ const LOOPBACK_ALIASES = new Set([
 ]);
 
 /**
- * Client-side mirror of the host's SSRF floor on a NEW workers.list[] entry (pithead's
- * ``_control_host_is_internal`` / the dashboard's ``worker_adopt.host_is_internal``): loopback,
- * "this network", link-local, multicast/reserved, "localhost" (and its standard ``/etc/hosts``
- * aliases and root-terminated spelling — see below), or the stack's own docker-bridge subnet. UX
- * only — a fast, clear refusal before the round trip; the host-side gate (and its own
- * dashboard-side mirror, checked at preview) is what actually enforces this.
+ * BEST-EFFORT, IN-BROWSER UX ONLY — this is NOT the security boundary. An earlier version of this
+ * (and its host-side and dashboard-side mirrors) classified a host purely by STRING SHAPE, and an
+ * independent review found that a spelling denylist can never answer "does this hostname resolve
+ * to my own loopback": this host's own machine-name self-entry and an attacker-controlled DNS name
+ * both look like "a genuine hostname, therefore safe" to a string classifier alone. The real fix
+ * is resolve-then-check, which needs an actual DNS round trip — not something this synchronous,
+ * dependency-free, in-browser check can or should do. So this stays a fast, best-effort refusal of
+ * the OBVIOUS cases only (an IP literal, including ambiguous encodings, or a known loopback
+ * spelling); a hostname it doesn't recognize passes here and is still caught by the real
+ * authority, which resolves it at commit time on the host (pithead's
+ * ``_control_host_is_internal``) — see that function's own comment, and this file's own test
+ * pinning exactly where this mirror's coverage stops.
+ *
+ * What IS still caught here (pithead's ``_control_host_is_internal`` / the dashboard's
+ * ``worker_adopt.host_is_internal``): loopback, "this network", link-local, multicast/reserved,
+ * "localhost" (and its standard ``/etc/hosts`` aliases and root-terminated spelling — see below),
+ * or the stack's own docker-bridge subnet.
  *
  * A trailing dot is DNS's "FQDN root" marker — resolvers (and curl) treat "localhost." exactly
  * like "localhost" — so it is stripped before any hostname comparison. "localhost.localdomain" /
