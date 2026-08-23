@@ -1,0 +1,172 @@
+"""Click-to-adopt a rig: the dashboard-side half of the adopt flow (the operator-decision
+comment, issue #893).
+
+The write itself rides the EXISTING control-channel config path — the same preview/commit
+mechanics ``ConfigView`` uses for any other edit (no new write endpoint, ``web/server.py``
+``handle_control_preview``/``handle_control_commit``). This module only builds the one guard that
+path needs to carry a ``workers.list[]`` write at all: ``pithead``'s ``control_approval_gate``
+(``pithead`` ~L9695) refuses ANY diff to the per-worker descriptors outright — deliberately, since
+they hold per-rig hosts and bearer tokens (the #122 SSRF class) — with a single narrow exception
+for a strictly ADD-ONLY append (a brand-new descriptor; every already-live entry must reappear
+byte-for-byte). That host-side gate is the actual security authority and is exercised at commit.
+
+What lives here is the *dashboard-side* mirror of the same shape/charset validation pithead's own
+``validate_worker_endpoints`` applies (defense in depth, the same pattern ``control_service``'s
+``SECRET_PATHS``/``EDITABLE_ENV_KEY_PATHS`` already follow), wired into ``handle_control_preview``
+so a malformed adopt submission is refused before it ever reaches the spool — never a
+miner-advertised value auto-trusted: the host field the operator confirms is still just a
+PREFILL, and every field here is exactly what the operator typed or edited in the adopt form.
+"""
+
+import ipaddress
+import re
+
+# Mirrors pithead's per-entry regexes (``validate_worker_endpoints``, pithead ~L5901) byte for
+# byte: the host charset in particular is the #122 guard — letters/digits/dot/dash/underscore
+# only, so a submitted value can never smuggle a port, path, or userinfo into a probe URL.
+NAME_RE = re.compile(r"^[!-~]{1,128}$")
+HOST_RE = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
+TOKEN_RE = re.compile(r"^[!-~]{1,128}$")
+
+# RigForge's default writable control-API port (rigforge#185); the adopt form prefills it and the
+# operator may override it, same as any other ``workers.list[].control_port``.
+DEFAULT_CONTROL_PORT = 8082
+
+
+def validate_worker_descriptor(entry):
+    """Return an error string for a malformed new ``workers.list[]`` entry, else ``""``.
+
+    Unlike pithead's own per-field validation (where host/port/token are each individually
+    optional), an ADOPTED entry must carry all three — a descriptor with a name but no host/token
+    is not a write target (``resolve_worker_target`` would refuse it anyway), so refusing it here
+    gives the operator an immediate, specific reason instead of a spooled request that could only
+    ever come back rejected.
+    """
+    if not isinstance(entry, dict):
+        return "a new worker entry must be an object."
+    name = entry.get("name")
+    if not isinstance(name, str) or not NAME_RE.fullmatch(name):
+        return "a new worker needs a name of 1-128 printable, non-space characters."
+    host = entry.get("host")
+    if not isinstance(host, str) or not HOST_RE.fullmatch(host):
+        return (
+            f"worker '{name}': host must be a hostname or IPv4 address "
+            "(letters, digits, and . _ - only — no port or path)."
+        )
+    control_port = entry.get("control_port", DEFAULT_CONTROL_PORT)
+    if (
+        isinstance(control_port, bool)
+        or not isinstance(control_port, int)
+        or not 1 <= control_port <= 65535
+    ):
+        return f"worker '{name}': control_port must be an integer between 1 and 65535."
+    token = entry.get("token")
+    if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
+        return f"worker '{name}': a control token is required — the rig's control API is bearer-mandatory."
+    return ""
+
+
+_DEFAULT_SUBNET = "172.28.0.0/24"
+_THIS_NETWORK = ipaddress.ip_network("0.0.0.0/8")
+
+
+_LOOPBACK_ALIASES = frozenset(
+    {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+)
+
+
+def host_is_internal(host, live_cfg):
+    """BEST-EFFORT, PREVIEW-TIME UX ONLY — this is NOT the security boundary. #893 round 5: an
+    earlier version of this function (and its bash/JS mirrors) classified a host purely by STRING
+    SHAPE, and an independent review found that a spelling denylist can never answer "does this
+    hostname resolve to my own loopback": this host's own machine-name self-entry (Debian gives
+    every box's own hostname a loopback ``/etc/hosts`` entry, e.g. ``127.0.1.1``) and an
+    attacker-controlled DNS name pointed at ``127.0.0.1`` both looked like "a genuine hostname,
+    therefore safe" — verified live with curl. The actual fix is RESOLVE-AND-CHECK, but that needs
+    a real (and here, synchronous-request-blocking) DNS round trip, which does not belong in this
+    module's fast, synchronous, dependency-free preview-time validation path. So this function
+    keeps doing what it always could: refuse a value that is ALREADY numeric (an IP literal,
+    including the ambiguous encodings below) or matches a KNOWN loopback spelling, purely to give
+    the operator immediate, in-browser feedback on the obvious cases. A hostname it doesn't
+    recognize — including ``gouda`` or any other name that would resolve to loopback — passes HERE
+    and is still caught by the actual authority: ``pithead``'s ``_control_host_is_internal``, which
+    runs at commit time on the host and genuinely resolves the name before deciding (see
+    ``tests/service/test_worker_adopt.py``'s ``test_a_hostname_that_would_resolve_elsewhere_is_not_caught_here_by_design``,
+    which pins this limitation as a test rather than leaving it as a comment-only claim).
+
+    What IS still caught here: loopback, "this network", link-local, multicast/reserved,
+    ``localhost`` (and its standard ``/etc/hosts`` aliases and root-terminated spelling — see
+    below), or the stack's own docker-bridge subnet (``network.subnet``, read from the SAME live
+    config the caller already has). An ordinary LAN/public rig address is unaffected.
+
+    A trailing dot is DNS's "FQDN root" marker — resolvers (and curl) treat ``localhost.`` exactly
+    like ``localhost`` — so it is stripped before any hostname comparison, or the root-terminated
+    spelling sails past a literal-string match untouched. ``localhost.localdomain`` /
+    ``ip6-localhost`` / ``ip6-loopback`` are the standard ``/etc/hosts`` loopback aliases on
+    Debian/RHEL-family Linux (this stack's own target OS) — refused explicitly, not just the bare
+    ``localhost`` family.
+
+    A string this host's own dial (curl, in the runner) would treat as numeric must be recognized
+    as one here too, or an alternate encoding of the very addresses above — a bare decimal integer
+    ("2130706433"), an octal-leading-zero octet ("0177.0.0.1"), hex ("0x7f000001"), or a
+    short/collapsed form ("127.1") all resolve to a real address curl accepts — sails through
+    misclassified as "just a hostname". So: any letter (other than a literal "0x"/"0X" hex marker)
+    means a real hostname, never re-resolved here (the same accepted, pre-existing limit the
+    read-path guard has, ``_safe_probe_host``); anything else — digits, dots, or a hex marker — is
+    a numeric-address ATTEMPT, and Python's own strict ``ipaddress`` parse (which, unlike curl,
+    already refuses all of the ambiguous forms above) failing to recognize it means REFUSE, never
+    "must be a hostname after all"."""
+    h = host.strip().lower()
+    if h.endswith("."):
+        h = h[:-1]
+    if h in _LOOPBACK_ALIASES or h.endswith(".localhost"):
+        return True
+    if any(c.isalpha() for c in h):
+        return "0x" in h  # a hex literal is still numeric-shaped; anything else is a real hostname
+    try:
+        addr = ipaddress.ip_address(h)
+    except ValueError:
+        return True  # numeric-shaped (digits/dots only) but not a valid canonical address
+    if addr.is_loopback or addr.is_link_local or addr.is_unspecified or addr.is_multicast:
+        return True
+    if addr.is_reserved or (addr.version == 4 and addr in _THIS_NETWORK):
+        return True
+    subnet = ((live_cfg or {}).get("network") or {}).get("subnet") or _DEFAULT_SUBNET
+    try:
+        network = ipaddress.ip_network(subnet, strict=False)
+    except ValueError:
+        network = ipaddress.ip_network(_DEFAULT_SUBNET)
+    return addr.version == network.version and addr in network
+
+
+def new_worker_entries(live_cfg, staged_cfg):
+    """The entries a staged config would ADD to ``workers.list[]``, or ``[]`` if the staged list
+    isn't a pure append of the live one (a non-append change is left for the host's own add-only
+    gate to refuse, with its own message — this only identifies the genuinely-new tail to
+    pre-validate)."""
+    live_list = ((live_cfg or {}).get("workers") or {}).get("list")
+    staged_list = ((staged_cfg or {}).get("workers") or {}).get("list")
+    live_list = live_list if isinstance(live_list, list) else []
+    if not isinstance(staged_list, list):
+        return []
+    if staged_list[: len(live_list)] != live_list:
+        return []
+    return staged_list[len(live_list) :]
+
+
+def validate_new_worker_entries(live_cfg, staged_cfg):
+    """The first validation error among the entries a staged config would newly append to
+    ``workers.list[]``, or ``""`` if every new entry is well-formed (including "no new entries").
+    Shape first (``validate_worker_descriptor``), then the #122 SSRF floor (``host_is_internal``)
+    — a malformed entry gets the more specific shape message even if it also happens to parse as
+    an internal address."""
+    for entry in new_worker_entries(live_cfg, staged_cfg):
+        err = validate_worker_descriptor(entry)
+        if err:
+            return err
+        if host_is_internal(entry["host"], live_cfg):
+            return (
+                f"worker '{entry['name']}': host '{entry['host']}' resolves inside this host's "
+                "own network — a rig's control address must be a distinct machine on your LAN."
+            )
+    return ""

@@ -9,7 +9,7 @@ import uuid
 from aiohttp import web
 
 from mining_dashboard.config import config
-from mining_dashboard.service import audit_service, control_service
+from mining_dashboard.service import audit_service, control_service, worker_adopt, worker_refresh
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.service.update_checker import parse_semver
 from mining_dashboard.web.prometheus import CONTENT_TYPE as PROMETHEUS_CONTENT_TYPE
@@ -121,10 +121,9 @@ async def handle_metrics(request):
 
 # --- Dashboard control channel (#33) ---------------------------------------------------------
 # Registered only when DASHBOARD_CONTROL_ENABLED (absent routes 404 when the feature is off).
-# Every mutating POST must carry this custom header: a cross-site request with a custom header
-# forces a CORS preflight, which the self-only CSP origin never grants — a cheap CSRF guard in
-# the same spirit as the CSP below. The actor is Caddy's authenticated X-Auth-User (header_up
-# overwrites any client-supplied value), threaded through to the host-side audit log.
+# Every mutating POST must carry this custom header: a cross-site header forces a CORS preflight,
+# which the self-only CSP origin never grants (a cheap CSRF guard, same spirit as the CSP below).
+# The actor is Caddy's authenticated X-Auth-User (header_up overwrites any client value).
 
 CONTROL_HEADER = "X-Pithead-Control"
 
@@ -154,6 +153,10 @@ async def handle_control_preview(request):
     proposed = body.get("config")
     if not isinstance(proposed, dict):
         raise web.HTTPBadRequest(text="'config' must be a JSON object.")
+    # Click-to-adopt (#893): pre-validate any newly-appended workers.list[] entry before spooling.
+    adopt_err = worker_adopt.validate_new_worker_entries(control_service.read_config(), proposed)
+    if adopt_err:
+        raise web.HTTPBadRequest(text=adopt_err)
     actor = request.headers.get("X-Auth-User", "")
     try:
         # The proposal ships as-is: an untouched secret rides as the {"__secret__": true}
@@ -224,10 +227,9 @@ OS_UPDATE_ACTIONS = frozenset({"check", "download", "verify", "install", "reboot
 async def handle_control_os_update(request):
     """Ask the host runner to run one step of the appliance OS-update flow. The body's action
     picks the step (check/download/verify/install/reboot); ``version`` is only what the operator
-    confirmed seeing — the host re-derives the real target over Tor and refuses a mismatch, and
-    every destructive judgment (signature, compatible, downgrade floor) is made host-side against
-    the local file. Returns 202 immediately: downloads and installs run long, and a reboot takes
-    the whole machine away — the client polls /api/control/result and rides it out."""
+    confirmed seeing — the host re-derives the real target over Tor, refuses a mismatch, and makes
+    every destructive judgment (signature, compatible, downgrade floor) against the local file.
+    Returns 202 immediately; the client polls /api/control/result and rides out the long steps."""
     _require_control_header(request)
     try:
         body = await request.json()
@@ -257,9 +259,8 @@ async def handle_control_backup(request):
     """Ask the host runner for an encrypted backup archive + a one-time emergency kit (#908).
 
     No body: unlike commit/upgrade this verb takes no operator input — the host generates its own
-    passphrase and never accepts one from the container (encrypted-only, refused otherwise). The
-    archive/openssl work and the brief stack stop+restart stack_backup performs can take a while,
-    so — like upgrade — this returns 202 immediately and the client polls /api/control/result."""
+    passphrase and never accepts one from the container (encrypted-only, refused otherwise). Like
+    upgrade, this returns 202 immediately and the client polls /api/control/result."""
     _require_control_header(request)
     try:
         rid = control_service.submit("backup", actor=request.headers.get("X-Auth-User", ""))
@@ -274,8 +275,7 @@ async def handle_backup_download(request):
 
     Read-only, no CSRF header required (matches the other GET routes) — a cross-site GET can
     trigger this but can't read a cross-origin response, and the archive is useless without the
-    passphrase shown once in the kit. The id must resolve to an "applied" result naming an
-    archive; anything else 404s rather than hinting whether some OTHER id exists."""
+    passphrase shown once in the kit. Any id not resolving to an "applied" archive 404s."""
     try:
         rid = str(uuid.UUID(request.query.get("id", "")))
     except ValueError:
@@ -385,7 +385,7 @@ async def handle_worker_apply(request):
     return web.json_response({"id": rid, **res})
 
 
-async def _finalize_worker_upgrade(state_mgr, worker, version, rid):
+async def _finalize_worker_upgrade(state_mgr, worker, version, rid, latest_data=None):
     """The server-side half of recording a worker-upgrade attempt (#1014): ``handle_worker_upgrade``
     returns 202 before any result exists (a rig rebuild can take minutes, so it never waits inline
     like ``handle_worker_apply`` does), so this runs as its own background task and records the
@@ -402,6 +402,7 @@ async def _finalize_worker_upgrade(state_mgr, worker, version, rid):
         return
     if res is not None:
         _record_worker_result(state_mgr, worker, {"version": version}, res, change_type="upgrade")
+        await worker_refresh.maybe_refresh_after_upgrade(latest_data, worker, version, res)
 
 
 async def handle_worker_upgrade(request):
@@ -409,12 +410,11 @@ async def handle_worker_upgrade(request):
 
     Mirrors the stack's own upgrade (#59) at the per-worker level: the body's version is only what
     the operator confirmed seeing (the badge's latest, #596); the host re-derives the real target
-    from the RigForge release API over Tor and refuses a mismatch, then resolves the rig's address
-    + bearer from config.json — this container never holds the token and cannot choose what gets
-    installed. Returns 202 + the request id immediately (a rig build can take minutes); the client
-    polls /api/control/result, and a background task records the terminal outcome to the per-worker
-    history once it lands (#1014). A rig already reporting the requested version short-circuits to a
-    no-op without spooling — a dial would just burn the rig's own 6h upgrade throttle."""
+    from the RigForge release API over Tor, refuses a mismatch, then resolves the rig's address +
+    bearer from config.json — this container never holds the token or picks what gets installed.
+    Returns 202 immediately (a build can take minutes); the client polls /api/control/result and a
+    background task records the terminal outcome to the per-worker history (#1014). A rig already
+    on the requested version short-circuits to a no-op — a dial would just burn its own throttle."""
     _require_control_header(request)
     try:
         body = await request.json()
@@ -443,7 +443,9 @@ async def handle_worker_upgrade(request):
         return web.json_response({"error": "Failed to submit the worker upgrade."}, status=500)
     state_mgr = request.app["state_manager"]
     bg_tasks = request.app["_bg_tasks"]
-    task = asyncio.create_task(_finalize_worker_upgrade(state_mgr, worker, version, rid))
+    task = asyncio.create_task(
+        _finalize_worker_upgrade(state_mgr, worker, version, rid, request.app["latest_data"])
+    )
     bg_tasks.add(task)
     task.add_done_callback(bg_tasks.discard)
     return web.json_response({"id": rid, "status": "pending"}, status=202)
@@ -592,7 +594,6 @@ async def _cancel_bg_tasks(app):
 def create_app(state_manager, latest_data_ref):
     """Factory to create the web app instance."""
     app = web.Application(middlewares=[security_headers_middleware])
-    # Pass shared state objects to the app context
     app["state_manager"] = state_manager
     app["latest_data"] = latest_data_ref
     # Fire-and-forget recorder tasks (worker-upgrade, #1014) — tracked so they can't be
@@ -611,9 +612,8 @@ def create_app(state_manager, latest_data_ref):
             web.get("/api/access", handle_access_log),
         ]
     )
-    # Control channel (#33): routes exist only when the feature is on — off means 404, not 403,
-    # so a disabled stack exposes no hint that the endpoints exist. Read at call time (not
-    # import) so tests can flip the flag per-app.
+    # Control channel (#33): routes exist only when the feature is on — off means 404, not 403.
+    # Read at call time (not import) so tests can flip the flag per-app.
     if config.DASHBOARD_CONTROL_ENABLED:
         app.add_routes(
             [

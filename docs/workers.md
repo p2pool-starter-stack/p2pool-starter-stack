@@ -270,9 +270,10 @@ its own watts and needs no estimate.
 
 `control_port` (default `8082`) is the rig's writable control API port, used by
 [Worker Inspect](dashboard.md#worker-inspect) to push config changes from the dashboard. Set it
-alongside `host` and `token` to make a rig editable; leave the whole feature off by not enabling the
-dashboard control channel. The token is the rig's `ACCESS_TOKEN` and never leaves the stack host — the
-dashboard container doesn't hold it.
+alongside `host` and `token` to make a rig editable — either by hand in `config.json`, or from
+Worker Inspect's own **adopt form** on a rig that doesn't have an entry yet; leave the whole
+feature off by not enabling the dashboard control channel. The token is the rig's `ACCESS_TOKEN`
+and never leaves the stack host — the dashboard container doesn't hold it.
 
 ! The control token is **write-capable** and travels in **cleartext HTTP** over the LAN (like the
 stratum password): a change can alter a rig's pools or its thermal `watchdog`/`max_temp_c`, so anyone
@@ -377,9 +378,12 @@ six-hour window isn't burned; a repeat click inside that window surfaces as retr
 
 An upgrade can rebuild the rig's miner (about ten minutes when the XMRig pin changed). The runner
 polls the rig to a terminal outcome with a hard cap; past the cap the panel reports the upgrade
-still running and the badge clears on its own once the rig's next poll reports the new version.
-Upgrades are per-rig only — there is deliberately no "upgrade all" button, so one click can never
-stagger rebuilds across the whole farm.
+still running. Once the runner reports the rig rebuilt (or is still rebuilding), the dashboard
+re-reads that one rig's status itself — a few bounded tries, not a new steady-state poll — instead
+of waiting out the normal 30-second cycle, so the version and the badge usually clear within
+seconds of the rebuild finishing rather than up to a full cycle later. Upgrades are per-rig only —
+there is deliberately no "upgrade all" button, so one click can never stagger rebuilds across the
+whole farm.
 
 ---
 

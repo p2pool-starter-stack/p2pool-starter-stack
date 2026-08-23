@@ -17,6 +17,7 @@ import { WorkerChartCard } from "./chart.mjs";
 import { SECRET_HINT } from "./configlogic.mjs";
 import { loadPref, savePref } from "./logic.mjs";
 import { Component, createRef, html } from "./preact.mjs";
+import { AdoptRigForm } from "./workeradopt.mjs";
 import {
   buildChartMarkers,
   buildFields,
@@ -417,11 +418,9 @@ export class WorkerInspect extends Component {
                 <button class="btn-toggle" disabled=${busy} onClick=${() => this.apply()}>${busy ? "Applying…" : "Apply to rig"}</button>
             </div>
             <${StatusLine} result=${result} />`
-                : html`<p class="text-muted text-small">${
-                    detail.control_enabled
-                      ? "This worker has no host/control_port/token in dashboard.workers[] — set them to edit its config from here."
-                      : "Config editing is off. Enable dashboard.control (which needs a dashboard password) to edit a rig's config."
-                  }</p>`
+                : detail.control_enabled
+                  ? html`<${AdoptRigForm} name=${this.props.name} ip=${detail.ip} onAdopted=${() => this.load()} />`
+                  : html`<p class="text-muted text-small">Config editing is off. Enable dashboard.control (which needs a dashboard password) to edit a rig's config.</p>`
             }
 
             <h4 class="mt-2">History</h4>

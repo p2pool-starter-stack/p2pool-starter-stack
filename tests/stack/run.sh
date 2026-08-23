@@ -5160,12 +5160,11 @@ gate_try "$C/cand.json"
 assert_eq "dashboard.workers change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 assert_contains "workers refusal names dashboard.workers" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "dashboard.workers"
 assert_eq "config.json keeps no worker descriptors" "$(jq -r '.dashboard.workers // "unset"' "$C/config.json")" "unset"
-# Same refusal on the CURRENT workers.list[] shape (#506) — the gate must catch either key.
-jq '.workers.list=[{name:"rig1",host:"attacker.example",token:"stolen"}]' "$C/config.json" >"$C/cand.json"
-gate_try "$C/cand.json"
-assert_eq "workers.list change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
-assert_contains "workers.list refusal names the per-worker descriptors" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "workers.list"
-assert_eq "config.json keeps no workers.list descriptors" "$(jq -r '.workers.list // "unset"' "$C/config.json")" "unset"
+# workers.list[]'s add-only exception (#893's click-to-adopt) + the #122 SSRF floor on a newly
+# appended entry's host — split into its own file purely for the file-budget ratchet; it shares
+# this section's $C/$UUID5/gate_try exactly like test-control-deploy.sh shares its own section's.
+# shellcheck source=tests/stack/test-control-add-only-ssrf.sh
+source "$HERE/test-control-add-only-ssrf.sh"
 
 # dashboard.energy (#504) is the ONE config.json-only block a commit MAY change: it never renders
 # to .env, so the host previews it as a normal INFO row (not the old non-committable HOST note) and
