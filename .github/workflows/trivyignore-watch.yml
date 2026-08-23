@@ -18,11 +18,11 @@ name: Trivyignore mute watch
 # tree is the one place the whole covered set can be built and the union check is honest.
 on:
   schedule:
-    # Registration proof first (#1257): a near-term daily slot until one schedule-triggered run
-    # is on record in `gh run list --json event` — the YAML existing proves nothing (the
-    # false-green trap above). Moved to the steady weekly slot, Mondays 07:00 UTC after the
-    # 05:00/06:00/06:30 sweeps, in the follow-up recorded on #1257.
-    - cron: "30 23 * * *"
+    # Mondays 07:00 UTC, after the 05:00/06:00/06:30 sweeps. The registration was PROVEN before
+    # this slot was set: the first cron was a near-term proof slot, and run 32606070407
+    # (event=schedule, success) is on record on #1257 — the YAML existing proves nothing (the
+    # false-green trap above), so any future move of this line owes the same proof again.
+    - cron: "0 7 * * 1"
   workflow_dispatch:
 
 # Least privilege (#282): issues.write is the job's one output — it never pushes or publishes.
