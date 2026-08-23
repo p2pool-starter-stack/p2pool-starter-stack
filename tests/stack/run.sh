@@ -6116,7 +6116,7 @@ case "$gh_rl" in
 esac
 
 gh_tf=$(gh_fetch 000 '' 1)
-assert_eq "a transport failure is still a failure" "${gh_tf%%|*}" "1"
+assert_eq "a transport failure is still a failure, now distinctly rc 2 (#1050)" "${gh_tf%%|*}" "2"
 assert_contains "and still reads as a dial that did not land" "$gh_tf" "could not reach the GitHub release API"
 case "$gh_tf" in
 *"restart tor"*) bad "a dial failure is not blamed on the rate limit" "the hint sends them to restart tor: $gh_tf" ;;
@@ -6192,7 +6192,7 @@ echo "== unit: appliance-lane release-fetch hints name no shell the box does not
 # "names no CLI verb" assertions below go red; hardcode it to the appliance string instead and the
 # DIY-lane assertions (both here and in the block above) go red — neither direction can pass alone.
 gh_tf_appliance=$(PITHEAD_APPLIANCE=1 gh_fetch 000 '' 1)
-assert_eq "appliance transport failure is still a failure" "${gh_tf_appliance%%|*}" "1"
+assert_eq "appliance transport failure is still a failure, now distinctly rc 2 (#1050)" "${gh_tf_appliance%%|*}" "2"
 assert_contains "and still reads as a dial that did not land" "$gh_tf_appliance" "could not reach the GitHub release API"
 assert_contains "and points at the dashboard instead of a shell" "$gh_tf_appliance" "Retry from the dashboard"
 case "$gh_tf_appliance" in
