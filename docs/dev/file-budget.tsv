@@ -46,10 +46,11 @@ tests/integration/lib.sh	692
 tests/integration/run.sh	2551
 tests/integration/selftest.sh	686
 tests/os/run.sh	3442
-tests/stack/run.sh	6411
+tests/stack/run.sh	5700
 tests/stack/test-backup.sh	523
 tests/stack/test-cli.sh	410
 tests/stack/test_compose.sh	462
+tests/stack/test-config.sh	753
 tests/stack/test-control-upgrade.sh	795
 tests/stack/test-dashboard-onion.sh	422
 tests/stack/test-dashboard.sh	592
