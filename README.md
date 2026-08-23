@@ -145,7 +145,8 @@ Full walkthrough: [docs/getting-started.md](docs/getting-started.md)
 | **[Privacy & Network Egress](docs/privacy.md)** | Every off-box connection: what's Tor-routed, what's clearnet today, and how to harden it. |
 | **[Operations & Maintenance](docs/operations.md)** | Full command reference, upgrades, backups, and troubleshooting. |
 
-Browse the full index at **[docs/](docs/README.md)**.
+Browse the full index at **[docs/](docs/README.md)**. Contributing, or just want to know where a
+subsystem lives? See the [repo map](docs/dev/repo-map.md).
 
 ---
 
