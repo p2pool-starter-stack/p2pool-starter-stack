@@ -9,6 +9,54 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [1.20.0] - 2026-08-22
+
+### Added
+
+- **The XvB steering loop now reacts to a projected credited average, not just the measured one
+  ([#892](https://github.com/p2pool-starter-stack/pithead/issues/892)).** The donation-steering
+  controller extrapolates the recent trend of the credited 1h average up to
+  `XVB_PROJECTION_HORIZON_S` seconds ahead (default 20 minutes; 0 disables the projection) and
+  steers off whichever of the measured or projected value is lower while the trend is falling. The
+  ramp-back after a round-ending dip now fires earlier, cutting time spent under the reward tier
+  threshold. Behaviour on a rising trend is unchanged.
+
+### Changed
+
+- **`main` is now updated by a fast-forward push at release time instead of a back-merge PR
+  ([#1076](https://github.com/p2pool-starter-stack/pithead/issues/1076)).** No dashboard or
+  runtime behaviour changes; `main` stays an ancestor of `develop` by construction.
+- **The dashboard's "Your Stack" and "Wider Pool" card sections switched from a fixed card order to
+  CSS column-packing ([#991](https://github.com/p2pool-starter-stack/pithead/issues/991)).** Page
+  height now adapts correctly to whichever optional cards (e.g. XvBStats) are actually rendered,
+  instead of relying on a hand-tuned order.
+- Internal: the shell test suite began its planned split
+  ([#1105](https://github.com/p2pool-starter-stack/pithead/issues/1105)) — a shared harness
+  library plus five per-domain test files extracted so far, each move proven against an unchanged
+  suite run (1,836 tests, 0 failures). Three new local-and-CI lint guards landed: a file-size
+  ratchet on tracked source files, a check against local-setup detail (hostnames, IPs, home paths)
+  leaking into the repo, and a weekly scan for stale `.trivyignore` CVE mutes.
+
+### Fixed
+
+- **The per-tier decision table no longer shows permanent dashes on a box that has never
+  enabled XvB ([#1214](https://github.com/p2pool-starter-stack/pithead/issues/1214)).** The
+  "XvB says" and "Study est." reward columns now fall back to a static per-tier published-reward snapshot
+  when no live figure exists yet, with the footer stating whether the number shown is live or the
+  published fallback. A box that has XvB enabled but currently stale still shows the old, honest
+  dashes.
+- **Worker Inspect dialog values were illegible in dark mode
+  ([#1232](https://github.com/p2pool-starter-stack/pithead/issues/1232)).** Plain metric values —
+  Governor, HugePages, Mainboard, and the rest — now render with an explicit theme-token colour
+  and bold weight instead of inheriting default styling.
+- **A one-click upgrade could silently repoint another install's control-runner systemd units
+  ([#1190](https://github.com/p2pool-starter-stack/pithead/issues/1190)).** `pithead` now refuses
+  to install the control-runner unit when the box-global unit already points at a different,
+  still-existing install directory, printing the owning directory and the
+  `PITHEAD_STEAL_CONTROL_UNITS=1` escape hatch rather than silently stealing it. If the previous
+  owner's directory is gone, the unit is adopted automatically. The stack-upgrade path passes an
+  explicit takeover argument so a legitimate one-click upgrade is unaffected by the new guard.
+
 ## [1.19.3] - 2026-08-21
 
 ### Changed
