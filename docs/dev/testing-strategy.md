@@ -274,6 +274,12 @@ Every scenario, at every tier, holds to the same rules.
 - Reproducible. The live run records a manifest (stack `VERSION`, git rev, image digests).
 - Test code is real code. The same lint (shellcheck) and coverage gate apply to the tests
   themselves, and the inventory generator fails CI if it stops enumerating a suite.
+- An assertion reads its haystack directly, never through a pipe. `grep -q` exits at its first
+  match, so under `pipefail` the writer's broken pipe becomes the pipeline's exit status and the
+  match is thrown away: a directive that was present read as missing, and — in the direction
+  nobody watches — a forbidden pattern that was present read as absent, which is a hardening
+  regression wearing a green tick. Use a here-string. And a reader that could not run at all is a
+  failure in its own right, never folded into either verdict.
 
 ### Flake policy
 
