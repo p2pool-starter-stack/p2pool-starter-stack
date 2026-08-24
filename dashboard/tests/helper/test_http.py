@@ -1,6 +1,7 @@
 """Tier 1 — bounded_get (#660): the shared response-size cap for external HTTP fetches."""
 
 import re
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -152,6 +153,42 @@ class TestBoundedRead:
         with pytest.raises(ResponseTooLarge):
             await bounded_read(stream, max_bytes=4096)
         assert stream.bytes_read <= 4097
+
+    async def test_a_trickled_body_does_not_cost_quadratic_time(self):
+        """A cap that turns memory exhaustion into CPU exhaustion is not a fix.
+
+        The read is SHORT, so the far end chooses how many reads a body takes: one byte per TCP
+        segment makes ~n of them. Accumulating into immutable ``bytes`` re-copies the whole buffer
+        each time, and this is asyncio — that time is the WHOLE event loop, not one coroutine.
+
+        This is a timing assertion, which is the honest way to catch a complexity regression and is
+        worth naming as such. The bound is sized off measurement rather than guessed: 512 KiB takes
+        ~0.31s accumulating linearly and ~15s quadratically (extrapolated from 3.68s at 256 KiB,
+        measured on this box under load). 4s therefore sits ~10x above the linear cost and ~4x below
+        the quadratic one, so it takes a very badly loaded box to false-red and no plausible one to
+        false-green."""
+
+        class Trickle:
+            """One byte per read — what aiohttp hands back when the sender writes one byte per
+            segment, and the worst case the short read allows."""
+
+            def __init__(self, n):
+                self.left = n
+
+            async def read(self, n=-1):
+                if self.left <= 0:
+                    return b""
+                self.left -= 1
+                return b"x"
+
+        size = 512 * 1024
+        started = time.perf_counter()
+        body = await bounded_read(Trickle(size), max_bytes=4 * 1024 * 1024)
+        elapsed = time.perf_counter() - started
+        assert len(body) == size  # the trickle is read whole, not just quickly
+        assert elapsed < 4.0, (
+            f"{elapsed:.1f}s for {size} one-byte reads — accumulation went quadratic"
+        )
 
     async def test_an_empty_body_is_not_an_error(self):
         assert await bounded_read(_Stream(b"")) == b""

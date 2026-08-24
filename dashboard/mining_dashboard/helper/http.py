@@ -102,10 +102,17 @@ async def bounded_read(content, max_bytes=MAX_RESPONSE_BYTES, what="response"):
     Raises :class:`ResponseTooLarge`, the same type the sync twin raises, so a caller's existing
     ``except Exception`` fail-silent path applies unchanged.
     """
-    body = b""
+    # A ``bytearray``, not ``bytes``, and that is not a style choice. ``bytes`` is immutable, so
+    # ``body += chunk`` reallocates and re-copies everything accumulated so far — O(n^2) in the
+    # number of reads. Because the read above is SHORT, the far end chooses that number: a sender
+    # writing one byte per segment turns a 1 MiB body into ~1M copies of a growing buffer. Measured
+    # through this function: 64 KiB took 0.13s, 128 KiB 0.82s, 256 KiB 3.68s. This is asyncio, so
+    # that time is the WHOLE event loop — every other collector and the state loop stall behind one
+    # hostile response. A cap that converts memory exhaustion into CPU exhaustion is not a fix.
+    body = bytearray()
     while len(body) <= max_bytes:
         chunk = await content.read(max_bytes + 1 - len(body))
         if not chunk:
-            return body
-        body += chunk
+            return bytes(body)
+        body.extend(chunk)
     raise ResponseTooLarge(f"{what} body exceeded {max_bytes} bytes")
