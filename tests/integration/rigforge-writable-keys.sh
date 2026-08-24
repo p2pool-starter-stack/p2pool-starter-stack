@@ -71,6 +71,8 @@ _settle_worker_apply_key() { # <rig> <key> <want-json> <dial-result-json> -> "<s
 _writable_key_round_trip() { # <rig> <key> <orig-json> <probe-json>
     local rig="$1" key="$2" orig="$3" probe="$4" res status ckeys change_id
     it_step "Worker Inspect edit: $key $orig -> $probe via /api/control/worker-apply…"
+    # On the books BEFORE the write goes out — the window #1379 covers includes the apply itself.
+    rig_key_mark dash "$rig" "$key" "$orig"
     res="$(_worker_apply "$rig" "$(jq -nc --arg k "$key" --argjson v "$probe" '{($k): $v}')")"
     IFS='|' read -r status ckeys change_id <<<"$(_settle_worker_apply_key "$rig" "$key" "$probe" "$res")"
     assert_eq "$key edit applied on the rig (#1236)" "$status" "applied"
@@ -83,6 +85,11 @@ _writable_key_round_trip() { # <rig> <key> <orig-json> <probe-json>
     res="$(_worker_apply "$rig" "$(jq -nc --arg k "$key" --argjson v "$orig" '{($k): $v}')")"
     IFS='|' read -r status _ _ <<<"$(_settle_worker_apply_key "$rig" "$key" "$orig" "$res")"
     assert_eq "$key edit reverted on the rig (#1236)" "$status" "applied"
+    # Retired only on a CONFIRMED revert. A revert that came back anything else stays on the books
+    # so the EXIT trap retries it — the assertion above has already red, and trusting it to have
+    # restored the rig would be trusting the thing that just told us it did not. (#1379)
+    [ "$status" = "applied" ] && rig_key_clear dash "$rig" "$key"
+    return 0
 }
 
 # #1236, and the refusals. Three of the six writable keys are deliberately NOT driven here, and the
@@ -172,6 +179,9 @@ run_rigforge_pools() { # <rig>
         return 0
     fi
     it_step "Worker Inspect edit: pools -> the operator-supplied probe via /api/control/worker-apply…"
+    # The restore target is last_applied, which still carries `pass` — the same un-stripped value
+    # the revert below uses, and the only one safe to write back (#113). (#1379)
+    rig_key_mark dash "$rig" pools "$orig_pools"
     res="$(_worker_apply "$rig" "{\"pools\":$IT_RIG_POOLS_PROBE}")"
     status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
     ckeys="$(printf '%s' "$res" | jq -r '(.changed_keys // []) | join(",")' 2>/dev/null)"
@@ -179,6 +189,8 @@ run_rigforge_pools() { # <rig>
     assert_contains "the rig's /status confirms pools changed (#1002b)" "$ckeys" "pools"
     it_step "reverting pools to the dashboard's last-applied value…"
     res="$(_worker_apply "$rig" "{\"pools\":$orig_pools}")"
-    assert_eq "pools edit reverted on the rig (#1002b)" \
-        "$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)" "applied"
+    status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
+    assert_eq "pools edit reverted on the rig (#1002b)" "$status" "applied"
+    [ "$status" = "applied" ] && rig_key_clear dash "$rig" pools
+    return 0
 }
