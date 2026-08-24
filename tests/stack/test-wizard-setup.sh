@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 #
-# Wizard + setup domain (#1105 Phase 1): the interactive wizard flows, the setup e2e paths, and
-# the setup-time kernel/GRUB tuning (optimize_kernel runs inside cmd_setup). Sourced by
-# tests/stack/run.sh after lib.sh.
+# Wizard + setup domain (#1105 Phase 1): the interactive wizard flows, the setup e2e paths, and the
+# setup-time kernel/GRUB tuning (optimize_kernel runs inside cmd_setup). Sourceable standalone (#1387).
+WALLET="${WALLET:-$VALID_PRIMARY}" # exactly build_val_sandbox's own default; a no-op under run.sh
 echo "== unit: randomx_boot_params (#176) =="
 # The kernel boot params pithead writes into GRUB_CMDLINE_LINUX_DEFAULT for RandomX. Guards the
 # regression where the THP-disable param was PLURAL (transparent_hugepages=never) — an unrecognized
