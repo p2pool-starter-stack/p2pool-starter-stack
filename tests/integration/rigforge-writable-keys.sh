@@ -53,23 +53,15 @@ _pred_rig_config_key() { # <rig> <key> <want-json>
     [ -n "$v" ] && [ "$v" = "$3" ]
 }
 
-# The generic form of _settle_worker_apply_maxt: settle a dial-time "accepted" (RigForge #344 async
-# apply, #1309) past its non-terminal state by watching the rig report the requested value. Same
-# contract, same '|'-joined output and the same reason for that delimiter — see the header comment
-# on rigforge-apply-settle.sh, which this deliberately mirrors rather than duplicates in spirit: a
-# real rejected/failed/timeout is left at its dial-time status so the caller's assert_eq reds.
+# Settle a dial-time "accepted" against the rig's own reported config. The wrapper — parse, wait,
+# promote to applied, leave a real rejected/failed/timeout alone so the caller's assert_eq reds — is
+# _settle_worker_apply in rigforge-apply-settle.sh, shared with the max_temp_c leg; only the
+# readback predicate is ours. Same '|'-joined output, and the same reason for that delimiter (an
+# empty middle field must survive `IFS='|' read`), documented on that module.
 _settle_worker_apply_key() { # <rig> <key> <want-json> <dial-result-json> -> "<status>|<ckeys>|<change_id>"
-    local rig="$1" key="$2" want="$3" res="$4" status ckeys change_id
-    status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
-    ckeys="$(printf '%s' "$res" | jq -r '(.changed_keys // []) | join(",")' 2>/dev/null)"
-    change_id="$(printf '%s' "$res" | jq -r '.change_id // empty' 2>/dev/null)"
-    if [ "$status" = "accepted" ] &&
-        wait_for 90 5 "the rig to report $key=$want applied (RigForge #344 async apply, #1309)" \
-            _pred_rig_config_key "$rig" "$key" "$want"; then
-        status="applied"
-        ckeys="$key"
-    fi
-    printf '%s|%s|%s' "$status" "$ckeys" "$change_id"
+    _settle_worker_apply "$2" \
+        "the rig to report $2=$3 applied (RigForge #344 async apply, #1309)" \
+        "$4" _pred_rig_config_key "$1" "$2" "$3"
 }
 
 # One reversible round trip on one writable key: apply the probe, assert the RIG reports it, assert

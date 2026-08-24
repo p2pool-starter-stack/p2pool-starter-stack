@@ -19,6 +19,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tests/integration/lib.sh
 source "$HERE/lib.sh"
+# shellcheck source=tests/integration/rigforge-apply-settle.sh
+source "$HERE/rigforge-apply-settle.sh" # _settle_worker_apply, shared with the max_temp_c leg
 # shellcheck source=tests/integration/rigforge-writable-keys.sh
 source "$HERE/rigforge-writable-keys.sh"
 
@@ -140,6 +142,39 @@ IFS='|' read -r rstatus rckeys rchange_id <<<"$(_settle_worker_apply_key rig1 DO
 assert_eq "empty middle field (ckeys) does not shift change_id left" \
     "$rstatus,$rckeys,$rchange_id" "rejected,,"
 wait_for() { return 0; }
+
+echo "== the settle actually CONSULTS its predicate, and the right one =="
+# Every test above stubs wait_for wholesale, so none of them ever runs the readback predicate — and
+# a settle wired to a predicate that always succeeds passed all of them. (Verified: replacing the
+# predicate with `true` survived the whole file.) So drive the settle with a ONE-SHOT wait_for that
+# invokes the real predicate exactly once and returns its verdict — no polling, no timing.
+wait_for() {
+    shift 3
+    "$@"
+}
+res='{"status":"accepted","change_id":"c9"}'
+STUB_DETAIL='{"rig_config":{"DONATION":1}}' # the rig DOES report the wanted value
+assert_eq "the rig reporting the wanted value settles to applied" \
+    "$(_settle_worker_apply_key rig1 DONATION 1 "$res")" "applied|DONATION|c9"
+STUB_DETAIL='{"rig_config":{"DONATION":0}}' # the rig reports something else
+assert_eq "the rig reporting a DIFFERENT value stays accepted (a predicate stubbed to true reds here)" \
+    "$(_settle_worker_apply_key rig1 DONATION 1 "$res")" "accepted||c9"
+STUB_DETAIL='{"rig_config":null}' # the rig cannot be read at all
+assert_eq "an unreadable rig stays accepted rather than being promoted" \
+    "$(_settle_worker_apply_key rig1 DONATION 1 "$res")" "accepted||c9"
+
+# The max_temp_c adapter shares the same settle after the #1236 refactor, so assert it routes to ITS
+# predicate with its own arguments — one shared wrapper means a mis-wired adapter is now a way for
+# one leg to silently read the other's surface.
+_pred_feed_maxt() {
+    printf 'maxt:%s:%s' "$1" "$2" >"$APPLY_LOG"
+    return 1
+}
+_settle_worker_apply_maxt rigX 101 "$res" >/dev/null
+assert_eq "the max_temp_c adapter calls _pred_feed_maxt with <rig> <want>" "$(applies)" "maxt:rigX:101"
+unset -f _pred_feed_maxt
+wait_for() { return 0; }
+reset_applies
 
 echo "== _writable_key_round_trip: the probe and the revert are both real, well-formed applies =="
 STUB_DETAIL='{"rig_config":{"DONATION":1}}'
