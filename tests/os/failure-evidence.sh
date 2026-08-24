@@ -505,14 +505,22 @@ VANISHED at 2026-08-24T01:25:57+00:00"
     # The evidence dump is a /proc sweep: arbitrary cmdlines, which can and do contain this file's
     # own header vocabulary. A real vanish whose process table mentions a RIVAL outcome must still
     # report as exactly one outcome — the vanish — because the captured line is indented as evidence
-    # and only a printf writes a header. Un-anchor the header grep in _fe_case and this case fails
-    # while every other case stays green, which is the whole point of it being here.
+    # and only a printf writes a header.
+    #
+    # The canned cmdline below carries the header's FIVE-SPACE indentation on purpose, and that
+    # detail is the whole assertion. Without it the poison matched neither the anchored pattern nor
+    # an un-anchored one, so this case passed on the indentation baked into the grep pattern rather
+    # than on the anchor — green even with the ^ removed, which is the plausible edit. A case that
+    # proves the guard only against an implausible mutation is a guard proven by nothing, the exact
+    # shape this branch keeps finding. Caught by the reviewer lane, who removed only the caret.
+    # What makes the discrimination real: the marker sits INSIDE the line, while a genuine header
+    # STARTS it. Anchored, this cannot match; drop the ^ and it does.
     _fe_case "a vanish is not confused by its own evidence naming another outcome" \
         "config.json went away during the backup" \
         "WATCHOKALIVE:STARTED at 2026-08-24T01:00:00+00:00 pid=1234
 VANISHED at 2026-08-24T01:25:57+00:00
 -- process table at that instant --
-4711	grep --line-buffered -- --- #1059: WATCHER UNREADABLE — this run collected no evidence either way ---"
+4711	tail -f /tmp/pithead-1059-watch.log | grep -F      --- #1059: WATCHER UNREADABLE — this run collected no evidence either way ---"
 
     printf '== unit: #1059 watcher arming ==\n'
     # pgrep found it: a watcher is on the guest, and arming has nothing to report.
