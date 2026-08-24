@@ -10,7 +10,9 @@ Run: PYTHONPATH=dashboard python3 -m pytest tests/integration/fakes -q
 """
 
 import asyncio
+import json
 import pathlib
+import re
 import sys
 
 import requests
@@ -26,14 +28,19 @@ from fake_monerod import FakeMonerod  # noqa: E402
 from fake_tari import start_server  # noqa: E402
 from fake_tari_wallet import start_server as start_wallet_server  # noqa: E402
 from fake_wallet_rpc import FakeWalletRpc  # noqa: E402
-from fake_worker_api import FakeWorkerApi  # noqa: E402
+from fake_worker_api import FakeWorkerApi, enriched_body  # noqa: E402
 
 from mining_dashboard.client import xmrig_client as xc  # noqa: E402
 from mining_dashboard.client.monero.monero_client import MoneroClient  # noqa: E402
 from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient  # noqa: E402
 from mining_dashboard.client.tari.tari_client import TariClient  # noqa: E402
 from mining_dashboard.client.tari.tari_wallet_client import TariWalletClient  # noqa: E402
-from mining_dashboard.client.xmrig_client import XMRigWorkerClient, parse_rigforge  # noqa: E402
+from mining_dashboard.client.xmrig_client import (  # noqa: E402
+    _CONTROL_TERMINAL,
+    XMRigWorkerClient,
+    parse_rigforge,
+    parse_worker_control_status,
+)
 
 
 # --- Monero (HTTP get_info) -------------------------------------------------
@@ -307,3 +314,138 @@ def test_worker_miner_down_body_parses_as_up_but_miner_down():
     assert payload["api_ok"] is True
     rf = parse_rigforge(payload)
     assert rf is not None and rf["miner_down"] is True
+
+
+# --- The wire contract RigForge publishes for us (#1412) ------------------------------------
+#
+# Everything above proves our fake and the real consumers agree. Nothing above tied the FAKE to
+# what a real worker emits, so the pair could drift together and stay green — a guard anchored to
+# the wrong artifact, which reads as coverage. RigForge regenerates `tests/contract/v1/` from its
+# real code paths and byte-compares it on every one of its own runs, so those fixtures are the
+# producer's own account of the wire. `contract/v1/` here is a vendored copy of them.
+#
+# Division of labour, because a reader should not have to infer it: the fixture pins the SHAPE and
+# the fake pins realistic VALUES (the fixture is a hardware-independent capture whose numeric
+# fields are mostly null). So the guards below compare key paths, never values.
+
+_CONTRACT = _HERE / "contract" / "v1"
+
+
+def _key_paths(obj, prefix=""):
+    """Every leaf path in `obj`, list indices collapsed to `[]` so ordering and length don't count."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from _key_paths(v, f"{prefix}.{k}" if prefix else k)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _key_paths(v, prefix + "[]")
+        if not obj:
+            yield prefix + "[]"
+    else:
+        yield prefix
+
+
+def test_fake_matches_the_vendored_wire_contract():
+    """Our fake's `rigforge` block carries exactly the keys a real worker emits — no more, no less.
+
+    Equality in both directions on purpose. A missing key is a surface the contract test cannot
+    see (that is how config/config_meta/control went uncovered); an extra key is our fake inventing
+    a shape no rig sends, which is how a consumer comes to depend on something that isn't there.
+    """
+    pinned = set(_key_paths(json.loads((_CONTRACT / "feed.json").read_text())["rigforge"]))
+    assert set(_key_paths(enriched_body()["rigforge"])) == pinned
+
+    # The miner-unreachable body drops every XMRig key and serves the WHOLE block plus one flag —
+    # config/config_meta/control included. Same producer path, so the same guard has to cover it.
+    down = enriched_body(miner_down=True)
+    assert set(down) == {"rigforge"}
+    assert set(_key_paths(down["rigforge"])) == pinned | {"xmrig_api"}
+
+
+def test_vendored_contract_matches_the_baked_rigforge_pin():
+    """The vendored fixtures are from the RigForge the appliance actually bakes.
+
+    A vendored snapshot with no freshness mechanism is just a slower drift: it agrees with the
+    producer on the day it is copied and silently stops. Pinning it to `RIGFORGE_REF` means a pin
+    bump that leaves these fixtures stale reddens here, at the tier that is cheap, instead of on a
+    live box.
+    """
+    provenance = dict(line.split("=", 1) for line in (_CONTRACT / "PROVENANCE").read_text().split())
+    dockerfile = (_REPO / "os" / "rootfs" / "Dockerfile").read_text()
+    baked = re.search(r"^ARG RIGFORGE_REF=(\S+)", dockerfile, re.M)
+    assert baked, "RIGFORGE_REF not found in os/rootfs/Dockerfile — did the pin move or rename?"
+    assert provenance["ref"] == baked.group(1), (
+        "the baked RigForge pin moved and tests/integration/fakes/contract/v1/ was not re-vendored. "
+        "Re-copy tests/contract/v1/{feed,control-status}.json from RigForge at the new ref and "
+        "update PROVENANCE, then run this suite — a shape change will show up as a failure above."
+    )
+
+
+def test_every_pinned_control_status_is_classified():
+    """Every status word RigForge can emit is one this repo has actually decided about.
+
+    RigForge's own guard cross-checks this vocabulary against the literals in its source, so the
+    fixture cannot fall behind its producer. This is the consumer half: a NEW status word must fail
+    here rather than fall through `not in _CONTROL_TERMINAL` and be read as "still in flight"
+    forever. That is exactly what happened with noop/throttled, which nothing outside a live run
+    caught. Fail-closed by construction — a word in neither set is an error, not a default.
+    """
+    pinned = set(json.loads((_CONTRACT / "control-status.json").read_text())["statuses"])
+    # Words we have looked at and deliberately class as NOT terminal: the rig has accepted or begun
+    # a change and has not said how it ended. Listed rather than inferred, so adding one is a
+    # decision someone makes on purpose.
+    non_terminal = {"pending", "started"}
+    assert pinned - set(_CONTROL_TERMINAL) - non_terminal == set()
+
+
+def test_worker_config_prefill_parses_over_the_wire():
+    """The rig's effective writable config reaches the editor's prefill (#1235), over a real socket."""
+    with FakeWorkerApi(auth="none") as fake:
+        payload = _probe_worker(fake, auth="none")
+    cfg = parse_rigforge(payload)["config"]
+    # Exactly the writable keys, with the rig's own values — not our record of what we last pushed.
+    assert cfg == {
+        "pools": [{"url": "itest-proxy:3333"}],
+        "DONATION": 1,
+        "autotune": "disabled",
+        "watchdog": "enabled",
+        "watchdog_interval_min": 5,
+        "max_temp_c": 85,
+    }
+
+
+def test_worker_config_provenance_parses_over_the_wire():
+    """The rig's account of where its config came from (#1345) survives the wire intact."""
+    with FakeWorkerApi(auth="none") as fake:
+        payload = _probe_worker(fake, auth="none")
+    assert parse_rigforge(payload)["config_meta"] == {
+        "revision": "50c51399833d2a28",
+        "changed_at": "2026-08-24T09:15:00Z",
+        "source": "control",
+        "last_change_id": "7777777777777777",
+    }
+
+
+def test_worker_control_outcome_mirrors_over_the_wire():
+    """A terminal control outcome rides the read feed (#579) and reconciles a history row."""
+    with FakeWorkerApi(auth="none") as fake:
+        payload = _probe_worker(fake, auth="none")
+    assert parse_worker_control_status(payload) == {
+        "change_id": "7777777777777777",
+        "status": "rolled_back",
+        "reason": "miner did not return to a live hashrate; rolled back and live",
+    }
+
+
+def test_a_rig_mid_change_or_fresh_reconciles_nothing():
+    """Non-terminal and never-changed both return None — a history row is never force-terminaled.
+
+    `control: null` is the fresh-rig wire shape: the producer's jq falls back to a literal null
+    rather than omitting the key, so this is the body a rig serves before any change has ever run.
+    """
+    for control in (None, {"change_id": "8888888888888888", "status": "started", "reason": None}):
+        with FakeWorkerApi(auth="none", control=control) as fake:
+            payload = _probe_worker(fake, auth="none")
+        assert parse_worker_control_status(payload) is None
+        # The rest of the block still parses — a rig with no control history is not a broken rig.
+        assert parse_rigforge(payload)["config_meta"]["revision"] == "50c51399833d2a28"

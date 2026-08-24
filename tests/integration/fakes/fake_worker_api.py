@@ -24,6 +24,10 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Sentinel: `control=None` is a real wire value (the fresh-rig case), so it cannot double as "no
+# override given".
+_UNSET = object()
+
 # A compact but real-shaped enriched /1/summary. The XMRig keys are a trimmed but valid subset (the
 # dashboard reads hashrate/connection from the proxy, not here); the `rigforge` block carries every
 # field parse_rigforge() reads, with the producer's real names and units.
@@ -35,8 +39,18 @@ _XMRIG_SUMMARY = {
     "connection": {"pool": "itest-proxy:3333", "uptime": 3600, "accepted": 42, "rejected": 0},
 }
 
+# Every key here is one the real producer emits, and the set is pinned against RigForge's own
+# committed wire fixture by `test_fake_matches_the_vendored_wire_contract` — see contract/v1/. The
+# VALUES are deliberately ours and deliberately not the fixture's: the fixture is a normalized,
+# hardware-independent capture whose numeric fields are mostly null, which would exercise the
+# consumers' default-everything path and nothing else. So the fixture pins the SHAPE and this pins
+# realistic content. Units match the real feed: H/s, W, °C, MT/s.
+#
+# `msr`/`smt` are strings and not booleans because that is what the producer sends ("ok"/"fail"/
+# "none"; the SMT control value or null). Nothing in the dashboard reads either one — they are here
+# so the shape guard has the whole block to compare, not because a consumer depends on them.
 _RIGFORGE_BLOCK = {
-    "version": "1.7.0",
+    "version": "1.16.0",
     "xmrig_version": "6.24.0",
     "xmrig_commit": "abcdef0",
     "tune": {
@@ -50,24 +64,68 @@ _RIGFORGE_BLOCK = {
     "health": {
         "service_active": True,
         "hugepages_total": 1280,
+        "hugepages_1g": 0,
         "governor": "performance",
-        "msr": True,
-        "smt": True,
+        "msr": "ok",
+        "smt": "on",
         "xmp": True,
+        "ram": {"channels": 2, "modules": 2, "mts": 6000, "rated_mts": 6000},
         "firmware": {"vendor": "ASUS", "board": "ProArt X670E"},
         "clock_pct_of_boost": 98,
         "throttling": False,
     },
-    "watchdog": {"mode": "enabled", "thermal_hold": False, "temp_c": 62, "max_temp_c": 85},
+    "watchdog": {
+        "mode": "enabled",
+        "thermal_hold": False,
+        "temp_c": 62,
+        "max_temp_c": 85,
+        "resumes_below_c": 80,
+        "strikes": 0,
+    },
+    # The rig's EFFECTIVE writable config (rigforge#253), what Worker Inspect prefills from (#1235).
+    # Exactly the six writable keys, and `pools` carries only what the producer leaves after its own
+    # `del(.pass, ."tls-fingerprint")` — a contract-shaped body cannot contain a credential, which
+    # is why the credential-strip defence is proven at tier 1 against a deliberately hostile body
+    # and not here. Testing it here too would be the same behaviour at two tiers.
+    "config": {
+        "pools": [{"url": "itest-proxy:3333"}],
+        "DONATION": 1,
+        "autotune": "disabled",
+        "watchdog": "enabled",
+        "watchdog_interval_min": 5,
+        "max_temp_c": 85,
+    },
+    # Where that config came from, in the rig's own words (rigforge#254, consumed by #1345).
+    "config_meta": {
+        "revision": "50c51399833d2a28",
+        "changed_at": "2026-08-24T09:15:00Z",
+        "source": "control",
+        "last_change_id": "7777777777777777",
+    },
+    # The rig's last control outcome, mirrored into this same read feed (#579, rigforge#346).
+    "control": {
+        "change_id": "7777777777777777",
+        "status": "rolled_back",
+        "reason": "miner did not return to a live hashrate; rolled back and live",
+    },
 }
 
 
-def enriched_body(miner_down=False):
-    """The bytes the api-server ships: the XMRig summary + `rigforge`, or the miner-down body."""
+def enriched_body(miner_down=False, control=_UNSET):
+    """The bytes the api-server ships: the XMRig summary + `rigforge`, or the miner-down body.
+
+    ``control`` overrides ``rigforge.control``. Pass ``None`` for the fresh-rig wire shape: the key
+    is still served, with a null value, because the producer's jq falls back to a literal ``null``
+    when no control change has ever been recorded — it does not omit the key.
+    """
+    block = dict(_RIGFORGE_BLOCK)
+    if control is not _UNSET:
+        block["control"] = control
     if miner_down:
-        # XMRig keys drop; only the RigForge block serves, flagged unreachable (rigforge#99).
-        return {"rigforge": {**_RIGFORGE_BLOCK, "xmrig_api": "unreachable"}}
-    return {**_XMRIG_SUMMARY, "rigforge": dict(_RIGFORGE_BLOCK)}
+        # XMRig keys drop; only the RigForge block serves, flagged unreachable (rigforge#99). The
+        # whole block still serves on this path — config/config_meta/control included.
+        return {"rigforge": {**block, "xmrig_api": "unreachable"}}
+    return {**_XMRIG_SUMMARY, "rigforge": block}
 
 
 def _make_handler(cfg):
@@ -102,7 +160,7 @@ def _make_handler(cfg):
                 return self._send(404, {"error": "not found"})
             if not self._authed():
                 return self._send(401, {"error": "unauthorized"})
-            self._send(200, enriched_body(cfg["miner_down"]))
+            self._send(200, enriched_body(cfg["miner_down"], cfg["control"]))
 
     return _Handler
 
@@ -118,8 +176,22 @@ class FakeWorkerApi:
     modes. ``miner_down`` serves the up-but-miner-unreachable body.
     """
 
-    def __init__(self, auth="none", name="rig1", token="", miner_down=False, host="127.0.0.1"):
-        self.cfg = {"auth": auth, "name": name, "token": token, "miner_down": miner_down}
+    def __init__(
+        self,
+        auth="none",
+        name="rig1",
+        token="",
+        miner_down=False,
+        host="127.0.0.1",
+        control=_UNSET,
+    ):
+        self.cfg = {
+            "auth": auth,
+            "name": name,
+            "token": token,
+            "miner_down": miner_down,
+            "control": control,
+        }
         self._srv = _Server((host, 0), _make_handler(self.cfg))
         self.host, self.port = self._srv.server_address
 
@@ -145,7 +217,13 @@ def main():
     ap.add_argument("--token", default="", help="expected bearer token for --auth token")
     ap.add_argument("--miner-down", action="store_true", help="serve the up-but-miner-down body")
     args = ap.parse_args()
-    cfg = {"auth": args.auth, "name": args.name, "token": args.token, "miner_down": args.miner_down}
+    cfg = {
+        "auth": args.auth,
+        "name": args.name,
+        "token": args.token,
+        "miner_down": args.miner_down,
+        "control": _UNSET,
+    }
     srv = _Server((args.host, args.port), _make_handler(cfg))
     print(f"fake-worker-api on {args.host}:{args.port} (auth={args.auth})", flush=True)
     try:
