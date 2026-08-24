@@ -32,3 +32,11 @@ echo "== unit: patch-coverage overlap self-test (#1000) =="
 # --self-test drives fixtures through both branches plus the file-present quiet pass.
 bash "$ROOT/scripts/patch-coverage.sh" --self-test >/dev/null 2>&1
 assert_rc "patch-coverage wrapper self-test passes" "$?" "0"
+
+echo "== unit: shipped-image sweep report self-test (#1313) =="
+# The weekly sweep of the PUBLISHED images renders its tracking-issue body with this script, and
+# its whole job is refusing to call an image clean when it was never scanned. Every refusal —
+# a missing leg, an unparseable report, an artifact that is a tag rather than a digest — is
+# driven through fixtures here, with no network, no docker and no gh.
+bash "$ROOT/scripts/shipped-image-sweep-report.sh" --self-test >/dev/null 2>&1
+assert_rc "shipped-image sweep report self-test passes" "$?" "0"
