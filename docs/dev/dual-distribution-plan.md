@@ -428,9 +428,10 @@ the #54 matrix per cut, same mandate as the targeted e2e.
   os-image release ships it. The watchers: Dependabot tracks every base digest
   (`build/*`, `dashboard/`, `docker-compose.yml`, `os/rootfs`), the weekly CI sweeps rebuild and
   Trivy-scan the stack images (ci.yml) and the rootfs (os-rootfs.yml), and
-  pin-watch.yml files an issue when a hand-pinned binary (docker-compose, cosign)
-  falls behind upstream. A security-relevant bump landing on the integration branch
-  is a release trigger, not just a green check.
+  pin-watch.yml files an issue when one of the hand-pinned upstreams (docker-compose,
+  cosign, and the baked RigForge tree) falls behind its latest release. A
+  security-relevant bump landing on the integration branch is a release trigger,
+  not just a green check.
 
 ## Repo outline (target state)
 
