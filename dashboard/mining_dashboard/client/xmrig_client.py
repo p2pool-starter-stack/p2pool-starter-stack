@@ -3,6 +3,7 @@ import json
 import logging
 import time
 
+from mining_dashboard.client.rig_config_meta import parse_config_meta
 from mining_dashboard.config.config import (
     API_TIMEOUT,
     DASHBOARD_WORKERS,
@@ -102,6 +103,7 @@ def parse_rigforge(payload):
             "max_temp_c": watchdog.get("max_temp_c") if wd_on else None,
         },
         "config": _rig_writable_config(rf.get("config")),
+        "config_meta": parse_config_meta(rf.get("config_meta")),
     }
 
 
