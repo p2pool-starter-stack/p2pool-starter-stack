@@ -1,13 +1,8 @@
-// Unit tests for Worker Inspect's editor UI (#518): mining_dashboard/web/static/workerview.mjs —
-// the table editor, the JSON mode (inline parse errors + the file-fill button), and the masked
-// sentinel round-trip shared with the Configuration view (#508/#440).
-//
-// Rendering uses the dependency-free vnode walker (helpers/render.mjs); apply()/onJsonInput/
-// onFilePick are called directly against a WorkerInspect instance, the same pattern
-// configview.test.mjs uses for ConfigView's poll()/save() — no DOM, no npm deps.
-//
-// Run with Node's built-in test runner (CI runs exactly this):
-//     node --test dashboard/tests/frontend/
+// Unit tests for Worker Inspect's editor UI (#518): mining_dashboard/web/static/workerview.mjs — the
+// table editor, the JSON mode (inline parse errors + the file-fill button), and the masked sentinel
+// round-trip shared with the Configuration view (#508/#440). Rendering uses the dependency-free vnode
+// walker (helpers/render.mjs); apply()/onJsonInput/onFilePick are called directly against a
+// WorkerInspect instance — no DOM, no npm deps. Run with: node --test dashboard/tests/frontend/
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -30,11 +25,9 @@ const DETAIL = {
   hashrate_history: { hashrate: [], markers: [] },
 };
 
-// WorkerInspect is never mounted here (no DOM/jsdom — this repo's frontend tests deliberately run
-// with neither, see helpers/render.mjs). Preact's setState() only takes effect through Preact's
-// own render loop, which never runs for an unmounted instance, so it silently no-ops on `state`.
-// Stub it to merge synchronously, the same net effect a real render would have, so the methods
-// under test (onJsonInput, apply's busy/result bookkeeping) are observable.
+// WorkerInspect is never mounted here (no DOM/jsdom), so Preact's setState() silently no-ops on
+// `state` — its render loop never runs. Stub it to merge synchronously so the methods under test
+// (onJsonInput, apply's bookkeeping) are observable.
 function stubSetState(inst) {
   inst.setState = (patch) => {
     const next = typeof patch === "function" ? patch(inst.state, inst.props) : patch;
@@ -138,8 +131,7 @@ test("table mode: leaving the secret row blank keeps the token untouched", async
 test("JSON mode: an untouched sentinel round-trips verbatim through the textarea", () => {
   const inst = readyInstance();
   inst.state.mode = "json";
-  // editText is prefilled from last_applied at load() time — unmodified, it still carries the
-  // literal sentinel shape (the same "unless replaced" contract the Configuration view uses).
+  // editText is prefilled from last_applied at load() time — unmodified, it still carries the literal sentinel shape (the same "unless replaced" contract the Configuration view uses).
   assert.match(inst.state.editText, /__secret__/);
   const parsed = JSON.parse(inst.state.editText);
   assert.deepEqual(parsed.token, SENTINEL);
@@ -435,23 +427,17 @@ test("Inspect surfaces the RigForge new-release callout only when the server der
 });
 
 // --- StatsTable value contrast (#1232) ------------------------------------------------------
-//
-// The detail-row values (Governor, HugePages, Mainboard, …) render with variant "outline" for a
-// plain metric — STAT_VALUE_CLS has no entry for it, so before the fix the value <td> got an
-// empty class: no colour, no font-weight, and it read as disabled text in dark mode. The fix
-// puts every value in `.stat-value` (explicit --text colour + weight 600), with status-ok/warn/
-// bad still layered on top to colour a flagged metric. These two tests would catch a regression
-// to the old behaviour: reverting the markup edit that adds `.stat-value` (the class check
-// below), or reverting/weakening the CSS rule itself (the second test, and the ratio test after
-// it) — verified by reverting each change locally and confirming the corresponding test reds.
+// A plain metric renders with variant "outline" — STAT_VALUE_CLS has no entry for it, so before the
+// fix the value <td> got an empty class (no colour/weight, reading as disabled text in dark mode).
+// The fix puts every value in `.stat-value`, with status-ok/warn/bad layered on top for a flagged
+// metric; these two tests catch a regression to either the markup or the CSS rule itself.
 
 test("StatsTable: a plain outline value still gets the stat-value class, not an empty one (#1232)", () => {
   const out = renderToString(StatsTable({ stats: [{ label: "Governor", value: "performance", variant: "outline" }] }));
   const valueCell = out.match(/<td class="([^"]*)">performance<\/td>/);
   assert.ok(valueCell, `expected a value <td> for the outline stat, got: ${out}`);
   assert.match(valueCell[1], /\bstat-value\b/);
-  // The old code emitted `STAT_VALUE_CLS[s.variant] || ""`, which for "outline" (or any variant
-  // with no colour entry) rendered class="" — an empty class is exactly the regression.
+  // The old code emitted `STAT_VALUE_CLS[s.variant] || ""`, which for "outline" (or any variant with no colour entry) rendered class="" — an empty class is exactly the regression.
   assert.notEqual(valueCell[1].trim(), "");
 });
 
@@ -463,9 +449,7 @@ test("StatsTable: a warn-variant value keeps its status colour alongside stat-va
   assert.match(valueCell[1], /\bstatus-warn\b/);
 });
 
-// WCAG contrast ratio (relative-luminance formula, same one the WCAG 2.x spec defines) computed
-// directly from the theme tokens the CSS declares — not a rendered/measured colour, since this
-// repo's frontend tests run with no DOM (see helpers/render.mjs). AA for normal text is 4.5:1.
+// WCAG contrast ratio (relative-luminance formula) computed directly from the theme tokens the CSS declares — not a rendered/measured colour, since these tests run with no DOM. AA is 4.5:1.
 function srgbToLinear(c) {
   const v = c / 255;
   return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
@@ -503,9 +487,7 @@ test("dashboard.css: .stat-value declares an explicit --text colour, not an empt
 });
 
 test("dashboard.css: .stat-value's --text on --card meets WCAG AA (>= 4.5:1) in dark AND light (#1232)", () => {
-  // Dark is the base palette (:root, :root[data-theme="dark"]); light is the explicit override
-  // block. Both declare --text and --card, so pull each theme's pair independently rather than
-  // assuming the first match in the file belongs to the theme under test.
+  // Dark is the base palette; light is the explicit override block — pull each theme's pair independently.
   const darkText = themeToken(DASHBOARD_CSS, /:root,\s*:root\[data-theme="dark"\]\s*\{[^}]*\}/, "--text");
   const darkCard = themeToken(DASHBOARD_CSS, /:root,\s*:root\[data-theme="dark"\]\s*\{[^}]*\}/, "--card");
   const lightText = themeToken(DASHBOARD_CSS, /:root\[data-theme="light"\]\s*\{[^}]*\}/, "--text");
@@ -515,4 +497,22 @@ test("dashboard.css: .stat-value's --text on --card meets WCAG AA (>= 4.5:1) in 
   const lightRatio = contrastRatio(lightText, lightCard);
   assert.ok(darkRatio >= 4.5, `dark .stat-value contrast ${darkRatio.toFixed(2)}:1 is below AA (4.5:1)`);
   assert.ok(lightRatio >= 4.5, `light .stat-value contrast ${lightRatio.toFixed(2)}:1 is below AA (4.5:1)`);
+});
+
+// --- Prefill provenance (#1235) ----------------------------------------------------------------
+
+test("table mode prefills from the rig's own config and labels every other case (#1235)", () => {
+  // Label text is proven at the logic tier (fieldNote, workerlogic.test.mjs); this proves the render.
+  const withRig = { ...DETAIL, rig_config: { DONATION: 9, max_temp_c: 85 } };
+  const out = renderToString(readyInstance(withRig).render());
+  assert.match(out, /value="9"/); // the rig's DONATION
+  assert.match(out, /value="85"/); // the rig's max_temp_c
+  assert.doesNotMatch(out, /value="5"/); // not the last-applied DONATION
+  assert.doesNotMatch(out, /value="70"/); // nor its max_temp_c
+  const noRig = { ...DETAIL, last_applied: { DONATION: 5 }, rig_config: null };
+  const fell = renderToString(readyInstance(noRig).render());
+  assert.match(fell, /last applied from here/);
+  assert.equal((fell.match(/could not read from the rig/g) || []).length, 2); // max_temp_c, token
+  assert.doesNotMatch(out, /the rig's live feed doesn't expose these values/); // stale claim, #1235
+  assert.match(out, /Prefilled with what the rig is running now/);
 });

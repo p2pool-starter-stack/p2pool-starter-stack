@@ -18,17 +18,33 @@ export { jsonSyntaxError } from "./configlogic.mjs";
 
 // One row per writable key, typed off the current (last-applied) value's JSON shape. A key never
 // applied yet has no value to type off, so it falls back to an empty JSON sub-editor.
-export function buildFields(writableKeys, lastApplied) {
+export function buildFields(writableKeys, lastApplied, rigConfig) {
   const applied = lastApplied || {};
+  const rig = rigConfig || {};
   return (writableKeys || []).map((key) => {
-    const value = applied[key];
-    if (isSecretSentinel(value)) return { key, type: "secret", value: "" };
-    if (typeof value === "boolean") return { key, type: "boolean", value };
-    if (typeof value === "number") return { key, type: "number", value };
-    if (typeof value === "string") return { key, type: "text", value };
-    // pools/autotune/watchdog (arrays/objects) and any never-applied key: a small per-row JSON
-    // sub-editor rather than a bespoke widget per shape (#518 leaves that for later).
-    return { key, type: "json", value: key in applied ? JSON.stringify(value, null, 2) : "" };
+    // Precedence: what the RIG is running, then what WE last pushed, then nothing (#1235). The
+    // rig's own value is the only one that is true on a never-edited rig or one changed directly
+    // with `rigforge.sh apply`; the last-applied record is a record of our writes, not its state.
+    // `source` travels with the field so the editor can say which of the three a box is showing —
+    // an unlabelled empty box reads as "0"/"none" and invites overwriting a good value.
+    const fromRig = key in rig;
+    const source = fromRig ? "rig" : key in applied ? "applied" : "unknown";
+    const value = fromRig ? rig[key] : applied[key];
+    if (isSecretSentinel(value)) return { key, source, type: "secret", value: "" };
+    // A null from the rig is a real answer — "no thermal cutoff set" — not a failed read, so it
+    // keeps source "rig" and renders empty rather than being demoted to unknown. The TYPE stays
+    // json regardless of source: buildTableChanges types the operator's edit off field.type, and
+    // an empty *text* row would hand back "80" where the rig expects 80 — validate_worker_changes
+    // checks key membership only, so a mistyped value would travel all the way to the rig.
+    if (value === null || value === undefined) {
+      return { key, source, type: "json", value: "" };
+    }
+    if (typeof value === "boolean") return { key, source, type: "boolean", value };
+    if (typeof value === "number") return { key, source, type: "number", value };
+    if (typeof value === "string") return { key, source, type: "text", value };
+    // pools/autotune/watchdog (arrays/objects): a small per-row JSON sub-editor rather than a
+    // bespoke widget per shape (#518 leaves that for later).
+    return { key, source, type: "json", value: JSON.stringify(value, null, 2) };
   });
 }
 
@@ -82,6 +98,14 @@ export function parseJsonChanges(text, writableKeys) {
   const bad = Object.keys(changes).filter((k) => !allowed.has(k));
   if (bad.length) return { error: `Not writable: ${bad.join(", ")}` };
   return { changes };
+}
+
+// Where a field's value came from (#1235). An unlabelled empty box reads as "0"/"none" and
+// invites overwriting a good value with a guess, so a value we could not read says so.
+export function fieldNote(source) {
+  if (source === "rig") return null;
+  if (source === "applied") return "last applied from here";
+  return "could not read from the rig";
 }
 
 // Per-worker hashrate chart markers (#1015): one change-history row -> one tooltip label. The

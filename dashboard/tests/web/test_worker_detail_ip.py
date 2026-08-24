@@ -9,6 +9,8 @@ Mutation-kill notes: swapping ``worker.get("ip")`` for the descriptor's ``host``
 ``test_ip_is_none_when_worker_not_in_snapshot``.
 """
 
+import pytest
+
 from mining_dashboard.service.storage_service import StateManager
 from mining_dashboard.web.views import build_worker_detail
 
@@ -56,3 +58,33 @@ class TestWorkerDetailIp:
         d = _detail(monkeypatch, "ghost", workers=[])
         assert d["found"] is False
         assert d["ip"] is None
+
+
+# --- Rig-sourced editor prefill (#1235) ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "rigforge,expected",
+    [
+        ({"config": {"DONATION": 9, "max_temp_c": 85}}, {"DONATION": 9, "max_temp_c": 85}),
+        (None, None),  # plain-xmrig rig
+        ({}, None),
+        ({"version": "1.9.0"}, None),  # RigForge too old to publish the block
+    ],
+)
+def test_rig_config_is_surfaced_for_the_editor_prefill(monkeypatch, rigforge, expected):
+    # #1235: the rig's own writable values ride the enriched feed, so the editor can show what
+    # the rig is RUNNING rather than what we last pushed at it. None means the editor must fall
+    # back to the last-applied record, never render empty boxes as if they were rig values.
+    d = _detail(
+        monkeypatch,
+        "rig1",
+        workers=[{"name": "rig1", "status": "online", "h60": 1, "rigforge": rigforge}],
+        descriptors=[{"name": "rig1", "host": "10.0.0.9"}],
+    )
+    assert d["rig_config"] == expected
+
+
+def test_rig_config_is_none_for_a_worker_that_is_not_in_the_snapshot(monkeypatch):
+    d = _detail(monkeypatch, "ghost", workers=[], descriptors=[])
+    assert d["rig_config"] is None

@@ -11,6 +11,7 @@ import {
   buildChartMarkers,
   buildFields,
   buildTableChanges,
+  fieldNote,
   jsonSyntaxError,
   markerLabel,
   parseJsonChanges,
@@ -175,4 +176,77 @@ test("buildChartMarkers: maps each row to a chart point, quiet only for a non-ap
 test("buildChartMarkers: tolerates a missing/empty marker list", () => {
   assert.deepEqual(buildChartMarkers(undefined), []);
   assert.deepEqual(buildChartMarkers([]), []);
+});
+
+// --- buildFields prefill precedence (#1235) -------------------------------------------------
+
+const WKEYS = ['DONATION', 'autotune', 'max_temp_c', 'pools', 'watchdog', 'watchdog_interval_min'];
+const byKey = (fields) => Object.fromEntries(fields.map((f) => [f.key, f]));
+
+test('buildFields: the rig\'s own value wins over what we last applied (#1235)', () => {
+    // The whole point: the last-applied record is a record of OUR writes. A value changed directly
+    // on the rig, or never set from here at all, is only in the rig's feed.
+    const f = byKey(buildFields(WKEYS, { DONATION: 1 }, { DONATION: 7, autotune: 'efficiency' }));
+    assert.equal(f.DONATION.value, 7);
+    assert.equal(f.DONATION.source, 'rig');
+    assert.equal(f.autotune.value, 'efficiency');
+    assert.equal(f.autotune.source, 'rig');
+});
+
+test('buildFields: falls back to the last-applied record only when the rig sent nothing (#1235)', () => {
+    const f = byKey(buildFields(WKEYS, { DONATION: 3 }, null));
+    assert.equal(f.DONATION.value, 3);
+    assert.equal(f.DONATION.source, 'applied');
+    // A key neither source knows is UNKNOWN, never silently empty — an unlabelled empty box reads
+    // as "0"/"none" and invites overwriting a good value with a guess.
+    assert.equal(f.watchdog.source, 'unknown');
+    assert.equal(f.watchdog.value, '');
+});
+
+test('buildFields: a null from the rig is an answer, not a failed read (#1235)', () => {
+    // max_temp_c null means "no thermal cutoff set" — it must not be demoted to "could not read".
+    const f = byKey(buildFields(WKEYS, {}, { max_temp_c: null }));
+    assert.equal(f.max_temp_c.source, 'rig');
+    assert.equal(f.max_temp_c.value, '');
+});
+
+test('buildFields -> buildTableChanges: a null-valued key still posts its real JSON type (#1235)', () => {
+    // Asserting the label alone let a regression through once: a null value was typed as a TEXT
+    // row, so editing a rig-reported-null max_temp_c posted the string "80" instead of 80. Nothing
+    // downstream catches that — validate_worker_changes checks key membership, not value types —
+    // so the round trip, not the source label, is what this key needs proven.
+    const fields = buildFields(WKEYS, {}, { max_temp_c: null });
+    assert.deepEqual(buildTableChanges(fields, { max_temp_c: '80' }), { max_temp_c: 80 });
+});
+
+test('buildFields: rig-sourced structured values still get the JSON sub-editor (#1235)', () => {
+    const pools = [{ url: 'rig:3333', user: '48edf' }];
+    const f = byKey(buildFields(WKEYS, {}, { pools }));
+    assert.equal(f.pools.type, 'json');
+    assert.equal(f.pools.source, 'rig');
+    assert.deepEqual(JSON.parse(f.pools.value), pools);
+});
+
+test('buildFields: every field carries a source, so no box can render unlabelled (#1235)', () => {
+    for (const f of buildFields(WKEYS, { DONATION: 1 }, { autotune: 'performance' })) {
+        assert.ok(['rig', 'applied', 'unknown'].includes(f.source), `${f.key} -> ${f.source}`);
+    }
+});
+
+// --- fieldNote ------------------------------------------------------------------------------
+
+test('fieldNote: a rig-sourced value needs no explanation (#1235)', () => {
+    assert.equal(fieldNote('rig'), null);
+});
+
+test('fieldNote: an applied value says where it came from (#1235)', () => {
+    assert.equal(fieldNote('applied'), 'last applied from here');
+});
+
+test('fieldNote: an unknown source says the value could not be read (#1235)', () => {
+    assert.equal(fieldNote('unknown'), 'could not read from the rig');
+});
+
+test('fieldNote: any unrecognised source falls back to could-not-read, never null (#1235)', () => {
+    assert.equal(fieldNote('bogus'), 'could not read from the rig');
 });
