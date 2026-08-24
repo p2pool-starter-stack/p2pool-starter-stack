@@ -71,3 +71,14 @@ echo "== unit: #1059 watch-report discrimination =="
 # that proves it and it needs no KVM.
 bash "$ROOT/tests/os/failure-evidence.sh" --self-test >/dev/null 2>&1
 assert_rc "#1059 watch-report self-test passes" "$?" "0"
+
+echo "== unit: tor healthcheck command-dependency self-test (#1372) =="
+# The #1098 pair above asks whether a healthcheck script EXISTS where its Dockerfile promises. This
+# asks the other half of the same contract: whether build/tor/healthcheck.sh can still RUN on
+# nothing but the commands that image ships. #1372 is the case that made the gap visible — the
+# Dockerfile installed `xxd` by name for one call site that busybox already served, and nothing in
+# CI could see either the need or its removal. Its --self-test drives the script for real with PATH
+# stripped to an allowlist of the image's commands, and drops each declared command in turn, because
+# a leaking PATH would pass every case on the host's own commands and prove nothing.
+bash "$ROOT/build/tor/healthcheck-selftest.sh" --self-test >/dev/null 2>&1
+assert_rc "tor healthcheck runs on the commands its own image ships (#1372)" "$?" "0"
