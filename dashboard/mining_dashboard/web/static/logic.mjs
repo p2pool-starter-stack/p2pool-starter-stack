@@ -295,88 +295,13 @@ export function computeEarnings(hashrateHs, earnings) {
   };
 }
 
-// Highest sustainable XvB tier for a what-if hashrate (#118): the highest tier whose threshold
-// clears `hashrateHs * calc.max_fraction`. A direct transcription of the AUTO path of
-// helper/utils.resolve_target_threshold (get_tier_info over stable_hr × max_fraction) — a pinned
-// test shares its inputs with the Python unit test so the two can't drift silently. Cost = the
-// threshold itself: XvB qualifies a tier on BOTH the 1h and 24h credited averages, so holding it
-// costs ~threshold H/s of continuous donation. Null when no tier is sustainable. Not gated on
-// calc.enabled: the what-if runs from local hashrate and the published thresholds, so it answers
-// "which tier could I hold?" before XvB is ever turned on (#938).
-export function computeXvbTier(hashrateHs, calc) {
-  if (!calc || !(hashrateHs > 0)) return null;
-  let best = null;
-  for (const t of calc.tiers || []) {
-    if (t.threshold > 0 && hashrateHs * calc.max_fraction >= t.threshold) {
-      if (!best || t.threshold > best.threshold) best = t;
-    }
-  }
-  return best && { tier: best.name, threshold: best.threshold, cost: best.threshold };
-}
-
-// XvB tier decision rows (#872, study-final). ONE row per donor tier with everything a miner
-// needs to choose a direction, all from measured or operator-published data:
-//   odds       — how often this tier's rounds pay out and among how many qualifiers (live feed)
-//   cost       — P2Pool earnings forgone donating the threshold (threshold x coeffDay x 365)
-//   xvbSays    — XvB's published face-value reward (their number, shown as theirs)
-//   study      — [lo, hi]: xvbSays x the measured delivery band (server-emitted; on-chain study
-//                constant, 25 rounds: 32% of face, CI 27-38%, margin-invariant)
-//   yours      — xvbSays x THIS wallet's measured realization, when >=5 wins exist (supersedes)
-//   net        — the actionable verdict: (yours ?? study ?? face) minus cost; [lo,hi] when a band
-// A tier the what-if hashrate cannot sustain is flagged, its net withheld (an unreachable payout
-// must not render as reachable). Pure + unit-tested; the component only renders these rows.
-// Not gated on calc.enabled: the table is the enable/don't-enable decision aid (#938) — the
-// server publishes the tiers either way, and a disabled box just has no live-credit context.
-export function xvbDecisionRows(calc, coeffDay, hr) {
-  if (!calc) return [];
-  const rows = [];
-  for (const t of calc.tiers || []) {
-    const cost = t.threshold > 0 && coeffDay > 0 ? t.threshold * coeffDay * DAYS_PER_YEAR : null;
-    const xvbSays = Number.isFinite(t.expected_reward_year) ? t.expected_reward_year : null;
-    const yours = Number.isFinite(t.realized_reward_year) ? t.realized_reward_year : null;
-    const study =
-      Array.isArray(t.assumed_reward_year_range) &&
-      t.assumed_reward_year_range.every(Number.isFinite)
-        ? t.assumed_reward_year_range
-        : null;
-    const sustainable = hr > 0 && t.threshold <= hr * (calc.max_fraction || 0);
-    let mode = "none";
-    let net = null;
-    if (cost !== null && yours !== null) {
-      mode = "yours";
-      net = [yours - cost, yours - cost];
-    } else if (cost !== null && study !== null) {
-      mode = "study";
-      net = [study[0] - cost, study[1] - cost];
-    } else if (cost !== null && xvbSays !== null) {
-      mode = "face";
-      net = [xvbSays - cost, xvbSays - cost];
-    }
-    // Verdict colour: red only when even the optimistic end loses; green only when even the
-    // pessimistic end profits; a zero-spanning band stays neutral.
-    const cls = net === null ? "" : net[1] < 0 ? "status-bad" : net[0] > 0 ? "status-ok" : "";
-    rows.push({
-      name: t.name,
-      threshold: t.threshold,
-      sustainable,
-      oddsPer30d: t.win_odds_day > 0 ? t.win_odds_day * 30 : null,
-      players: t.players_avg > 0 ? t.players_avg : null,
-      cost,
-      xvbSays,
-      study,
-      yours,
-      net,
-      mode,
-      cls,
-    });
-  }
-  return rows;
-}
-
 // Decimal places for a coin amount: more for small amounts (a day's earnings can be a tiny
-// fraction) so the figure isn't rounded to "0.0000".
+// fraction) so the figure isn't rounded to "0.0000". Magnitude, not the signed value: a negative
+// failed both comparisons and fell through to 8 dp, so a loss was always the longest string in
+// its row and carried four trailing zeros that said nothing (#1316).
 function coinDp(value) {
-  return value >= 1 ? 4 : value >= 0.001 ? 6 : 8;
+  const magnitude = Math.abs(value);
+  return magnitude >= 1 ? 4 : magnitude >= 0.001 ? 6 : 8;
 }
 
 // Format a client-computed coin amount; "—" for the null/invalid case.
