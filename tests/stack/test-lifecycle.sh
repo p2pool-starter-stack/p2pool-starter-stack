@@ -801,10 +801,12 @@ boot_up_probe() { # <exit status from `pithead up`> -> "<counter>|<rebooted?>|<w
         cd "$BOOTC" || exit 9
         # shellcheck disable=SC1090
         source "$ROOT/os/overlay/pithead-boot"
+        # shellcheck disable=SC2034  # both are read by the sourced boot script, not by this shell
         BOOT_FAIL_COUNT="$BOOTC/.boot-gate-failures"
+        # shellcheck disable=SC2034
         PITHEAD_REBOOT_CMD="touch $BOOTC/rebooted"
         boot_up_failed "$1"
-    ) 2>&1 )
+    ) 2>&1)
     # Each branch is read on the one sentence ONLY it writes, and the other's absence is asserted
     # by the verdict being a single value: both messages mention the A/B fallback, so keying on
     # that shared phrase would let either branch stand in for the other.
