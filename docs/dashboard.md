@@ -423,6 +423,47 @@ whatever config version happened to be active when it ran. See
 [Connecting Miners › One-click rig upgrade](workers.md#one-click-rig-upgrade) for what the rig
 must enable and how the target is derived.
 
+Above the history, a line says **where the rig's current config came from** — the rig's own
+account, not ours. The history table below it can only list what this dashboard did; this line is
+the one place a change it never saw can show up. RigForge stamps each config change it records with
+what applied it and a change id, and the dashboard looks for that id among this rig's own history
+rows — the table directly below — so the verdict is one you can check by eye:
+
+- **Last changed from this dashboard** — the id matches a change in the history below, and that
+  change held.
+- **Last change from this dashboard was rolled back** — the id matches a change the history below
+  records as rolled back or failed. When a control change does not come back live, RigForge
+  restores the previous config and stamps that restore with the *same* change id it just reverted,
+  so the rig goes on naming a change it is no longer running. The rig is on whatever config came
+  before it.
+- **Last changed from another dashboard** — applied over a control channel, but with an id this
+  dashboard has never issued. Another host drove this rig, or its record here is gone.
+- **Last changed on the rig itself** — applied on the rig, not over a control channel at all.
+- **Last restored from a saved config** — someone ran RigForge's restore command on the rig. This
+  covers only that command; the rig's own rollback after a failed change reads as the rolled-back
+  line above, not as a restore.
+- **No recorded config change** — the rig is running a config whose change it never recorded. A rig
+  that has never been changed reads the same way as one whose config file was edited
+  underneath RigForge, so the line claims neither.
+
+A rig running plain XMRig, or a RigForge too old to publish the block, shows no line at all rather
+than a guess. The words come from a fixed set the dashboard controls, never from the rig — a rig
+cannot write its own provenance in text you would read as ours. The line carries the rig's own
+timestamp beside it; hover it for the revision of the config the rig is running.
+
+Read it as evidence, not as proof, and know the one case it gets wrong. The line reports the last
+change RigForge **recorded**. A config file edited underneath RigForge — by hand, with nothing
+running to record it — is not a recorded change, so the line keeps naming whatever came before it.
+On a rig where the dashboard applied the previous change, that reads as "Last changed from this
+dashboard" while the rig runs something else. Treat the line as an alarm that fires, not as an
+all-clear: it can tell you a change happened elsewhere, but its silence is not proof that none did.
+
+Everything behind it is the rig's own account, so a rig that has been taken over can also say
+whatever it likes, including replaying a change id you really did send it. Within what the rig does
+report honestly, the dashboard's own half errs one way only: a change id belonging to a different
+rig, or a history it cannot read at that moment, both land on "another dashboard" rather than on a
+false reassurance.
+
 How it stays safe:
 
 - **The dashboard never holds the rig's token.** It spools the worker name and the change into the
@@ -948,7 +989,8 @@ watches for both on its normal poll cycle and appends them to the SAME audit tra
 - **`rig-edit`** — a worker's control API reports a config change this dashboard never sent. The
   row names the worker and the rig's own change id; RigForge's status feed reports only the
   outcome of a change, not a per-key diff, so unlike `host-edit` this can't name which setting
-  moved — inspect the rig directly to see what changed. This one source reads off the
+  moved — inspect the rig directly to see what changed, where Worker Inspect's own
+  [config-origin line](#worker-inspect) names what applied the rig's current config. This one source reads off the
   unauthenticated worker feed, so it is rate-capped per worker
   ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a fresh
   change id every poll can add only a bounded number of `rig-edit` rows per hour before the rest

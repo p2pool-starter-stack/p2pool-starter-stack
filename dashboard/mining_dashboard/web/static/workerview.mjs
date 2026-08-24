@@ -14,6 +14,7 @@
 // textarea (FileReader, no upload) for pushing the same profile to several rigs.
 
 import { WorkerChartCard } from "./chart.mjs";
+import { ConfigProvenance, HistoryRow, STATUS_META } from "./confighistory.mjs";
 import { SECRET_HINT } from "./configlogic.mjs";
 import { loadPref, savePref } from "./logic.mjs";
 import { Component, createRef, html } from "./preact.mjs";
@@ -54,22 +55,6 @@ async function pollWorkerResult(id, max = POLL_MAX) {
   return { status: "pending", note: "still applying — reopen to see the outcome" };
 }
 
-// A terminal status → a display variant + label. rolled_back and rejected/failed read as bad;
-// applied is good; accepted/pending are in-flight.
-const STATUS_META = {
-  applied: { cls: "status-ok", label: "Applied" },
-  accepted: { cls: "status-warn", label: "Queued on the rig" },
-  pending: { cls: "status-warn", label: "Pending" },
-  rejected: { cls: "status-bad", label: "Rejected" },
-  rolled_back: { cls: "status-bad", label: "Rolled back" },
-  failed: { cls: "status-bad", label: "Failed" },
-  error: { cls: "status-bad", label: "Error" },
-  // Worker-upgrade extras (#597): a rig already on the target is a calm no-op, and the rig's own
-  // 6h anti-beacon throttle is retry-later, not a fault (the host runner maps it server-side).
-  noop: { cls: "status-ok", label: "Already up to date" },
-  throttled: { cls: "status-warn", label: "Throttled by the rig — retry later" },
-};
-
 function StatusLine({ result }) {
   if (!result) return null;
   const meta = STATUS_META[result.status] || { cls: "text-muted", label: result.status };
@@ -79,28 +64,6 @@ function StatusLine({ result }) {
         ${meta.label}${result.change_id ? html` · <span class="font-mono text-xs">${result.change_id}</span>` : null}
         ${detail ? html`<span class="text-muted"> — ${detail}</span>` : null}
     </p>`;
-}
-
-// One history row: the change keys, the outcome, and when. `changes` IS the diff (we record only
-// the deltas we authored), so listing its keys is the per-change diff — except a rig-upgrade row
-// (#1014), whose `changes` carries `{version}` rather than a writable-key diff, shown as its own
-// target version instead of the literal key name "version".
-function HistoryRow({ row }) {
-  const meta = STATUS_META[row.status] || { cls: "text-muted", label: row.status };
-  const keys = Object.keys(row.changes || {});
-  const changed =
-    row.type === "upgrade"
-      ? `upgrade → ${row.changes?.version || "?"}`
-      : keys.length
-        ? keys.join(", ")
-        : "—";
-  return html`
-    <tr>
-        <td class="text-xs text-muted">${row.applied_at || ""}</td>
-        <td class="font-mono text-xs">${changed}</td>
-        <td><span class=${"text-small " + meta.cls}>${meta.label}</span></td>
-        <td class="text-xs text-muted">${row.reason || ""}</td>
-    </tr>`;
 }
 
 // One row of the hashrate-by-config table (#492): a config version + the measured hashrate
@@ -424,6 +387,7 @@ export class WorkerInspect extends Component {
             }
 
             <h4 class="mt-2">History</h4>
+            <${ConfigProvenance} origin=${detail.config_origin} meta=${detail.rig_config_meta} />
             ${
               (detail.history || []).length
                 ? html`

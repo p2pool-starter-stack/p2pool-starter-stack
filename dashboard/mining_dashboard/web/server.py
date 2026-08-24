@@ -16,11 +16,11 @@ from mining_dashboard.web.prometheus import CONTENT_TYPE as PROMETHEUS_CONTENT_T
 from mining_dashboard.web.prometheus import render_prometheus
 from mining_dashboard.web.views import (
     build_state,
-    build_worker_detail,
     canonical_window,
     get_shell_html,
     parse_window,
 )
+from mining_dashboard.web.worker_detail import build_worker_detail
 
 logger = logging.getLogger("WebServer")
 

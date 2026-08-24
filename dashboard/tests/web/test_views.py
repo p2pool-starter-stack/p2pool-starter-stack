@@ -50,7 +50,6 @@ from mining_dashboard.web.views import (
     build_sync,
     build_system,
     build_tari,
-    build_worker_detail,
     build_workers,
     build_xvb_calc,
     build_xvb_history,
@@ -66,6 +65,7 @@ from mining_dashboard.web.views import (
     xvb_realization,
     xvb_tempered_day,
 )
+from mining_dashboard.web.worker_detail import build_worker_detail
 
 # --- Metrics fixtures for the presentation builders -----------------------------------
 
