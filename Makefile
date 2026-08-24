@@ -65,7 +65,7 @@ lint-sh: ## shellcheck + shfmt over the CLI, build/* + dashboard/ container scri
 		os/overlay/pithead-data-reset os/overlay/pithead-mount-generator os/overlay/pithead-ssh-host-keys \
 		os/overlay/pithead-machine-id os/overlay/pithead-media-config os/overlay/pithead-hugepages \
 		os/overlay/pithead-journal-persist \
-		tests/os/run.sh tests/os/verify-image.sh tests/os/hugepages-boot-verdict.sh
+		tests/os/*.sh
 # run.sh by itself, keeping company only with the one file outside tests/stack that it sources:
 # os/overlay/pithead-boot, whose gate_ready and os_update_rollback_verdict read three globals
 # run.sh sets for them. Drop pithead-boot from this line and those three report as SC2034 — it

@@ -40,15 +40,15 @@ osupdate_failure_evidence() {
 # The tree is the discriminator. Every path that removes config.json without touching .env
 # lives in the firstboot wizard loop, and on an INSTALLED machine that has already accepted a
 # config and brought its stack up, one of them is reachable: the setup-failure branch, which
-# does `mv -f config.json config.json.failed` and re-mints a token. (The rest are pre-setup
-# validator rejections, or installer-STICK paths keyed on an install-request and /boot/efi.)
-# `config.json.failed` on disk names that branch outright, and the spool it writes beside it
-# (error.txt, last-attempt.json) carries the reason setup failed. Its ABSENCE proves nothing,
-# though, and that asymmetry is the whole reason this dump exists: the branch is
-# `mv -f config.json config.json.failed 2>/dev/null || rm -f config.json`, so a failed mv
-# discards its own stderr and DELETES the file outright, leaving no artifact at all. Read a
-# missing config.json.failed as "no evidence either way", never as an alibi. A
-# `config.json.tmp` would instead name the credential write-back's atomic sibling.
+# re-mints a token. (The rest are pre-setup validator rejections, or installer-STICK paths keyed
+# on an install-request and /boot/efi.) `config.json.failed` on disk names that branch outright,
+# and the spool beside it (error.txt, last-attempt.json) carries the reason setup failed.
+# #1059's fix changed what that branch DOES, so read the dump accordingly. It was
+# `mv -f config.json config.json.failed 2>/dev/null || rm -f config.json` — itself a mechanism
+# for the vanish, and a failed mv deleted the file outright leaving no artifact. It is now an
+# `install -m 600` COPY that removes the original only when `machine-role` is absent, so it no
+# longer vanishes a coordinator's config.json — which makes a reported vanish a STRONGER signal.
+# A `config.json.tmp` would instead name the credential write-back's atomic sibling.
 backup_failure_evidence() {
     printf '     --- guest evidence (#1059) ---\n'
     _ssh "echo '-- backup log --'; cat /tmp/restore-backup.log 2>/dev/null
