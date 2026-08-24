@@ -27,6 +27,10 @@ import ipaddress
 from urllib.parse import urlsplit
 
 from mining_dashboard.config import config
+from mining_dashboard.service.topology_graph import (  # noqa: F401  (re-exported)
+    TOPOLOGY_NODES,
+    topology_nodes,
+)
 
 TOR = "tor"
 CLEARNET = "clearnet"
@@ -254,28 +258,6 @@ def _notify_knobs():
 # The egress list above answers "is anything leaking?"; the topology answers "how is the whole
 # stack wired?" — every component and the route of each link (ingress, egress, internal). Same
 # config-derived routes, so the two views can never disagree (the summary is shared verbatim).
-
-# Zones, left-to-right by trust: your LAN, the host's container bridge, the Tor hub, the Internet.
-ZONE_LAN = "lan"
-ZONE_HOST = "host"
-ZONE_TOR = "tor"
-ZONE_NET = "internet"
-
-# Nodes bracket the host components with the external actors they actually talk to. ``internal``
-# nodes (the socket proxies) only appear when the operator expands the internal mesh.
-TOPOLOGY_NODES = [
-    {"id": "rigs", "label": "Mining rigs", "zone": ZONE_LAN},
-    {"id": "browser", "label": "Browser", "zone": ZONE_LAN},
-    {"id": "xmrig-proxy", "label": "xmrig-proxy", "zone": ZONE_HOST},
-    {"id": "caddy", "label": "caddy", "zone": ZONE_HOST},
-    {"id": "dashboard", "label": "dashboard", "zone": ZONE_HOST},
-    {"id": "p2pool", "label": "p2pool", "zone": ZONE_HOST},
-    {"id": "monerod", "label": "monerod", "zone": ZONE_HOST},
-    {"id": "tari", "label": "tari", "zone": ZONE_HOST},
-    {"id": "docker", "label": "docker-proxy", "zone": ZONE_HOST, "internal": True},
-    {"id": "tor", "label": "tor", "zone": ZONE_TOR},
-    {"id": "internet", "label": "Tor network", "zone": ZONE_NET},
-]
 
 
 def _edge(src, dst, route, label, kind):

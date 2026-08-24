@@ -39,6 +39,7 @@ import { MineCartTrain } from "./minecart.mjs";
 import { OsUpdateControl, OsVerdictBanner } from "./osupdate.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 import { SecurityPanel } from "./securityview.mjs";
+import { MoreStats, StatCard, TariStatus } from "./statcards.mjs";
 import { StackTopology } from "./topology.mjs";
 import { WorkerInspect } from "./workerview.mjs";
 
@@ -46,12 +47,6 @@ import { WorkerInspect } from "./workerview.mjs";
 const cVar = (v) => "c-" + v;
 
 // --- Small shared pieces -------------------------------------------------------------
-
-const StatCard = ({ label, value, cls, span, title }) => html`
-    <div class=${"stat-card" + (span ? " col-span-2" : "")} title=${title || ""}>
-        <h5>${label}</h5>
-        <p class=${cls || ""}>${value}</p>
-    </div>`;
 
 // Standardized Day/Month/Year estimate table — the one shape every earnings tab presents its
 // estimate in: coin column in accent, a ≈-fiat column appearing once the coin's price is known
@@ -97,51 +92,6 @@ const SharesStat = ({ sw, label = "Share in Window" }) => html`
         <h5>${label}</h5>
         <p><span class=${sw.ok ? "status-ok" : "status-bad"}>${sw.count}</span></p>
     </div>`;
-
-// Progressive disclosure for a busy stat-grid card ("show more" pattern). A card splits its
-// StatCards into `headline` (always visible — the figures an operator actually glances at) and
-// `detail` (behind the toggle, collapsed by default); both share one `stat-grid` so the layout is
-// identical to the old flat list once expanded. Expansion is persisted per card via
-// loadPref/savePref — the same helpers dashboardEarningsTab already uses — keyed on `prefKey` so
-// each card remembers its own state independently across a reload. The toggle is a real <button>
-// with aria-expanded (not <details>/<summary>): that keeps the expanded/collapsed state explicit
-// for assistive tech and gives the label control ("Show all (N)") the native disclosure triangle
-// doesn't.
-const EXPAND_STATES = ["expanded", "collapsed"];
-class MoreStats extends Component {
-  constructor(props) {
-    super(props);
-    this.state = { expanded: loadPref(props.prefKey, EXPAND_STATES, "collapsed") === "expanded" };
-    this.toggle = () => {
-      const expanded = !this.state.expanded;
-      savePref(this.props.prefKey, expanded ? "expanded" : "collapsed");
-      this.setState({ expanded });
-    };
-  }
-
-  render() {
-    const { headline, detail, count } = this.props;
-    const { expanded } = this.state;
-    return html`
-        <div class="stat-grid">
-            ${headline}
-            ${expanded ? detail : null}
-        </div>
-        <button type="button" class="more-stats-toggle" aria-expanded=${expanded ? "true" : "false"}
-                onClick=${this.toggle}>
-            ${expanded ? "Show less ▴" : `Show all (${count}) ▾`}
-        </button>`;
-  }
-}
-
-// Tari merge-mine status. The ✔ means the gRPC channel is actually up, so it's gated on `connected`
-// (channel_state READY) — NOT on `active` (a chain is merely configured). When configured but the
-// channel is down (e.g. TRANSIENT_FAILURE) we show the raw state in a warn style and no ✔, so a dead
-// channel can never read as "TRANSIENT_FAILURE ✔".
-const TariStatus = ({ tari }) => html`
-    <p class=${tari.connected ? "status-ok" : tari.active ? "status-warn" : ""}>
-        ${tari.status}${tari.connected ? html` <span class="check-inline">✔</span>` : null}
-    </p>`;
 
 const Badges = ({ badges }) => html`
     <div class="badge-row">
