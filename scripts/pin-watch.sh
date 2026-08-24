@@ -104,6 +104,10 @@ comparable() { # <component> <owner/repo> <tag> -> the tag in that pin's spellin
     local sha
     case "$1" in
     rigforge)
+        # `commits/<tag>`, never `git/refs/tags/<tag>`: every rigforge release tag is annotated, so
+        # the refs endpoint answers with the TAG object's sha, which is also 40 hex and so passes
+        # the shape check below. It can never equal a commit pin, and the row would read stale for
+        # ever — including right after a correct bump, which is the failure this row exists to catch.
         sha=$(gh api "repos/$2/commits/$3" --jq .sha 2>/dev/null) || return 1
         # Third-party input, under the same rule as the tag itself: a value that is not shaped like
         # a commit must not be compared, and must not be printed into an issue body.
