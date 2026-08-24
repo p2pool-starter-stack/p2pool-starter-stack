@@ -2,8 +2,8 @@
 # The file-budget ratchet gate (#1105 Phase 0): stop the biggest files in the repo from getting
 # any bigger, without demanding anyone rewrite them today. Two rules:
 #
-#   1. A brand-new tracked file has a hard ceiling of 800 lines (target: 400 — see the
-#      docs/dev/file-budget.tsv header for the target/ceiling rationale). Over 800 fails outright.
+#   1. A tracked file over the 400-line target must record a ceiling in
+#      docs/dev/file-budget.tsv; over 800 the refusal names the hard ceiling instead.
 #   2. An existing offender (already over 400 when this gate landed, or added to the budget
 #      since) gets its CURRENT line count recorded in docs/dev/file-budget.tsv as a personal
 #      ceiling. A PR may not grow that file past its recorded ceiling. Ceilings only ever go
@@ -166,6 +166,12 @@ run_gate() {
             echo "file-budget: FAIL — $path is $lines lines, over the hard ceiling of $HARD_CEILING for a" \
                 "new/unbudgeted file (target: $TARGET_LINES)."
             fail=1
+        elif [ "$lines" -gt "$TARGET_LINES" ]; then
+            # The other half of the same rule: an entry IFF over target. --generate has always
+            # emitted exactly this set (`awk '$2 > t'`); the gate now refuses what it would write.
+            echo "file-budget: FAIL — $path is $lines lines (> $TARGET_LINES target) but has no" \
+                "$BUDGET_FILE entry. Add one: scripts/lint-file-budget.sh --generate."
+            fail=1
         fi
     done <<<"$candidates"
 
@@ -186,7 +192,7 @@ run_gate() {
         echo "See CONTRIBUTING.md — file budget gate."
         return 1
     fi
-    echo "file budget OK — no file grew past its ceiling, no new file crossed $HARD_CEILING lines, $BUDGET_FILE is monotonic."
+    echo "file budget OK — every over-target file has a ceiling, none grew past it, $BUDGET_FILE is monotonic."
     return 0
 }
 
@@ -278,7 +284,18 @@ self_test() {
     git -C "$tmp" add new.sh
     rc=0
     (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "a new 800-line file passes (at the hard ceiling)" 0 "$rc"
+    expect "an over-target file with NO entry FAILS (800, inside the hard ceiling)" 1 "$rc"
+    if grep -q "new.sh is 800 lines (> 400 target) but has no" "$out"; then
+        echo "  self-test ok: names the missing entry, not the hard ceiling"
+    else
+        echo "  self-test FAIL: did not name the missing entry"
+        st_fail=1
+    fi
+    printf '# test budget\nbudgeted.sh\t500\nnew.sh\t800\n' >"$tmp/$BUDGET_FILE"
+    rc=0
+    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
+    expect "recording the entry is the fix — the same file then passes" 0 "$rc"
+    printf '# test budget\nbudgeted.sh\t500\n' >"$tmp/$BUDGET_FILE"
     seq 1 801 >"$tmp/new.sh"
     rc=0
     (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
