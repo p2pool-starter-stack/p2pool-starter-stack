@@ -88,7 +88,7 @@ OPTIONS:
                       targeted — LEAN (default): validate the dashboard + the sync logic against
                                  the EXISTING synced node — no full config sweep, no node re-sync.
                                  = check + lifecycle (one controlled restart exercises the sync
-                                 gate / node-down failover) + --auth-fail-closed.
+                                 gate / node-down failover), auth-fail-closed, RigForge read+control.
                       check    — non-destructive: readiness + current live state only (pure reads).
                       matrix   — the full destructive config matrix + lifecycle + fault-injection
                                  + auth-fail-closed, with --safety-backup auto-rollback. Opt-in —
@@ -106,7 +106,7 @@ OPTIONS:
 ENV OVERRIDES: BENCH_HOST, MINER_HOST, CANONICAL_DIR, E2E_DIR, MINER_XMRIG_CONFIG, GIT_REMOTE_URL
 
 EXAMPLES:
-  tests/integration/e2e.sh claude/my-feature                 # full matrix, borrow the configured miner
+  tests/integration/e2e.sh claude/my-feature                 # targeted (the default), borrow the miner
   tests/integration/e2e.sh claude/my-feature --mode check    # safe, non-destructive first run
   tests/integration/e2e.sh main --mode targeted --keep       # quick, leave it deployed to inspect
 EOF
@@ -688,10 +688,10 @@ run_harness() {
     # RigForge integration (#185/#235/#260) is only meaningful with a REAL rig mining through the stack.
     # The phase self-skips if no rigforge rig is connected, so this gate is just to avoid the noise.
     [ "$BORROW_MINER" = "1" ] && [ "$MODE" != "check" ] && phases="$phases --rigforge"
-    # RigForge control WRITE paths (#513/#514/#516/#517) need the rig pinned in dashboard.workers[] and
-    # its control API opted in. matrix only (it mutates config + dials the rig); each leg self-skips
-    # loudly when its prerequisite is missing, so this stays safe on a bench without the descriptor.
-    [ "$BORROW_MINER" = "1" ] && [ "$MODE" = "matrix" ] && phases="$phases --rigforge-control"
+    # The dashboard-to-rig WRITE paths (#513/#514/#516/#517/#1002b/#1236) — same gate as the read phase
+    # since #1364: matrix-only meant the mandated pre-cut run (--mode targeted) never asked for them, so
+    # the write surface shipped unproven. DESTRUCTIVE-then-restored; every leg self-skips loudly.
+    [ "$BORROW_MINER" = "1" ] && [ "$MODE" != "check" ] && phases="$phases --rigforge-control"
     # #905: no borrowed miner means no worker will ever appear — tell the harness to SKIP its two
     # mining assertions (workers online, stratum hashes) instead of failing a healthy stack.
     local no_mining=""
