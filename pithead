@@ -1585,6 +1585,39 @@ record_machine_role() { # <pithead|both|rig>
     printf '%s\n' "$1" >"$PWD/machine-role" 2>/dev/null || true
 }
 
+# The wizard's response to a failed (setup), as one step so it can be driven directly (#1059).
+#
+# It KEEPS the machine's configuration. A non-zero (setup) says something went wrong, never that
+# the submitted config is what went wrong — the capture that found this was a concurrent `backup`
+# calling stack_down out from under setup's in-flight `compose up`, on a config valid enough to
+# have rendered .env, provisioned Tor and started containers.
+#
+# This used to MOVE the file, to re-arm the setup wizard. It cannot, on any path that reaches it:
+# pithead-firstboot.service ANDs !config.json with !machine-role, and record_machine_role above
+# has already run, so the second condition holds the window shut whatever this does with the
+# first. Keeping the file also keeps the next boot working — pithead-boot.service's conditions
+# are ORed so it runs regardless, and os/overlay/pithead-boot's `./pithead render` reads exactly
+# the file the move used to take away.
+#
+# The removal therefore happens only where it can still buy something: a machine-role that never
+# landed (record_machine_role is best-effort). It lives INSIDE the success branch on purpose —
+# the defect this replaced was `mv ... 2>/dev/null || rm -f config.json`, which deleted the
+# operator's configuration outright whenever the mv failed, for a reason it had already
+# discarded. Structurally, nothing here can remove the file without a copy already on disk.
+#
+# install -m 600, not cp: config.json holds the dashboard password and the wallet address, and
+# the copy must not widen its mode.
+#
+# rc 0 = a copy was kept, 1 = it could not be.
+wizard_keep_failed_config() {
+    if install -m 600 "$PWD/config.json" "$PWD/config.json.failed" 2>/dev/null; then
+        [ -f "$PWD/machine-role" ] || rm -f "$PWD/config.json"
+        return 0
+    fi
+    warn "Could not keep a copy of the failed configuration as config.json.failed."
+    return 1
+}
+
 # The marker, read back. Anything unrecognised (or absent) is a coordinator: every machine
 # provisioned before this contract existed had no marker and was one.
 machine_role() { # echoes pithead|both|rig
@@ -2747,9 +2780,13 @@ firstboot_wizard() {
                     rm -f "$setup_log"
                     return
                 fi
-                warn "Provisioning failed. The submitted configuration is kept aside as config.json.failed;"
+                warn "Provisioning failed. A copy of the submitted configuration is kept as config.json.failed;"
                 warn "reopening the setup window so it can be corrected."
-                mv -f "$PWD/config.json" "$PWD/config.json.failed" 2>/dev/null || rm -f "$PWD/config.json"
+                # The machine KEEPS its configuration (#1059) — this used to move it aside, which
+                # on this path can only cost. The reasoning, and why the removal that remains is
+                # conditional, is at wizard_keep_failed_config's definition.
+                local kept_copy=0
+                if wizard_keep_failed_config; then kept_copy=1; fi
                 mkdir -p "$spool"
                 chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
                 # The reopened page gets BOTH halves of a usable retry: the reason it failed, and
@@ -2757,7 +2794,14 @@ firstboot_wizard() {
                 # machine still holds. The accept path wiped the spool, so both are restored here.
                 grep -a "\[ERROR\]" "$setup_log" | tail -n 1 | tr -d '[:cntrl:]' | tail -c 300 >"$spool/error.txt"
                 [ -s "$spool/error.txt" ] || printf 'Provisioning failed — see the machine console for detail.' >"$spool/error.txt"
-                [ -f "$PWD/config.json.failed" ] && jq -c . "$PWD/config.json.failed" >"$spool/last-attempt.json" 2>/dev/null
+                # Prefill from what THIS run failed on. The copy when it was made, the live file
+                # otherwise — never a config.json.failed left by an earlier attempt, which would
+                # hand the operator back answers they had already moved past.
+                if [ "$kept_copy" -eq 1 ]; then
+                    jq -c . "$PWD/config.json.failed" >"$spool/last-attempt.json" 2>/dev/null || true
+                elif [ -f "$PWD/config.json" ]; then
+                    jq -c . "$PWD/config.json" >"$spool/last-attempt.json" 2>/dev/null || true
+                fi
                 chown 1000:1000 "$spool/error.txt" "$spool/last-attempt.json" 2>/dev/null || true
                 rm -f "$setup_log"
                 break # outer loop re-mints a token and restarts the wizard container

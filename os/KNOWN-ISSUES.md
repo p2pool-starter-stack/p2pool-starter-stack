@@ -213,11 +213,22 @@ the boot gate do the committing, and it found this the first time it ran to comp
 directory is now one rule, `control_unit_dir`, read by the writer and both readers.
 
 **Fixed — a provisioning failure now surfaces its own reason on the reopened wizard.**
-Setup failures move the config aside as `config.json.failed` and re-mint a token; the
+Setup failures keep the config, copy it to `config.json.failed` and re-mint a token; the
 reopened page used to make an operator dig the reason out of the console. It no longer
 does: `pithead` writes the last `[ERROR]` line to `error.txt` and the failed config to
 `last-attempt.json` before reopening, and `wizard.py`/`wizard.mjs` surface both — the
 reason as the page's error text, the config as the retry prefill.
+
+**Fixed — a failed setup no longer costs the machine its configuration (#1059).** It used
+to move `config.json` aside, and delete it outright when that move failed. A non-zero
+`setup` does not mean the submitted configuration is at fault: the capture that found this
+was a concurrent `backup` stopping the stack under an in-flight `compose up`, on a config
+that had already rendered `.env`, provisioned Tor and started containers. Moving it aside
+existed to re-arm the setup wizard, and it could not — `pithead-firstboot.service` needs
+both `config.json` and `machine-role` absent, and `record_machine_role` has already run by
+then. So the machine keeps its configuration, takes an owner-only copy beside it, and
+removes the original only where doing so genuinely re-arms the wizard: a `machine-role`
+that never landed.
 
 **Fixed — the hugepages reservation now fits the machine's RAM (#977).** The baked 6 GiB
 sysctl imposed a silent ≥ 16 GiB floor the harness's 16 GiB VM could never notice.
