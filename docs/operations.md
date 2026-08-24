@@ -107,9 +107,18 @@ takes it after its prompts, so a passphrase you have not typed yet holds nothing
 first-boot wizard holds it only while it deploys. Read-only commands — `status`, `doctor` and
 `logs` among them — never take it and never wait.
 
-The lock lives on `.pithead.lock` beside `.env`, and belongs to the running process rather than
-to the file: if a command is killed, the lock is released with it. A leftover `.pithead.lock`
-after a crash is an ordinary file, not a stale lock, and there is nothing to clean up by hand.
+The lock covers one stack, not one directory. A bundle install keeps each release in its own
+`pithead-vX.Y.Z` directory beside the one before it (see [The deploy-box
+layout](#the-deploy-box-layout)), and every one of those directories drives the same containers
+and the same data — including the fresh directory a one-click upgrade creates and runs from. They
+share a single `.pithead.lock` in the directory that holds them all. A plain `pithead/` checkout
+has no siblings and keeps its lock in the checkout. `PITHEAD_LOCK_FILE` overrides the path.
+
+The lock belongs to the running process rather than to the file: if a command is killed, the lock
+is released with it. A leftover `.pithead.lock` after a crash is an ordinary file, not a stale
+lock, and there is nothing to clean up by hand. Where the file cannot be opened at all — a
+directory only root can write, a read-only mount — pithead says so and runs anyway rather than
+refusing every command that changes the stack.
 
 ### Tab completion
 

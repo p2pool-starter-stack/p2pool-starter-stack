@@ -152,6 +152,38 @@ _PITHEAD_LOCK_WARNED=0
 # Long enough that a routine `compose down` (seconds) never turns a backup into a refusal, short
 # enough that a wedged holder is reported instead of waited on forever.
 PITHEAD_LOCK_TIMEOUT="${PITHEAD_LOCK_TIMEOUT:-300}"
+# A timeout exits with THIS, not error()'s 1, because one caller has to tell the two apart:
+# os/overlay/pithead-boot reboots on its first failed boot so the bootloader falls back to the
+# other A/B slot, and declares "the fault is not the slot" on its second. A boot that merely
+# collided with the firstboot wizard's `setup` would spend that fallback on a slot that is fine
+# and then misdiagnose itself. 75 is sysexits.h's EX_TEMPFAIL — retry, nothing is wrong here.
+PITHEAD_EX_LOCK_TIMEOUT=75
+
+# WHERE the lock lives, and it is deliberately not the install directory.
+#
+# `$PWD/.pithead.lock` keys the lock on the directory pithead was run from — but the documented
+# bundle layout (docs/operations.md, "A recommended layout") gives ONE stack SEVERAL of those:
+# `current -> pithead-v1.5.0` sits beside `pithead-v1.4.0`, and the dashboard's one-click upgrade
+# creates a third sibling and runs `./pithead upgrade` INSIDE it (control_upgrade). Every one of
+# them drives the same Compose project (`pithead`, pinned in docker-compose.yml) against the same
+# data dirs, so a directory-keyed lock leaves that upgrade and a concurrent `backup` mutually
+# invisible — a lock that cannot be contended is #1059 again, wearing a green tick.
+#
+# So key it on the DEPLOY ROOT: the one thing every version dir of a stack shares. A plain
+# `pithead/` checkout has no siblings, keeps the directory-local path, and is unaffected.
+# PITHEAD_LOCK_FILE still overrides both, which is what the suite drives.
+is_versioned_install_dir() { # <dir> — the `pithead-vX.Y.Z` shape control_upgrade's #629 deploy creates
+    [[ "$(basename "$1")" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+mutation_lock_path() {
+    if [ -n "${PITHEAD_LOCK_FILE:-}" ]; then
+        printf '%s' "$PITHEAD_LOCK_FILE"
+    elif is_versioned_install_dir "$PWD"; then
+        printf '%s' "$(dirname "$PWD")/.pithead.lock"
+    else
+        printf '%s' "$PWD/.pithead.lock"
+    fi
+}
 
 mutation_lock_acquire() { # <verb label>
     local label="${1:-pithead}"
@@ -179,10 +211,23 @@ mutation_lock_acquire() { # <verb label>
         return 0
     fi
 
-    _PITHEAD_LOCK_PATH="${PITHEAD_LOCK_FILE:-$PWD/.pithead.lock}"
+    _PITHEAD_LOCK_PATH="$(mutation_lock_path)"
     # Append, never truncate: `9>` empties the file at OPEN time — before the flock is taken — so
     # it would wipe the holder record the waiter below is about to read.
-    exec 9>>"$_PITHEAD_LOCK_PATH" || error "Cannot open the pithead lock file: $_PITHEAD_LOCK_PATH"
+    #
+    # Fail OPEN here, matching the missing-flock branch above and for the same reason: a lock file
+    # this user cannot open is an environment fault (a deploy root only root can write, a
+    # read-only mount), and refusing every mutating verb on such a box is a worse regression than
+    # the race this closes. The two environmental failures are now handled the same direction on
+    # purpose — the asymmetry that used to sit here was not deliberate.
+    if ! exec 9>>"$_PITHEAD_LOCK_PATH"; then
+        if [ "$_PITHEAD_LOCK_WARNED" -eq 0 ]; then
+            warn "Cannot open the pithead lock file ($_PITHEAD_LOCK_PATH), so pithead cannot serialise itself — another pithead running now can interleave with this one."
+            _PITHEAD_LOCK_WARNED=1
+        fi
+        _PITHEAD_LOCK_PATH=""
+        return 0
+    fi
     if ! flock -n 9; then
         local holder
         holder=$(head -n 1 "$_PITHEAD_LOCK_PATH" 2>/dev/null | tr -d '[:cntrl:]' | head -c 120)
@@ -190,7 +235,10 @@ mutation_lock_acquire() { # <verb label>
         warn "Another pithead operation is in progress ($holder) — waiting up to ${PITHEAD_LOCK_TIMEOUT}s for it to finish."
         if ! flock -w "$PITHEAD_LOCK_TIMEOUT" 9; then
             exec 9>&-
-            error "Timed out after ${PITHEAD_LOCK_TIMEOUT}s waiting for another pithead operation ($holder) — nothing was changed. Re-run '$0 $label' once it has finished."
+            # error()'s message, error()'s exit — except the status, for the reason at
+            # PITHEAD_EX_LOCK_TIMEOUT above. Anything reading only the message is unaffected.
+            echo -e "${C_RED}[ERROR]${C_RESET} Timed out after ${PITHEAD_LOCK_TIMEOUT}s waiting for another pithead operation ($holder) — nothing was changed. Re-run '$0 $label' once it has finished." >&2
+            exit "$PITHEAD_EX_LOCK_TIMEOUT"
         fi
     fi
     _PITHEAD_LOCK_OWNED=1
@@ -10583,7 +10631,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # its default paths under the NEW dir and the stack would come up beside its own data.
     local new_dir="" cwd
     cwd=$(pwd -P) # physical path: the guard below compares canonicalized values on BOTH sides
-    if [[ "$(basename "$cwd")" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if is_versioned_install_dir "$cwd"; then
         new_dir="$(dirname "$cwd")/pithead-$tag"
         local dvar dval
         for dvar in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR TOR_DATA_DIR DASHBOARD_DATA_DIR; do

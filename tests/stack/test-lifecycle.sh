@@ -414,7 +414,7 @@ assert_rc "the holder records itself so a waiter can name it" "$(lock_await_reco
 : >"$LKLOG"
 out="$(PITHEAD_LOCK_FILE="$LKFILE" PITHEAD_LOCK_TIMEOUT=1 DOCKER_LOG="$LKLOG" PATH="$LKBIN:$PATH" run_sourced "$LKDIR" stack_down 2>&1)"
 rc=$?
-assert_rc "a mutating verb refuses rather than interleaving with a held window" "$rc" "1"
+assert_rc "a mutating verb refuses rather than interleaving with a held window" "$rc" "75"
 # `verb=backup` is the discriminator for opening the lock file with `9>>` and not `9>`: `9>`
 # truncates at OPEN time, before the flock, which would wipe the record this waiter just read.
 assert_contains "the refusal names the verb holding the window" "$out" "verb=backup"
@@ -458,7 +458,7 @@ while [ "$i" -lt 200 ]; do
 done
 out="$(PITHEAD_LOCK_FILE="$LKFILE" PITHEAD_LOCK_TIMEOUT=1 DOCKER_LOG="$LKLOG" PATH="$LKBIN:$PATH" run_sourced "$LKDIR" stack_down 2>&1)"
 rc=$?
-assert_rc "an unrecorded holder still blocks the window" "$rc" "1"
+assert_rc "an unrecorded holder still blocks the window" "$rc" "75"
 assert_contains "an unrecorded holder is reported as unrecorded" "$out" "holder unrecorded"
 assert_not_contains "and is never reported under the previous holder's name" "$out" "verb=backup"
 kill "$LKEXT" 2>/dev/null
@@ -544,7 +544,7 @@ lock_reinvoke_probe() { # <1=keep the inherited marker|0=strip it> -> "<child rc
 assert_eq "a re-invoked pithead inside a held window proceeds on the inherited marker" \
     "$(lock_reinvoke_probe 1)" "0|called|held|intact"
 assert_eq "without the marker that same child blocks on its own parent and changes nothing" \
-    "$(lock_reinvoke_probe 0)" "1|untouched|held|intact"
+    "$(lock_reinvoke_probe 0)" "75|untouched|held|intact"
 assert_eq "a re-invoked child can open a second window without deadlocking on its parent" \
     "$(lock_reinvoke_probe 2)" "0|untouched|held|intact"
 
@@ -595,4 +595,227 @@ rm -f "$LKDIR/.pithead.lock"
 DOCKER_LOG="$LKLOG" PATH="$LKBIN:$PATH" run_sourced "$LKDIR" stack_down >/dev/null 2>&1
 assert_eq "the lock defaults to .pithead.lock in the stack directory" \
     "$([ -f "$LKDIR/.pithead.lock" ] && echo present || echo absent)" "present"
+
+# An unopenable lock file degrades OPEN, exactly like a missing flock and for the same reason: a
+# deploy root only root can write, or a read-only mount, is an environment fault, and refusing
+# every mutating verb on such a box is a worse regression than the race. The path here has a
+# REGULAR FILE as its parent, so the open fails with ENOTDIR for any uid — a chmod-based fixture
+# would silently stop being a fixture under a root-run suite and the case would pass vacuously.
+printf 'not a directory\n' >"$LKDIR/notadir"
+: >"$LKLOG"
+out="$(PITHEAD_LOCK_FILE="$LKDIR/notadir/nope.lock" DOCKER_LOG="$LKLOG" PATH="$LKBIN:$PATH" run_sourced "$LKDIR" stack_down 2>&1)"
+rc=$?
+assert_rc "an unopenable lock file degrades instead of refusing every mutating verb" "$rc" "0"
+assert_contains "and says out loud that it is no longer serialising anything" "$out" "cannot serialise itself"
+assert_contains "the mutation it could not serialise still runs" "$(cat "$LKLOG")" "compose down"
+
+# The lock is keyed on the DEPLOY ROOT, not on the directory pithead was run from. One stack is
+# several sibling pithead-vX.Y.Z dirs (`current ->`, the rollback copy, and the fresh dir the
+# dashboard's one-click upgrade creates and runs `./pithead upgrade` inside), all driving the same
+# Compose project against the same data. Keyed on the directory, that upgrade and a concurrent
+# `backup` took different lock files and could not see each other — uncontended by construction,
+# which is #1059 wearing a green tick.
+LKROOT="$SANDBOX/deploy"
+mkdir -p "$LKROOT/pithead-v1.0.0" "$LKROOT/pithead-v2.0.0" "$LKROOT/plain-a" "$LKROOT/plain-b"
+# Hold a window in one dir; drive a mutating verb from its sibling. `env -u PITHEAD_LOCK_HELD`
+# because the concurrent actor is a SEPARATE process tree — inheriting the marker would make the
+# child skip the lock entirely and the case would pass without ever contending.
+lock_sibling_probe() { # <holder dir> <other dir> -> "<rc>|<mutated?>"
+    local clog="$LKROOT/sib.log"
+    : >"$clog"
+    (
+        cd "$1" || exit 9
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e # sourcing pithead turns errexit on here (pithead:14)
+        mutation_lock_acquire backup
+        PITHEAD_LOCK_TIMEOUT=1 DOCKER_LOG="$clog" PATH="$LKBIN:$PATH" \
+            env -u PITHEAD_LOCK_HELD bash -c 'cd "$2" || exit 9; source "$1"; set +e; stack_down' _ "$STACK" "$2" >/dev/null 2>&1
+        local rc=$? mutated=untouched
+        grep -q 'compose down' "$clog" 2>/dev/null && mutated=mutated
+        printf '%s|%s\n' "$rc" "$mutated"
+    ) 2>/dev/null
+}
+assert_eq "a window held in one version dir blocks its sibling, which is where the one-click upgrade runs" \
+    "$(lock_sibling_probe "$LKROOT/pithead-v1.0.0" "$LKROOT/pithead-v2.0.0")" "75|untouched"
+# The control that makes the case above mean something: two dirs that are NOT a versioned deploy
+# keep their own locks, so the block is the deploy root talking and not merely "two directories".
+assert_eq "two unrelated stacks still lock independently" \
+    "$(lock_sibling_probe "$LKROOT/plain-a" "$LKROOT/plain-b")" "0|mutated"
+rm -f "$LKROOT/.pithead.lock" "$LKROOT/pithead-v1.0.0/.pithead.lock"
+DOCKER_LOG="$LKLOG" PATH="$LKBIN:$PATH" run_sourced "$LKROOT/pithead-v1.0.0" stack_down >/dev/null 2>&1
+assert_eq "a versioned install keys its lock on the deploy root its siblings share" \
+    "$([ -f "$LKROOT/.pithead.lock" ] && echo present || echo absent)" "present"
+assert_eq "and leaves no second, uncontendable lock inside the version dir" \
+    "$([ -f "$LKROOT/pithead-v1.0.0/.pithead.lock" ] && echo present || echo absent)" "absent"
+
+# WIRING, verb by verb. Everything above proves the lock PRIMITIVE; these prove each verb is
+# actually attached to it. Every runtime case above drives stack_down, so six of the eight locked
+# verbs could stop acquiring — or stop releasing — with nothing going red.
+LKW="$SANDBOX/lockwiring"
+mkdir -p "$LKW/bin"
+make_stubs "$LKW/bin"
+cat >"$LKW/bin/sudo" <<'SUDOEOF'
+#!/usr/bin/env bash
+# restore's chown to the container uid cannot work unprivileged; everything else runs as the
+# test user, so the verb reaches its own window instead of aborting before it.
+[ "$1" = "chown" ] && exit 0
+exec "$@"
+SUDOEOF
+chmod +x "$LKW/bin/sudo"
+# A provisioned install, rebuildable — every verb driven below WRITES to it, and a used fixture
+# stops being a fixture. The hand-written .env is deliberately not what a render produces, so
+# `apply` sees a change and takes its committing branch rather than returning early.
+lock_wiring_fixture() { # <dir>
+    mkdir -p "$1/data/tor" "$1/data/dashboard"
+    cat >"$1/.env" <<'ENVEOF'
+MONERO_ONION_ADDRESS=mona.onion
+TARI_ONION_ADDRESS=taria.onion
+P2POOL_ONION_ADDRESS=p2pa.onion
+PROXY_AUTH_TOKEN=LKWTOKEN
+HOST_IP=box.lan
+DEPLOYMENT_COMPLETED=true
+COMPOSE_PROFILES=local_node
+ENVEOF
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"%s"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" "$VALID_TARI" >"$1/config.json"
+    printf 'CADDY-ORIG\n' >"$1/Caddyfile"
+    printf 'ONIONKEY-ORIG\n' >"$1/data/tor/hs_ed25519_secret_key"
+    printf 'DBDATA-ORIG\n' >"$1/data/dashboard/dashboard.db"
+}
+lock_wiring_fixture "$LKW"
+tar -czf "$LKW/wiring-archive.tar.gz" -C "$LKW" config.json
+LKWHELD="$LKW/held.lock"
+LKWFREE="$LKW/free.lock"
+# Which directory a pair runs in. `setup` needs an UNPROVISIONED one: the fixture above carries a
+# rendered .env, and setup refuses a non-interactive re-run before it reaches its window — so
+# driven there it would report "did not wait" for a reason that has nothing to do with the lock.
+LKWDIR="$LKW"
+LKWFRESH="$LKW/fresh"
+LKWBAL="$LKW/balance"
+mkdir -p "$LKWFRESH"
+
+lock_wiring_probe() { # <lock file> <fn> [args...] -> "<timedout|ran>+<mutated|untouched>"
+    local lk="$1" log="$LKW/wiring-docker.log" out t=ran m=untouched
+    shift
+    : >"$log"
+    out=$(cd "$LKWDIR" && PITHEAD_LOCK_FILE="$lk" PITHEAD_LOCK_TIMEOUT=1 PITHEAD_APPLIANCE=0 \
+        DOCKER_LOG="$log" PATH="$LKW/bin:$PATH" \
+        env -u PITHEAD_LOCK_HELD bash -c 'source "$1"; set +e; shift; "$@"' _ "$STACK" "$@" 2>&1)
+    case "$out" in *"waiting up to"*) t=timedout ;; esac
+    # Only the MUTATING compose calls: `backup` runs `compose ps` to decide whether the stack is
+    # up before it takes the window, and a read-only query is not a mutation.
+    grep -Eq 'compose (up|down|stop|create|restart)' "$log" 2>/dev/null && m=mutated
+    printf '%s+%s' "$t" "$m"
+}
+# The pair, per verb, in one assertion: refuses against a held window and touches nothing, and
+# gets PAST the lock when nothing holds it. The second half is the control — without it
+# "timed out" would also be true of a verb that cannot run in this fixture at all.
+lock_wiring_pair() { # <fn> [args...] -> "<held>|<free timed out?>"
+    local held free
+    held=$(lock_wiring_probe "$LKWHELD" "$@")
+    rm -f "$LKWFREE"
+    free=$(lock_wiring_probe "$LKWFREE" "$@")
+    rm -f "$LKWFREE"
+    printf '%s|%s' "$held" "${free%%+*}"
+}
+# One holder for all six pairs below. `flock -w`, not `flock -n`: the readiness poll under it
+# takes the lock itself to test for it, and a non-blocking holder that loses that race exits —
+# leaving every case below to pass against a lock nobody held. Bounded, so a genuinely stuck
+# fixture is reported by the guard below instead of hanging the suite.
+: >"$LKWHELD"
+(
+    exec 9>>"$LKWHELD"
+    flock -w 20 9 || exit 1
+    exec sleep 120
+) &
+LKWHOLDER=$!
+i=0
+while [ "$i" -lt 200 ]; do
+    flock -n "$LKWHELD" true 2>/dev/null || break
+    sleep 0.05
+    i=$((i + 1))
+done
+# The wiring cases are only evidence while this holds — say so rather than reporting six passes
+# earned by an absent holder.
+if flock -n "$LKWHELD" true 2>/dev/null; then
+    bad "the holder for the verb-wiring cases takes the window" "the lock is free, so the six cases below prove nothing"
+fi
+assert_eq "up waits on a held window and changes nothing" "$(lock_wiring_pair stack_up)" "timedout+untouched|ran"
+assert_eq "upgrade waits on a held window and changes nothing" "$(lock_wiring_pair stack_upgrade)" "timedout+untouched|ran"
+LKWDIR="$LKWFRESH"
+assert_eq "setup waits on a held window and changes nothing" "$(lock_wiring_pair setup)" "timedout+untouched|ran"
+LKWDIR="$LKW"
+assert_eq "restore waits on a held window and changes nothing" \
+    "$(lock_wiring_pair stack_restore -y "$LKW/wiring-archive.tar.gz")" "timedout+untouched|ran"
+assert_eq "backup waits on a held window and changes nothing" \
+    "$(lock_wiring_pair stack_backup -y --no-encrypt)" "timedout+untouched|ran"
+assert_eq "apply waits on a held window and changes nothing" "$(lock_wiring_pair apply -y)" "timedout+untouched|ran"
+kill "$LKWHOLDER" 2>/dev/null
+wait "$LKWHOLDER" 2>/dev/null
+
+# The other half of the wiring: a verb that finishes must hand the lock back exactly once. A
+# missing release leaves the window open for the rest of the process, and a DOUBLE acquire leaves
+# the depth counter at 1 with nothing left to decrement it — the failure the `apply` retry-branch
+# guard exists to prevent. Neither is visible from outside the process, because the kernel drops
+# the hold when it exits; both are visible from inside it.
+lock_wiring_balance() { # <fn> [args...] -> "depth=<n> state=<free|held>"
+    # On a FRESH fixture every time, and that is load-bearing rather than tidiness: a completed
+    # `apply` re-renders .env, so a second apply against the same dir finds nothing to change and
+    # returns before the retry-branch guard this case exists to protect. Re-using the dir left
+    # that guard unfalsifiable — the case passed either way, which reads exactly like coverage.
+    rm -rf "$LKWBAL"
+    lock_wiring_fixture "$LKWBAL"
+    rm -f "$LKWFREE"
+    (cd "$LKWBAL" && PITHEAD_LOCK_FILE="$LKWFREE" PITHEAD_APPLIANCE=0 DOCKER_LOG=/dev/null \
+        PATH="$LKW/bin:$PATH" env -u PITHEAD_LOCK_HELD \
+        bash -c 'source "$1"; set +e; shift; "$@" >/dev/null 2>&1
+                 st=free; flock -n "$PITHEAD_LOCK_FILE" true 2>/dev/null || st=held
+                 printf "depth=%s state=%s" "$_PITHEAD_LOCK_DEPTH" "$st"' _ "$STACK" "$@") 2>/dev/null
+}
+assert_eq "up gives its window back when it finishes" "$(lock_wiring_balance stack_up)" "depth=0 state=free"
+assert_eq "upgrade gives its window back when it finishes" "$(lock_wiring_balance stack_upgrade)" "depth=0 state=free"
+assert_eq "backup gives its window back when it finishes" \
+    "$(lock_wiring_balance stack_backup -y --no-encrypt)" "depth=0 state=free"
+assert_eq "restore gives its window back when it finishes" \
+    "$(lock_wiring_balance stack_restore -y "$LKW/wiring-archive.tar.gz")" "depth=0 state=free"
+assert_eq "apply takes its window once and gives it back, however it reached the recreate" \
+    "$(lock_wiring_balance apply -y)" "depth=0 state=free"
 unset -f lock_hold_bg lock_await_record lock_state lock_reinvoke_probe lock_nest_probe
+unset -f lock_sibling_probe lock_wiring_fixture lock_wiring_probe lock_wiring_pair lock_wiring_balance
+
+echo "== unit: the appliance boot leg tells lock contention from a bad slot (#1342) =="
+# pithead-boot's fail_boot reboots on the first failed boot so the bootloader falls back to the
+# other A/B slot, and on the second declares that the fault is not the slot. There is no systemd
+# ordering between pithead-firstboot and pithead-boot, so `./pithead up` here can collide with the
+# wizard's `setup` window — and a collision routed through fail_boot spends the one fallback the
+# box has on a slot that is fine, then misdiagnoses itself. Sourcing the boot script defines its
+# functions and runs none of it (its BASH_SOURCE guard), so this drives the real routing.
+BOOTC="$SANDBOX/bootcontend"
+mkdir -p "$BOOTC"
+boot_up_probe() { # <exit status from `pithead up`> -> "<counter>|<rebooted?>|<which message>"
+    local out verdict=other
+    rm -f "$BOOTC/.boot-gate-failures" "$BOOTC/rebooted"
+    # Both branches report on STDERR, so the redirect belongs to the subshell and INSIDE the
+    # capture: `$(...) 2>&1` sends it to the caller's stderr instead and leaves $out empty.
+    out=$( (
+        cd "$BOOTC" || exit 9
+        # shellcheck disable=SC1090
+        source "$ROOT/os/overlay/pithead-boot"
+        BOOT_FAIL_COUNT="$BOOTC/.boot-gate-failures"
+        PITHEAD_REBOOT_CMD="touch $BOOTC/rebooted"
+        boot_up_failed "$1"
+    ) 2>&1 )
+    # Each branch is read on the one sentence ONLY it writes, and the other's absence is asserted
+    # by the verdict being a single value: both messages mention the A/B fallback, so keying on
+    # that shared phrase would let either branch stand in for the other.
+    case "$out" in *"contention, NOT a bad slot"*) verdict=contended ;; esac
+    case "$out" in *"slot left uncommitted so"*) verdict="$verdict+slotfailure" ;; esac
+    printf '%s|%s|%s' \
+        "$(cat "$BOOTC/.boot-gate-failures" 2>/dev/null || echo none)" \
+        "$([ -f "$BOOTC/rebooted" ] && echo rebooted || echo no-reboot)" "$verdict"
+}
+assert_eq "a lock timeout spends no A/B fallback, is not counted, and says it is contention" \
+    "$(boot_up_probe 75)" "none|no-reboot|contended"
+assert_eq "any other failed up still reads as a bad slot and falls back" \
+    "$(boot_up_probe 1)" "1|rebooted|other+slotfailure"
+unset -f boot_up_probe
