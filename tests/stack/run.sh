@@ -2510,7 +2510,7 @@ export FAKE_LOAD_SECS=0
 hstart=$(date +%s)
 hout=$(hbl)
 hlen=$(($(date +%s) - hstart))
-printf '%s' "$hout" | grep -q "still loading" &&
+grep -q "still loading" <<<"$hout" &&
     bad "a fast load stays quiet" "heartbeat fired anyway" ||
     ok "a fast load stays quiet — no heartbeat for work already done"
 [ "$hlen" -lt 3 ] &&
@@ -2560,15 +2560,15 @@ fi
 # shell reports itself — `2>/dev/null` on the inner command cannot reach it. Harmless to control
 # flow, but it would print "No such file or directory" into the journal of every coordinator
 # boot. Existence has to be tested before the read.
-sed -n "${rig_line:-1}p" "$BOOTSCRIPT" | grep -q '\[ -f machine-role \]' &&
+grep -q '\[ -f machine-role \]' <(sed -n "${rig_line:-1}p" "$BOOTSCRIPT") &&
     ok "the marker is tested for existence before it is read (no error on every coordinator boot)" ||
     bad "the marker is tested for existence before it is read (no error on every coordinator boot)" \
         "$(sed -n "${rig_line:-1}p" "$BOOTSCRIPT")"
 rig_branch=$(sed -n "${rig_line:-1},/^fi\$/p" "$BOOTSCRIPT")
-printf '%s' "$rig_branch" | grep -qE '\./pithead (up|render|load-images)' &&
+grep -qE '\./pithead (up|render|load-images)' <<<"$rig_branch" &&
     bad "the rig branch starts nothing container-shaped" "it calls the stack's own commands" ||
     ok "the rig branch starts nothing container-shaped"
-printf '%s' "$rig_branch" | grep -q 'mark-good' &&
+grep -q 'mark-good' <<<"$rig_branch" &&
     ok "a rig commits its A/B slot exactly like a coordinator" ||
     bad "a rig commits its A/B slot exactly like a coordinator" "no mark-good in the rig branch"
 # The units are the other half of the fork: without the triggering condition a rig never runs
@@ -2585,7 +2585,7 @@ grep -q '^ConditionPathExists=!/data/pithead/machine-role' "$FBUNIT" &&
     bad "the wizard window is closed by the role marker too (no wizard on a provisioned rig)" "missing"
 # The marker, not rig.json: a fleet stick writes a rig's ANSWERS in flight while installing one
 # onto a disk, and must stay an installer through it — only an ACCEPTED role writes the marker.
-grep -h '^ConditionPathExists=' "$BOOTUNIT" "$FBUNIT" | grep -q 'rig\.json' &&
+grep -q 'rig\.json' <(grep -h '^ConditionPathExists=' "$BOOTUNIT" "$FBUNIT") &&
     bad "neither unit keys on the in-flight rig.json (a stick would stop being an installer)" "it does" ||
     ok "neither unit keys on the in-flight rig.json (a stick stays an installer)"
 unset BOOTSCRIPT BOOTUNIT FBUNIT mg_line lm_line rig_line li_line rig_branch
