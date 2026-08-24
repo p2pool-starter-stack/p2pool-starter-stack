@@ -1732,20 +1732,15 @@ phase_install() {
     local restore_archive="/tmp/pithead-os-restore-test.tar.gz.enc"
     local restore_pass="pithead-os-restore-test-passphrase" # fixture value, not real secret material
     rm -f "$restore_archive"
-    # State of the two files the backup collects unguarded, captured BEFORE the run (#1059). The
-    # backup failed here with `tar: data/pithead/config.json: Cannot stat` on a machine that was
-    # serving a live stack, and the guest is recycled before anyone can look. `tar` reports exactly
-    # that for a DANGLING SYMLINK as well as for a missing file, and `.env` beside it archived
-    # fine, so what the path actually IS matters more than whether `ls` finds something there.
-    _ssh "ls -la /data/pithead/config.json /data/pithead/.env 2>&1; readlink -f /data/pithead/config.json 2>&1" |
-        tr -d '\r' | sed 's/^/     · /'
+    backup_precapture # #1059: state of both collected files, plus a watcher for the run itself
     if _ssh "cd /data/pithead && PITHEAD_BACKUP_PASSPHRASE=$restore_pass ./pithead backup -y >/tmp/restore-backup.log 2>&1"; then
         ok "restore leg: took a real encrypted backup off the live machine"
+        backup_watch_report # a vanish the backup happened to survive is still the #1059 event
     else
         bad "restore leg: could not take the source backup"
-        # The reason lives on the guest — print ALL of it, or this failure is undiagnosable
-        # after the VM is recycled (a 500-char tail cut off the tar/openssl stderr once).
-        _ssh "cat /tmp/restore-backup.log 2>/dev/null" | tr -d '\r' | sed 's/^/     | /'
+        # The reason lives on the guest — capture ALL of it, log AND tree, or this failure is
+        # undiagnosable after the VM is recycled (it has been, twice: #1059).
+        backup_failure_evidence
         rm -f "$target_disk"
         return
     fi

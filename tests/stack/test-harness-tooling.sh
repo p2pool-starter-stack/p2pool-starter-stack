@@ -59,3 +59,15 @@ echo "== unit: shipped-image sweep report self-test (#1313) =="
 # driven through fixtures here, with no network, no docker and no gh.
 bash "$ROOT/scripts/shipped-image-sweep-report.sh" --self-test >/dev/null 2>&1
 assert_rc "shipped-image sweep report self-test passes" "$?" "0"
+
+echo "== unit: #1059 watch-report discrimination =="
+# The restore leg's config.json watcher reports on PASSING runs, so its SILENCE is the load-bearing
+# output — and five ways of collecting no evidence (guest unreadable, watcher never started,
+# watcher killed mid-window, watch window expired) must not print what a genuinely clean window
+# prints. Its --self-test drives all six outcomes, asserts each on the one sentence only it writes
+# AND on the absence of the others, and runs the shipped watcher body for real against a sandbox
+# file so the watcher and the report are proven against each other rather than each against an
+# assumption. Lives in tests/os/ (appliance lane); driven here because tier 1 is the lowest tier
+# that proves it and it needs no KVM.
+bash "$ROOT/tests/os/failure-evidence.sh" --self-test >/dev/null 2>&1
+assert_rc "#1059 watch-report self-test passes" "$?" "0"
