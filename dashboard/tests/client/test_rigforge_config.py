@@ -87,3 +87,52 @@ class TestRigWritableConfig:
     def test_a_malformed_pool_entry_does_not_crash_the_whole_poll(self):
         out = self._block({"pools": ["not-a-dict", None, {"url": "ok:1", "pass": "x"}]})
         assert out["pools"] == ["not-a-dict", None, {"url": "ok:1"}]
+
+
+# --- RigForge enriched feed parse (#235) ---------------------------------------------------------
+# The enriched feed is a SUPERSET of /1/summary: the whole XMRig object plus one `rigforge` key.
+# parse_rigforge lifts the display-relevant fields, nullable-safe; a plain-xmrig body → None.
+
+
+def test_parse_rigforge_absent_is_none():
+    # A plain-xmrig worker (no `rigforge` key) parses to None — the UI renders it as today.
+    assert parse_rigforge({"hashrate": {"total": [100]}, "api_ok": True}) is None
+    assert parse_rigforge({}) is None
+    assert parse_rigforge(["not", "a", "dict"]) is None
+
+
+def test_parse_rigforge_miner_down_has_no_xmrig_keys():
+    # Miner-down body: XMRig keys drop, only the rigforge block with xmrig_api unreachable remains.
+    rf = parse_rigforge({"rigforge": {"version": "1.7.0", "xmrig_api": "unreachable"}})
+    assert rf["miner_down"] is True
+    assert rf["version"] == "1.7.0"
+    # Absent sub-objects default cleanly — no chip data, no crash.
+    assert rf["power"] == {"watts": None, "hs_per_watt": None}
+    assert rf["watchdog"]["enabled"] is False
+
+
+def test_parse_rigforge_all_null_fields():
+    # Every enriched field is nullable on the wire (no RAPL, non-root, watchdog disabled).
+    block = {
+        "version": "1.7.0",
+        "tune": {"target": None, "autotune": {"enabled": False, "next": None}},
+        "power": {"watts": None, "hs_per_watt": None},
+        "health": {"governor": None, "throttling": None, "firmware": {}, "hugepages_total": None},
+        "watchdog": {"mode": "disabled"},
+    }
+    rf = parse_rigforge({"rigforge": block})
+    assert rf["power"] == {"watts": None, "hs_per_watt": None}
+    assert rf["health"] == {
+        "governor": None,
+        "throttling": None,
+        "board": None,
+        "hugepages_total": None,
+    }
+    assert rf["tune"] == {"target": None, "autotune_enabled": False, "autotune_next": None}
+    # A disabled watchdog masks its temp fields.
+    assert rf["watchdog"] == {
+        "enabled": False,
+        "thermal_hold": None,
+        "temp_c": None,
+        "max_temp_c": None,
+    }

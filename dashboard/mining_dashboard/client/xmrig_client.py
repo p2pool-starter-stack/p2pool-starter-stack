@@ -1,4 +1,5 @@
 import ipaddress
+import json
 import logging
 import time
 
@@ -25,6 +26,18 @@ WORKER_ENDPOINTS = DASHBOARD_WORKERS
 # Longest worker-name we'll ever echo back as a Bearer token (#122). xmrig names/tokens are short;
 # this just bounds a pathological miner-supplied value before it goes into a header.
 _MAX_NAME_TOKEN = 128
+
+# Ceiling on one rig's /1/summary. The poll pulls a device's response straight into the
+# dashboard's memory, and since #1235 part of it is forwarded on to the operator's browser;
+# nothing else bounds it, so aiohttp would buffer whatever the far end chose to send.
+#
+# Measured, not guessed — JSON-serialized /1/summary at real rig shapes, RigForge block included:
+# ~2.8 KiB for an 8-thread rig, 3.6 KiB for a 32-thread workstation, 8.0 KiB for a 192-thread
+# EPYC, and 16.0 KiB for an absurd-but-legitimate 512 threads with 8 pools. The term that actually
+# scales is hashrate.threads — one row per mining thread. 1 MiB is ~64x that absurd case, so the
+# cap cannot plausibly be reached by a rig telling the truth, which is the failure that would
+# matter: a cap set tight enough to bite a real operator is worse than the exhaustion it prevents.
+_MAX_SUMMARY_BYTES = 1024 * 1024
 
 # Re-warn about a worker whose API keeps failing at most this often, so a misconfigured fleet logs
 # one line per worker per interval — not one per poll (the data loop runs every ~30s).
@@ -345,7 +358,26 @@ class XMRigWorkerClient:
         try:
             async with self.session.get(url, headers=headers, timeout=API_TIMEOUT) as response:
                 if response.status == 200:
-                    payload = await response.json()
+                    # Read one byte past the ceiling and refuse on overflow. Deliberately NOT a
+                    # Content-Length check: that header is set by the far end, may be absent under
+                    # chunked encoding, and is exactly what a rig lying about its size would lie
+                    # about. Reading with a bound never trusts it in the first place.
+                    # Accumulate: StreamReader.read(n) is a SHORT read — it returns whatever is
+                    # buffered the moment anything is, NOT n bytes. One call would truncate any
+                    # body that arrives split across TCP reads, which is ordinary for a rig on
+                    # WiFi or any link with latency, and the rig would then read as unreachable
+                    # for a reason with nothing to do with its size. Stop at EOF, or one byte past
+                    # the ceiling — never buffering more than that however the body is framed.
+                    body = b""
+                    while len(body) <= _MAX_SUMMARY_BYTES:
+                        chunk = await response.content.read(_MAX_SUMMARY_BYTES + 1 - len(body))
+                        if not chunk:
+                            break
+                        body += chunk
+                    if len(body) > _MAX_SUMMARY_BYTES:
+                        self._warn(host, name, url, f"body over {_MAX_SUMMARY_BYTES} bytes")
+                        return {"api_ok": False}
+                    payload = json.loads(body)
                     if isinstance(payload, dict):
                         self._warned.pop(host, None)  # recovered — allow the next failure to log
                         payload["api_ok"] = True
