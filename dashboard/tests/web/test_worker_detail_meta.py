@@ -94,6 +94,38 @@ class TestConfigOrigin:
         )
         assert d["config_origin"] == "here"
 
+    def test_a_change_the_rig_only_acknowledged_is_not_claimed_as_the_running_config(
+        self, monkeypatch
+    ):
+        # The reachable half of the allowlist inversion, driven through the real StateManager
+        # rather than through config_origin alone. ``accepted`` is what we write on the rig's 202
+        # and it is NOT an outcome: ``reconcile_worker_config_status`` is the only thing that ever
+        # moves the row off it, and a rollback slower than the host runner's status-poll deadline
+        # never gets reconciled. The rig goes on naming the change it reverted (RigForge re-stamps
+        # the same id), our row still reads "accepted", and the old denylist printed the calm
+        # "Last changed from this dashboard" over a config the rig had already thrown away.
+        d = _detail(
+            monkeypatch, {"config_meta": _META}, spooled=_META["last_change_id"], status="accepted"
+        )
+        assert d["config_origin"] == "unconfirmed"
+
+    def test_a_status_this_dashboard_has_never_written_still_fails_closed(self, monkeypatch):
+        # The property the inversion buys, asserted end to end: a status no code path here
+        # produces today must not reach the reassuring verdict. Under the previous denylist both of
+        # these read as "here" purely by not being enumerated. Two samples and not a longer list:
+        # through the real StateManager a status is a TEXT column value, so an unanticipated
+        # non-empty string and the empty string are the only two paths there are to travel. The
+        # full vocabulary is enumerated against ``config_origin`` itself in
+        # tests/client/test_rig_config_meta.py, which is the tier that owns it.
+        for status in ("pending", ""):
+            d = _detail(
+                monkeypatch,
+                {"config_meta": _META},
+                spooled=_META["last_change_id"],
+                status=status,
+            )
+            assert d["config_origin"] == "unconfirmed", status
+
     def test_control_change_we_never_spooled_is_elsewhere(self, monkeypatch):
         # Same source, same shape — only the id differs. Another host drove this rig, or our
         # record of it is gone. Either way it is not ours to present as ours.

@@ -149,6 +149,14 @@ export function buildChartMarkers(markers) {
 // rollback after a change fails to hold, so the text has to leave room for the rig having healed
 // itself rather than someone having edited it. `unrecorded` claims nothing for the same reason — a
 // never-changed rig and a config edited underneath RigForge look identical from here.
+//
+// `unconfirmed` is the one that says "we do not know", and it must keep saying only that: it can
+// neither promise the change held nor accuse the rig of dropping it. It is reached by an
+// `accepted` row, which the host runner writes only after polling the rig's /status for a terminal
+// outcome for 20s and getting none ("queued on the rig; outcome not yet observed", pithead's own
+// note). Phrased "is unconfirmed" rather than "was never confirmed" on purpose — the reconciler
+// can still settle that row on a later read poll, so claiming finality would be a second wrong
+// answer in place of the first one this verdict exists to remove.
 const CONFIG_ORIGIN_TEXT = {
   here: { cls: "text-muted", label: "Last changed from this dashboard" },
   reverted: {
@@ -156,6 +164,12 @@ const CONFIG_ORIGIN_TEXT = {
     label: "Last change from this dashboard was rolled back",
     detail:
       "the rig re-stamps the change id it reverted, so it is running whatever config came before",
+  },
+  unconfirmed: {
+    cls: "status-warn",
+    label: "Last change from this dashboard is unconfirmed",
+    detail:
+      "the rig acknowledged it but has not reported an outcome — it may be running, or it may have been rolled back",
   },
   elsewhere: {
     cls: "status-warn",

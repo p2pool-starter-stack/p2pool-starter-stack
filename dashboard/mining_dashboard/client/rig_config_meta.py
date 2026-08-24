@@ -38,13 +38,25 @@ import re
 # would let a compromised one write its own provenance.
 CONFIG_SOURCES = ("control", "local", "restore")
 
-# A control change whose id we matched, but which this dashboard's own history records as not having
-# held. RigForge's rollback re-apply stamps the SAME change id it just reverted, so the rig goes on
-# naming a change that is no longer what it is running — and "Last changed from this dashboard" over
-# one of those is the one confidently wrong answer this line can give, in exactly the case an
-# operator most needs it right. ``rejected`` cannot reach us today (a rejected change returns before
-# config.json is touched, so it is never stamped at all); it is listed anyway so that the check
-# fails closed rather than open if RigForge's apply path ever changes.
+# The one status that positively records a control change as having taken effect. This is an
+# ALLOWLIST and that is the whole point (#1371): "Last changed from this dashboard" is the one
+# confidently wrong answer this line can give, so it is reached only by a status that says the
+# change held, never by the absence of a status that says it did not. The first shape of this check
+# was the inverse — everything outside ``REVERTED_STATUSES`` read as ``here`` — which handed the
+# reassuring answer to ``accepted`` (the rig took the request; it has not said it kept it) and to
+# every status a future RigForge or a future dashboard might write. A denylist cannot be made
+# fail-closed by lengthening it; only inverting it does that.
+HELD_STATUSES = ("applied",)
+
+# Among the statuses that are NOT in ``HELD_STATUSES``, the ones we can name precisely: the change
+# reached the rig and the rig threw it away. RigForge's rollback re-apply stamps the SAME change id
+# it just reverted, so the rig goes on naming a change that is no longer what it is running.
+# ``rejected`` cannot reach us today (a rejected change returns before config.json is touched, so it
+# is never stamped at all); it is listed for the wording, not for safety.
+#
+# This one stays a denylist on purpose, and it is safe to be one because it no longer decides
+# anything the operator can be misled by: it picks the SPECIFIC wording among rows we have already
+# refused to call ``here``. A status missing from it falls to ``unconfirmed``, which under-claims.
 REVERTED_STATUSES = ("rolled_back", "failed", "rejected")
 
 # Long enough for the ids RigForge actually mints (a 16-hex change id, a 16-hex revision) with room
@@ -108,6 +120,13 @@ def config_origin(meta, change_id_known, change_status=None):
                       the id it just reverted, so the rig keeps naming it while running whatever
                       preceded it. Saying ``here`` over this would print a calm "changed from this
                       dashboard" directly above a history row reading "Rolled back" in red.
+    - ``unconfirmed``— applied over the control channel with an id we know, and our own row for it
+                      records neither that it held nor that it was reverted (#1371). ``accepted``
+                      is the one that actually happens: the rig acknowledged the request and our
+                      reconciler has not yet caught the row up to a terminal outcome, so a rollback
+                      that lost the race to the poll sits here indefinitely. Distinct from both
+                      neighbours because it is the honest answer — we do not know — and folding it
+                      into either would state something we cannot support.
     - ``elsewhere`` — applied over a control channel, with an id we have never seen. Another host,
                       or our record of it is gone. Either way it is not something to present as ours.
     - ``rig``       — applied on the rig itself.
@@ -127,7 +146,11 @@ def config_origin(meta, change_id_known, change_status=None):
     if source == "control":
         if not change_id_known:
             return "elsewhere"
-        return "reverted" if change_status in REVERTED_STATUSES else "here"
+        if change_status in HELD_STATUSES:
+            return "here"
+        if change_status in REVERTED_STATUSES:
+            return "reverted"
+        return "unconfirmed"
     if source == "local":
         return "rig"
     if source == "restore":
