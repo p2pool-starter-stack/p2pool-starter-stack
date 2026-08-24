@@ -37,6 +37,11 @@
 # token travels on on_bench's STDIN and reaches the runner as an ENVIRONMENT entry (/proc/PID/environ
 # is owner-only). It never touches the bench's disk, the SSH command string, or any log.
 
+# BORROWED FROM THE SOURCER, declared rather than left to be discovered: `ok`, `warn`, `on_miner` and
+# `on_bench` are defined in e2e.sh (:73/:74/:171/:172), which sources this file at :38 — BEFORE any of
+# them exists. That is correct only because rig_supply is called from run_harness, long after. Sourcing
+# this file alone and calling rig_supply gets `warn: command not found` and rc 0 — it reports nothing,
+# because the warnings ARE the report. `quote_arg` is the one helper that comes from lib.sh.
 RIGFORGE_CONFIG="${RIGFORGE_CONFIG:-/opt/rigforge/config.json}"
 # Mirrors run.sh:50. Always passed through as --rig-control-port below rather than left to match by
 # luck, so an override here cannot silently dial a different port than the phase's legs do.
@@ -63,8 +68,13 @@ rig_supply() {
         return 0
     fi
     # Dial from the BENCH, not from here: the bench is the box run.sh's legs dial, and it is the one
-    # whose reachability the phase depends on. Token on stdin, read into the remote shell's memory.
-    if printf '%s' "$IT_RIG_TOKEN" | on_bench "IFS= read -r t; curl -fsS -o /dev/null --max-time 10 -H \"Authorization: Bearer \$t\" $(quote_arg "http://$RIG_HOST:$RIG_CONTROL_PORT/status")"; then
+    # whose reachability the phase depends on. The token travels on stdin and stays there — `curl -K -`
+    # reads its config from stdin, so the bearer never enters curl's argv, which is world-readable at
+    # mode 444 in /proc/<curl>/cmdline for the life of the dial. run.sh's own rx() curl does put a token
+    # in a bench-side argv, and that is a level this harness already accepts — but "we already have this
+    # exposure" is an argument against blocking on it, not for adding another instance in new code.
+    if printf 'header = "Authorization: Bearer %s"\n' "$IT_RIG_TOKEN" |
+        on_bench "curl -fsS -o /dev/null --max-time 10 -K - $(quote_arg "http://$RIG_HOST:$RIG_CONTROL_PORT/status")"; then
         ok "write phase supplied: $BENCH_HOST reached the rig control API at $RIG_HOST:$RIG_CONTROL_PORT"
     else
         warn "write phase supplied but UNPROVEN (#1378): $BENCH_HOST could not reach http://$RIG_HOST:$RIG_CONTROL_PORT/status with the token."

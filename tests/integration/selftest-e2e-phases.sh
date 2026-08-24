@@ -232,6 +232,50 @@ assert_eq "rc 0 when the rig is UNREACHABLE (supplied but unproven)" "$(rc_of ri
 assert_eq "rc 0 when the rig yields no token" "$(rc_of rig1 "" 0)" "0"
 assert_eq "rc 0 when there is no rig host at all" "$(rc_of "" tok 0)" "0"
 
+echo "== rig_supply REPORTS which case it took, and says the right thing (#1378) =="
+# The gap this closes was found by the reviewer lane on this PR, and it was the sharpest kind: rc_of
+# above stubs warn() and ok() to `:`, so it is structurally incapable of seeing whether any message
+# fires. "The harness does not report which case it took" is half of what #1378 is about, and until
+# these assertions existed that half could be deleted outright with every gate still green — the worst
+# mutation being an UNREACHABLE rig reported to the operator as "reached the rig control API".
+#
+# Same subshell as rc_of, but the helpers RECORD instead of discarding. Each branch is asserted on the
+# sentence only it writes AND on not writing the other's, because two branches sharing one output
+# string means either can silently cover for the other's deletion.
+report_of() { # <miner-host> <token-from-rig> <dial-rc> -> "WARN <msg>" / "OK <msg>" lines
+    (
+        MINER_HOST="$1" TOKEN_OUT="$2" DIAL_RC="$3"
+        RIG_HOST="" IT_RIG_TOKEN="" RIGFORGE_CONFIG=/opt/rigforge/config.json BENCH_HOST=bench
+        warn() { printf 'WARN %s\n' "$*"; }
+        ok() { printf 'OK %s\n' "$*"; }
+        on_miner() { printf '%s' "$TOKEN_OUT"; }
+        on_bench() {
+            cat >/dev/null
+            return "$DIAL_RC"
+        }
+        rig_supply
+    ) </dev/null
+}
+R_NOTOKEN="$(report_of rig1 "" 0)"
+R_NOHOST="$(report_of "" tok 0)"
+R_UNREACH="$(report_of rig1 tok 7)"
+R_OK="$(report_of rig1 tok 0)"
+assert_eq "no token => the operator is TOLD the phase is under-supplied" \
+    "$(contains "$R_NOTOKEN" 'WARN write phase UNDER-SUPPLIED')" "yes"
+assert_eq "no token => the report names the leg that cannot run at all (#516)" \
+    "$(contains "$R_NOTOKEN" 'feed leg cannot run')" "yes"
+assert_eq "no rig host => the operator is TOLD the phase is under-supplied" \
+    "$(contains "$R_NOHOST" 'WARN write phase UNDER-SUPPLIED')" "yes"
+assert_eq "an UNREACHABLE rig is reported as supplied-but-UNPROVEN" \
+    "$(contains "$R_UNREACH" 'WARN write phase supplied but UNPROVEN')" "yes"
+# The mutation this exists for: turning that warn into ok would tell the operator the harness reached
+# a rig it never reached, and every other assertion here would still pass.
+assert_eq "an UNREACHABLE rig is NEVER reported as reached" \
+    "$(contains "$R_UNREACH" 'OK write phase supplied:')" "no"
+assert_eq "a rig that answers IS reported as supplied" \
+    "$(contains "$R_OK" 'OK write phase supplied:')" "yes"
+assert_eq "a rig that answers produces NO warning" "$(contains "$R_OK" 'WARN')" "no"
+
 echo "== the proof dial actually proves something (#1378) =="
 # rig_supply's whole value over a bare default is that it DIALS before claiming the phase is
 # supplied. A dial carrying no credential would 401 against a real rig and "prove" only that
@@ -250,9 +294,12 @@ dial_of() { # -> the argv rig_supply's proof dial hands to curl on the bench
         warn() { :; }
         ok() { :; }
         on_miner() { printf '%s' "s3cr3t-tok3n"; }
-        curl() { printf 'CURL_ARGV=[%s]' "$*" >"$DIAL_FILE"; }
-        # eval, so the dial's own `read` consumes the token off the pipe exactly as it would on the
-        # bench. The stub deliberately does NOT re-implement the command it is checking.
+        # Record BOTH channels. The token now travels in curl's stdin config (-K -) rather than its
+        # argv, so a stub that captured only "$*" would see a dial with no credential in it and could
+        # not tell "the bearer moved to stdin" from "the bearer was dropped".
+        curl() { printf 'CURL_ARGV=[%s]\nCURL_STDIN=[%s]' "$*" "$(cat)" >"$DIAL_FILE"; }
+        # eval, so the dial's own redirection reaches the stub exactly as it would on the bench. The
+        # stub deliberately does NOT re-implement the command it is checking.
         on_bench() { eval "$1"; }
         rig_supply
     ) </dev/null
@@ -267,6 +314,14 @@ assert_eq "the dial targets exactly the host and port handed to run.sh" \
     "$(contains "$DIAL" 'http://rig1:8082/status')" "yes"
 assert_eq "the dial fails on a non-2xx (curl -f), so a 401 cannot read as proof" \
     "$(contains "$DIAL" '-fsS')" "yes"
+# The two halves that make the -K form a hygiene FIX rather than a rearrangement. Both are needed:
+# argv-only would pass on a dial that simply lost the credential, and stdin-only would pass on a dial
+# that sent it twice. /proc/<curl>/cmdline is mode 444 on the bench for the life of the dial.
+assert_eq "the token is NOT in curl's world-readable argv" \
+    "$(contains "${DIAL%%$'\n'CURL_STDIN=*}" 's3cr3t-tok3n')" "no"
+assert_eq "the token reaches curl on stdin, as a -K config" \
+    "$(contains "$DIAL" 'CURL_STDIN=[header = "Authorization: Bearer s3cr3t-tok3n"')" "yes"
+assert_eq "the dial tells curl to read that config from stdin" "$(contains "$DIAL" '-K -')" "yes"
 
 echo "== the flag e2e.sh emits is one run.sh actually parses =="
 # run.sh's parser ends in `-*) die "Unknown option"`, so a phase e2e.sh invents is not a no-op —
