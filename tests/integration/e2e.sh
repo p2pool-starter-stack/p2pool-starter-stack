@@ -374,14 +374,11 @@ PROBE
 
     # 3. The control units must still name RESTORE_DIR (#1085). Grep the verdict, never doctor's
     #    exit code — it is 1 on ANY dr_fail, so an unrelated failure elsewhere would swamp this.
-    #
-    #    Note what this check can and cannot see. It runs AFTER restore_all's `apply -y`, and that
-    #    apply converges the units (v1.19.2+), so on the ordinary #1085 path the strand is already
-    #    repaired by the time we look — this arm is a proof that the box was LEFT working, not a
-    #    detector of the strand itself. The strand is caught upstream, by CONTROL_VERDICT_BEFORE
-    #    recorded in restore_all before that apply, and by run.sh's ExecStart assertion. What this
-    #    arm does catch on its own: a pithead too old to converge (no-check), a disabled channel
-    #    where apply leaves stray units alone, and strands this run did not cause.
+    #    It runs AFTER restore_all's `apply -y`, which converges the units (v1.19.2+), so on the
+    #    ordinary #1085 path the strand is already repaired: this arm proves the box was LEFT
+    #    working, it does not detect the strand (CONTROL_VERDICT_BEFORE and run.sh's ExecStart
+    #    assertion do). Alone it catches a pithead too old to converge (no-check), a disabled
+    #    channel where apply leaves stray units, and strands this run did not cause.
     local doc verdict_line
     doc="$(on_bench "cd '$RESTORE_DIR' && ./pithead doctor 2>/dev/null" || true)"
     verdict_line="$(printf '%s\n' "$doc" | awk '/^Dashboard control channel:/{getline; print; exit}')"
@@ -526,10 +523,10 @@ provision() {
         git -C '$E2E_DIR' fetch --quiet origin '$BRANCH'
         # The e2e checkout is DEDICATED and disposable, so force a pristine tree instead of assuming
         # one (#454): drop stray untracked files (e.g. a leftover bench script) that would otherwise
-        # abort 'checkout' with \"would be overwritten\". -x clears ignored build cruft too; the
-        # -e excludes keep data/backups and the harness's own results/, so the shared chains and
-        # rollback anchors are never touched. config.json/.env ARE wiped (gitignored, no -e) but the
-        # next step re-seeds them from CANONICAL_DIR — don't drop that seed thinking clean spares them.
+        # abort 'checkout' with \"would be overwritten\". -x clears ignored build cruft too; the -e
+        # excludes keep data/backups and results/, so chains and rollback anchors are never touched.
+        # config.json/.env ARE wiped (gitignored, no -e) — the next step re-seeds them, so don't drop
+        # that seed thinking clean spares them.
         git -C '$E2E_DIR' checkout -q -f -B '$BRANCH' FETCH_HEAD
         git -C '$E2E_DIR' reset -q --hard FETCH_HEAD
         git -C '$E2E_DIR' clean -qfdx -e /results -e /backups -e /data
@@ -592,38 +589,41 @@ borrow_miner() {
     }
     log "Borrowing $MINER_HOST → pointing it at $BENCH_HOST"
 
-    # Strip our OWN leftovers first, before anything else touches the config (#1178). The repoint
-    # below tags the pool it injects with "rig-id": "pithead-e2e" — a documented per-pool xmrig key,
-    # ignored for pool selection — so a pool already carrying that tag is unambiguous: no run but this
-    # harness writes it, and finding one before THIS run has injected anything means a previous run
-    # repointed the rig and never restored it (crash, SIGKILL, --keep, or a failed teardown). Strip it
-    # before the backup below is minted, or the backup enshrines the borrowed state as "original" and
-    # every later restore returns to it — the self-perpetuating contamination measured live on a
-    # loaner: 32 backups, 3 distinct contents, the two most recent already carrying a bench pool.
-    local tagged_pools
-    tagged_pools="$(on_miner "jq -r '[.pools[]? | select(.[\"rig-id\"]? == \"pithead-e2e\")] | length' '$MINER_XMRIG_CONFIG' 2>/dev/null" || true)"
-    case "$tagged_pools" in "" | *[!0-9]*) tagged_pools=0 ;; esac
-    if [ "$tagged_pools" -gt 0 ]; then
-        warn "$MINER_HOST's xmrig config already carries $tagged_pools pool(s) tagged rig-id=pithead-e2e — a previous e2e run repointed this rig and never restored it."
-        warn "  Stripping the leftover tagged pool(s) now, before this run's backup, so the backup records the true original."
-        on_miner "jq '.pools |= [.[] | select(.[\"rig-id\"]? != \"pithead-e2e\")]' '$MINER_XMRIG_CONFIG' > '$MINER_XMRIG_CONFIG.e2e.tmp' && mv '$MINER_XMRIG_CONFIG.e2e.tmp' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG'" ||
-            die "Failed to strip leftover tagged pool(s) from $MINER_HOST config."
+    # Undo a run that died borrowed, before this run's backup is minted (#1178) — or the backup
+    # enshrines the borrowed state as "the original" and every later restore returns to it.
+    # ONE detector, three remedies. "Still borrowed" is: the primary pool names the bench, OR any
+    # pool carries our tag. Needing EITHER is the point — the repoint below has two mutation paths
+    # and the tag marks only one of them, because a rig that ALREADY names the bench takes the
+    # `then .` arm and is merely REORDERED, tagging nothing. A tag-only detector is blind to that.
+    # The remedy is the backup: restore_all prunes it only once the bytes are proven back (#1067),
+    # so a surviving .e2e-orig.* is an un-restored borrow and the OLDEST is the true original.
+    # Without one the pre-borrow state is gone — strip the tag, and say plainly that a pure reorder
+    # cannot be undone. Not borrowed but leftovers present means RigForge regenerated the file since
+    # (it does, on every apply): clear them, which is what keeps "oldest" meaning the original.
+    # Unreadable clears and restores NOTHING — a config half-written by a run that died mid-restore
+    # looks exactly like this, and must not cost the only copy of the original.
+    local leftover borrowed
+    leftover="$(on_miner "ls -1 '$MINER_XMRIG_CONFIG'.e2e-orig.* 2>/dev/null | sort | head -n1" || true)"
+    borrowed="$(on_miner "jq -r --arg b '$BENCH_HOST' 'if (((.pools[0].url // \"\") | ascii_downcase | contains(\$b | ascii_downcase)) or any(.pools[]?; .[\"rig-id\"]? == \"pithead-e2e\")) then \"yes\" else \"no\" end' '$MINER_XMRIG_CONFIG' 2>/dev/null" || true)"
+    if [ "$borrowed" = "yes" ] && [ -n "$leftover" ]; then
+        warn "$MINER_HOST is still borrowed by an earlier e2e run that never restored it; $leftover holds its pre-borrow config. Restoring from it now, BEFORE this run's backup is minted (#1178)."
+        on_miner "cp -a '$leftover' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG' && rm -f '$MINER_XMRIG_CONFIG'.e2e-orig.*" || die "Failed to restore $MINER_HOST from $leftover."
+    elif [ "$borrowed" = "yes" ]; then
+        warn "$MINER_HOST looks borrowed but NO .e2e-orig.* backup survives, so the pre-borrow state is unrecoverable. Stripping any tagged pool; a pure REORDER cannot be undone and this run's backup will record it."
+        on_miner "jq '.pools |= [.[] | select(.[\"rig-id\"]? != \"pithead-e2e\")]' '$MINER_XMRIG_CONFIG' > '$MINER_XMRIG_CONFIG.e2e.tmp' && mv '$MINER_XMRIG_CONFIG.e2e.tmp' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG'" || die "Failed to strip leftover tagged pool(s) from $MINER_HOST config."
+    elif [ "$borrowed" = "no" ] && [ -n "$leftover" ]; then
+        warn "$MINER_HOST carries leftover e2e backup(s) but does not look borrowed — RigForge regenerates this file on every apply. Clearing them as stale, so 'oldest' keeps meaning the original."
+        on_miner "rm -f '$MINER_XMRIG_CONFIG'.e2e-orig.*" || die "Failed to clear stale e2e backups on $MINER_HOST."
+    elif [ "$borrowed" != "no" ]; then
+        warn "could not read $MINER_HOST's pool list, so it cannot be judged borrowed or clean — leaving the config AND any backup(s) untouched. A half-written config looks exactly like this."
     fi
 
-    # Say so BEFORE the backup is taken, because the backup is what "restore" means afterwards. The
-    # repoint below has an `if any(.pools[]?; .url | contains($b)) then .` arm — written for a rig
-    # that legitimately keeps a bench pool — and that arm still absorbs an UNTAGGED bench-naming pool
-    # with no complaint. Tagged leftovers are handled above; this is the remaining, genuinely
-    # ambiguous case: an untagged pool naming the bench could be the operator's own, or contamination
-    # from before the tag existed (#1178 — the tag cannot repair what it predates).
-    # `.url // ""` and a lowercased needle, because a pool entry with no .url makes `.url |
-    # ascii_downcase` raise and jq exits non-zero for the WHOLE expression — one malformed sibling
-    # entry and the probe reports nothing. And the answer is a three-way, not a boolean: "could not
-    # tell" must not read as "clean". The old spelling ended `2>/dev/null || echo 0`, which failed
-    # open on every error path — a truncated config, a dropped ssh — and those are correlated with
-    # the very fault this probe exists to find: a config left half-written by a run that died before
-    # restoring. A probe that goes quiet exactly when the thing it looks for is present is the
-    # defect class this whole PR is about, one function away from the comment that says so.
+    # Report an untagged bench-naming pool that SURVIVED the recovery above — the recovery found no
+    # un-restored borrow, so this is the rig's own permanent bench pool: the backup records it and
+    # the restore returns to it, which is right. Said BEFORE the backup, because the backup is what
+    # "restore" means afterwards. `.url // ""` and a lowercased needle because one sibling entry
+    # with no .url makes jq exit non-zero for the WHOLE expression; and the answer is a three-way,
+    # not a boolean — a probe that goes quiet exactly when the fault is present must not read clean.
     local bench_pools
     bench_pools="$(on_miner "jq -r --arg b '$BENCH_HOST' '[.pools[]? | select((.url // \"\") | ascii_downcase | contains(\$b | ascii_downcase))] | length' '$MINER_XMRIG_CONFIG' 2>/dev/null" || true)"
     case "$bench_pools" in
@@ -633,10 +633,8 @@ borrow_miner() {
         ;;
     0) ;;
     *)
-        warn "$MINER_HOST's xmrig config ALREADY names $BENCH_HOST in $bench_pools pool(s) before this run borrowed it, and none of them are tagged rig-id=pithead-e2e."
-        warn "  Either this rig legitimately keeps a permanent bench pool, or it's contamination from before the tag existed — left alone; the tag can't tell those apart retroactively."
-        warn "  The backup taken next records THAT state as the original, so a later restore returns to it."
-        warn "  Check by hand before trusting a restore: jq '.pools[].url' $MINER_XMRIG_CONFIG on $MINER_HOST"
+        warn "$MINER_HOST's xmrig config ALREADY names $BENCH_HOST in $bench_pools untagged pool(s), and the recovery above found no un-restored borrow to undo."
+        warn "  Read as the rig's own permanent bench pool: the backup taken next records it and the restore returns to it. Verify by hand if that surprises you: jq '.pools[].url' $MINER_XMRIG_CONFIG on $MINER_HOST"
         ;;
     esac
     MINER_CFG_BACKUP="$MINER_XMRIG_CONFIG.e2e-orig.$(on_miner 'date +%Y%m%d-%H%M%S')"
@@ -646,9 +644,8 @@ borrow_miner() {
     # user/pass/keepalive carry over, override url→bench and force plain stratum), then reorder so the
     # bench pool is primary and the rest stay as failover. Non-destructive, fully reversible from the
     # backup above. ponytail: hardcodes :3333 (the seeded canonical stratum_port default, which the bench runs).
-    # Tagged "rig-id": "pithead-e2e" (#1178) — a documented per-pool xmrig key, ignored for pool
-    # selection — so a future run (or the restore path below) can tell this injected entry apart from
-    # anything an operator put there.
+    # The injected entry is tagged "rig-id": "pithead-e2e" (#1178) — a documented per-pool xmrig key,
+    # ignored for pool selection — which is what the restore path's belt-and-braces check keys on.
     on_miner "
         jq --arg b '$BENCH_HOST' '
             (if any(.pools[]?; .url | ascii_downcase | contains(\$b)) then .

@@ -194,6 +194,22 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
    With `--no-miner` nothing is borrowed, and the harness runs with `--no-mining-asserts`: the
    workers-online and stratum-hashes assertions skip with a logged notice while every other
    assertion stays binding ([#905](https://github.com/p2pool-starter-stack/pithead/issues/905)).
+
+   Before it takes that backup, the borrow undoes a previous run that died without restoring —
+   SIGKILL, an OOM kill, `--keep`, a failed teardown. Such a run leaves the rig pointed at the bench
+   and leaves its `.e2e-orig.*` backup on disk, because the restore prunes that backup only once it
+   has compared the bytes back into place. So a surviving backup means an un-restored borrow, and the
+   oldest one holds the true pre-borrow config. Restoring from it first is what stops this run's
+   backup from recording the borrowed state as "the original" and every later restore returning to it
+   ([#1178](https://github.com/p2pool-starter-stack/pithead/issues/1178)).
+
+   A rig that keeps a permanent bench pool of its own is the case that makes this necessary. There the
+   repoint finds the bench already named, so it only reorders the pool list and tags nothing — the
+   contamination leaves no marker, and a tag-based check cannot see it. Two other outcomes are worth
+   knowing: when the rig does not look borrowed, leftover backups are cleared as stale, because
+   RigForge regenerates the xmrig config from its own source on every apply; and when the config
+   cannot be read at all, nothing is cleared and nothing is restored, since a config half-written by a
+   run that died mid-restore looks exactly like that and must not cost the only copy of the original.
 5. Deploys the branch (`pithead upgrade` — re-renders the generated configs and rebuilds the
    first-party images from `build/`, so a Dockerfile or entrypoint change is actually under test;
    `apply` never builds and would reuse whatever images were last built on the box,
