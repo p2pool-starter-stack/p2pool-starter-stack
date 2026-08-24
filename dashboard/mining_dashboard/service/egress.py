@@ -1,5 +1,5 @@
 """Egress posture (#170) — for each stack component, its outbound connections and their network
-route (Tor / clearnet / local / inactive), plus a privacy roll-up.
+route (Tor / clearnet / LAN / local / unknown / inactive), plus a privacy roll-up.
 
 Routes are *derived from the live config*, never hardcoded, so the panel can't drift from reality or
 lie after a regression — the #160 audit's lesson (``--onion-address`` *looked* like Tor but wasn't).
@@ -17,8 +17,8 @@ Two backstops matter for whether a clearnet route is actually an IP leak:
 The alert sinks (#380) have one more wrinkle: ``notifications.tor: false`` is a LAN carve-out for
 self-hosted endpoints Tor exits can't reach. A POST to a private/loopback IP never leaves your
 network, so it routes as *local*, not a clearnet leak. Only IP literals can prove that without a
-DNS lookup — a hostname endpoint with Tor off counts as clearnet, honestly, since we can't know
-where it resolves.
+DNS lookup. A hop to a relocatable node takes the same rule via ``topology_graph.node_route``
+(#1350), but keeps *LAN* and *unknown* apart instead of collapsing both into clearnet.
 
 So a connection is a *leak* only when its route is clearnet AND it isn't neutralised by a backstop.
 """
@@ -28,14 +28,14 @@ from urllib.parse import urlsplit
 
 from mining_dashboard.config import config
 from mining_dashboard.service.topology_graph import (  # noqa: F401  (re-exported)
+    CLEARNET,
+    INACTIVE,
+    LOCAL,
     TOPOLOGY_NODES,
+    TOR,
+    node_route,
     topology_nodes,
 )
-
-TOR = "tor"
-CLEARNET = "clearnet"
-LOCAL = "local"
-INACTIVE = "inactive"
 
 
 def _xvb_route(xvb_enabled, xvb_tor):
@@ -100,7 +100,7 @@ def compute_egress_posture(
     xvb_tor,
     monero_clearnet_sync,
     tari_clearnet_sync,
-    remote_monero,
+    monero_route,
     healthchecks_enabled,
     telegram_enabled,
     price_feed_enabled=False,
@@ -134,7 +134,7 @@ def compute_egress_posture(
             "firewalled": True,
             "conns": [
                 {"to": "sidechain P2P peers", "route": CLEARNET if p2pool_clearnet else TOR},
-                {"to": "monerod RPC/ZMQ", "route": CLEARNET if remote_monero else LOCAL},
+                {"to": "monerod RPC/ZMQ", "route": monero_route},
             ],
         },
         {
@@ -235,7 +235,7 @@ def egress_posture_from_config():
         xvb_tor=config.XVB_TOR_ENABLED,
         monero_clearnet_sync=config.MONERO_CLEARNET_SYNC,
         tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
-        remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
+        monero_route=node_route(config.MONERO_NODE_HOST, is_local=config.monero_is_local()),
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
         price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],
@@ -278,12 +278,12 @@ def compute_topology(
     xvb_tor,
     monero_clearnet_sync,
     tari_clearnet_sync,
-    remote_monero,
-    # Defaulted, unlike remote_monero: the egress posture does not model a remote Tari
-    # node's gRPC route yet (#1350), so the two functions no longer take identical knobs
-    # and the shared sweep fixtures splat into both. topology_from_config passes it, and
-    # test_topology_graph asserts that it does rather than trusting the signature to.
-    remote_tari=False,
+    monero_route,
+    # Defaulted, unlike monero_route: the egress posture has no Tari RPC conn to route, so the
+    # two functions do not take identical knobs and the shared sweep fixtures splat into both.
+    # topology_from_config passes it, and test_topology_graph asserts that it does rather than
+    # trusting the signature to.
+    tari_route=LOCAL,
     healthchecks_enabled,
     telegram_enabled,
     price_feed_enabled=False,
@@ -305,7 +305,7 @@ def compute_topology(
         xvb_tor=xvb_tor,
         monero_clearnet_sync=monero_clearnet_sync,
         tari_clearnet_sync=tari_clearnet_sync,
-        remote_monero=remote_monero,
+        monero_route=monero_route,
         healthchecks_enabled=healthchecks_enabled,
         telegram_enabled=telegram_enabled,
         price_feed_enabled=price_feed_enabled,
@@ -318,7 +318,6 @@ def compute_topology(
     sinks = _notify_route(notify_sinks_enabled, notify_tor, notify_sinks_private)
     standby = _xvb_standby_route(xvb_standby_source)
     sidechain = CLEARNET if p2pool_clearnet else TOR
-    rpc = CLEARNET if remote_monero else LOCAL
 
     edges = [
         # Ingress from your LAN — the only listeners actually exposed to the network.
@@ -377,12 +376,12 @@ def compute_topology(
         _edge("tor", "internet", TOR, "SOCKS + onion circuits", "p2p"),
         # Internal mesh (hidden until expanded).
         _edge("xmrig-proxy", "p2pool", LOCAL, "upstream pool", "internal"),
-        _edge("p2pool", "monerod", rpc, "RPC / ZMQ", "internal"),
-        _edge("p2pool", "tari", LOCAL, "gRPC merge-mine", "internal"),
+        _edge("p2pool", "monerod", monero_route, "RPC / ZMQ", "internal"),
+        _edge("p2pool", "tari", tari_route, "gRPC merge-mine", "internal"),
         _edge("caddy", "dashboard", LOCAL, "reverse-proxy :8000", "internal"),
-        _edge("dashboard", "monerod", LOCAL, "get_info RPC", "internal"),
+        _edge("dashboard", "monerod", monero_route, "get_info RPC", "internal"),
         _edge("dashboard", "xmrig-proxy", LOCAL, "proxy API", "internal"),
-        _edge("dashboard", "tari", LOCAL, "gRPC", "internal"),
+        _edge("dashboard", "tari", tari_route, "gRPC", "internal"),
         _edge("dashboard", "docker", LOCAL, "container API", "internal"),
     ]
     # Optional clearnet initial-sync paths (#183) bypass the Tor hub straight to the internet.
@@ -401,7 +400,7 @@ def compute_topology(
         else:
             edge["leak"] = True
 
-    nodes = topology_nodes(remote_monero=remote_monero, remote_tari=remote_tari)
+    nodes = topology_nodes(monero_route=monero_route, tari_route=tari_route)
     return {"nodes": nodes, "edges": edges, "summary": posture["summary"]}
 
 
@@ -414,8 +413,8 @@ def topology_from_config():
         xvb_tor=config.XVB_TOR_ENABLED,
         monero_clearnet_sync=config.MONERO_CLEARNET_SYNC,
         tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
-        remote_monero=not config.monero_is_local(),
-        remote_tari=not config.tari_is_local(),
+        monero_route=node_route(config.MONERO_NODE_HOST, is_local=config.monero_is_local()),
+        tari_route=node_route(config.TARI_GRPC_ADDRESS, is_local=config.tari_is_local()),
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
         price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],

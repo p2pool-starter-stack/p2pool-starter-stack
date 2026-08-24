@@ -134,6 +134,19 @@ only when every configured endpoint is a private or loopback IP literal, since s
 leaves your network. A hostname can't be proven private without a DNS lookup, so a hostname
 endpoint with Tor off counts as **clearnet**, a real leak.
 
+The topology diagram applies that same rule to the hops that reach a remote monerod or Tari node,
+and keeps three answers apart instead of two. A node reached at a private, loopback or link-local
+IP literal draws as **LAN**: the hop leaves this machine but stays on your network, so it does not
+expose your IP and is not counted as a leak. Any other IP literal draws as **clearnet** and is
+counted. A node configured by **hostname** draws as **Unverified** — the diagram will not resolve
+a name to classify it, because that lookup would itself be an egress, and on a Tor-routed stack it
+would cause the exact exposure the panel exists to warn about, on every render. Unverified is not
+counted as a leak either; the panel says it cannot tell rather than guessing in either direction.
+
+**LAN is a statement about exposure, not about encryption.** A remote-node hop is a plaintext
+connection whichever way it draws, so the rows above still apply: anyone who can watch your local
+network can read it. LAN means only that the traffic does not reach the internet.
+
 ---
 
 ## Build / setup-time egress
