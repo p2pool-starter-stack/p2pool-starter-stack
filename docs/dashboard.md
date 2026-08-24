@@ -426,8 +426,8 @@ must enable and how the target is derived.
 Above the history, a line says **where the rig's current config came from** — the rig's own
 account, not ours. The history table below it can only list what this dashboard did; this line is
 the one place a change it never saw can show up. RigForge stamps each config change it records with
-what applied it and a change id, and the dashboard compares that id against its own record of the
-changes it sent:
+what applied it and a change id, and the dashboard looks for that id among this rig's own history
+rows — the table directly below — so the verdict is one you can check by eye:
 
 - **Last changed from this dashboard** — the id matches a change in the history below.
 - **Last changed from another dashboard** — applied over a control channel, but with an id this
@@ -443,6 +443,12 @@ A rig running plain XMRig, or a RigForge too old to publish the block, shows no 
 than a guess. The words come from a fixed set the dashboard controls, never from the rig — a rig
 cannot write its own provenance in text you would read as ours. Hover the line for the rig's
 timestamp and the revision of the config it is running.
+
+Read it as evidence, not as proof. Everything behind the line is the rig's own account, so a rig
+that has been taken over can say whatever it likes — including replaying a change id you really did
+send it. What the line does guarantee is which way it errs: anything the dashboard cannot vouch for
+reads as **not from here**, never as yours. A change id belonging to a different rig, or a history
+it cannot read at the time, both land on "another dashboard" rather than on a false reassurance.
 
 How it stays safe:
 

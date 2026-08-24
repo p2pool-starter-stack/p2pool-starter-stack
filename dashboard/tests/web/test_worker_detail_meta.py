@@ -18,6 +18,10 @@ Mutation-kill notes, one per guard — each of these was run and seen to red:
   different claims, and only one of them is true of a rig too old to serve the block.
 - Passing the rig's ``source`` through instead of matching the allowlist flips
   ``test_a_source_we_do_not_know_never_reaches_the_verdict``.
+- Swapping the worker-scoped history scan back to ``state_mgr.worker_config_change_known`` — which
+  is unscoped and fails OPEN, both correct for the #530 audit and both wrong here — flips
+  ``test_another_rigs_change_id_is_never_claimed_as_this_rigs`` and
+  ``test_a_history_read_that_fails_never_manufactures_trust``.
 """
 
 import pytest
@@ -117,6 +121,57 @@ class TestConfigOrigin:
         assert meta["source"] is None
         d = _detail(monkeypatch, {"config_meta": meta}, spooled=_META["last_change_id"])
         assert d["config_origin"] == "unrecorded"
+
+    def test_another_rigs_change_id_is_never_claimed_as_this_rigs(self, monkeypatch):
+        # The id IS one this dashboard minted — for a different rig. Scoping is the whole
+        # difference between "we sent this change to THIS rig" and "this string appears somewhere
+        # in our history", and only the first is a claim worth printing. Found by security review:
+        # the #530 audit's own lookup is deliberately unscoped, which is correct for #530 and
+        # exactly wrong here.
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(
+            views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "1.2.3.4"}]
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        sm = StateManager(db_path=":memory:")
+        try:
+            sm.add_worker_config_version(
+                "rig2", _META["last_change_id"], "applied", {"DONATION": 5}, None
+            )
+            workers = [{"name": "rig1", "status": "online", "rigforge": {"config_meta": _META}}]
+            d = build_worker_detail("rig1", {"workers": workers}, sm)
+        finally:
+            sm.close()
+        assert d["config_origin"] == "elsewhere"
+
+    def test_a_history_read_that_fails_never_manufactures_trust(self, monkeypatch):
+        # A DB the dashboard cannot read must not print "you did this". The #530 audit path fails
+        # OPEN on a read error (a false "known" there only declines to accuse a rig); the same
+        # direction here would hand a hostile rig the one verdict this feature exists to protect.
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(
+            views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "1.2.3.4"}]
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        sm = StateManager(db_path=":memory:")
+        try:
+            sm.add_worker_config_version(
+                "rig1", _META["last_change_id"], "applied", {"DONATION": 5}, None
+            )
+            # Close the sqlite handle but LEAVE ``_conn`` set: every read then raises
+            # sqlite3.ProgrammingError, which is what reaches the `except sqlite3.Error` arm. A
+            # plain ``_conn = None`` would NOT do — the early `if not self._conn` return short-
+            # circuits before the fail-open line, so that version of this test passed against the
+            # vulnerable code too.
+            sm._conn.close()
+            workers = [{"name": "rig1", "status": "online", "rigforge": {"config_meta": _META}}]
+            d = build_worker_detail("rig1", {"workers": workers}, sm)
+        finally:
+            sm._conn = None  # already closed above; keep sm.close() from raising on it
+            sm.close()
+        assert d["config_origin"] == "elsewhere"
 
     def test_a_worker_missing_from_the_snapshot_carries_no_provenance(self, monkeypatch):
         from mining_dashboard.web import views

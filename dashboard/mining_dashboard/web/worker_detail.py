@@ -11,8 +11,13 @@ last changed and what changed it, already validated against RigForge's vocabular
 ``client/rig_config_meta.py``. ``config_origin`` is the verdict the operator actually wants: did
 this change come from here, or did something change it underneath me? Answering that needs one
 fact only this side holds — whether the rig's ``last_change_id`` matches a change *this* dashboard
-spooled. The rig mints those ids in its control server and hands them back in the 202, so an id we
-have a row for is an id we asked for.
+spooled *for this rig*. The rig mints those ids in its control server and hands them back in the
+202, so an id in this rig's own history is an id we asked for.
+
+The comparison is evidence, not proof. A rig that is lying controls its whole response and can
+replay an id we really did send it, so this detects a change we did not make — it does not defeat a
+rig that has decided to deceive us. What it does guarantee is the direction of any error: every
+input it cannot vouch for lands on "not ours".
 
 This is not a new capability from nothing: #530 already notices a rig-applied change, but only
 while a poll is watching a terminal report go by, and only ever as a change_id. The keys here make
@@ -87,14 +92,23 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     # Already filtered to RigForge's own vocabulary by the client layer, so this is a read, not a
     # second parse — re-validating here would be a second place to get the allowlist wrong.
     rig_meta = (worker.get("rigforge") or {}).get("config_meta") if worker else None
-    # Only a ``control`` change carries an id this dashboard could have minted, so that is the only
-    # source worth a lookup; ``config_origin`` ignores this flag for every other one. An id we have
-    # no row for stays "elsewhere" rather than being claimed as ours — including the case where the
-    # rig names no id at all, which is the conservative reading and not a case RigForge produces.
+    # Matched against THIS rig's own history rows, which is both the correct scope and the cheapest
+    # one: ``history`` is already in hand, so this costs no extra query.
+    #
+    # Deliberately NOT ``worker_config_change_known``, which the #530 rig-edit audit uses. That
+    # lookup is unscoped — it asks whether ANY rig's change carried this id — and it fails OPEN
+    # (True) on a DB error, both correct for #530, where a false "known" merely declines to accuse
+    # a rig. Here the same two properties invert into the one answer this feature must never give
+    # wrongly: a change id spooled for a DIFFERENT rig, or a transient DB error, would print "Last
+    # changed from this dashboard" over a change this dashboard never made. Scanning the rig's own
+    # rows is worker-scoped by construction and fails closed, because the read returns [] on error.
+    #
+    # It also makes the verdict checkable: "here" now means precisely "the id is one of the rows
+    # rendered directly below this line", so an operator can confirm it by eye rather than trust it.
+    # An id older than that window reads as "elsewhere" — wrong in the direction that under-claims.
+    last_change_id = (rig_meta or {}).get("last_change_id")
     change_known = bool(
-        rig_meta
-        and rig_meta.get("source") == "control"
-        and state_mgr.worker_config_change_known(rig_meta.get("last_change_id") or "")
+        last_change_id and any(row.get("change_id") == last_change_id for row in history)
     )
     return {
         "name": name,
