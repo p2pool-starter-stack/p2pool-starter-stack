@@ -8,6 +8,7 @@ from mining_dashboard.config.config import (
     MONERO_NODE_USERNAME,
     MONERO_RPC_URL,
 )
+from mining_dashboard.helper.http import bounded_get
 
 logger = logging.getLogger("MoneroClient")
 
@@ -42,7 +43,7 @@ class MoneroClient:
     def get_info(self):
         """Return monerod's `get_info` payload as a dict, or None if unreachable/errored."""
         try:
-            resp = requests.get(self.url, auth=self._auth, timeout=self.timeout)
+            resp = bounded_get(self.url, auth=self._auth, timeout=self.timeout)
         except requests.RequestException as e:
             logger.warning(f"monerod get_info unreachable at {self.url}: {e}")
             return None

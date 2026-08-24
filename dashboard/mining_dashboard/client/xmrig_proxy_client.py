@@ -4,6 +4,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from mining_dashboard.helper.http import bounded_request
+
 
 class XMRigProxyClient:
     def __init__(self, host="127.0.0.1", port=8080, access_token=None):
@@ -70,7 +72,10 @@ class XMRigProxyClient:
         }
         """
         url = f"{self.base_url}/1/summary"
-        response = self.session.get(url, timeout=5)
+        # Bounded (#1360). Highest trust class of that set: xmrig-proxy is our own container, but
+        # this body is built from what MINERS advertise to it — the same boundary as #1347, one hop
+        # back. ``session=`` keeps the retry adapter configured above.
+        response = bounded_request("GET", url, timeout=5, session=self.session)
         response.raise_for_status()
         return response.json()
 
@@ -105,7 +110,10 @@ class XMRigProxyClient:
         }
         """
         url = f"{self.base_url}/1/workers"
-        response = self.session.get(url, timeout=5)
+        # Bounded (#1360). Highest trust class of that set: xmrig-proxy is our own container, but
+        # this body is built from what MINERS advertise to it — the same boundary as #1347, one hop
+        # back. ``session=`` keeps the retry adapter configured above.
+        response = bounded_request("GET", url, timeout=5, session=self.session)
         response.raise_for_status()
         return response.json()
 
@@ -140,7 +148,10 @@ class XMRigProxyClient:
         }
         """
         url = f"{self.base_url}/1/config"
-        response = self.session.get(url, timeout=5)
+        # Bounded (#1360). Highest trust class of that set: xmrig-proxy is our own container, but
+        # this body is built from what MINERS advertise to it — the same boundary as #1347, one hop
+        # back. ``session=`` keeps the retry adapter configured above.
+        response = bounded_request("GET", url, timeout=5, session=self.session)
         response.raise_for_status()
         return response.json()
 
@@ -165,7 +176,7 @@ class XMRigProxyClient:
         }
         """
         url = f"{self.base_url}/1/config"
-        response = self.session.put(url, json=config_data, timeout=5)
+        response = bounded_request("PUT", url, json=config_data, timeout=5, session=self.session)
         response.raise_for_status()
         # Handle 204 No Content or empty responses which cause JSON decode errors
         if response.status_code == 204 or not response.content:

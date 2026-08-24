@@ -8,6 +8,7 @@ from mining_dashboard.config.config import (
     WALLET_RPC_PASSWORD,
     WALLET_RPC_USERNAME,
 )
+from mining_dashboard.helper.http import bounded_request
 from mining_dashboard.service.earnings import ATOMIC_PER_XMR
 
 logger = logging.getLogger("MoneroWalletClient")
@@ -45,7 +46,9 @@ class MoneroWalletClient:
         """POST one JSON-RPC call; return the ``result`` dict, or None on any error."""
         payload = {"jsonrpc": "2.0", "id": "0", "method": method, "params": params or {}}
         try:
-            resp = requests.post(self.url, json=payload, auth=self._auth, timeout=self.timeout)
+            resp = bounded_request(
+                "POST", self.url, json=payload, auth=self._auth, timeout=self.timeout
+            )
         except requests.RequestException as e:
             logger.warning(f"wallet-rpc {method} unreachable at {self.url}: {e}")
             return None

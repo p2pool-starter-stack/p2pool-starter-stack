@@ -1,8 +1,10 @@
+import json
 import logging
 
 import aiohttp
 
 from mining_dashboard.config.config import DOCKER_PROXY_URL, DOCKER_TIMEOUT
+from mining_dashboard.helper.http import bounded_read
 
 logger = logging.getLogger("ContainerCollector")
 
@@ -49,7 +51,12 @@ async def get_container_health():
                     ) as response:
                         if response.status != 200:
                             continue
-                        payload = await response.json()
+                        # Bounded (#1360). Lowest trust class of that set — the payload shape is
+                        # dictated by our own compose file — but a proxy that misbehaves should
+                        # skip one container, not buffer an unbounded body into the data loop.
+                        payload = json.loads(
+                            await bounded_read(response.content, what=f"{name} inspect")
+                        )
                 except Exception as e:
                     logger.debug("Container inspect failed for %s: %s", name, e)
                     continue
