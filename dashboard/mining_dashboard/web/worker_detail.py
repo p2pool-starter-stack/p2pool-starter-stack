@@ -41,6 +41,12 @@ from mining_dashboard.web.views import (
     rigforge_update_for,
 )
 
+# How far back the provenance match may look. Named rather than left to the storage layer's default
+# because the verdict depends on it TWICE: once to find the id, and once to know whether not finding
+# it meant anything (#1369). A bare call would leave the second use comparing against a number
+# written down somewhere else, which is how the two drift apart.
+_HISTORY_LIMIT = 50
+
 
 def build_worker_hashrate_history(state_mgr, worker, range_arg, window=None):
     """Per-worker hashrate-over-time chart (#1013): ``worker_history.h15`` for one rig, same
@@ -85,7 +91,7 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     workers = data.get("workers", []) if data else []
     worker = next((w for w in workers if w.get("name") == name), None)
     descriptor = next((e for e in config.DASHBOARD_WORKERS if e["name"] == name), None)
-    history = state_mgr.get_worker_config_history(name)
+    history = state_mgr.get_worker_config_history(name, limit=_HISTORY_LIMIT)
     for row in history:
         ts = row.get("ts")
         row["applied_at"] = format_time_abs(ts) if ts else ""
@@ -112,7 +118,14 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     # It also makes the verdict checkable: "here" now means precisely "the id is one of the rows
     # rendered directly below this line, and that row records the change as having held", so an
     # operator can confirm it by eye rather than trust it.
-    # An id older than that window reads as "elsewhere" — wrong in the direction that under-claims.
+    #
+    # But a bounded window can only settle a MISS when it saw the whole history. Reading exactly
+    # ``_HISTORY_LIMIT`` rows means there may be more we did not read, so a miss could be an id one
+    # row past the end rather than an id nobody here spooled — and "elsewhere" reads as "Last
+    # changed from another dashboard", an accusation the read cannot support (#1369). Passing the
+    # fullness of the window lets that case say "we do not know" instead. Only that case changes:
+    # a short read is still conclusive, which is what keeps the ``sqlite3.Error`` path (a ``[]``
+    # return, and 0 is not full) answering exactly as it does today rather than more confidently.
     #
     # The matched ROW, not merely whether one exists: RigForge's rollback re-apply re-stamps the id
     # it just reverted, so a rolled-back change still matches by id. The row's status is the only
@@ -141,7 +154,10 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
         # for a rig that cannot answer — the client renders that as silence, not as "unknown".
         "rig_config_meta": rig_meta,
         "config_origin": config_origin(
-            rig_meta, matched is not None, (matched or {}).get("status")
+            rig_meta,
+            matched is not None,
+            (matched or {}).get("status"),
+            history_truncated=len(history) >= _HISTORY_LIMIT,
         ),
         "last_applied": state_mgr.get_last_applied_worker_config(name),
         "history": history,
