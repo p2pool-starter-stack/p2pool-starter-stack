@@ -174,8 +174,9 @@ const CONFIG_ORIGIN_TEXT = {
 export function configOriginNote(origin, meta) {
   const text = CONFIG_ORIGIN_TEXT[origin];
   if (!text) return null;
+  // No timestamp here: ConfigProvenance already renders changed_at inline on this same line, so
+  // repeating it in the tooltip says the same thing twice.
   const parts = [];
-  if (meta?.changed_at) parts.push(`Recorded ${meta.changed_at}`);
   if (meta?.revision) parts.push(`config revision ${meta.revision}`);
   if (text.detail) parts.push(text.detail);
   return { cls: text.cls, label: text.label, title: parts.join(" · ") };

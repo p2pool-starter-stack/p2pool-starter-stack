@@ -84,10 +84,12 @@ test("unrecorded claims no change happened and no change did not", () => {
 
 // --- The tooltip carries the evidence, not just the verdict ---------------------------------
 
-test("the tooltip names when the rig recorded the change and which revision it runs", () => {
+test("the tooltip carries the revision, and does not repeat the visible timestamp", () => {
   const note = configOriginNote("here", META);
-  assert.match(note.title, /2026-08-20T11:22:33Z/);
   assert.match(note.title, /a1b2c3d4e5f60718/);
+  // changed_at is rendered inline by ConfigProvenance, so the tooltip must not say it again.
+  assert.doesNotMatch(note.title, /2026-08-20T11:22:33Z/);
+  assert.match(renderToString(ConfigProvenance({ origin: "here", meta: META })), /2026-08-20T11:22:33Z/);
 });
 
 test("a fresh rig's revision-only meta still yields a usable tooltip", () => {
@@ -98,7 +100,6 @@ test("a fresh rig's revision-only meta still yields a usable tooltip", () => {
     last_change_id: null,
   });
   assert.match(note.title, /beefbeefbeefbeef/);
-  assert.doesNotMatch(note.title, /Recorded/);
 });
 
 // --- What moved out of workerview.mjs still behaves ------------------------------------------
