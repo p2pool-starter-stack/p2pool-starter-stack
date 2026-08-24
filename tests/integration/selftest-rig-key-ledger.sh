@@ -29,6 +29,10 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 APPLY_LOG="$WORK/applies.log"
 SCEN_OUT="$WORK/out.txt"
+# Exported, not passed as prefix assignments: a prefix assignment is visible only to the forked
+# process, so `$WORK` in the same command line would still expand to the caller's value (SC2097).
+export INT_DIR="$HERE"
+export APPLY_LOG WORK
 
 # --- The scenario harness ---------------------------------------------------
 # Each scenario is a fresh bash CHILD. That is the point: an EXIT trap can only be honestly
@@ -57,8 +61,7 @@ scenario() {
         cat "$WORK/prelude.sh"
         printf '%s\n' "$@"
     } >"$WORK/scen.sh"
-    INT_DIR="$HERE" APPLY_LOG="$APPLY_LOG" WORK="$WORK" \
-        bash "$WORK/scen.sh" >"$SCEN_OUT" 2>&1
+    bash "$WORK/scen.sh" >"$SCEN_OUT" 2>&1
     printf '%s' "$?"
 }
 
