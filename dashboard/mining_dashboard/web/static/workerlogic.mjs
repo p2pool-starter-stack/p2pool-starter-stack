@@ -151,6 +151,12 @@ export function buildChartMarkers(markers) {
 // never-changed rig and a config edited underneath RigForge look identical from here.
 const CONFIG_ORIGIN_TEXT = {
   here: { cls: "text-muted", label: "Last changed from this dashboard" },
+  reverted: {
+    cls: "status-warn",
+    label: "Last change from this dashboard was rolled back",
+    detail:
+      "the rig re-stamps the change id it reverted, so it is running whatever config came before",
+  },
   elsewhere: {
     cls: "status-warn",
     label: "Last changed from another dashboard",
@@ -160,7 +166,7 @@ const CONFIG_ORIGIN_TEXT = {
   restored: {
     cls: "status-warn",
     label: "Last restored from a saved config",
-    detail: "RigForge also does this on its own when a change fails to hold",
+    detail: "someone ran RigForge's restore command on the rig",
   },
   unrecorded: {
     cls: "text-muted",

@@ -110,11 +110,17 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     # rows is worker-scoped by construction and fails closed, because the read returns [] on error.
     #
     # It also makes the verdict checkable: "here" now means precisely "the id is one of the rows
-    # rendered directly below this line", so an operator can confirm it by eye rather than trust it.
+    # rendered directly below this line, and that row records the change as having held", so an
+    # operator can confirm it by eye rather than trust it.
     # An id older than that window reads as "elsewhere" — wrong in the direction that under-claims.
+    #
+    # The matched ROW, not merely whether one exists: RigForge's rollback re-apply re-stamps the id
+    # it just reverted, so a rolled-back change still matches by id. The row's status is the only
+    # thing separating a change that held from one the rig threw away (``REVERTED_STATUSES``).
     last_change_id = (rig_meta or {}).get("last_change_id")
-    change_known = bool(
-        last_change_id and any(row.get("change_id") == last_change_id for row in history)
+    matched = next(
+        (row for row in history if last_change_id and row.get("change_id") == last_change_id),
+        None,
     )
     return {
         "name": name,
@@ -134,7 +140,9 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
         # The rig's own record of its last config change, and our verdict on it (#1345). Both None
         # for a rig that cannot answer — the client renders that as silence, not as "unknown".
         "rig_config_meta": rig_meta,
-        "config_origin": config_origin(rig_meta, change_known),
+        "config_origin": config_origin(
+            rig_meta, matched is not None, (matched or {}).get("status")
+        ),
         "last_applied": state_mgr.get_last_applied_worker_config(name),
         "history": history,
         "hashrate_by_config": hashrate_by_config,

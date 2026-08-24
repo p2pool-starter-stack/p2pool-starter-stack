@@ -64,13 +64,29 @@ test("rig edits are flagged — noticing one is the whole point of the feature",
   assert.match(out, /status-warn/);
 });
 
-test("restored never accuses a rig that rolled itself back", () => {
+test("restored describes the one thing RigForge actually stamps it for", () => {
   const note = configOriginNote("restored", { ...META, source: "restore" });
   assert.match(note.label, /restored from a saved config/i);
-  // RigForge stamps `restore` for its OWN automatic rollback, so neither the label nor the
-  // tooltip may say a person did it.
-  assert.doesNotMatch(note.label + note.title, /\b(you|someone|operator|edited on the rig)\b/i);
-  assert.match(note.title, /fails to hold/);
+  // RigForge stamps `restore` ONLY for its operator-run restore command. This test used to assert
+  // the opposite — that the tooltip must not name a person, because the rig "also does this on its
+  // own after a failed change". It does not: the automatic rollback re-enters apply() still scoped
+  // to source=control, so it arrives as `reverted`, never here.
+  assert.match(note.title, /restore command/i);
+  assert.doesNotMatch(note.title, /fails to hold/i);
+});
+
+test("a rolled-back change of ours is never dressed up as the running config", () => {
+  const out = renderToString(ConfigProvenance({ origin: "reverted", meta: META }));
+  // The worst case this feature exists to surface: our own control push did not come back live,
+  // the rig restored what it had, and re-stamped the SAME change id. It must not read as the calm
+  // `here` line, which would sit directly above a red "Rolled back" row for the same change.
+  assert.match(out, /rolled back/i);
+  assert.match(out, /status-warn/);
+  assert.doesNotMatch(out, /Last changed from this dashboard/);
+  const here = configOriginNote("here", META);
+  const note = configOriginNote("reverted", META);
+  assert.notEqual(note.label, here.label);
+  assert.match(note.title, /came before/i);
 });
 
 test("unrecorded claims no change happened and no change did not", () => {

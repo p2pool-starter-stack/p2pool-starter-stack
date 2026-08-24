@@ -38,8 +38,12 @@ _META = {
 }
 
 
-def _detail(monkeypatch, rigforge, *, spooled=None):
-    """Build the payload for one rig, optionally with ``spooled`` already in our own history."""
+def _detail(monkeypatch, rigforge, *, spooled=None, status="applied"):
+    """Build the payload for one rig, optionally with ``spooled`` already in our own history.
+
+    ``status`` is the outcome our history records for that row — the thing that separates a change
+    that held from one the rig rolled back out from under us.
+    """
     from mining_dashboard.web import views
 
     monkeypatch.setattr(views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "10.0.0.9"}])
@@ -47,7 +51,7 @@ def _detail(monkeypatch, rigforge, *, spooled=None):
     sm = StateManager(db_path=":memory:")
     try:
         if spooled:
-            sm.add_worker_config_version("rig1", spooled, "applied", {"DONATION": 5}, None)
+            sm.add_worker_config_version("rig1", spooled, status, {"DONATION": 5}, None)
         workers = [{"name": "rig1", "status": "online", "h60": 1, "rigforge": rigforge}]
         return build_worker_detail("rig1", {"workers": workers}, sm)
     finally:
@@ -61,6 +65,34 @@ class TestConfigOrigin:
         d = _detail(monkeypatch, {"config_meta": _META}, spooled=_META["last_change_id"])
         assert d["config_origin"] == "here"
         assert d["rig_config_meta"] == _META
+
+    def test_a_rolled_back_change_is_never_claimed_as_the_running_config(self, monkeypatch):
+        # RigForge's rollback re-apply re-stamps the change id it just reverted (control_apply
+        # keeps ``source=control`` and the same id across both apply attempts), so the rig still
+        # names this change while running the config that preceded it. Matching on id alone put a
+        # calm "Last changed from this dashboard" directly above a red "Rolled back" history row.
+        d = _detail(
+            monkeypatch,
+            {"config_meta": _META},
+            spooled=_META["last_change_id"],
+            status="rolled_back",
+        )
+        assert d["config_origin"] == "reverted"
+
+    def test_a_change_that_failed_its_rollback_is_not_claimed_either(self, monkeypatch):
+        # "failed" is the rollback whose own restore did not come back live — the config the rig is
+        # running is least knowable here of all, so it is the last case that may read as ours.
+        d = _detail(
+            monkeypatch, {"config_meta": _META}, spooled=_META["last_change_id"], status="failed"
+        )
+        assert d["config_origin"] == "reverted"
+
+    def test_a_change_that_held_is_still_ours_to_claim(self, monkeypatch):
+        # The guard above must not swallow the ordinary case: an applied row still reads "here".
+        d = _detail(
+            monkeypatch, {"config_meta": _META}, spooled=_META["last_change_id"], status="applied"
+        )
+        assert d["config_origin"] == "here"
 
     def test_control_change_we_never_spooled_is_elsewhere(self, monkeypatch):
         # Same source, same shape — only the id differs. Another host drove this rig, or our

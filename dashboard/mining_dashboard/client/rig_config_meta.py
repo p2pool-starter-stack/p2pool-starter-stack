@@ -27,13 +27,25 @@ against is not a filter.
 import re
 
 # Every value RigForge stamps into ``source`` (its ``_stamp_config_meta``): a change applied over
-# the control channel, one applied on the rig itself, and one restored from a saved config — which
-# includes the rig's own automatic rollback after a failed change, so it is NOT evidence that a
-# person touched the rig. Anything else is a rig speaking a dialect we do not know; it becomes None
-# rather than reaching the operator's screen, because the whole value of this line is that the
-# operator can trust who it names, and free text from the rig would let a compromised one write its
-# own provenance.
+# the control channel, one applied on the rig itself, and one restored from a saved config.
+# ``restore`` is narrower than it reads: RigForge stamps it only for the operator-run ``restore
+# <archive>`` command. The rig's own automatic rollback after a failed control change is NOT a
+# restore — ``control_apply`` re-enters apply() still scoped to ``source=control`` carrying the same
+# change id, and RigForge's own comment there says it means to. So a rollback reaches us as
+# ``control``; ``config_origin`` is where that is untangled. Anything else is a rig speaking a
+# dialect we do not know; it becomes None rather than reaching the operator's screen, because the
+# whole value of this line is that the operator can trust who it names, and free text from the rig
+# would let a compromised one write its own provenance.
 CONFIG_SOURCES = ("control", "local", "restore")
+
+# A control change whose id we matched, but which this dashboard's own history records as not having
+# held. RigForge's rollback re-apply stamps the SAME change id it just reverted, so the rig goes on
+# naming a change that is no longer what it is running — and "Last changed from this dashboard" over
+# one of those is the one confidently wrong answer this line can give, in exactly the case an
+# operator most needs it right. ``rejected`` cannot reach us today (a rejected change returns before
+# config.json is touched, so it is never stamped at all); it is listed anyway so that the check
+# fails closed rather than open if RigForge's apply path ever changes.
+REVERTED_STATUSES = ("rolled_back", "failed", "rejected")
 
 # Long enough for the ids RigForge actually mints (a 16-hex change id, a 16-hex revision) with room
 # for a future format; short enough that a rig cannot push a wall of text into the operator's view.
@@ -81,7 +93,7 @@ def parse_config_meta(meta):
     return out if any(out.values()) else None
 
 
-def config_origin(meta, change_id_known):
+def config_origin(meta, change_id_known, change_status=None):
     """Where the rig's current config came from, as far as we can honestly tell.
 
     ``change_id_known`` is whether this dashboard has a ``worker_config`` row for the rig's
@@ -89,13 +101,19 @@ def config_origin(meta, change_id_known):
     202, so a control change we made is one we can recognise by id. That comparison is what
     separates the two cases the operator most needs told apart:
 
-    - ``here``      — applied over the control channel, with an id in our own history.
+    - ``here``      — applied over the control channel, with an id in our own history, and that row
+                      records the change as having held.
+    - ``reverted``  — applied over the control channel with an id we know, but our own history says
+                      that change was rolled back or failed. RigForge's rollback re-apply re-stamps
+                      the id it just reverted, so the rig keeps naming it while running whatever
+                      preceded it. Saying ``here`` over this would print a calm "changed from this
+                      dashboard" directly above a history row reading "Rolled back" in red.
     - ``elsewhere`` — applied over a control channel, with an id we have never seen. Another host,
                       or our record of it is gone. Either way it is not something to present as ours.
     - ``rig``       — applied on the rig itself.
-    - ``restored``  — restored from a saved config, which the rig also does on its own after a
-                      failed change. Deliberately not folded into ``rig``: that would tell the
-                      operator someone edited the rig when the rig may simply have rolled back.
+    - ``restored``  — restored from a saved config by the operator-run ``restore`` command.
+                      Deliberately not folded into ``rig``: a restore is not someone editing the rig.
+                      It does NOT cover the rig's automatic rollback, which arrives as ``control``.
     - ``unrecorded``— the rig is running a config whose change it never recorded. A fresh rig that
                       has never been changed looks exactly like this, and so does one whose config
                       file was edited underneath RigForge, so this claims neither.
@@ -107,7 +125,9 @@ def config_origin(meta, change_id_known):
         return None
     source = meta.get("source")
     if source == "control":
-        return "here" if change_id_known else "elsewhere"
+        if not change_id_known:
+            return "elsewhere"
+        return "reverted" if change_status in REVERTED_STATUSES else "here"
     if source == "local":
         return "rig"
     if source == "restore":

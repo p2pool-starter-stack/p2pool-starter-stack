@@ -429,20 +429,27 @@ the one place a change it never saw can show up. RigForge stamps each config cha
 what applied it and a change id, and the dashboard looks for that id among this rig's own history
 rows — the table directly below — so the verdict is one you can check by eye:
 
-- **Last changed from this dashboard** — the id matches a change in the history below.
+- **Last changed from this dashboard** — the id matches a change in the history below, and that
+  change held.
+- **Last change from this dashboard was rolled back** — the id matches a change the history below
+  records as rolled back or failed. When a control change does not come back live, RigForge
+  restores the previous config and stamps that restore with the *same* change id it just reverted,
+  so the rig goes on naming a change it is no longer running. The rig is on whatever config came
+  before it.
 - **Last changed from another dashboard** — applied over a control channel, but with an id this
   dashboard has never issued. Another host drove this rig, or its record here is gone.
 - **Last changed on the rig itself** — applied on the rig, not over a control channel at all.
-- **Last restored from a saved config** — RigForge also does this on its own after a change fails
-  to hold, so it is not by itself evidence that anyone touched the rig.
+- **Last restored from a saved config** — someone ran RigForge's restore command on the rig. This
+  covers only that command; the rig's own rollback after a failed change reads as the rolled-back
+  line above, not as a restore.
 - **No recorded config change** — the rig is running a config whose change it never recorded. A rig
   that has never been changed reads the same way as one whose config file was edited
   underneath RigForge, so the line claims neither.
 
 A rig running plain XMRig, or a RigForge too old to publish the block, shows no line at all rather
 than a guess. The words come from a fixed set the dashboard controls, never from the rig — a rig
-cannot write its own provenance in text you would read as ours. Hover the line for the rig's
-timestamp and the revision of the config it is running.
+cannot write its own provenance in text you would read as ours. The line carries the rig's own
+timestamp beside it; hover it for the revision of the config the rig is running.
 
 Read it as evidence, not as proof, and know the one case it gets wrong. The line reports the last
 change RigForge **recorded**. A config file edited underneath RigForge — by hand, with nothing

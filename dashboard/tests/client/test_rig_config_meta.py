@@ -4,8 +4,11 @@ Two things are under test here and they fail in different directions. The FILTER
 rig that describes its own provenance in terms we did not define — the operator's only reason to
 believe this line is that a rig cannot write it. The MAPPING has to keep apart the cases that look
 alike and mean opposite things: a change we made, a change someone else made through a control
-channel, a change made on the rig, and a rig that rolled itself back.
+channel, a change made on the rig, a restore, and a change of ours the rig rolled back — which
+reaches us wearing the same ``source`` and the same change id as the one that held.
 """
+
+import pytest
 
 from mining_dashboard.client.rig_config_meta import config_origin, parse_config_meta
 from mining_dashboard.client.xmrig_client import parse_rigforge
@@ -72,6 +75,20 @@ def test_a_timestamp_the_rig_did_not_stamp_is_not_shown():
 
 def test_a_control_change_we_have_a_record_of_is_ours():
     assert config_origin(GOOD, change_id_known=True) == "here"
+
+
+@pytest.mark.parametrize("status", ["rolled_back", "failed", "rejected"])
+def test_a_control_change_our_history_says_did_not_hold_is_not_claimed_as_running(status):
+    # The rig keeps naming a change its own rollback reverted, because RigForge re-stamps the same
+    # change id when it restores the previous config. Only the row's status tells the two apart.
+    assert config_origin(GOOD, change_id_known=True, change_status=status) == "reverted"
+
+
+@pytest.mark.parametrize("status", ["applied", "noop", "throttled", None])
+def test_a_change_that_was_not_reverted_still_reads_as_ours(status):
+    # The negative control for the guard above: it must catch reverted rows WITHOUT swallowing the
+    # ordinary ones. ``None`` covers a history row from before the status column carried a value.
+    assert config_origin(GOOD, change_id_known=True, change_status=status) == "here"
 
 
 def test_a_control_change_we_have_no_record_of_is_not_claimed_as_ours():
