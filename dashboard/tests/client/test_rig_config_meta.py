@@ -150,7 +150,40 @@ def test_a_control_change_we_have_no_record_of_is_not_claimed_as_ours():
     # The case worth having: an id minted by a rig's control server that never reached this
     # dashboard's history. Another host applied it, or our record of it is gone. Reporting it as
     # "applied from here" would be the exact lie this issue exists to stop.
+    #
+    # This is also the case that keeps a FAILED read where it is (#1369). A short window still
+    # settles the miss, and `get_worker_config_history` returns [] on a sqlite3.Error — an empty
+    # list is not a full window, so a DB hiccup keeps exactly this verdict rather than being handed
+    # a stronger claim. That is why the rule is written as ">= limit -> soften" and not as a
+    # separate "we read the whole history" assurance. Caller-side twin:
+    # `test_a_history_read_that_fails_never_manufactures_trust`.
     assert config_origin(GOOD, change_id_known=False) == "elsewhere"
+
+
+def test_a_miss_in_a_window_that_was_full_does_not_get_to_call_it_another_dashboard():
+    # #1369: "we did not find it" only means "it is not there" if we could see the whole history.
+    # A full window means the id may sit one row past the end, so `elsewhere` — which renders as
+    # "Last changed from another dashboard" — is an accusation the read cannot support.
+    assert config_origin(GOOD, change_id_known=False, history_truncated=True) == "untraced"
+
+
+def test_the_new_argument_can_only_ever_soften_the_miss():
+    # The whole safety property of this fix in one assertion: `history_truncated` may change the
+    # verdict for a MISS and nothing else. Every case where we found the id keeps the answer it
+    # had, so a caller that starts passing the flag cannot silently move a verdict it was right
+    # about. Mutating the flag's use into any of these branches reds this test.
+    for status, expected in (
+        ("applied", "here"),
+        ("rolled_back", "reverted"),
+        ("accepted", "unconfirmed"),
+    ):
+        for truncated in (False, True):
+            assert (
+                config_origin(
+                    GOOD, change_id_known=True, change_status=status, history_truncated=truncated
+                )
+                == expected
+            )
 
 
 def test_a_change_made_on_the_rig_says_so():

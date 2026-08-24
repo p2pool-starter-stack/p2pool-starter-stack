@@ -176,6 +176,18 @@ const CONFIG_ORIGIN_TEXT = {
     label: "Last changed from another dashboard",
     detail: "applied over a control channel, with a change id this dashboard has no record of",
   },
+  // `untraced` is `elsewhere` with the accusation taken back out. The server reaches it when the id
+  // was not found AND the history it searched was full, so the id may simply sit past the end of
+  // the window. `text-muted` rather than `status-warn` on purpose: the two muted verdicts are the
+  // ones that claim nothing, and a warning colour over "we could not tell" is the same overclaim in
+  // a different medium. The cost is stated where it belongs — a genuinely foreign change on a
+  // long-history rig lands here too, so a true alarm is traded for a statement that is always true.
+  untraced: {
+    cls: "text-muted",
+    label: "Last changed over a control channel",
+    detail:
+      "too many changes since to tell whether it was this dashboard — the id is older than the history read",
+  },
   rig: { cls: "status-warn", label: "Last changed on the rig itself" },
   restored: {
     cls: "status-warn",

@@ -104,6 +104,29 @@ test("an unconfirmed change of ours neither claims it held nor accuses the rig",
   assert.match(note.title, /has not reported an outcome/i);
 });
 
+test("untraced withdraws the accusation elsewhere makes, without making the opposite one", () => {
+  const out = renderToString(ConfigProvenance({ origin: "untraced", meta: META }));
+  const note = configOriginNote("untraced", META);
+  // The server reaches this when the id was not found in a history window that was FULL, so the
+  // one thing it must not do is repeat `elsewhere`'s claim that another dashboard did it.
+  assert.doesNotMatch(out, /from another dashboard/);
+  assert.notEqual(note.label, configOriginNote("elsewhere", META).label);
+  // Nor may it swing the other way and claim the change as ours.
+  assert.doesNotMatch(out, /Last changed from this dashboard/);
+  // Muted, not warned: the two verdicts that claim nothing are the two that are not coloured as a
+  // problem, and a warning over "we could not tell" is the same overclaim in a different medium.
+  assert.doesNotMatch(out, /status-warn/);
+  assert.match(note.title, /older than the history read/i);
+});
+
+test("an unknown verdict token renders nothing rather than a blank warning", () => {
+  // configOriginNote returns null for a token it does not know, which is why a server-side verdict
+  // added without its label here would vanish silently instead of failing loudly. This pins that
+  // behaviour so the silence stays a deliberate choice for absent verdicts only.
+  assert.equal(configOriginNote("a-token-no-client-knows", META), null);
+  assert.notEqual(configOriginNote("untraced", META), null);
+});
+
 test("unrecorded claims no change happened and no change did not", () => {
   const note = configOriginNote("unrecorded", { revision: META.revision });
   assert.match(note.label, /No recorded config change/);

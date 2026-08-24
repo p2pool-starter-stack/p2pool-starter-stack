@@ -209,6 +209,77 @@ class TestConfigOrigin:
             sm.close()
         assert d["config_origin"] == "elsewhere"
 
+    @pytest.mark.parametrize(
+        "filler,expected",
+        [(48, "here"), (49, "here"), (50, "untraced")],
+    )
+    def test_a_change_pushed_out_of_the_history_window_is_not_reported_as_someone_elses(
+        self, monkeypatch, filler, expected
+    ):
+        """#1369, at the boundary. The provenance match reads a bounded window of this rig's
+        history. Once enough later changes exist, our own `applied` row falls off the end and the
+        id stops being found — and before this fix that printed "Last changed from another
+        dashboard" over a change this dashboard *did* make.
+
+        The filler rows are `rejected` on purpose. A rejected change returns before the rig's
+        config is touched, so nothing is re-stamped and `last_change_id` stays pinned to the good
+        change throughout — which is the situation being modelled. `rolled_back` fillers would be
+        the opposite: RigForge's rollback re-apply re-stamps the id it just reverted, so those
+        would mostly exercise the `reverted` path and this test could pass for a reason that has
+        nothing to do with windowing.
+
+        49 filler rows leaves the good row as the 50th and last readable one; 50 pushes it out.
+        The cliff is exact, which is what makes the off-by-one worth pinning.
+        """
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(
+            views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "1.2.3.4"}]
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        sm = StateManager(db_path=":memory:")
+        try:
+            sm.add_worker_config_version(
+                "rig1", _META["last_change_id"], "applied", {"DONATION": 5}, None, ts=1000.0
+            )
+            for i in range(filler):
+                sm.add_worker_config_version(
+                    "rig1", f"later{i:04d}", "rejected", {"DONATION": 6}, None, ts=2000.0 + i
+                )
+            workers = [{"name": "rig1", "status": "online", "rigforge": {"config_meta": _META}}]
+            d = build_worker_detail("rig1", {"workers": workers}, sm)
+        finally:
+            sm.close()
+        assert d["config_origin"] == expected
+        # The window really is the mechanism, not an accident of row count.
+        assert len(d["history"]) == min(filler + 1, 50)
+
+    def test_a_rolled_back_change_still_reads_as_reverted_on_a_long_history(self, monkeypatch):
+        # The truncation verdict must not swallow the case where we DID find the row. The rig
+        # re-stamps the id it reverted, so the id is still matched even on a rig with a full
+        # window — and the answer stays `reverted`, not the new "we do not know".
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(
+            views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "1.2.3.4"}]
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        sm = StateManager(db_path=":memory:")
+        try:
+            for i in range(60):
+                sm.add_worker_config_version(
+                    "rig1", f"older{i:04d}", "rejected", {"DONATION": 6}, None, ts=1000.0 + i
+                )
+            sm.add_worker_config_version(
+                "rig1", _META["last_change_id"], "rolled_back", {"DONATION": 5}, None, ts=9000.0
+            )
+            workers = [{"name": "rig1", "status": "online", "rigforge": {"config_meta": _META}}]
+            d = build_worker_detail("rig1", {"workers": workers}, sm)
+        finally:
+            sm.close()
+        assert len(d["history"]) == 50  # the window IS full, so the softening was available...
+        assert d["config_origin"] == "reverted"  # ...and correctly not taken
+
     def test_a_history_read_that_fails_never_manufactures_trust(self, monkeypatch):
         # A DB the dashboard cannot read must not print "you did this". The #530 audit path fails
         # OPEN on a read error (a false "known" there only declines to accuse a rig); the same
