@@ -115,7 +115,7 @@ run_rigforge_writable_keys() { # <rig>
     # to the operator scanning a release-gate log — exactly like an omission nobody noticed.
     it_log "   #1236: autotune and watchdog are deliberately NOT driven (a real tuning run; and dropping thermal protection on a rig at its temperature ceiling), and pools is never derived from the rig's own read (credential-stripped, #113) — see docs/dev/integration-testing.md"
     detail="$(_worker_detail "$rig")"
-    if [ -z "$(printf '%s' "$detail" | jq -c '.rig_config | select(type == "object")' 2>/dev/null)" ]; then
+    if ! printf '%s' "$detail" | jq -e '(.rig_config | type) == "object"' >/dev/null 2>&1; then
         it_warn "rig '$rig' reports no writable config (.rig_config is null — 'could not read', or a RigForge older than v1.10.0/rigforge#253) — skipping the writable-key legs (#1236)"
         return 0
     fi
@@ -147,8 +147,6 @@ run_rigforge_writable_keys() { # <rig>
         [ "$orig" -ge 1440 ] && probe=$((orig - 1))
         _writable_key_round_trip "$rig" watchdog_interval_min "$orig" "$probe"
     fi
-
-    run_rigforge_pools "$rig"
 }
 
 # #1002b: pools, the repoint-your-hashrate key. Unchanged in substance from the leg that lived in

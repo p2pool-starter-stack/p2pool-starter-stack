@@ -2224,6 +2224,7 @@ run_rigforge_control() {
     # config (.rig_config, #1235/rigforge#253) rather than from a record of what we last pushed, and
     # the three keys not driven there carry their reasons with them.
     run_rigforge_writable_keys "$rig"
+    run_rigforge_pools "$rig"
 
     # ---- #516: a rig-side edit reflects in the dashboard's enriched feed + the masked prefill ----
     run_rigforge_reverse "$rig" "$orig_maxt"

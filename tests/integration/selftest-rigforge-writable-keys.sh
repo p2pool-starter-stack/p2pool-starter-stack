@@ -262,7 +262,10 @@ assert_eq "autotune is never applied — it would start a real tuning run" \
     "$(applies | grep -c autotune)" "0"
 assert_eq "watchdog is never applied — it would drop thermal protection" \
     "$(applies | grep -cw '"watchdog"')" "0"
-assert_eq "pools is never derived from the rig's own credential-stripped read (#113)" \
+# Covers two things at once: pools is never derived from the rig's own credential-stripped read
+# (#113), and these legs never run the pools leg on our behalf — it is a sibling (#1002b) that
+# run.sh calls separately, and re-nesting it would hide a whole leg behind an unrelated name.
+assert_eq "no pools apply comes out of the #1236 legs, self-derived or otherwise (#113/#1002b)" \
     "$(applies | grep -c pools)" "0"
 assert_eq "max_temp_c is not duplicated here — the #513 leg already round-trips it" \
     "$(applies | grep -c max_temp_c)" "0"
