@@ -226,7 +226,13 @@ sudo tests/os/run.sh --image os/rauc/build/system.img
 What gates a merge vs. a release, the standards every test holds to, and the known gaps. For the
 full enumerated coverage, `make test-inventory` generates the list on demand (git-ignored — read it
 locally). The generator is grep-based, so CI runs it on every PR and fails if any suite it
-enumerates counts zero — the drift a moved or reshaped suite would otherwise hide.
+enumerates counts zero — the drift a moved or reshaped suite would otherwise hide. It also holds
+`tests/stack/run.sh` and the per-domain files it sources to each other in both directions: a file
+named by a `source` line has to exist, and a file on disk has to be sourced by something. Either
+mismatch ends the same way — `run.sh` does not stop on a failed `source`, so the suite reports a
+pass having skipped every assertion in that domain. It reads those `source` lines as text, which
+catches one that is absent or commented out but not one that is present and never reached; a
+handful of suites are invoked as their own CI step instead and are listed as exempt in the script.
 
 ### What runs where
 
@@ -239,7 +245,7 @@ enumerates counts zero — the drift a moved or reshaped suite would otherwise h
 | Compose interpolation + **security/hardening** invariants | 1 | every PR | ✅ required |
 | Fake-daemon **contract test** | 2 | every PR | ✅ required |
 | Integration harness **self-test** | 4 | every PR | ✅ required |
-| **Test-inventory drift** check (the generator still enumerates every suite) | — | every PR | ✅ required |
+| **Test-inventory drift** check (every suite still enumerates; every domain file is sourced) | — | every PR | ✅ required |
 | Fake-daemon **docker mini-stack** | 3 | PRs touching the harness/dashboard | ✅ (own workflow) |
 | **Live config matrix** on real nodes | 4 | manual / pre-release | ✅ **release gate** ([#44](https://github.com/p2pool-starter-stack/pithead/issues/44)) |
 | **KVM appliance battery** (`tests/os/run.sh`) | 4 | manual / pre-release | ✅ **release gate for the image** ([appliance-release.md](appliance-release.md)) |
