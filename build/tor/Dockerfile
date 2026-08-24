@@ -2,9 +2,10 @@
 # names the Alpine minor line (3.24) so Dependabot's patch-update policy has a real version to track.
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
-# Install Tor plus the tools the bootstrap healthcheck needs: netcat (talk to the
-# control port) and xxd (hex-encode the auth cookie). --no-cache keeps the image small.
-RUN apk add --no-cache tor netcat-openbsd xxd
+# Install Tor plus netcat, which the bootstrap healthcheck needs to talk to the control port.
+# Deliberately NOT xxd: the healthcheck's `xxd -p -c 256` is served by busybox's own applet, so
+# `apk add xxd` bought nothing but vim's CVE stream (#1372). --no-cache keeps the image small.
+RUN apk add --no-cache tor netcat-openbsd
 
 # Copy the Tor config TEMPLATE + the entrypoint that renders it: the bridge subnet prefix is
 # substituted at container start (#180). The rendered torrc lands in /tmp (the unprivileged 'tor'

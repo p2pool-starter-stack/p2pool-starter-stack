@@ -11,7 +11,11 @@
 
 set -eu
 
-COOKIE_FILE=/var/lib/tor/control_auth_cookie
+# The cookie path is fixed in the container. TOR_COOKIE_FILE is the test seam (#1372) — the same
+# shape as entrypoint.sh's TORRC_OUT, and for the same reason: the shell suite has to drive this
+# script for real, and it cannot write /var/lib/tor. Nothing sets it in production, so what ships
+# is the default; the suite asserts that default is still spelled exactly this way.
+COOKIE_FILE=${TOR_COOKIE_FILE:-/var/lib/tor/control_auth_cookie}
 CONTROL_HOST=127.0.0.1
 CONTROL_PORT=9051
 
