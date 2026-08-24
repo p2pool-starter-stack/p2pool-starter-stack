@@ -18,8 +18,8 @@ dashboard/mining_dashboard/web/static/dashboard.css	1579
 dashboard/mining_dashboard/web/static/logic.mjs	609
 dashboard/mining_dashboard/web/static/osupdate.mjs	415
 dashboard/mining_dashboard/web/static/wizard.mjs	889
-dashboard/mining_dashboard/web/static/workerview.mjs	479
-dashboard/mining_dashboard/web/views.py	2339
+dashboard/mining_dashboard/web/static/workerview.mjs	443
+dashboard/mining_dashboard/web/views.py	2263
 dashboard/mining_dashboard/wizard.py	674
 dashboard/tests/client/test_xmrig_client.py	504
 dashboard/tests/config/test_config.py	458

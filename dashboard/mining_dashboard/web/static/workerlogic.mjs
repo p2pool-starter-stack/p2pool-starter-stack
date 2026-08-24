@@ -139,3 +139,44 @@ export function buildChartMarkers(markers) {
     quiet: row.status !== "applied",
   }));
 }
+
+// Where the rig's running config came from (#1345) -> the one line the operator reads. The server
+// decides the VERDICT (it holds the only fact that settles it: whether the rig's last_change_id
+// matches a change this dashboard spooled); this is the client turning that token into text, the
+// same division of labour markerLabel() above already follows.
+//
+// `restored` is deliberately not phrased as an accusation: RigForge stamps it for its OWN automatic
+// rollback after a change fails to hold, so the text has to leave room for the rig having healed
+// itself rather than someone having edited it. `unrecorded` claims nothing for the same reason — a
+// never-changed rig and a config edited underneath RigForge look identical from here.
+const CONFIG_ORIGIN_TEXT = {
+  here: { cls: "text-muted", label: "Last changed from this dashboard" },
+  elsewhere: {
+    cls: "status-warn",
+    label: "Last changed from another dashboard",
+    detail: "applied over a control channel, with a change id this dashboard has no record of",
+  },
+  rig: { cls: "status-warn", label: "Last changed on the rig itself" },
+  restored: {
+    cls: "status-warn",
+    label: "Last restored from a saved config",
+    detail: "RigForge also does this on its own when a change fails to hold",
+  },
+  unrecorded: {
+    cls: "text-muted",
+    label: "No recorded config change",
+    detail: "a rig that has never been changed looks the same as one changed outside RigForge",
+  },
+};
+
+// null means SAY NOTHING — an absent verdict is a rig too old to answer (or no RigForge at all),
+// which is not the same claim as "unknown" and must not render as one.
+export function configOriginNote(origin, meta) {
+  const text = CONFIG_ORIGIN_TEXT[origin];
+  if (!text) return null;
+  const parts = [];
+  if (meta?.changed_at) parts.push(`Recorded ${meta.changed_at}`);
+  if (meta?.revision) parts.push(`config revision ${meta.revision}`);
+  if (text.detail) parts.push(text.detail);
+  return { cls: text.cls, label: text.label, title: parts.join(" · ") };
+}

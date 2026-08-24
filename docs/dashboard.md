@@ -423,6 +423,27 @@ whatever config version happened to be active when it ran. See
 [Connecting Miners › One-click rig upgrade](workers.md#one-click-rig-upgrade) for what the rig
 must enable and how the target is derived.
 
+Above the history, a line says **where the rig's current config came from** — the rig's own
+account, not ours. The history table below it can only list what this dashboard did; this line is
+the one place a change it never saw can show up. RigForge stamps each config change it records with
+what applied it and a change id, and the dashboard compares that id against its own record of the
+changes it sent:
+
+- **Last changed from this dashboard** — the id matches a change in the history below.
+- **Last changed from another dashboard** — applied over a control channel, but with an id this
+  dashboard has never issued. Another host drove this rig, or its record here is gone.
+- **Last changed on the rig itself** — applied on the rig, not over a control channel at all.
+- **Last restored from a saved config** — RigForge also does this on its own after a change fails
+  to hold, so it is not by itself evidence that anyone touched the rig.
+- **No recorded config change** — the rig is running a config whose change it never recorded. A rig
+  that has never been changed reads the same way as one whose config file was edited
+  underneath RigForge, so the line claims neither.
+
+A rig running plain XMRig, or a RigForge too old to publish the block, shows no line at all rather
+than a guess. The words come from a fixed set the dashboard controls, never from the rig — a rig
+cannot write its own provenance in text you would read as ours. Hover the line for the rig's
+timestamp and the revision of the config it is running.
+
 How it stays safe:
 
 - **The dashboard never holds the rig's token.** It spools the worker name and the change into the
@@ -948,7 +969,8 @@ watches for both on its normal poll cycle and appends them to the SAME audit tra
 - **`rig-edit`** — a worker's control API reports a config change this dashboard never sent. The
   row names the worker and the rig's own change id; RigForge's status feed reports only the
   outcome of a change, not a per-key diff, so unlike `host-edit` this can't name which setting
-  moved — inspect the rig directly to see what changed. This one source reads off the
+  moved — inspect the rig directly to see what changed, where Worker Inspect's own
+  [config-origin line](#worker-inspect) names what applied the rig's current config. This one source reads off the
   unauthenticated worker feed, so it is rate-capped per worker
   ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a fresh
   change id every poll can add only a bounded number of `rig-edit` rows per hour before the rest
