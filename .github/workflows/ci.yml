@@ -22,13 +22,6 @@ on:
   # Scheduled runs use the default branch (develop).
   schedule:
     - cron: "0 5 * * 1" # Mondays 05:00 UTC
-    # TEMPORARY, and its own follow-up PR removes it the moment it has fired once (#1313). A
-    # `schedule:` is read from the DEFAULT branch only, and a workflow file that merely LOOKS
-    # right proves nothing about registration — #1048, #1064 and #1146 are all the same defect,
-    # a scheduled job that never ran and reported nothing while not running. The only proof is a
-    # run carrying `event: schedule`, and the weekly slot above cannot supply one inside a working
-    # session. This near-term daily slot does, then goes away. Same recipe as #1257's proof cron.
-    - cron: "30 3 * * *" # PROOF SLOT — removed once a scheduled run is on record
 
 # Least privilege (#282): every job here only reads the repo — none push commits, comment, or
 # publish packages. Narrowing the default GITHUB_TOKEN limits the blast radius of a compromised step.
