@@ -81,11 +81,12 @@ fails=0
 # nobody sees, a forbidden pattern that IS present read as absent, i.e. a hardening regression
 # wearing a green tick. grep exiting >= 2 is "could not check", counted as a failure, never a verdict.
 expect_min() { # <label> <pattern> <min-count> [haystack, default $RENDERED]
-    local n
-    n=$(grep -c -- "$2" <<<"${4-$RENDERED}" || true)
-    if [ "$n" -ge "$3" ]; then echo "  ✓ $1 ($n)"; else
-        echo "  ✗ $1: expected >= $3, got $n"
-        fails=$((fails + 1))
+    local n rc=0
+    n=$(grep -c -- "$2" <<<"${4-$RENDERED}") || rc=$?
+    if [ "$rc" -gt 1 ]; then
+        echo "  ✗ $1: could not check [$2] (grep exited $rc)" && fails=$((fails + 1))
+    elif [ "$n" -ge "$3" ]; then echo "  ✓ $1 ($n)"; else
+        echo "  ✗ $1: expected >= $3, got $n" && fails=$((fails + 1))
     fi
 }
 expect_present() { # <label> <pattern>
