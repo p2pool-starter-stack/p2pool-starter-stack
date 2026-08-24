@@ -4,12 +4,23 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-  # Weekly CVE sweep (#833): rebuild + Trivy-scan every image even when no PR is open, so a CVE
-  # disclosed during a quiet week — or fixed in the apt archive without a new base digest, which
-  # Dependabot never sees — surfaces here instead of reddening the next unrelated PR. Only
-  # `build-images` runs on the schedule (every other job gates on the event); the run going red
-  # in the Actions tab is the alert, the lychee.yml posture. Scheduled runs use the default
-  # branch (develop).
+  # Two Monday sweeps hang off this schedule, answering two different questions. Every other job
+  # gates itself off the event, so only these two run.
+  #
+  #   build-images  (#833) rebuilds every image from the branch and scans the rebuild: does what
+  #                 we are about to ship carry a CVE? It is the only sweep that can go red before
+  #                 a release, and the run reddening in the Actions tab is its alert.
+  #   sweep-shipped (#1313) scans what users are already running — the published ghcr images from
+  #                 `main`, each tag resolved to a digest and the digest scanned as published. A
+  #                 rebuild structurally cannot answer that: it resolves apt at scan time, so it
+  #                 picks up archive fixes the published bytes never got. It reports into a
+  #                 tracking issue rather than reddening, because "a shipped image has a fixable
+  #                 CVE" asks for a patch release, which is a decision a person makes.
+  #
+  # NEITHER FIRES FROM THIS FILE — `schedule:` is read from the DEFAULT branch only, so both run
+  # from `develop`'s copy and this cron block is inert. It is here so the twins stay level, and so
+  # `make lint-trivy-parity` (this lane only) covers sweep-shipped's trivy step at all. Change the
+  # cadence on `develop`, and prove it fired with `gh run list --json event`.
   schedule:
     - cron: "0 5 * * 1" # Mondays 05:00 UTC
 
@@ -146,6 +157,177 @@ jobs:
           exit-code: "1"
           trivyignores: .trivyignore
           cache: "false"
+
+  sweep-shipped:
+    # The half of the Monday sweep that reports on what users are running (#1313). `build-images`
+    # above scans a rebuild of this branch; this scans the bytes on the registry.
+    #
+    # Every leg resolves the published TAG to a DIGEST and scans the digest. That is not
+    # ceremony: a tag is a moving pointer, so "we scanned :v1.20.0" stops being a statement about
+    # any particular image the moment it moves, and the digest is the only reference that names
+    # the bytes a user pulled. The digest scanned is printed in the report.
+    #
+    # fail-fast: false so one unreachable image does not hide the other four — and a leg that
+    # fails still shows up, because the report job runs on `always()` and names any image it
+    # received no scan for as UNCHECKED rather than counting it as clean.
+    name: Shipped-image CVE sweep (${{ matrix.service }})
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [monero, p2pool, tor, xmrig-proxy, dashboard]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve the shipped tag to a digest, and take main's own .trivyignore
+        id: shipped
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -Eeuo pipefail
+          # The scheduled run checks out develop. `main` is a different ref and a shallow clone
+          # does not carry it, so fetch it rather than assume it is here — since #1076 `main` is a
+          # fast-forward pointer to the released tag, and it is the only ref that knows what
+          # shipped.
+          git fetch --no-tags --depth=1 origin main
+          ver="$(git show origin/main:VERSION)"
+          [ -n "$ver" ] || { echo "::error::main carries no VERSION — cannot tell what shipped"; exit 1; }
+          tag="v$ver"
+          # main's OWN .trivyignore, never develop's. A mute added after the cut would otherwise
+          # silence a finding in an image whose review never saw that mute.
+          git show origin/main:.trivyignore >main.trivyignore
+          repo="p2pool-starter-stack/pithead-$SERVICE"
+          # The packages are public, so an anonymous pull token is enough — no registry secret
+          # enters this workflow.
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull" | jq -er .token)"
+          digest="$(curl -fsSI \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/$repo/manifests/$tag" |
+            tr -d '\r' | awk 'tolower($1) == "docker-content-digest:" { print $2 }')"
+          # An unresolved digest must never fall through to a tag scan: the report would then say
+          # "shipped image" about bytes nobody can identify. Fail the leg instead and let it read
+          # UNCHECKED.
+          printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' ||
+            { echo "::error::could not resolve ghcr.io/$repo:$tag to a digest — got [$digest]"; exit 1; }
+          echo "ref=ghcr.io/$repo@$digest" >>"$GITHUB_OUTPUT"
+          # The tag every leg swept, so the report can refuse to mix two releases if a cut lands
+          # mid-run.
+          printf '%s\n' "$tag" >"sweep-$SERVICE.tag"
+      - name: Scan the published image by digest (Trivy)
+        # Same scope as the gate above, and the same engine — but only because #1290's pin is on
+        # both steps. Read that as a dependency, not a coincidence: comparing this sweep's verdict
+        # against the rebuild's is the whole reason both exist, and two trivy releases apart is
+        # enough to make them disagree for reasons that have nothing to do with the images. If the
+        # step above ever loses its `version:`, this comparison stops meaning anything, and on
+        # develop no lint will say so (`make lint-trivy-parity` is develop-v2's).
+        #
+        # trivy pulls the digest from the registry itself — nothing is built here.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: ${{ steps.shipped.outputs.ref }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          # Report-only, deliberately. A fixable CVE in an image that is already published cannot
+          # be fixed by failing this run; it asks for a patch release. The run goes red only when
+          # the sweep itself could not do its job, which the report job decides.
+          exit-code: "0"
+          trivyignores: main.trivyignore
+          cache: "false"
+          format: json
+          output: sweep-${{ matrix.service }}.json
+      - name: Upload this image's scan output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: shipped-sweep-${{ matrix.service }}
+          path: |
+            sweep-${{ matrix.service }}.json
+            sweep-${{ matrix.service }}.tag
+          # An empty upload would reach the report job as a scan that found nothing, which is the
+          # one thing this must never say off a leg that did not scan.
+          if-no-files-found: error
+
+  sweep-shipped-report:
+    # One tracking issue, edited in place — the pin-watch.yml / trivyignore-watch.yml posture. An
+    # issue persists, is assignable, and lets a person write "held until the next cut, here's why"
+    # in a comment. A red square in the Actions tab cannot hold that, and this finding's whole
+    # value is the conversation about whether to cut a patch release.
+    name: Shipped-image CVE sweep — tracking issue
+    # always() so a failed scan leg still reports: an image with no scan output is UNCHECKED, and
+    # saying so is the entire point. Skipping the report on a partial sweep would leave the last
+    # good report standing as if it were current.
+    if: always() && github.event_name == 'schedule'
+    needs: sweep-shipped
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Least privilege (#282): issues.write is this job's one output — it never pushes or publishes.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Collect every leg's scan output
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: shipped-sweep-*
+          merge-multiple: true
+          path: shipped-sweep
+      - name: Render the report
+        id: report
+        run: |
+          set -uo pipefail
+          # NOT `set -e`: an incomplete sweep is a result to publish, not a reason to publish
+          # nothing. The script names the images it could not check and exits 1; the rc is
+          # carried to the last step so the run still fails loudly.
+          bash scripts/shipped-image-sweep-report.sh shipped-sweep >report.md
+          rc=$?
+          # An empty report is itself a failure to report — never publish silence.
+          [ -s report.md ] || { echo "The shipped-image sweep produced no report at all — see the run log." >report.md; rc=1; }
+          echo "rc=$rc" >>"$GITHUB_OUTPUT"
+      - name: Publish it to the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC: ${{ steps.report.outputs.rc }}
+        run: |
+          set -Eeuo pipefail
+          # The title is the upsert key and it lives in the script, so there is exactly one
+          # spelling of it anywhere. A second spelling here would file a second issue on the very
+          # next run and then keep both stale.
+          TITLE="$(bash scripts/shipped-image-sweep-report.sh --title)"
+          body=$(cat report.md)
+          # Exact title match over the open list, NOT `--search`: the search index lags issue
+          # creation by minutes, so a search-based dedup files a second issue on the next run.
+          n=$(gh issue list --state open --limit 200 --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          # A run that could not do its job must not DELETE the "last fully successful" date —
+          # that date is the only thing separating "failed once this morning" from "has been dead
+          # for six weeks". Stamp it on success, carry it forward on failure (pin-watch pattern).
+          if [ "$RC" = "0" ]; then
+            body="$body"$'\n\n'"_Last fully successful sweep: $(date -u +%F)_"
+          elif [ -n "$n" ]; then
+            prev=$(gh issue view "$n" --json body --jq .body | grep -a "^_Last fully successful sweep:" || true)
+            if [ -n "$prev" ]; then
+              body="$body"$'\n\n'"$prev (this run could not complete)"
+            fi
+          fi
+          if [ -n "$n" ]; then
+            gh issue edit "$n" --body "$body"
+            echo "updated #$n"
+          else
+            gh issue create --title "$TITLE" --label infra --body "$body"
+          fi
+      - name: Fail the run if the sweep could not cover every shipped image
+        if: steps.report.outputs.rc != '0'
+        run: |
+          echo "::error::the shipped-image sweep did not cover every published image — those images are UNCHECKED, not clean"
+          exit 1
 
   hadolint:
     name: Dockerfile lint (hadolint)
