@@ -17,6 +17,7 @@ from mining_dashboard.config.config import (
 # rather than restated: a second literal would be a third copy of the same list, and the existing
 # drift guard only compares the dashboard's copy against pithead's. control_service imports only
 # `config`, so this does not close an import cycle.
+from mining_dashboard.helper.http import ResponseTooLarge, bounded_read
 from mining_dashboard.service.control_service import WORKER_WRITABLE_KEYS
 
 # Per-worker endpoint descriptors (#172): the validated dashboard.workers[] list from config.json.
@@ -360,23 +361,23 @@ class XMRigWorkerClient:
         try:
             async with self.session.get(url, headers=headers, timeout=API_TIMEOUT) as response:
                 if response.status == 200:
-                    # Read one byte past the ceiling and refuse on overflow. Deliberately NOT a
-                    # Content-Length check: that header is set by the far end, may be absent under
-                    # chunked encoding, and is exactly what a rig lying about its size would lie
-                    # about. Reading with a bound never trusts it in the first place.
-                    # Accumulate: StreamReader.read(n) is a SHORT read — it returns whatever is
-                    # buffered the moment anything is, NOT n bytes. One call would truncate any
-                    # body that arrives split across TCP reads, which is ordinary for a rig on
-                    # WiFi or any link with latency, and the rig would then read as unreachable
-                    # for a reason with nothing to do with its size. Stop at EOF, or one byte past
-                    # the ceiling — never buffering more than that however the body is framed.
-                    body = b""
-                    while len(body) <= _MAX_SUMMARY_BYTES:
-                        chunk = await response.content.read(_MAX_SUMMARY_BYTES + 1 - len(body))
-                        if not chunk:
-                            break
-                        body += chunk
-                    if len(body) > _MAX_SUMMARY_BYTES:
+                    # This loop is where the bounded async read was worked out (#1347); #1360
+                    # lifted it into ``bounded_read`` and this is the call site coming back to it.
+                    # Keeping a second copy meant two implementations of one contract, and they had
+                    # already diverged: the helper's accumulator was fixed to a ``bytearray``
+                    # because immutable ``bytes +=`` is O(n^2) in the NUMBER of reads, and the read
+                    # is SHORT, so the far end picks that number. This is the least trustworthy
+                    # endpoint we read — a rig's own API — so it is the last place to keep the
+                    # slow copy. Overflow is a refusal for THIS rig only, never an exception that
+                    # takes the poll down for every other worker, so it is caught here rather than
+                    # left to the blanket handler below, which would log it differently.
+                    try:
+                        body = await bounded_read(
+                            response.content,
+                            max_bytes=_MAX_SUMMARY_BYTES,
+                            what=f"{name} summary",
+                        )
+                    except ResponseTooLarge:
                         self._warn(host, name, url, f"body over {_MAX_SUMMARY_BYTES} bytes")
                         return {"api_ok": False}
                     payload = json.loads(body)

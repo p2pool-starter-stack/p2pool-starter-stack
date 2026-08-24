@@ -16,8 +16,20 @@ from mining_dashboard.config.config import (
     MONERO_NODE_HOST,
     NETWORK_STATS_PATH,
 )
+from mining_dashboard.helper.http import MAX_RESPONSE_BYTES, bounded_read
 
 logger = logging.getLogger("LogCollector")
+
+# The log read is the one bounded site (#1360) where a legitimately large body exists, so the cap
+# is derived from what the operator asked for rather than fixed. ``tail`` bounds LINES, never bytes,
+# so a container emitting very long lines is unbounded — and container logs carry miner-supplied
+# strings (worker names, pool messages), which is why "our own daemon serves it" is not the question.
+#
+# 16 KiB is where Docker's json-file driver splits a log line, so ``tail * 16 KiB`` is the ceiling a
+# well-behaved daemon can legitimately produce for the requested number of lines. The 1 MiB floor
+# keeps the default (100 lines) generous. A cap set too tight is worse than the exhaustion it
+# prevents, because it presents to the operator as the far end being broken rather than as a refusal.
+_LOG_BYTES_PER_LINE = 16 * 1024
 
 # Stateless client reused across cycles; reads monerod's get_info RPC (Issue #29).
 _monero_client = MoneroClient()
@@ -44,7 +56,11 @@ async def fetch_docker_logs(container_name, tail=None):
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params, timeout=DOCKER_TIMEOUT) as response:
                 if response.status == 200:
-                    raw_data = await response.read()
+                    raw_data = await bounded_read(
+                        response.content,
+                        max_bytes=max(MAX_RESPONSE_BYTES, int(tail) * _LOG_BYTES_PER_LINE),
+                        what=f"{container_name} logs",
+                    )
                     return _parse_docker_stream(raw_data)
                 else:
                     logger.error(

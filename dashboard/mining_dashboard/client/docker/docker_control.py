@@ -3,6 +3,7 @@ import logging
 import aiohttp
 
 from mining_dashboard.config.config import DOCKER_CONTROL_URL, DOCKER_TIMEOUT
+from mining_dashboard.helper.http import bounded_read
 
 logger = logging.getLogger("DockerControl")
 
@@ -73,7 +74,11 @@ class DockerControl:
                         log = logger.debug if quiet else logger.info
                         log(f"Container {container} {action}: ok (HTTP {resp.status})")
                         return True
-                    body = await resp.text()
+                    # Bounded (#1360). The 200-char slice below only ever trimmed the LOG LINE —
+                    # the whole body was buffered first, so an error response was the one path
+                    # here that read without a limit.
+                    raw = await bounded_read(resp.content, what=f"{container} {action} error")
+                    body = raw.decode("utf-8", errors="replace")
                     logger.error(
                         f"Container {container} {action} failed: HTTP {resp.status} {body[:200]}"
                     )

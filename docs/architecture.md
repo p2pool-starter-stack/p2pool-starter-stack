@@ -193,6 +193,20 @@ map and the remaining lock-down steps.
   loopback, so the host-networked dashboard reaches them but no mining container can — a compromised
   `monerod`/`tari`/`p2pool`/`xmrig-proxy` cannot read other containers' env (inspect) or start/stop
   the stack through them.
+- **Every response the dashboard reads has a ceiling** (#660, #1347, #1360). The dashboard pulls
+  from a dozen places: GitHub's release feed, the price feed, the XvB API, its own `xmrig-proxy`,
+  `monerod` and the two view-only wallets, each rig's API, and container logs and inspect data
+  through the read-only Docker proxy. Every one of those reads stops at a size cap and gives up
+  rather than buffer whatever arrives, so a broken or hostile endpoint cannot exhaust the
+  dashboard's memory by answering a small request with a huge body. A refusal is treated like any
+  other unreachable endpoint — the panel keeps its last good value, and one oversized answer never
+  takes down the poll for everything else. The caps sit orders of magnitude above any real payload,
+  and the container-log cap scales with the number of lines you asked for (`LOG_TAIL_LINES`),
+  because a ceiling set too low is the worse failure: it presents as a broken daemon rather than as
+  a refusal. The reads on the box are bounded for the same reason the ones leaving it are — "our own
+  container" describes who *serves* a body, not who *wrote* it. `xmrig-proxy`'s summary is assembled
+  from what miners advertise to it, container logs carry miner-supplied worker names and pool
+  messages, and a remote `monerod` is someone else's server on someone else's network.
 - **Locked-down config.** `config.json` is created `chmod 600` (owner-only), and the internal RPC
   proxy token is generated once and preserved across re-runs.
 

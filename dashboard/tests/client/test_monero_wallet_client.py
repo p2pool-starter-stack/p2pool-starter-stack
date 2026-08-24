@@ -1,18 +1,43 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import requests
 
 import mining_dashboard.client.monero.monero_wallet_client as wallet_mod
 from mining_dashboard.client.monero.monero_wallet_client import MoneroWalletClient
+from mining_dashboard.helper.http import MAX_RESPONSE_BYTES
 
 
-def _resp(status_code=200, json_data=None, raise_json=False):
-    resp = MagicMock(status_code=status_code)
-    if raise_json:
-        resp.json.side_effect = ValueError("no json")
-    else:
+def _resp(status_code=200, json_data=None, raise_json=False, body=None):
+    """A streaming ``requests`` response — what ``bounded_request`` consumes since #1360.
+
+    The payload is served as real BYTES over ``iter_content``: the client now receives a
+    ``BoundedResponse`` parsed from the stream, not this mock. ``json()`` is set on the mock too, so
+    the same fake drives the unbounded ``requests.post`` this replaced — which is what makes the
+    oversized test below fail if the bounding is taken out.
+    """
+    raw = (
+        b"not json"
+        if raise_json
+        else (body if body is not None else json.dumps(json_data or {}).encode())
+    )
+    resp = MagicMock(status_code=status_code, encoding="utf-8")
+    resp.iter_content.return_value = iter([raw[i : i + 65536] for i in range(0, len(raw), 65536)])
+    resp.json.side_effect = ValueError("no json") if raise_json else None
+    if not raise_json:
         resp.json.return_value = json_data or {}
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
     return resp
+
+
+def _oversized(json_data):
+    """A valid ``result`` payload one byte past the cap: refused on byte count, not on content."""
+    empty = json.dumps({**json_data, "pad": ""}).encode()
+    pad = "x" * (MAX_RESPONSE_BYTES + 1 - len(empty))
+    raw = json.dumps({**json_data, "pad": pad}).encode()
+    assert len(raw) == MAX_RESPONSE_BYTES + 1, len(raw)
+    return _resp(json_data=json_data, body=raw)
 
 
 def _transfers(rows):
@@ -107,6 +132,15 @@ class TestGetConfirmedPayouts:
 
     def test_non_json_returns_empty(self):
         with patch.object(wallet_mod.requests, "post", return_value=_resp(raise_json=True)):
+            assert self._client().get_confirmed_payouts() == []
+
+    def test_an_oversized_body_is_refused_and_never_parsed(self):
+        """``get_transfers`` is the one call here whose size the wallet, not us, decides: a wallet
+        with a long history answers with every incoming transfer it has. Unbounded, the fake's
+        ``json()`` payload comes straight back as two payouts; bounded, the read is refused on its
+        size and the caller's existing empty-list contract applies."""
+        rows = [{"txid": "aa", "amount": 1, "height": 1, "timestamp": 1}]
+        with patch.object(wallet_mod.requests, "post", return_value=_oversized(_transfers(rows))):
             assert self._client().get_confirmed_payouts() == []
 
     def test_rpc_error_object_returns_empty(self):

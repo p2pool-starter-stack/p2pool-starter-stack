@@ -1,18 +1,41 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import requests
 
 import mining_dashboard.client.monero.monero_client as monero_mod
 from mining_dashboard.client.monero.monero_client import MoneroClient
+from mining_dashboard.helper.http import MAX_RESPONSE_BYTES
 
 
-def _resp(status_code=200, json_data=None, raise_json=False):
-    resp = MagicMock(status_code=status_code)
+def _resp(status_code=200, json_data=None, raise_json=False, body=None):
+    """A streaming ``requests`` response — what ``bounded_get`` consumes since #1360.
+
+    The payload is served as real BYTES over ``iter_content``, because the client now receives a
+    ``BoundedResponse`` parsed from the stream rather than this mock. ``json()`` is still set on the
+    mock so the same fake also drives the unbounded ``requests.get`` this replaced; that is what
+    makes the oversized test below fail if the bounding is taken out.
+    """
+    raw = body if body is not None else json.dumps(json_data or {}).encode()
     if raise_json:
-        resp.json.side_effect = ValueError("no json")
-    else:
+        raw = b"not json"
+    resp = MagicMock(status_code=status_code, encoding="utf-8")
+    resp.iter_content.return_value = iter([raw[i : i + 65536] for i in range(0, len(raw), 65536)])
+    resp.json.side_effect = ValueError("no json") if raise_json else None
+    if not raise_json:
         resp.json.return_value = json_data or {}
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
     return resp
+
+
+def _oversized(json_data):
+    """A valid payload one byte past the cap: the refusal is on byte count, not on content."""
+    empty = json.dumps({**json_data, "pad": ""}).encode()
+    pad = "x" * (MAX_RESPONSE_BYTES + 1 - len(empty))
+    raw = json.dumps({**json_data, "pad": pad}).encode()
+    assert len(raw) == MAX_RESPONSE_BYTES + 1, len(raw)
+    return _resp(json_data=json_data, body=raw)
 
 
 class TestGetInfo:
@@ -50,6 +73,17 @@ class TestGetInfo:
     def test_non_json_returns_none(self):
         client = MoneroClient(username="u", password="p")
         with patch.object(monero_mod.requests, "get", return_value=_resp(raise_json=True)):
+            assert client.get_info() is None
+
+    def test_an_oversized_body_is_refused_and_never_parsed(self):
+        """A *remote* monerod (#183) is someone else's server on someone else's network, so the
+        #660 "internal" exemption never fitted it. The fake's ``json()`` returns a perfectly good
+        payload — unbounded, ``get_info`` hands that straight back; bounded, the body is refused on
+        its size before anything parses it, and the caller's existing None contract applies."""
+        client = MoneroClient(username="u", password="p")
+        with patch.object(
+            monero_mod.requests, "get", return_value=_oversized({"status": "OK", "height": 5})
+        ):
             assert client.get_info() is None
 
     def test_busy_status_returns_none(self):
