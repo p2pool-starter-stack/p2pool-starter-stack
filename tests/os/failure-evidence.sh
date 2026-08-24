@@ -115,12 +115,25 @@ EOS
 setsid nohup bash /tmp/pithead-1059-watch.sh </dev/null >/dev/null 2>&1 & disown' >/dev/null 2>&1 || true
 }
 
-# Report whatever the watcher saw, and stop it. Silent when the file never went away, so a healthy
+# Report whatever the watcher saw, and stop it. Quiet when the file never went away, so a healthy
 # run stays quiet; loud the moment it blinks, pass or fail.
+#
+# The one thing it must NOT do is stay quiet because it could not look. A silent "no vanish" and a
+# silent "the guest never answered" are the same output and opposite meanings, and reading the
+# second as the first is how a run gets recorded as evidence when it collected none. So the log is
+# fetched with a sentinel: no sentinel back means the watcher could not be read, and that is said
+# out loud rather than passed off as a clean result.
 backup_watch_report() {
-    local seen
-    seen=$(_ssh "cat /tmp/pithead-1059-watch.log 2>/dev/null" | tr -d '\r')
+    local raw seen
+    raw=$(_ssh "printf WATCHOK; cat /tmp/pithead-1059-watch.log 2>/dev/null" | tr -d '\r')
     _ssh "pkill -f pithead-1059-watch.sh" >/dev/null 2>&1 || true
+    case "$raw" in
+    WATCHOK*) seen=${raw#WATCHOK} ;;
+    *)
+        printf '     --- #1059: WATCHER UNREADABLE — this run collected no evidence either way ---\n'
+        return 0
+        ;;
+    esac
     [ -n "$seen" ] || return 0
     printf '     --- #1059: config.json went away during the backup ---\n'
     printf '%s\n' "$seen" | sed 's/^/     | /'
