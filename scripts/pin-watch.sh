@@ -50,6 +50,7 @@ upstream_for() {
     socket-proxy) echo Tecnativa/docker-socket-proxy ;;
     compose) echo docker/compose ;;
     cosign) echo sigstore/cosign ;;
+    rigforge) echo p2pool-starter-stack/rigforge ;;
     esac
 }
 
@@ -83,6 +84,30 @@ latest_release() { # <owner/repo> -> tag on stdout, rc 1 on any failure
     # an issue body, or otherwise trusted.
     printf '%s' "$tag" | grep -qE '^v?[0-9]' || return 1
     printf '%s' "$tag"
+}
+
+# Every pin above spells a VERSION, so the release tag is directly comparable to it. RIGFORGE_REF
+# does not: os/rootfs/Dockerfile pins rigforge by COMMIT so that a moved tag cannot change the bake,
+# and comparing a sha against `v1.16.0` reads **stale** every week for ever — including the hour
+# after a correct bump. That is a different lie from the silence this row was added to end, not a
+# fix for it. So the tag is resolved to the commit it names, with the same idiom this script already
+# prints in its _COMMIT warning below, and the comparison is sha against sha.
+#
+# The resolution is a SECOND network call, and it gets the first one's treatment: a failure returns
+# rc 1 so the caller renders an unchecked row. It must never fall through to `current`.
+
+comparable() { # <component> <owner/repo> <tag> -> the tag in that pin's spelling, rc 1 on failure
+    local sha
+    case "$1" in
+    rigforge)
+        sha=$(gh api "repos/$2/commits/$3" --jq .sha 2>/dev/null) || return 1
+        # Third-party input, under the same rule as the tag itself: a value that is not shaped like
+        # a commit must not be compared, and must not be printed into an issue body.
+        printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$' || return 1
+        printf '%s' "$sha"
+        ;;
+    *) printf '%s' "$3" ;;
+    esac
 }
 
 # --- self-test -----------------------------------------------------------------------------------
@@ -119,6 +144,43 @@ if [ "${1:-}" = "--self-test" ]; then
             gh() { printf 'nightly'; }
             latest_release foo/bar >/dev/null 2>&1 && echo ok || echo failed
         )" "failed"
+    # A COMMIT pin cannot be compared against a TAG. What follows covers the resolution that
+    # makes the rigforge row honest, and the property the sha comparison rests on.
+    st "an upstream tag resolves to the commit it names" \
+        "$(
+            gh() { printf '%s' 4ce29b3daf063fd1b45e050649e93aa9592618e1; }
+            comparable rigforge foo/bar v1.16.0
+        )" "4ce29b3daf063fd1b45e050649e93aa9592618e1"
+    # The issue's own requirement: a resolution that cannot run reaches the unchecked row, never
+    # `current`. It is not uniquely load-bearing — see the overlap note on the next case but one.
+    st "a commit resolution that cannot run fails" \
+        "$(
+            gh() { return 1; }
+            comparable rigforge foo/bar v1.16.0 >/dev/null 2>&1 && echo ok || echo failed
+        )" "failed"
+    # The two refusals below overlap on every realistic input, and a mutation round proved it: with
+    # the `|| return 1` removed, this next case still failed — because an empty `sha` fails the shape
+    # check too, so the shape guard silently covered for the exit-code guard's deletion. Each is now
+    # pinned on the one input only IT refuses. This one is the exit code being trusted over stdout.
+    st "a resolution that exits non-zero is refused even when it printed a commit" \
+        "$(
+            gh() {
+                printf '%s' 4ce29b3daf063fd1b45e050649e93aa9592618e1
+                return 1
+            }
+            comparable rigforge foo/bar v1.16.0 >/dev/null 2>&1 && echo ok || echo failed
+        )" "failed"
+    st "an answer that is not shaped like a commit is refused, not compared" \
+        "$(
+            gh() { printf 'Not Found'; }
+            comparable rigforge foo/bar v1.16.0 >/dev/null 2>&1 && echo ok || echo failed
+        )" "failed"
+    # And every version-spelled pin is still compared against the tag itself, unresolved.
+    st "a version pin is compared against the tag, with no lookup at all" \
+        "$(comparable caddy caddyserver/caddy v2.11.4)" "v2.11.4"
+    # Both sides of that comparison go through norm(), so norm must leave a commit sha untouched.
+    st "normalisation leaves a commit sha alone" \
+        "$(norm 60aa883901fc74ea39ed2f21962b8ba7f96d73ba)" "60aa883901fc74ea39ed2f21962b8ba7f96d73ba"
     [ "$st_fail" = 0 ] && echo "pin-watch self-test OK"
     exit "$st_fail"
 fi
@@ -131,9 +193,10 @@ set -- # release.sh's arg parser must not see ours
 # shellcheck disable=SC1091
 source "$ROOT/scripts/release.sh"
 
-# The appliance rootfs COMPILES two more binaries from source, and dependabot has no ecosystem for
-# an ARG consumed by wget — so nothing else can see them. They exist on the appliance lane only,
-# hence the guard: on `develop` this loop is simply shorter, not wrong.
+# The appliance rootfs builds three more things from an `ARG` — two binaries compiled from source
+# and the RigForge tree fetched as a source tarball — and dependabot has no ecosystem for an ARG
+# consumed by a download, so nothing else can see any of them. They exist on the appliance lane
+# only, hence the guard: on `develop` this loop is simply shorter, not wrong.
 #
 # BOUNDARY, stated because a silent one is what this whole issue is about: GitHub runs `schedule:`
 # from the DEFAULT branch, so a single-job workflow only ever reads `develop` and these two rows
@@ -145,16 +208,17 @@ lane="the product stack"
 # A real `if`, for the same reason the publish step in pin-watch.yml uses one: `[ -f X ] && var=…`
 # evaluates to 1 on the develop lane, which is only safe while nothing depends on the exit status.
 if [ -f "$ROOT/os/rootfs/Dockerfile" ]; then
-    components="$components compose cosign"
+    components="$components compose cosign rigforge"
     lane="the product stack and the appliance rootfs"
 fi
 
-# release.sh's pin() is the one place pins are read from the tree; the two rootfs binaries have no
+# release.sh's pin() is the one place pins are read from the tree; the three rootfs `ARG`s have no
 # case there because a release does not bundle them.
 tree_pin() {
     case "$1" in
     compose) sed -n 's/^ARG COMPOSE_VERSION=//p' "$ROOT/os/rootfs/Dockerfile" ;;
     cosign) sed -n 's/^ARG COSIGN_VERSION=//p' "$ROOT/os/rootfs/Dockerfile" ;;
+    rigforge) sed -n 's/^ARG RIGFORGE_REF=//p' "$ROOT/os/rootfs/Dockerfile" ;;
     *) pin "$1" ;;
     esac
 }
@@ -178,7 +242,15 @@ for component in $components; do
         failed=$((failed + 1))
         continue
     fi
-    if [ "$(norm "$raw")" = "$(norm "$latest")" ]; then
+    # A resolution failure is its own row, with its own sentence. Sharing the string above would
+    # let either guard silently cover for the other's deletion, which this repo has already shipped
+    # once. The tag IS known here, so it is still reported — only the verdict is withheld.
+    if ! cmp_to=$(comparable "$component" "$repo" "$latest"); then
+        row "$component" "\`$(norm "$raw")\`" "\`$(norm "$latest")\`" "**upstream tag could not be resolved to a commit — NOT checked**"
+        failed=$((failed + 1))
+        continue
+    fi
+    if [ "$(norm "$raw")" = "$(norm "$cmp_to")" ]; then
         verdict="current"
     else
         verdict="**stale** → \`$latest\`"
@@ -201,8 +273,12 @@ if [ -f "$ROOT/os/rootfs/Dockerfile" ]; then
     # #1137 describes for image digests. (This warning came from the appliance-lane watcher this
     # script replaced; the fact outlived the file.)
     printf '%s\n' "\`compose\` and \`cosign\` are compiled from source in \`os/rootfs/Dockerfile\`, so each bump is TWO ARGs — the version AND its paired \`_COMMIT\`. Resolve the commit with \`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha\`; bumping the version alone still builds the old code."
+    # RIGFORGE_REF is the opposite spelling and needs the same idiom pointed the other way: the
+    # table resolves the tag to a commit to reach its verdict, and whoever acts on a stale row has
+    # to write that commit into the ARG. Saying which commit here saves them repeating the lookup.
+    printf '%s\n' "\`RIGFORGE_REF\` pins a COMMIT, not a tag, so a moved tag cannot change the bake. The row above compares it against the commit its latest release points at; to bump it, write that commit — \`gh api repos/p2pool-starter-stack/rigforge/commits/<tag> --jq .sha\` — into \`ARG RIGFORGE_REF\`, release by release."
 else
-    printf '%s\n' "The appliance rootfs's own pins (its docker-compose and cosign, compiled from \`ARG\` values that no dependabot ecosystem can read) are NOT in this table. They are in the appliance report, which the same workflow run produces from an explicit \`develop-v2\` checkout (#1146)."
+    printf '%s\n' "The appliance rootfs's own pins (its docker-compose, cosign and baked RigForge tree, all built from \`ARG\` values that no dependabot ecosystem can read) are NOT in this table. They are in the appliance report, which the same workflow run produces from an explicit \`develop-v2\` checkout (#1146)."
 fi
 printf '%s\n' "Also NOT checked: whether each image pin's digest still corresponds to its tag. The digest is what actually runs, so a half-done bump is invisible to the table above."
 if [ "$failed" -gt 0 ]; then

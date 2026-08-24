@@ -51,6 +51,11 @@ reports and never bumps: a Tari or `monerod` minor can carry a one-time data mig
 work to schedule rather than a pull request to merge. Dependabot covers the base images it can see
 and is set to ignore minor and major bumps on the component pins for the same reason.
 
+One pin is not spelled as a version. The appliance pins RigForge by commit, so that a moved tag
+cannot change what is baked; that row resolves the latest release tag to the commit it names and
+compares the two commits. Comparing the commit against the tag directly would read stale for ever,
+including straight after a correct bump.
+
 A lookup that could not be made is reported as unchecked, never as current, and the run fails. The
 report carries the date of the last fully successful check, so a watcher that has stopped looks
 different from one with nothing to say.
