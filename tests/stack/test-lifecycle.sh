@@ -456,6 +456,13 @@ while [ "$i" -lt 200 ]; do
     sleep 0.05
     i=$((i + 1))
 done
+# A poll that gives up must say so. If this one exhausts, the external holder never took the
+# window: the two rc/message cases below would be reporting on an uncontended run, and the third
+# passes for the worst reason available — nothing was reported under ANY name, so "never under
+# the previous holder's name" is true of an empty string.
+if [ "$(lock_state)" != "held" ]; then
+    bad "the unrecorded holder takes the window" "the lock is free, so the three cases below prove nothing"
+fi
 out="$(PITHEAD_LOCK_FILE="$LKFILE" PITHEAD_LOCK_TIMEOUT=1 DOCKER_LOG="$LKLOG" PATH="$LKBIN:$PATH" run_sourced "$LKDIR" stack_down 2>&1)"
 rc=$?
 assert_rc "an unrecorded holder still blocks the window" "$rc" "75"
@@ -485,6 +492,11 @@ while [ "$i" -lt 200 ]; do
     sleep 0.05
     i=$((i + 1))
 done
+# Same shape. If the waiter never announced, the kill below frees the window before anything was
+# blocked on it, and the three cases become a report on a verb that never contended at all.
+if ! grep -q "waiting up to" "$LKWOUT" 2>/dev/null; then
+    bad "the waiter reaches the held window before the holder is killed" "no announcement, so the three cases below prove nothing"
+fi
 kill "$LKHOLDER" 2>/dev/null
 wait "$LKHOLDER" 2>/dev/null
 wait "$LKWAITER" 2>/dev/null
@@ -665,7 +677,11 @@ SUDOEOF
 chmod +x "$LKW/bin/sudo"
 # A provisioned install, rebuildable — every verb driven below WRITES to it, and a used fixture
 # stops being a fixture. The hand-written .env is deliberately not what a render produces, so
-# `apply` sees a change and takes its committing branch rather than returning early.
+# `apply` sees a change and takes its committing branch rather than returning early — but that
+# holds only on a directory no verb has run in yet. The free half of each pair below re-renders
+# this .env, so by the time `apply` is probed on the shared fixture there is nothing left to
+# change. That is why the committing branch is driven on its own fixture, here and in
+# lock_wiring_balance.
 lock_wiring_fixture() { # <dir>
     mkdir -p "$1/data/tor" "$1/data/dashboard"
     cat >"$1/.env" <<'ENVEOF'
@@ -691,6 +707,7 @@ LKWFREE="$LKW/free.lock"
 # driven there it would report "did not wait" for a reason that has nothing to do with the lock.
 LKWDIR="$LKW"
 LKWFRESH="$LKW/fresh"
+LKWAPPLY="$LKW/applying"
 LKWBAL="$LKW/balance"
 mkdir -p "$LKWFRESH"
 
@@ -749,7 +766,21 @@ assert_eq "restore waits on a held window and changes nothing" \
     "$(lock_wiring_pair stack_restore -y "$LKW/wiring-archive.tar.gz")" "timedout+untouched|ran"
 assert_eq "backup waits on a held window and changes nothing" \
     "$(lock_wiring_pair stack_backup -y --no-encrypt)" "timedout+untouched|ran"
-assert_eq "apply waits on a held window and changes nothing" "$(lock_wiring_pair apply -y)" "timedout+untouched|ran"
+# apply takes the window in THREE places and the shared fixture reaches exactly one of them:
+# five free-runs have re-rendered its .env by now, so apply finds nothing to change and returns
+# on the no-change branch. Drive all three, each on the fixture it needs. Until this split,
+# DELETING either of the other two acquires outright left this whole file green.
+assert_eq "apply waits on a held window when it has nothing to change" "$(lock_wiring_pair apply -y)" "timedout+untouched|ran"
+lock_wiring_fixture "$LKWAPPLY"
+LKWDIR="$LKWAPPLY"
+assert_eq "apply waits on a held window before it commits a change" "$(lock_wiring_pair apply -y)" "timedout+untouched|ran"
+# The third window is the retry branch — a previous apply committed the config and then failed to
+# recreate. That state is what this fixture is in now (the free run above re-rendered its .env),
+# so arming the marker is the whole setup. Nothing else in this file reaches that acquire:
+# deleting it leaves every other case green, which is how it stayed unguarded until now.
+: >"$LKWAPPLY/.env.apply-incomplete"
+assert_eq "apply waits on a held window while it retries a failed recreate" "$(lock_wiring_pair apply -y)" "timedout+untouched|ran"
+LKWDIR="$LKW"
 kill "$LKWHOLDER" 2>/dev/null
 wait "$LKWHOLDER" 2>/dev/null
 
