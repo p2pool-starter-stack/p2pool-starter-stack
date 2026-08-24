@@ -42,6 +42,7 @@ dashboard/tests/web/test_views.py	3576
 dashboard/tests/web/test_wizard.py	974
 .github/workflows/ci.yml	513
 os/rootfs/Dockerfile	406
+scripts/lint-file-budget.sh	407
 scripts/release.sh	851
 scripts/shipped-image-sweep-report.sh	429
 scripts/trivyignore-watch.sh	599
@@ -69,3 +70,4 @@ tests/stack/test-release-signing.sh	454
 tests/stack/test-rig-worker.sh	617
 tests/stack/test-secrets.sh	401
 tests/stack/test-tor-network.sh	780
+tests/stack/test-wizard-setup.sh	417
