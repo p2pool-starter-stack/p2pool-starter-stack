@@ -86,6 +86,31 @@ failed and what did and didn't run, and the failing step's exit code becomes the
 Flags don't chain — `apply -y upgrade` is a single `apply` invocation (and `apply` rejects the
 stray argument), so run flagged commands separately.
 
+### Two commands at once
+
+Commands that change the stack take a lock, so a second one waits instead of running alongside
+the first. Without it a `backup` — which stops the stack to take a consistent archive — could
+remove a container out from under a `setup` or an `apply` that was still using it.
+
+The waiting command says what it is waiting for:
+
+```
+[WARNING] Another pithead operation is in progress (pid=4821 verb=backup since=2026-08-24T14:42:32Z) — waiting up to 300s for it to finish.
+```
+
+It then runs as soon as the first command finishes. If the wait runs out it stops without
+changing anything, and you can re-run it once the other command is done. Set
+`PITHEAD_LOCK_TIMEOUT` (seconds) to wait longer or give up sooner.
+
+The lock covers the parts of a command that change things, not the whole command. A `backup`
+takes it after its prompts, so a passphrase you have not typed yet holds nothing up, and the
+first-boot wizard holds it only while it deploys. Read-only commands — `status`, `doctor` and
+`logs` among them — never take it and never wait.
+
+The lock lives on `.pithead.lock` beside `.env`, and belongs to the running process rather than
+to the file: if a command is killed, the lock is released with it. A leftover `.pithead.lock`
+after a crash is an ordinary file, not a stale lock, and there is nothing to clean up by hand.
+
 ### Tab completion
 
 `pithead-completion.bash` (in the repo root and the release bundle) completes subcommands for
