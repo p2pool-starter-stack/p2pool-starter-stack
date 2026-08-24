@@ -82,9 +82,23 @@ backup_failure_evidence() {
 # first two static passes over the backup's own call chain found nothing, because the actor is a
 # concurrent process rather than anything that call chain invokes.
 backup_precapture() {
-    _ssh "ls -la /data/pithead/config.json /data/pithead/.env 2>&1; readlink -f /data/pithead/config.json 2>&1" |
-        tr -d '\r' | sed 's/^/     · /'
-    _ssh 'cat >/tmp/pithead-1059-watch.sh <<"EOS"
+    # Captured and re-emitted rather than streamed, so the header printed below is GUARANTEED to
+    # start its own line. sed does not terminate a final line that arrived unterminated, and the
+    # guest's last line here is a `readlink` whose termination is not ours to assume — glue the
+    # header onto the tail of an evidence line and every line-anchored reader of the battery
+    # scrollback, this file's own self-test included, stops seeing it. `$()` strips the trailing
+    # newlines, printf puts back exactly one, and empty output still prints nothing.
+    local pre
+    pre=$(_ssh "ls -la /data/pithead/config.json /data/pithead/.env 2>&1; readlink -f /data/pithead/config.json 2>&1" |
+        tr -d '\r' | sed 's/^/     · /')
+    [ -n "$pre" ] && printf '%s\n' "$pre"
+    # The log is cleared BEFORE the watcher is armed, not by the watcher. The watcher truncates it
+    # too, but only if it starts — and a watcher that never starts is precisely the case the report
+    # reads off an empty log. The restore leg runs on a keep-reinstalled guest, so a log left by an
+    # earlier run can outlive the run that wrote it; without this, "never started" would be reported
+    # against the PREVIOUS run's evidence. Loud and wrong is better than silent, but neither is the
+    # bar here.
+    _ssh 'rm -f /tmp/pithead-1059-watch.log; cat >/tmp/pithead-1059-watch.sh <<"EOS"
 # Paths and ceiling come from the environment so the self-test can drive this exact body
 # unmodified. The heredoc is quoted, so these expand on the GUEST at run time, where nothing sets
 # them and the defaults are what runs. A test that had to sed the constants would be proving a
@@ -225,7 +239,9 @@ backup_watch_report() {
 # silently covers for another's deletion. Delete any branch below and its case goes red rather
 # than falling through to the quiet path.
 _fe_selftest_reply=""
+_fe_selftest_pgrep=""
 _fe_selftest_rc=0
+_fe_ssh_capture=""
 
 # Every outcome's unique sentence. The keys are the assertion vocabulary: a case names the one it
 # wants and is checked against all the others.
@@ -233,6 +249,7 @@ _FE_SENTENCES="WATCHER UNREADABLE
 WATCHER NEVER STARTED
 WATCHER DIED mid-window
 WATCH WINDOW EXPIRED
+WATCHER DID NOT START
 config.json went away during the backup"
 
 _fe_case() { # <label> <want-sentence|QUIET> <canned _ssh reply>
@@ -264,7 +281,17 @@ _fe_case() { # <label> <want-sentence|QUIET> <canned _ssh reply>
     # earlier session was running with "WATCHER UNREADABLE" inside its grep pattern, the sweep
     # captured its cmdline, and a whole-output match called that a second outcome. The header is
     # what NAMES the outcome, so the header is what has to be unambiguous.
-    headers=$(printf '%s\n' "$got" | grep -- '--- #1059:' || true)
+    # ANCHORED, and that anchor is load-bearing. Every header this file writes is a printf that
+    # starts the line at this exact indentation; every line of captured evidence is prefixed
+    # '     | ' (vanish) or '     · ' (precapture) by the sed that renders it. So anchoring makes
+    # the two unconfusable. Unanchored, this grep matched the marker WHEREVER it appeared —
+    # including inside the /proc sweep the vanish branch dumps, whose cmdlines are arbitrary text.
+    # That is not hypothetical twice over: a predecessor session's orphaned `tail -f | grep` held
+    # 'WATCHER UNREADABLE' in its pattern and produced a false failure here, and this very branch's
+    # mutation runs poisoned themselves the same way — the sed rewriting a header string was itself
+    # captured as evidence naming a second outcome. A searcher that can find its own vocabulary in
+    # what it is searching reports confident nonsense.
+    headers=$(printf '%s\n' "$got" | grep -- '^     --- #1059:' || true)
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         [ "$line" = "$want" ] && continue
@@ -276,6 +303,67 @@ _fe_case() { # <label> <want-sentence|QUIET> <canned _ssh reply>
         esac
     done <<<"$_FE_SENTENCES"
     printf 'ok: %s\n' "$label"
+}
+
+# The ARM side. Everything above drives the REPORT; until now nothing drove the one call that puts
+# a watcher on the guest in the first place, and that asymmetry was not theoretical: deleting
+# backup_precapture's confirmation OUTRIGHT left this suite fully green (mutated 2026-08-24, 14/14
+# ok, rc 0). A guard present in the source and unproven by any test is the same defect this file
+# exists to refuse, one call earlier — the reviewer lane made exactly that structural point against
+# an earlier revision of this branch.
+#
+# The launch is `setsid nohup ... & disown` inside `>/dev/null 2>&1 || true`, so its exit status
+# carries no information about whether a watcher is running. Only the pgrep afterwards does, and
+# these two cases are what hold it in place.
+_fe_precapture_case() { # <label> <want-sentence|QUIET> <canned evidence reply> <canned pgrep reply>
+    local label="$1" want="$2" got
+    _fe_selftest_reply="$3"
+    _fe_selftest_pgrep="$4"
+    # Headers only. The first _ssh in precapture echoes the guest's `ls` back through a `· ` prefix,
+    # and under a single canned stub that reply is this case's own sentinel text — matching the whole
+    # output would let the echo satisfy the assertion instead of the branch under test.
+    got=$(backup_precapture | grep -- '^     --- #1059:' || true)
+    if [ "$want" = "QUIET" ]; then
+        if [ -n "$got" ]; then
+            printf 'FAIL: %s — a watcher confirmed running must name no outcome, got: %s\n' "$label" "$got"
+            _fe_selftest_rc=1
+            return
+        fi
+        printf 'ok: %s (silent)\n' "$label"
+        return
+    fi
+    case "$got" in
+    *"$want"*) printf 'ok: %s\n' "$label" ;;
+    *)
+        printf 'FAIL: %s — expected "%s", got: %s\n' "$label" "$want" "${got:-<silence>}"
+        _fe_selftest_rc=1
+        ;;
+    esac
+}
+
+# A stale log outliving the run that wrote it is the one way an empty-log reading can be right about
+# "never started" and still be reported against the previous run's evidence. The clear has to happen
+# before the script is written, not after the spawn, or it races the watcher's own first line.
+#
+# Asserted on the command precapture actually SENDS, which is a text-level check: it dies if the
+# clear is deleted or reordered, and it cannot prove the guest honoured it. That proof is tier 4.
+_fe_precapture_arms_clean() {
+    local sent
+    _fe_selftest_reply=""
+    _fe_selftest_pgrep="UP"
+    _fe_ssh_capture=""
+    backup_precapture >/dev/null
+    sent=$_fe_ssh_capture
+    case "$sent" in
+    *"rm -f /tmp/pithead-1059-watch.log"*"cat >/tmp/pithead-1059-watch.sh"*)
+        printf 'ok: the arm call clears any stale log before writing the watcher\n'
+        ;;
+    *)
+        printf 'FAIL: the arm call does not clear the stale log ahead of the watcher: %s\n' "${sent:0:120}"
+        _fe_selftest_rc=1
+        ;;
+    esac
+    _fe_ssh_capture=""
 }
 
 # The other half of the contract. Everything above drives the REPORT against a canned reply; it
@@ -372,8 +460,20 @@ _fe_watcher_cases() {
 
 _fe_self_test() {
     # The stub transport. backup_watch_report calls _ssh twice — the fetch and the pkill — and
-    # discards the second's output, so one canned reply serves both.
-    _ssh() { printf '%s' "$_fe_selftest_reply"; }
+    # discards the second's output, so one canned reply serves both. It also records what it was
+    # asked to run, which is the only handle tier 1 has on the arm call: that one is fire-and-forget
+    # by design, so nothing about it can be read back from a reply.
+    _ssh() {
+        _fe_ssh_capture="$_fe_ssh_capture$*"
+        # backup_precapture makes two calls with different jobs, and a case needs to drive them
+        # independently: the evidence read, and the arm-check probe. Matched on the probe's own
+        # tail rather than on 'pgrep', because backup_watch_report's fetch contains a pgrep too and
+        # matching that would quietly re-point every report case at the wrong canned reply.
+        case "$*" in
+        *"&& printf UP") printf '%s' "$_fe_selftest_pgrep" ;;
+        *) printf '%s' "$_fe_selftest_reply" ;;
+        esac
+    }
 
     printf '== unit: #1059 watch-report discrimination ==\n'
     # No sentinel at all: ssh failed, the guest is gone, the command died. Nothing is known.
@@ -402,6 +502,33 @@ VANISHED at 2026-08-24T01:25:57+00:00"
     # The ONLY quiet case: started, still watching, nothing seen.
     _fe_case "a fully-watched window with no vanish stays quiet" "QUIET" \
         "WATCHOKALIVE:STARTED at 2026-08-24T01:00:00+00:00 pid=1234"
+    # The evidence dump is a /proc sweep: arbitrary cmdlines, which can and do contain this file's
+    # own header vocabulary. A real vanish whose process table mentions a RIVAL outcome must still
+    # report as exactly one outcome — the vanish — because the captured line is indented as evidence
+    # and only a printf writes a header. Un-anchor the header grep in _fe_case and this case fails
+    # while every other case stays green, which is the whole point of it being here.
+    _fe_case "a vanish is not confused by its own evidence naming another outcome" \
+        "config.json went away during the backup" \
+        "WATCHOKALIVE:STARTED at 2026-08-24T01:00:00+00:00 pid=1234
+VANISHED at 2026-08-24T01:25:57+00:00
+-- process table at that instant --
+4711	grep --line-buffered -- --- #1059: WATCHER UNREADABLE — this run collected no evidence either way ---"
+
+    printf '== unit: #1059 watcher arming ==\n'
+    # pgrep found it: a watcher is on the guest, and arming has nothing to report.
+    _fe_precapture_case "a watcher confirmed running arms quietly" "QUIET" "" "UP"
+    # pgrep found nothing: the detached launch did not take. Said at the START of the window, where
+    # it still reads as a warning — the report will say it again at the end, and the two are
+    # deliberately different sentences so neither can stand in for the other.
+    _fe_precapture_case "a watcher that failed to arm is named immediately" "WATCHER DID NOT START" "" ""
+    # The guest's evidence arriving WITHOUT a trailing newline is the case that broke this: sed does
+    # not terminate an unterminated final line, so the header printed next was glued to the end of an
+    # evidence line and stopped being a header at all. Anchored readers — the battery scrollback, and
+    # the assertion above — then see nothing while the branch is firing correctly. Found by mutation:
+    # with the guard removed, inverting the arm-check no longer failed anything.
+    _fe_precapture_case "the header starts its own line even when the guest evidence does not" \
+        "WATCHER DID NOT START" "/data/pithead/config.json" ""
+    _fe_precapture_arms_clean
 
     printf '== unit: #1059 watcher body, run for real against a sandbox file ==\n'
     _fe_watcher_cases
