@@ -432,12 +432,12 @@ EOF
         local path="$1" verline="$2" has="$3"
         {
             printf '%s\n' "name: fixture" "jobs:" "  scan:" "    steps:" \
-                "      - uses: actions/checkout@deadbeef # v7.0.1" \
+                "      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v7.0.1" \
                 "        with:" \
                 "          persist-credentials: false"
             if [ "$has" = "1" ]; then
                 printf '%s\n' "      - name: Scan image for CVEs (Trivy)" \
-                    "        uses: aquasecurity/trivy-action@deadbeef # v0.36.0" \
+                    "        uses: aquasecurity/trivy-action@0123456789abcdef0123456789abcdef01234567 # v0.36.0" \
                     "        with:"
                 [ -n "$verline" ] && printf '          %s\n' "$verline"
                 printf '%s\n' "          image-ref: pithead-example:ci" \
@@ -514,12 +514,12 @@ EOF
     {
         printf '%s\n' "name: fixture" "jobs:" "  scan:" "    steps:" \
             "      - name: Scan image for CVEs (Trivy)" \
-            "        uses: aquasecurity/trivy-action@deadbeef # v0.36.0" \
+            "        uses: aquasecurity/trivy-action@0123456789abcdef0123456789abcdef01234567 # v0.36.0" \
             "        with:" \
             "          image-ref: pithead-example:ci" \
             "          scanners: vuln" \
             "      - name: Unrelated step that happens to also take a version input" \
-            "        uses: some/other-action@deadbeef" \
+            "        uses: some/other-action@0123456789abcdef0123456789abcdef01234567" \
             "        with:" \
             "          version: v0.74.0"
     } >"$ci_f"
