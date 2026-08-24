@@ -356,6 +356,37 @@ loudly without its prerequisite:
 - Auto-rollback ([#517](https://github.com/p2pool-starter-stack/pithead/issues/517), rigforge#236):
   a change the rig rolls back is recorded as `rolled_back` in the worker-apply result and history.
 
+### The abort-safe unwind
+
+Every leg above restores what it changed when it finishes. That covers a leg that *fails*; it does
+not cover a run that never reaches its own restore. Ctrl-C, a `set -u` abort, an SSH drop or a
+cancelled CI job used to leave a borrowed production miner on a probe value, while `e2e.sh`'s
+`restore_all` reported a clean restore of the *pool* config and said nothing about the writable keys
+([#1379](https://github.com/p2pool-starter-stack/pithead/issues/1379)).
+
+`rig-key-ledger.sh` closes that window. A key goes on a ledger when its write is sent — before, not
+after, so the apply itself is covered — and comes off only when its revert is **confirmed applied**.
+An `EXIT` trap restores whatever is still on the ledger, by the same route that changed it: the
+dashboard's `/api/control/worker-apply` for the #513, #1236 and #1002b legs, a direct dial at the
+rig's control API for #516's rig-side edit. Each restore names its key, value and rig on stderr.
+
+Three properties are worth knowing rather than rediscovering:
+
+- **It is a no-op by construction, not by a guard.** A run that writes no writable key never marks
+  anything, so no trap is ever installed. `--mode targeted` runs that borrow no rig are unaffected.
+- **The trap is composed, not stacked.** `trap … EXIT` replaces rather than stacks, and `rig_lock`
+  already installs one to clear the shared-bench holder breadcrumb. The ledger's handler folds that
+  removal into its own body — which is what `lib.sh` prescribed for whatever trap came second — so
+  arming it cannot silently strand the breadcrumb or silently skip the restore.
+- **`#517` is deliberately outside the ledger.** Its leg induces a change the *rig* rolls back on
+  its own. Unwinding it from here would race that rollback and could re-apply a value the rig had
+  already reverted, so the rig stays the authority for it.
+
+What it cannot do: the restore dials the dashboard or the rig while the run is already dying, so it
+is best-effort, and it cannot run at all if the shell never exits — `kill -9`, an OOM kill, or the
+box losing power. After an end like that, read the rig's values in Worker Inspect and put a stray
+one back by hand.
+
 Prerequisites: a real RigForge rig connected (self-skips otherwise); `--rig-host` + `IT_RIG_TOKEN`
 to inject a descriptor when the baseline lacks one, and to dial the rig directly for the #516 feed
 leg; `IT_RIG_POOLS_PROBE` (a JSON `pools` value safe to apply to the borrowed rig) for the pools

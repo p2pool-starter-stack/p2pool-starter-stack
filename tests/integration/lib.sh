@@ -381,9 +381,9 @@ monero_caught_up() {
 # same lock path on every box IS the protocol; do not fork the two copies. FD 9 is inherited
 # by children, which is what keeps the lock held for the whole run — never close it.
 # RIG_LOCK_FILE/RIG_LOCK_HOLDER are env-overridable so the tier-1 self-test can sandbox the
-# paths (rigforge#183 note 6). run.sh sets no other EXIT trap; if one is ever added there,
-# fold this rm -f into its body instead of trapping twice — a later `trap … EXIT` replaces,
-# it doesn't stack (rigforge#183 note 3). The lock is opened READ-only (9<, rigforge#242/#252) so a
+# paths (rigforge#183 note 6). run.sh NOW installs an EXIT trap — rig_key_atexit (rig-key-ledger.sh,
+# #1379) — folding this rm -f into its body per note 3, since a later `trap … EXIT` replaces rather
+# than stacks. That is its ONLY other copy; keep the pair in step. Opened READ-only (9<, #242/#252) so a
 # root run can reserve a box whose lock file a prior non-root reserve created — fs.protected_regular
 # blocks even root's write-open (9>) of a foreign-owned lock, silently dropping the flock (#249).
 rig_lock() { # rig_lock <project> <suite> [shared]

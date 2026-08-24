@@ -25,6 +25,8 @@ source "$HERE/lib.sh"
 # shellcheck source=tests/integration/scenarios.sh
 source "$HERE/scenarios.sh"
 source "$HERE/rigforge-apply-settle.sh"
+# shellcheck source=tests/integration/rig-key-ledger.sh
+source "$HERE/rig-key-ledger.sh" # must precede any module that marks a write (#1379)
 # shellcheck source=tests/integration/rigforge-writable-keys.sh
 source "$HERE/rigforge-writable-keys.sh"
 
@@ -2206,6 +2208,7 @@ run_rigforge_control() {
     else
         new_maxt=$((orig_maxt + 1))
         it_step "Worker Inspect edit: max_temp_c $orig_maxt -> $new_maxt via /api/control/worker-apply…"
+        rig_key_mark dash "$rig" max_temp_c "$orig_maxt" # abort-safe unwind (#1379)
         res="$(_worker_apply "$rig" "{\"max_temp_c\":$new_maxt}")"
         IFS='|' read -r status ckeys change_id <<<"$(_settle_worker_apply_maxt "$rig" "$new_maxt" "$res")"
         assert_eq "Worker Inspect edit applied on the rig (#513)" "$status" "applied"
@@ -2217,6 +2220,7 @@ run_rigforge_control() {
         res="$(_worker_apply "$rig" "{\"max_temp_c\":$orig_maxt}")"
         IFS='|' read -r status _ _ <<<"$(_settle_worker_apply_maxt "$rig" "$orig_maxt" "$res")"
         assert_eq "reversible edit reverted on the rig (#513)" "$status" "applied"
+        [ "$status" = "applied" ] && rig_key_clear dash "$rig" max_temp_c # (#1379)
     fi
 
     # ---- #1236/#1002b: the other writable keys, and the ones we deliberately refuse ----
@@ -2301,6 +2305,7 @@ run_rigforge_reverse() { # <rig-name> <orig-max_temp_c-or-empty>
     fi
     local reflect=$((orig_maxt + 2)) change_id
     it_step "rig-side edit (direct control API): max_temp_c -> $reflect on $RIG_HOST:$RIG_CONTROL_PORT…"
+    rig_key_mark rig "$rig" max_temp_c "$orig_maxt" # abort-safe unwind, rig route (#1379)
     change_id="$(_rig_control_apply "{\"max_temp_c\":$reflect}")"
     if [ -z "$change_id" ]; then
         it_fail "direct rig control apply accepted (#516)" "the rig's /apply did not return a change_id"
@@ -2313,7 +2318,8 @@ run_rigforge_reverse() { # <rig-name> <orig-max_temp_c-or-empty>
         fi
         # Revert the rig to its original ceiling.
         change_id="$(_rig_control_apply "{\"max_temp_c\":$orig_maxt}")"
-        [ -n "$change_id" ] && _rig_control_await "$change_id" applied || true
+        { [ -n "$change_id" ] && _rig_control_await "$change_id" applied &&
+            rig_key_clear rig "$rig" max_temp_c; } || true # retire only on a confirmed revert (#1379)
     fi
 }
 
