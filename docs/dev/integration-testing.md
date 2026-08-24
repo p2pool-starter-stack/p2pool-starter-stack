@@ -228,11 +228,14 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
 
 `--mode`: `targeted` (default, lean) validates the dashboard and the sync logic against the
 already-synced node: `check` + `--lifecycle` (one controlled restart exercises the sync gate /
-node-down failover) + `--auth-fail-closed`. No full config sweep, and never a re-sync. Container
-restarts reload the existing chain and re-confirm the tip in seconds. `check` is pure reads only.
-`matrix` is the opt-in full destructive config sweep (lifecycle + fault-injection + auth-fail-closed +
-hardening + `--subnet`, plus `--rigforge-control` when a rig is borrowed, all under `--safety-backup`
-auto-rollback) for a pre-release tier-4 gate. `--keep` leaves it deployed for
+node-down failover) + `--auth-fail-closed`, plus `--rigforge` and `--rigforge-control` when a rig is
+borrowed. No full config sweep, and never a re-sync. Container restarts reload the existing chain and
+re-confirm the tip in seconds. `check` is pure reads only. `matrix` is the opt-in full destructive
+config sweep (lifecycle + fault-injection + auth-fail-closed + hardening + `--subnet`, plus the same
+two rig phases, all under `--safety-backup` auto-rollback) for a pre-release tier-4 gate.
+The rig phases are gated on a borrowed miner rather than on the mode: the release runbook mandates
+`targeted`, so keeping the write paths matrix-only left them out of the gate that decides whether a
+release ships ([#1364](https://github.com/p2pool-starter-stack/pithead/issues/1364)). `--keep` leaves it deployed for
 inspection (skips the restore). Requires SSH access to the test bench and the miner; see the
 [testbench README](../../tests/integration/testbench-README.md).
 

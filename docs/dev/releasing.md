@@ -187,10 +187,24 @@ Two runs of the matrix are required, and the automated one is the smaller of the
    This deploys the candidate to the bench's dedicated e2e checkout, repoints the rig at it
    (under the [rig lock](release-server.md#bench-allocation-and-the-rig-lock), with automatic
    restore of both), and proves what `--readiness` cannot: a real miner mining through the
-   stack, the lifecycle phase (restart, apply secret-preservation, node-down failover), and
-   fail-closed auth. If the release's diff touches the worker or control-descriptor path, add
-   the `--rigforge-control` legs (needs a rig with its control API enabled). The readiness
-   gate alone does not satisfy this requirement; abort the release on any failure.
+   stack, the lifecycle phase (restart, apply secret-preservation, node-down failover),
+   fail-closed auth, and the dashboard-to-rig write paths. Those write paths used to be
+   reachable only under `--mode matrix`, so this mandated run never asked for them and the whole
+   surface shipped unproven; the targeted run now requests them whenever a rig is borrowed. They
+   need a rig with its control API enabled, and each leg says so and skips when it is missing —
+   read the run's output rather than its exit code alone. The readiness gate does not satisfy
+   this requirement; abort the release on any failure.
+
+   A run that does not finish leaves the rig's writable config where it stopped. The `EXIT`
+   trap restores the rig's xmrig pool config and the baseline stack; it does not restore the
+   RigForge writable keys, and `run.sh` — which writes them — has no trap at all
+   ([#1379](https://github.com/p2pool-starter-stack/pithead/issues/1379)). So a `Ctrl-C`, an
+   SSH drop, or a cancelled job mid-leg can leave `max_temp_c` a degree above where it started,
+   or whichever key the run died inside. Every probe is a near neighbour of the value it read
+   off the rig, so nothing is damaged — but the rig is not where you left it, and the restore
+   summary will not mention it. Read the rig's current values in Worker Inspect against what
+   you expect, and put a stray one back the same way. This is the same shape as `--keep`: the
+   run tells you it did not restore, and the rest is yours.
 
 After deploying the published release to the bench, run the non-destructive live sweep as the
 closing check: `tests/integration/run.sh --local --dir <stack-dir> --check`. On a bench with no
