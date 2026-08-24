@@ -300,6 +300,10 @@ class TestWiringDriftGuard:
             pkg / "collector" / "logs.py": r"await response\.(read|text|json)\(",
             pkg / "collector" / "containers.py": r"await response\.(read|text|json)\(",
             pkg / "client" / "docker" / "docker_control.py": r"await resp\.(read|text|json)\(",
+            # #1347's own site. It is where this algorithm was worked out, and it kept a second
+            # copy until #1360 folded it back in -- the two had already diverged (only the helper
+            # got the bytearray fix). The pattern below is the hand-rolled loop coming back.
+            pkg / "client" / "xmrig_client.py": r"await response\.content\.read\(",
         }
         for mod, pattern in async_sites.items():
             src = mod.read_text()
