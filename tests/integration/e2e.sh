@@ -33,9 +33,11 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# For rig_lock/rig_lock_remote (#430): the shared-bench flock protocol from rigforge#183.
+# lib.sh: rig_lock/rig_lock_remote (#430) from rigforge#183. rig-supply.sh: the write phase's rig host + token (#1378).
 # shellcheck source=tests/integration/lib.sh
 source "$HERE/lib.sh"
+# shellcheck source=tests/integration/rig-supply.sh
+source "$HERE/rig-supply.sh"
 
 # --- Config (override via env or flags) -------------------------------------
 BENCH_HOST="${BENCH_HOST:-}"
@@ -103,7 +105,8 @@ OPTIONS:
   --keep            don't restore at the end (leave the branch deployed + miner repointed — debugging)
   -h, --help        this help
 
-ENV OVERRIDES: BENCH_HOST, MINER_HOST, CANONICAL_DIR, E2E_DIR, MINER_XMRIG_CONFIG, GIT_REMOTE_URL
+ENV OVERRIDES: BENCH_HOST, MINER_HOST, CANONICAL_DIR, E2E_DIR, MINER_XMRIG_CONFIG, GIT_REMOTE_URL, and
+  RIG_HOST, IT_RIG_TOKEN, RIG_CONTROL_PORT, RIGFORGE_CONFIG (#1378 — all default off the borrowed miner)
 
 EXAMPLES:
   tests/integration/e2e.sh claude/my-feature                 # targeted (the default), borrow the miner
@@ -685,13 +688,10 @@ run_harness() {
     targeted) phases="--auth-fail-closed --lifecycle" ;; # readiness/check run inline first (below); NOT here — run.sh returns after --readiness
     matrix) phases="--safety-backup --lifecycle --fault-injection --auth-fail-closed --hardening --subnet" ;;
     esac
-    # RigForge integration (#185/#235/#260) is only meaningful with a REAL rig mining through the stack.
-    # The phase self-skips if no rigforge rig is connected, so this gate is just to avoid the noise.
-    [ "$BORROW_MINER" = "1" ] && [ "$MODE" != "check" ] && phases="$phases --rigforge"
-    # The dashboard-to-rig WRITE paths (#513/#514/#516/#517/#1002b/#1236) — same gate as the read phase
-    # since #1364: matrix-only meant the mandated pre-cut run (--mode targeted) never asked for them, so
-    # the write surface shipped unproven. DESTRUCTIVE-then-restored; every leg self-skips loudly.
-    [ "$BORROW_MINER" = "1" ] && [ "$MODE" != "check" ] && phases="$phases --rigforge-control"
+    # RigForge read (#185/#235/#260) + the WRITE paths (#513/#514/#516/#517/#1002b/#1236): both need a
+    # REAL rig, both self-skip loudly without one. The write half was matrix-only until #1364. rig_supply
+    # supplies its host + token (#1378) and ALWAYS returns rc 0, so this && cannot drop the flags.
+    [ "$BORROW_MINER" = "1" ] && [ "$MODE" != "check" ] && rig_supply && phases="$phases --rigforge --rigforge-control${RIG_HOST:+ --rig-host $RIG_HOST --rig-control-port $RIG_CONTROL_PORT}"
     # #905: no borrowed miner means no worker will ever appear — tell the harness to SKIP its two
     # mining assertions (workers online, stratum hashes) instead of failing a healthy stack.
     local no_mining=""
@@ -722,7 +722,7 @@ RUNNER
             warn "readiness/check reported issues (see above) — continuing to the destructive phases"
     fi
 
-    on_bench "rm -f '$E2E_DIR/results/e2e-harness.done'; cd '$E2E_DIR' && nohup ./.e2e-run.sh '$E2E_DIR' '$WORKERS' $phases >/dev/null 2>&1 & echo launched" ||
+    printf '%s' "$IT_RIG_TOKEN" | on_bench "IFS= read -r t; rm -f '$E2E_DIR/results/e2e-harness.done'; cd '$E2E_DIR' && IT_RIG_TOKEN=\"\$t\" nohup ./.e2e-run.sh '$E2E_DIR' '$WORKERS' $phases >/dev/null 2>&1 & echo launched" ||
         die "Failed to launch the harness."
 
     # Poll the done-marker, printing a heartbeat tail of the log.

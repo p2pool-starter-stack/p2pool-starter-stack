@@ -362,6 +362,16 @@ leg; `IT_RIG_POOLS_PROBE` (a JSON `pools` value safe to apply to the borrowed ri
 leg; `IT_RIG_ROLLBACK_CHANGES` (a writable-key `changes` object the rig's fault-injection reverts)
 for the #517 leg.
 
+Under `e2e.sh` the first two are supplied for you
+([#1378](https://github.com/p2pool-starter-stack/pithead/issues/1378)): `RIG_HOST` defaults to the
+borrowed `MINER_HOST`, and the token is read off the rig's own `/opt/rigforge/config.json` over the
+SSH the borrow already holds. Neither needs the operator to handle a secret, which matters because a
+supply step done by hand is one the mandated pre-cut run would skip. `e2e.sh` then dials the rig's
+control API **from the bench** before reporting the phase as supplied, and says which case it took —
+an unreachable rig is named rather than left to surface later as a leg that quietly skips. Override
+either with `RIG_HOST` or `IT_RIG_TOKEN` in the environment; `RIG_CONTROL_PORT` (default `8082`) is
+passed through to `run.sh` so the two can never dial different ports.
+
 ### RigForge upgrade (`--rigforge-upgrade`)
 
 With `--rigforge-control`, also POSTs the rig's own already-installed version back through
