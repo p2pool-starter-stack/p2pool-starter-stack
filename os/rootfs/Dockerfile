@@ -186,14 +186,14 @@ RUN chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
 # The built-in miner (#796): a pinned RigForge tree plus everything it needs, baked at image
 # build because nothing can be installed later — apt cannot run on the read-only root, and even
 # a rw-remount install leaves its /etc state (alternatives, ld.so.cache) on the volatile overlay
-# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.15.1 release
+# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.16.0 release
 # (by commit, not tag name, so a moved tag cannot change the bake); bump it release by release.
-# v1.15.1 and not v1.15.0: it carries the API-reader fix that stopped a dead worker API aborting
-# tune and autotune sweeps outright, and it is what every rig in the field runs — baking the older
-# tree would ship an appliance whose built-in miner is behind the workers beside it. (When this was
-# first written, GitHub's releases/latest pointer still named v1.15.0, so RigForge's own
-# `upgrade --check` called the newer patch a development build; that was rigforge#371 and the
-# release now carries the Latest label, so the two agree.)
+# v1.16.0 is the floor for the HugePages pool ceiling: hugepages_pool_ceiling_mb (rigforge#398,
+# filed from #1103) is absent from v1.15.1's tree entirely, and declaring it into one fails OPEN —
+# parse_config never reads the key, so the rendered config would look capped and behave as today.
+# When bumping: re-check that the span's control /status vocabulary is still covered by the closed
+# allowlists both poll loops in the root pithead script match on (rigforge#344 added pending and
+# age_seconds). A status neither arm names must stay non-terminal — it must never read as applied.
 # pithead-sync copies the tree to /data/rigforge every boot; `pithead local-miner` runs
 # its setup with RIGFORGE_APPLIANCE=1 when local_miner.enabled.
 #
@@ -204,7 +204,7 @@ RUN chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
 RUN apt-get install -y --no-install-recommends \
         git build-essential cmake libuv1-dev libssl-dev libhwloc-dev gettext-base python3 \
         linux-cpupower msr-tools
-ARG RIGFORGE_REF=60aa883901fc74ea39ed2f21962b8ba7f96d73ba
+ARG RIGFORGE_REF=4ce29b3daf063fd1b45e050649e93aa9592618e1
 RUN curl -fsSL -o /tmp/rigforge.tar.gz \
         "https://github.com/p2pool-starter-stack/rigforge/archive/${RIGFORGE_REF}.tar.gz" \
     && mkdir -p /opt/rigforge \
