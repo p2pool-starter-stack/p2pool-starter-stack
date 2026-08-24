@@ -73,25 +73,38 @@ fi
 echo "Checking hardening directives (#90) ..."
 RENDERED="$(docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" config)"
 fails=0
-expect_min() { # <label> <pattern> <min-count>
+# An empty render would let every expect_absent pass for the reassuring reason, so refuse it here.
+[ -n "$RENDERED" ] || { echo "  ✗ compose rendered nothing to assert against" && exit 1; }
+# The helpers read their haystack with a here-string, NEVER a pipe: `grep -q` exits at its first
+# match, so under the pipefail this file sets, the writer's EPIPE became the pipeline's status and
+# the match was discarded (#1370) — a present directive read as missing and, in the direction
+# nobody sees, a forbidden pattern that IS present read as absent, i.e. a hardening regression
+# wearing a green tick. grep exiting >= 2 is "could not check", counted as a failure, never a verdict.
+expect_min() { # <label> <pattern> <min-count> [haystack, default $RENDERED]
     local n
-    n=$(printf '%s\n' "$RENDERED" | grep -c -- "$2")
+    n=$(grep -c -- "$2" <<<"${4-$RENDERED}" || true)
     if [ "$n" -ge "$3" ]; then echo "  ✓ $1 ($n)"; else
         echo "  ✗ $1: expected >= $3, got $n"
         fails=$((fails + 1))
     fi
 }
 expect_present() { # <label> <pattern>
-    if printf '%s\n' "$RENDERED" | grep -q -- "$2"; then echo "  ✓ $1"; else
-        echo "  ✗ $1: missing [$2]"
-        fails=$((fails + 1))
-    fi
+    local rc=0
+    grep -q -- "$2" <<<"$RENDERED" || rc=$?
+    case $rc in
+    0) echo "  ✓ $1" ;;
+    1) echo "  ✗ $1: missing [$2]" && fails=$((fails + 1)) ;;
+    *) echo "  ✗ $1: could not check [$2] (grep exited $rc)" && fails=$((fails + 1)) ;;
+    esac
 }
 expect_absent() { # <label> <pattern>
-    if printf '%s\n' "$RENDERED" | grep -q -- "$2"; then
-        echo "  ✗ $1: found [$2]"
-        fails=$((fails + 1))
-    else echo "  ✓ $1"; fi
+    local rc=0
+    grep -q -- "$2" <<<"$RENDERED" || rc=$?
+    case $rc in
+    0) echo "  ✗ $1: found [$2]" && fails=$((fails + 1)) ;;
+    1) echo "  ✓ $1" ;;
+    *) echo "  ✗ $1: could not check [$2] (grep exited $rc)" && fails=$((fails + 1)) ;;
+    esac
 }
 
 # no-new-privileges on all 5 leaf services.
@@ -100,7 +113,7 @@ expect_min "no-new-privileges on leaf services" "no-new-privileges:true" 5
 # dashboard. The dashboard now runs non-root and owns its volume (#255), so it no longer needs
 # CAP_DAC_OVERRIDE to write its history DB and joins the others; pin the count so dropping cap_drop
 # from any leaf fails CI.
-caps=$(printf '%s\n' "$RENDERED" | grep -c -- "- ALL")
+caps=$(grep -c -- "- ALL" <<<"$RENDERED" || true)
 if [ "$caps" -eq 5 ]; then echo "  ✓ cap_drop: [ALL] on all 5 leaves incl. dashboard ($caps)"; else
     echo "  ✗ cap_drop: [ALL]: expected 5 (incl. dashboard, #255), got $caps"
     fails=$((fails + 1))
@@ -144,8 +157,8 @@ expect_present "tari node pinned by digest" "minotari_node:v5.3.1-mainnet@sha256
 # Per-service precision checks via the JSON render (cleaner than grepping the flat YAML): the
 # Docker socket proxies must stay least-privilege, and the Tari probe must self-match safely.
 JSON="$(docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
-jq_assert() { # <label> <filter>
-    if printf '%s' "$JSON" | jq -e "$2" >/dev/null 2>&1; then echo "  ✓ $1"; else
+jq_assert() { # <label> <filter> [json, default $JSON]
+    if jq -e "$2" <<<"${3-$JSON}" >/dev/null 2>&1; then echo "  ✓ $1"; else
         echo "  ✗ $1: failed [$2]"
         fails=$((fails + 1))
     fi
@@ -237,7 +250,7 @@ grep -vE '^PROXY_STRATUM_PASSWORD=|^PROXY_DONATE_LEVEL=' "$ENV_FILE" >"$OFF_ENV"
 echo 'PROXY_STRATUM_PASSWORD=' >>"$OFF_ENV"
 OFF_JSON="$(docker compose --env-file "$OFF_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
 rm -f "$OFF_ENV"
-if printf '%s' "$OFF_JSON" | jq -e '.services["xmrig-proxy"] | (.environment["PROXY_STRATUM_PASSWORD"] == "") and (.command | any(. == "--donate-level=0"))' >/dev/null 2>&1; then
+if jq -e '.services["xmrig-proxy"] | (.environment["PROXY_STRATUM_PASSWORD"] == "") and (.command | any(. == "--donate-level=0"))' <<<"$OFF_JSON" >/dev/null 2>&1; then
     echo "  ✓ default-off: empty stratum password + --donate-level=0 (#152/#173)"
 else
     echo "  ✗ default-off must leave PROXY_STRATUM_PASSWORD empty and render --donate-level=0"
@@ -384,7 +397,7 @@ else
 fi
 REMOTE_TARI_JSON="$(docker compose --env-file "$REMOTE_TARI_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
 rm -f "$REMOTE_TARI_ENV"
-if printf '%s' "$REMOTE_TARI_JSON" | jq -e '.services | has("tari") | not' >/dev/null 2>&1; then
+if jq -e '.services | has("tari") | not' <<<"$REMOTE_TARI_JSON" >/dev/null 2>&1; then
     echo "  ✓ tari service absent when local_tari is omitted (remote tari, #103)"
 else
     echo "  ✗ tari service still present with local_tari omitted (remote tari, #103)"
@@ -392,7 +405,7 @@ else
 fi
 # The same profile list must reach the tor container, which gates each node's inbound hidden service
 # on it (#103) — without this wiring tor would keep publishing an onion for a node that never starts.
-if printf '%s' "$REMOTE_TARI_JSON" | jq -e '.services.tor.environment.COMPOSE_PROFILES == "local_node"' >/dev/null 2>&1; then
+if jq -e '.services.tor.environment.COMPOSE_PROFILES == "local_node"' <<<"$REMOTE_TARI_JSON" >/dev/null 2>&1; then
     echo "  ✓ tor receives the active profile list, so its onion gate matches the running nodes (#103)"
 else
     echo "  ✗ tor did not receive the active profile list (#103)"
@@ -408,20 +421,12 @@ CUSTOM_ENV="$(mktemp)"
 } >"$CUSTOM_ENV"
 CUSTOM="$(docker compose --env-file "$CUSTOM_ENV" -f "$ROOT/docker-compose.yml" config 2>/dev/null)"
 rm -f "$CUSTOM_ENV"
-sub_check() { # <label> <pattern> <min-count>
-    local n
-    n=$(printf '%s\n' "$CUSTOM" | grep -c -- "$2")
-    if [ "$n" -ge "$3" ]; then echo "  ✓ $1 ($n)"; else
-        echo "  ✗ $1: expected >= $3, got $n"
-        fails=$((fails + 1))
-    fi
-}
-sub_check "custom subnet rebases the bridge network (#180)" "subnet: 10.84.0.0/24" 1
+expect_min "custom subnet rebases the bridge network (#180)" "subnet: 10.84.0.0/24" 1 "$CUSTOM"
 # Five static mining-bridge IPs (tor .25, monerod .26, tari .27, p2pool .28, dashboard-reach .29);
 # the two socket proxies moved off mining_net to loopback-published proxy_net (#345), so no longer 7.
-sub_check "custom subnet rebases all static service IPs (#180)" "ipv4_address: 10.84.0." 5
-sub_check "custom subnet rebases the dashboard SSRF CIDR (#180)" "MINING_NET_CIDR: 10.84.0.0/24" 1
-sub_check "custom subnet rebases the dashboard Tor SOCKS endpoint (#180)" "TOR_SOCKS_PROXY: socks5h://10.84.0.25:9050" 1
+expect_min "custom subnet rebases all static service IPs (#180)" "ipv4_address: 10.84.0." 5 "$CUSTOM"
+expect_min "custom subnet rebases the dashboard SSRF CIDR (#180)" "MINING_NET_CIDR: 10.84.0.0/24" 1 "$CUSTOM"
+expect_min "custom subnet rebases the dashboard Tor SOCKS endpoint (#180)" "TOR_SOCKS_PROXY: socks5h://10.84.0.25:9050" 1 "$CUSTOM"
 
 # Configurable stratum port (#172). Default env (no STRATUM_PORT — a pre-#172 .env) must keep
 # publishing/binding :3333; a custom port must move the publish, the container port, the -b bind
@@ -438,22 +443,16 @@ PORT_ENV="$(mktemp)"
 } >"$PORT_ENV"
 PORT_JSON="$(docker compose --env-file "$PORT_ENV" -f "$ROOT/docker-compose.yml" config --format json 2>/dev/null)"
 rm -f "$PORT_ENV"
-port_assert() { # <label> <filter>
-    if printf '%s' "$PORT_JSON" | jq -e "$2" >/dev/null 2>&1; then echo "  ✓ $1"; else
-        echo "  ✗ $1: failed [$2]"
-        fails=$((fails + 1))
-    fi
-}
-port_assert "custom stratum port moves the publish and container port (#172)" \
-    '.services["xmrig-proxy"].ports | any((.published == "4444") and (.target == 4444))'
-port_assert "custom stratum port moves the -b bind (#172)" \
-    '.services["xmrig-proxy"].command | any(. == "0.0.0.0:4444")'
-port_assert "custom stratum port reaches the dashboard hint env (#172)" \
-    '.services.dashboard.environment["STRATUM_PORT"] == "4444"'
-port_assert "internal p2pool stratum stays :3333 under a custom port (#172)" \
-    '.services["p2pool"].command | any(. == "0.0.0.0:3333")'
-port_assert "proxy upstream (P2POOL_URL) stays the internal :3333 (#172)" \
-    '.services["xmrig-proxy"].command | any(. == "172.28.0.28:3333")'
+jq_assert "custom stratum port moves the publish and container port (#172)" \
+    '.services["xmrig-proxy"].ports | any((.published == "4444") and (.target == 4444))' "$PORT_JSON"
+jq_assert "custom stratum port moves the -b bind (#172)" \
+    '.services["xmrig-proxy"].command | any(. == "0.0.0.0:4444")' "$PORT_JSON"
+jq_assert "custom stratum port reaches the dashboard hint env (#172)" \
+    '.services.dashboard.environment["STRATUM_PORT"] == "4444"' "$PORT_JSON"
+jq_assert "internal p2pool stratum stays :3333 under a custom port (#172)" \
+    '.services["p2pool"].command | any(. == "0.0.0.0:3333")' "$PORT_JSON"
+jq_assert "proxy upstream (P2POOL_URL) stays the internal :3333 (#172)" \
+    '.services["xmrig-proxy"].command | any(. == "172.28.0.28:3333")' "$PORT_JSON"
 
 if [ "$fails" -ne 0 ]; then
     echo "  ✗ $fails hardening check(s) failed"
