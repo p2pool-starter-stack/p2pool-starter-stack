@@ -1,5 +1,5 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml lint-topology lint-file-budget release release-smoke
+.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml lint-topology lint-file-budget lint-trivy-parity release release-smoke
 
 test: lint test-dashboard test-frontend test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
@@ -44,7 +44,7 @@ test-inventory: ## Write the test coverage inventory to docs/dev/test-inventory.
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
-lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-file-budget lint-proto lint-toml ## Lint/format-check every surface
+lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-file-budget lint-trivy-parity lint-proto lint-toml ## Lint/format-check every surface
 
 # Two shellcheck invocations, not one, and the split is load-bearing. shellcheck resolves a
 # `# shellcheck source=` directive only when the sourced file is ALSO named on the same command
@@ -100,6 +100,10 @@ lint-topology: ## Fail if a real-looking IPv6/IPv4/hostname/path/user@host liter
 lint-file-budget: ## Fail if a tracked file crosses the 800-line hard ceiling, or an existing offender grows past its docs/dev/file-budget.tsv ceiling (#1105 Phase 0)
 	bash scripts/lint-file-budget.sh --self-test
 	bash scripts/lint-file-budget.sh
+
+lint-trivy-parity: ## Fail if ci.yml's and os-rootfs.yml's trivy-action steps drift from the version scripts/trivyignore-watch.sh scans with (#1290)
+	bash scripts/trivyignore-watch.sh --self-test
+	bash scripts/trivyignore-watch.sh --check-parity
 
 lint-proto: ## buf lint + build on the vendored Tari protos (config: .../tari/proto/buf.yaml)
 	cd dashboard/mining_dashboard/client/tari/proto && \
