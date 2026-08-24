@@ -64,21 +64,23 @@ backup_failure_evidence() {
     backup_watch_report
 }
 
-# The #1059 watcher. Two static passes over this repo — a 12-candidate adversarial fan-out and a
-# hand trace of every path that removes config.json — agree that NOTHING in the backup's own call
-# chain touches the file: compose never mounts it, remove_tor_egress_firewall only edits nftables,
-# and the one remover reachable on an installed machine is the firstboot wizard loop's
-# `mv config.json config.json.failed`. That branch is NOT ruled out: it is gated on the exit
-# status of `(setup)` (pithead:2746), and under `set -Eeuo pipefail` any failing command,
-# unbound variable or ERR trap exits that subshell — calling error() is one route to a non-zero
-# status, not the gate. So the actor may be in this tree or outside it, and an instrument that
-# can only name this repo's code would miss half the possibilities by construction.
+# The #1059 watcher. It caught the mechanism on its first instrumented run, and stays as the
+# canary for it: `setup` is still inside `stack_up`'s `compose up -d` when a concurrent
+# `pithead backup` calls `stack_down`, which deletes a container out from under that in-flight
+# `compose up`; it fails, `stack_up` calls error(), the `(setup)` subshell exits non-zero, and
+# the firstboot wizard loop moves config.json aside (pithead:2746 -> :2752). Whether tar then
+# reports `Cannot stat` is pure timing.
 #
-# Hence a watcher that names ANY actor. The appliance image ships no inotify-tools, no auditd and
-# no lsof (os/rootfs/Dockerfile), so this is a poll plus a /proc sweep — the process table read
-# within ~100ms of the file going away, while whatever did it is still likely to be alive. It
-# also survives the case that has bitten this issue twice: a run where the backup SUCCEEDS but
-# the file still blinked, which every previous capture would have recorded as an uneventful pass.
+# It reports on PASSING runs too, and that is the load-bearing part rather than a nicety: the run
+# that produced the capture above was one where the BACKUP SUCCEEDED and the config was moved
+# aside anyway. A failure-only instrument would have printed a green tick. It follows that older
+# greens on this leg are not evidence the vanish did not happen — nothing was looking.
+#
+# The appliance image ships no inotify-tools, no auditd and no lsof (os/rootfs/Dockerfile), so
+# this is a poll plus a /proc sweep, read within ~100ms of the file going away while whatever did
+# it is still likely to be alive. Deliberately names ANY actor, not just this repo's code: the
+# first two static passes over the backup's own call chain found nothing, because the actor is a
+# concurrent process rather than anything that call chain invokes.
 backup_precapture() {
     _ssh "ls -la /data/pithead/config.json /data/pithead/.env 2>&1; readlink -f /data/pithead/config.json 2>&1" |
         tr -d '\r' | sed 's/^/     · /'
@@ -126,7 +128,9 @@ setsid nohup bash /tmp/pithead-1059-watch.sh </dev/null >/dev/null 2>&1 & disown
 backup_watch_report() {
     local raw seen
     raw=$(_ssh "printf WATCHOK; cat /tmp/pithead-1059-watch.log 2>/dev/null" | tr -d '\r')
-    _ssh "pkill -f pithead-1059-watch.sh" >/dev/null 2>&1 || true
+    # Bracketed: the remote `bash -c` running this pkill carries the pattern in its OWN cmdline,
+    # so an unbracketed one matches the shell issuing it.
+    _ssh "pkill -f '[p]ithead-1059-watch.sh'" >/dev/null 2>&1 || true
     case "$raw" in
     WATCHOK*) seen=${raw#WATCHOK} ;;
     *)
