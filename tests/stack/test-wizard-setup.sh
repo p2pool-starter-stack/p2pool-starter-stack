@@ -322,7 +322,12 @@ wkf_reset() { # <present|absent>  — the machine-role marker
     # A fixed literal, not a fixture constant: wizard_keep_failed_config never parses the file,
     # so borrowing $WALLET would only buy an ordering dependency on another domain file.
     printf '{"submitted":"the operator answers"}\n' >"$WKF/config.json"
-    chmod 600 "$WKF/config.json"
+    # 644, NOT 600, and that is the whole point of the fixture. A copy tool derives the new
+    # file's mode from the source, so a 600 source makes "the copy is 600" true of `cp` as much
+    # as of `install -m 600` — the assertion would then be proven by the fixture instead of by
+    # the guard. 644 is also the real shape: config.json written under systemd's default umask
+    # 022 lands at 644, so this is what the tightening actually has to act on.
+    chmod 644 "$WKF/config.json"
     if [ "$1" = "present" ]; then printf 'pithead\n' >"$WKF/machine-role"; fi
     return 0
 }
@@ -380,5 +385,33 @@ else
         bad "and no half-written config.json.failed is left behind to look like a copy" "a copy exists after a failed install"
     assert_contains "the reason is reported instead of discarded" "$wkf_out" "Could not keep a copy of the failed configuration"
 fi
+
+# The same four assertions at ANY uid. The staging above cannot be built as root (mode 000 does
+# not deny root), and these are exactly the assertions that guard the reported defect, so the
+# branch must not be uncovered on a root runner. Shadowing install(1) forces the failure directly.
+# BESIDE the real-install case above, never instead of it: a stub proves the guard's shape, only a
+# real install failure proves that a real one reaches it. The shadow is therefore coupled to the
+# implementation still using install(1) — if that changes, this case reddens loudly (the success
+# path runs and deletes config.json) rather than passing vacuously. Retarget the shadow then;
+# do not delete the case.
+wkf_reset absent
+wkf_out=$(
+    cd "$WKF" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    install() { return 1; }
+    wizard_keep_failed_config 2>&1
+)
+wkf_rc=$?
+assert_rc "a stubbed-failing copy reports failure too (any uid)" "$wkf_rc" "1"
+[ -f "$WKF/config.json" ] &&
+    ok "a failed copy NEVER deletes the configuration, at any uid (#1059)" ||
+    bad "a failed copy NEVER deletes the configuration, at any uid (#1059)" "config.json was deleted"
+[ ! -e "$WKF/config.json.failed" ] &&
+    ok "and leaves no half-written copy behind, at any uid" ||
+    bad "and leaves no half-written copy behind, at any uid" "a copy exists after a failed install"
+assert_contains "the reason is reported at any uid" "$wkf_out" "Could not keep a copy of the failed configuration"
+
 unset WKF wkf_out wkf_rc
 unset -f wkf_reset
