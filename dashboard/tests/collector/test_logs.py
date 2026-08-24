@@ -8,7 +8,7 @@ from mining_dashboard.helper.http import MAX_RESPONSE_BYTES
 def _cap_for(tail):
     """The cap the collector derives for a given ``tail`` — read from the module, never restated,
     so this cannot drift into asserting a number the code no longer uses."""
-    return max(MAX_RESPONSE_BYTES, tail * logs._LOG_BYTES_PER_LINE)
+    return logs._log_cap(tail)
 
 
 async def _fetch(resp, tail=None):
@@ -117,6 +117,26 @@ class TestFetchDockerLogs:
         assert await _fetch(_FakeResp(200, _frame(body), chunk=65536), tail=1) == [
             "Error: Connection to Docker Proxy failed."
         ]
+
+    async def test_a_completely_full_tail_window_is_accepted_headers_and_all(self):
+        """The maximally packed legitimate case — ``tail`` frames each carrying a full 16 KiB
+        payload — is the exact case the derived ceiling exists to admit, and it was refused (#1360).
+
+        ``bounded_read`` counts RAW stream bytes, so the real weight of a full window is
+        ``tail * (16384 + 8)``: Docker prefixes every frame with an 8-byte header. A cap of
+        ``tail * 16384`` is short by ``tail * 8`` and cuts the window off just before its end.
+
+        ``tail=64`` is the smallest value that demonstrates it, because below it the 1 MiB floor
+        dominates and hides the shortfall: at 64, ``64 * 16384`` is exactly the floor, so the header
+        bytes are the whole of the difference. Against the pre-fix cap this body is one frame's
+        header too large and the collector returns the connection-failure string instead of logs."""
+        tail = 64
+        raw = b"".join(_frame("z" * logs._LOG_BYTES_PER_LINE) for _ in range(tail))
+        assert len(raw) == tail * (logs._LOG_BYTES_PER_LINE + logs._LOG_FRAME_HEADER)
+        assert len(raw) > max(MAX_RESPONSE_BYTES, tail * logs._LOG_BYTES_PER_LINE)  # pre-fix: over
+        assert len(raw) <= _cap_for(tail)  # post-fix: admitted, and only just
+        out = await _fetch(_FakeResp(200, raw, chunk=65536), tail=tail)
+        assert out == ["z" * logs._LOG_BYTES_PER_LINE] * tail
 
     async def test_a_body_split_across_many_reads_is_still_read_whole(self):
         """The regression a single ``read(cap)`` would cause: aiohttp's read is SHORT, so a body
