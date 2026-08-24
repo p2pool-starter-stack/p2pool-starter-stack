@@ -173,6 +173,24 @@ class TestConfigOrigin:
             sm.close()
         assert d["config_origin"] == "elsewhere"
 
+    def test_a_hand_edit_underneath_rigforge_is_not_detected_known_gap(self, monkeypatch):
+        """CHARACTERIZATION, not an endorsement — this asserts a KNOWN-WRONG answer (#1367).
+
+        A config file edited underneath RigForge is not a *recorded* change, so the marker keeps
+        naming whatever came before it. Where that was our own control change, the line says "Last
+        changed from this dashboard" over a config we did not set — the one direction the rest of
+        this feature exists to avoid. RigForge computes the value that would catch it (the marker's
+        stored revision) and then overwrites it with the live one before serving, so the comparison
+        needs the last revision we OBSERVED, which is persistence this does not add.
+
+        When #1367 closes, this test SHOULD red. Update it then — do not delete it.
+        """
+        # Same provenance as the change we really did apply; only `revision` has moved, because
+        # the rig recomputes it live from a config nobody recorded a change for.
+        meta = dict(_META, revision="ffffffffffffffff")
+        d = _detail(monkeypatch, {"config_meta": meta}, spooled=_META["last_change_id"])
+        assert d["config_origin"] == "here"  # known-wrong; see #1367
+
     def test_a_worker_missing_from_the_snapshot_carries_no_provenance(self, monkeypatch):
         from mining_dashboard.web import views
 

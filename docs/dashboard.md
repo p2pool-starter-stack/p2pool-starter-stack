@@ -444,11 +444,18 @@ than a guess. The words come from a fixed set the dashboard controls, never from
 cannot write its own provenance in text you would read as ours. Hover the line for the rig's
 timestamp and the revision of the config it is running.
 
-Read it as evidence, not as proof. Everything behind the line is the rig's own account, so a rig
-that has been taken over can say whatever it likes — including replaying a change id you really did
-send it. What the line does guarantee is which way it errs: anything the dashboard cannot vouch for
-reads as **not from here**, never as yours. A change id belonging to a different rig, or a history
-it cannot read at the time, both land on "another dashboard" rather than on a false reassurance.
+Read it as evidence, not as proof, and know the one case it gets wrong. The line reports the last
+change RigForge **recorded**. A config file edited underneath RigForge — by hand, with nothing
+running to record it — is not a recorded change, so the line keeps naming whatever came before it.
+On a rig where the dashboard applied the previous change, that reads as "Last changed from this
+dashboard" while the rig runs something else. Treat the line as an alarm that fires, not as an
+all-clear: it can tell you a change happened elsewhere, but its silence is not proof that none did.
+
+Everything behind it is the rig's own account, so a rig that has been taken over can also say
+whatever it likes, including replaying a change id you really did send it. Within what the rig does
+report honestly, the dashboard's own half errs one way only: a change id belonging to a different
+rig, or a history it cannot read at that moment, both land on "another dashboard" rather than on a
+false reassurance.
 
 How it stays safe:
 

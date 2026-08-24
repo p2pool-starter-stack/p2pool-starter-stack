@@ -14,10 +14,16 @@ fact only this side holds — whether the rig's ``last_change_id`` matches a cha
 spooled *for this rig*. The rig mints those ids in its control server and hands them back in the
 202, so an id in this rig's own history is an id we asked for.
 
-The comparison is evidence, not proof. A rig that is lying controls its whole response and can
-replay an id we really did send it, so this detects a change we did not make — it does not defeat a
-rig that has decided to deceive us. What it does guarantee is the direction of any error: every
-input it cannot vouch for lands on "not ours".
+The comparison is evidence, not proof, and one case escapes it entirely. RigForge serves ``revision``
+recomputed live but takes the other three from a marker file it writes only when a change is
+*recorded* (``_stamp_config_meta``), and the marker's own stored revision is overwritten by the live
+one before it goes on the wire. So a config hand-edited underneath RigForge moves the revision while
+the provenance stays stale, and this reports the change before it — reading as "here" over a config
+we did not set. Catching that needs the last revision we OBSERVED per rig, which is persistence this
+does not add; see the follow-up issue.
+
+A rig that is lying can also replay an id we really did send it. Within what a rig reports honestly,
+the dashboard's own half errs one way only: every input it cannot vouch for lands on "not ours".
 
 This is not a new capability from nothing: #530 already notices a rig-applied change, but only
 while a poll is watching a terminal report go by, and only ever as a change_id. The keys here make
