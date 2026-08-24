@@ -25,6 +25,8 @@ source "$HERE/lib.sh"
 # shellcheck source=tests/integration/scenarios.sh
 source "$HERE/scenarios.sh"
 source "$HERE/rigforge-apply-settle.sh"
+# shellcheck source=tests/integration/rigforge-writable-keys.sh
+source "$HERE/rigforge-writable-keys.sh"
 
 # --- Defaults / globals -----------------------------------------------------
 IT_MODE="ssh"
@@ -129,16 +131,18 @@ MATRIX:
   --rigforge             also run the RigForge integration phase (#185/#235/#260): assert the
                          dashboard consumed a REAL rigforge rig's enriched feed and Worker Inspect
                          reads it. Non-destructive; self-skips if no rigforge rig is connected.
-  --rigforge-control     also run the RigForge control phase (#513/#514/#516/#517/#1002b), local mode
-                         only: with dashboard.control ON and workers.list[] populated for the borrowed
-                         rig (masked-token descriptor, #440/#506 — the box's pre-existing
+  --rigforge-control     also run the RigForge control phase (#513/#514/#516/#517/#1002b/#1236), local
+                         mode only: with dashboard.control ON and workers.list[] populated for the
+                         borrowed rig (masked-token descriptor, #440/#506 — the box's pre-existing
                          dashboard.workers[] legacy descriptor is honored as-is if that's what the
                          baseline already carries), assert the enriched read path survives populated
                          descriptors (#514) and the rig is editable (#508/#513), drive a reversible
-                         Worker Inspect edit end-to-end to the rig's control API on TWO of the six
-                         writable keys — max_temp_c (#513) and pools (#1002b, needs
-                         IT_RIG_POOLS_PROBE) — reflect a rig-side edit back into the dashboard (#516),
-                         and record an auto-rollback (#517). DESTRUCTIVE-then-restored. Needs a real rig
+                         Worker Inspect edit end-to-end to the rig's control API on max_temp_c (#513),
+                         DONATION and watchdog_interval_min (#1236, read back from the rig's own
+                         reported config), and pools (#1002b, needs IT_RIG_POOLS_PROBE); reflect a
+                         rig-side edit back into the dashboard (#516), and record an auto-rollback
+                         (#517). autotune and watchdog are deliberately never driven — see
+                         docs/dev/integration-testing.md. DESTRUCTIVE-then-restored. Needs a real rig
                          with its control API opted in; each leg self-skips loudly without its
                          prerequisites.
   --rig-host <h>         the borrowed rig's LAN host/IP for control dials — needed to inject a
@@ -1913,7 +1917,7 @@ run_rigforge_integration() {
     # 2a. Worker Inspect READ: GET /api/worker?name=<rig> returns the rig's detail carrying the
     #     enriched telemetry (plus the config prefill + history).
     local detail
-    detail="$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null || true)"
+    detail="$(_worker_detail "$rig" || true)"
     if [ -n "$detail" ] && printf '%s' "$detail" | jq -e '.name' >/dev/null 2>&1; then
         it_pass "Worker Inspect read returns the rig's detail (#185)"
         assert_ne "worker detail carries the enriched telemetry" \
@@ -2185,7 +2189,7 @@ run_rigforge_control() {
 
     # ---- #513: the rig is editable, and a reversible Worker Inspect edit lands on the rig ----
     local detail
-    detail="$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null || true)"
+    detail="$(_worker_detail "$rig" || true)"
     assert_eq "Worker Inspect reports the rig editable with a descriptor (#508/#513)" \
         "$(printf '%s' "$detail" | jq -r '.editable // false' 2>/dev/null)" "true"
     assert_eq "Worker Inspect control_enabled (#513)" \
@@ -2208,47 +2212,18 @@ run_rigforge_control() {
         assert_contains "the rig's /status confirms max_temp_c changed (#513)" "$ckeys" "max_temp_c"
         # Matched by change_id, not "the newest row" — #579/#604's reconciler (rigforge-apply-settle.sh).
         assert_eq "worker-apply recorded in the per-worker history (#185)" \
-            "$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null | jq -r --arg c "$change_id" 'first(.history[]? | select(.change_id==$c)) | .status // empty' 2>/dev/null)" "applied"
+            "$(_worker_detail "$rig" | jq -r --arg c "$change_id" 'first(.history[]? | select(.change_id==$c)) | .status // empty' 2>/dev/null)" "applied"
         it_step "reverting max_temp_c $new_maxt -> $orig_maxt…"
         res="$(_worker_apply "$rig" "{\"max_temp_c\":$orig_maxt}")"
         IFS='|' read -r status _ _ <<<"$(_settle_worker_apply_maxt "$rig" "$orig_maxt" "$res")"
         assert_eq "reversible edit reverted on the rig (#513)" "$status" "applied"
     fi
 
-    # ---- #1002b: a second writable key (pools) proves the edit isn't max_temp_c-specific ----
-    # pools is the repoint-your-hashrate key; unlike max_temp_c its CURRENT value has no live
-    # telemetry readback — the enriched feed carries no writable-config VALUES at all (only
-    # health/power/tune telemetry), which is exactly why Worker Inspect's own editor prefills from
-    # the dashboard's last-applied record instead of a live rig read (docs/dashboard.md, "Worker
-    # Inspect": "the rig's enriched feed doesn't expose the writable config values"). So the honest
-    # "original" here is GET /api/worker's .last_applied.pools — the same source the real editor
-    # prefills from — and the probe value is operator-supplied (IT_RIG_POOLS_PROBE): pithead treats
-    # `pools` as opaque passthrough (WORKER_WRITABLE_KEYS only checks the key NAME, never the
-    # value shape), so guessing a value shaped wrong for this rig's RigForge version risks a real
-    # rejected/failed instead of proving the round trip — the same reasoning
-    # IT_RIG_ROLLBACK_CHANGES already applies to the #517 leg below.
-    if [ -z "${IT_RIG_POOLS_PROBE:-}" ]; then
-        it_warn "no IT_RIG_POOLS_PROBE (a JSON pools value safe to apply to rig '$rig') — skipping the pools write leg (#1002b)"
-    elif ! printf '%s' "$IT_RIG_POOLS_PROBE" | jq -e . >/dev/null 2>&1; then
-        it_fail "IT_RIG_POOLS_PROBE is valid JSON (#1002b)" "got [$IT_RIG_POOLS_PROBE]"
-    else
-        local orig_pools
-        orig_pools="$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null | jq -c '.last_applied.pools // empty' 2>/dev/null)"
-        if [ -z "$orig_pools" ]; then
-            it_warn "rig '$rig' has no dashboard-applied pools on record (.last_applied.pools) — skipping the pools write leg (can't read the original to restore it) (#1002b)"
-        else
-            it_step "Worker Inspect edit: pools -> the operator-supplied probe via /api/control/worker-apply…"
-            res="$(_worker_apply "$rig" "{\"pools\":$IT_RIG_POOLS_PROBE}")"
-            status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
-            ckeys="$(printf '%s' "$res" | jq -r '(.changed_keys // []) | join(",")' 2>/dev/null)"
-            assert_eq "pools edit applied on the rig (#1002b)" "$status" "applied"
-            assert_contains "the rig's /status confirms pools changed (#1002b)" "$ckeys" "pools"
-            it_step "reverting pools to the dashboard's last-applied value…"
-            res="$(_worker_apply "$rig" "{\"pools\":$orig_pools}")"
-            assert_eq "pools edit reverted on the rig (#1002b)" \
-                "$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)" "applied"
-        fi
-    fi
+    # ---- #1236/#1002b: the other writable keys, and the ones we deliberately refuse ----
+    # Lives in rigforge-writable-keys.sh: the legs read each original from the rig's OWN reported
+    # config (.rig_config, #1235/rigforge#253) rather than from a record of what we last pushed, and
+    # the three keys not driven there carry their reasons with them.
+    run_rigforge_writable_keys "$rig"
 
     # ---- #516: a rig-side edit reflects in the dashboard's enriched feed + the masked prefill ----
     run_rigforge_reverse "$rig" "$orig_maxt"
@@ -2408,7 +2383,7 @@ run_rigforge_rollback() { # <rig-name>
     # confirms the change was driven end-to-end from the dashboard (the rig-side terminal is asserted
     # above). ponytail: accept both rather than force a product change to the runner's poll budget.
     local histstatus
-    histstatus="$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/worker?name=$rig")" 2>/dev/null | jq -r 'first(.history[]?) | .status // empty' 2>/dev/null)"
+    histstatus="$(_worker_detail "$rig" | jq -r 'first(.history[]?) | .status // empty' 2>/dev/null)"
     case "$histstatus" in
     rolled_back | accepted) it_pass "the dashboard's per-worker history records the change (#517: $histstatus)" ;;
     *) it_fail "the dashboard's per-worker history records the change (#517)" "expected rolled_back|accepted, got [$histstatus]" ;;
