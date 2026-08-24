@@ -11,12 +11,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib.sh"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-harness-tooling.sh
-source "$HERE/test-harness-tooling.sh"
+# shellcheck source=tests/stack/test-harness-tooling.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-harness-tooling.sh" && domain_ran test-harness-tooling.sh "$_d0" "$?" || domain_ran test-harness-tooling.sh "$_d0" "$?"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-doctor.sh
-source "$HERE/test-doctor.sh"
+# shellcheck source=tests/stack/test-doctor.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-doctor.sh" && domain_ran test-doctor.sh "$_d0" "$?" || domain_ran test-doctor.sh "$_d0" "$?"
 
 echo "== unit: docker_boot_enabled (#137) =="
 # A systemctl stub on PATH; FAKE_BOOT picks which unit reports "enabled". Docker counts as
@@ -40,11 +40,11 @@ PATH="$BOOT/bin:$PATH" FAKE_BOOT=none run_sourced "$SANDBOX" docker_boot_enabled
 assert_rc "neither enabled -> 1" "$?" "1"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-control-upgrade.sh
-source "$HERE/test-control-upgrade.sh"
+# shellcheck source=tests/stack/test-control-upgrade.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-control-upgrade.sh" && domain_ran test-control-upgrade.sh "$_d0" "$?" || domain_ran test-control-upgrade.sh "$_d0" "$?"
 
-# shellcheck source=tests/stack/test-release-signing.sh
-source "$HERE/test-release-signing.sh"
+# shellcheck source=tests/stack/test-release-signing.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-release-signing.sh" && domain_ran test-release-signing.sh "$_d0" "$?" || domain_ran test-release-signing.sh "$_d0" "$?"
 
 echo "== unit: config_bool honours an explicit false (jq // false-coercion guard, #294) =="
 # Regression for #294: `.x // true` returns true even when x is explicitly false (jq treats false as
@@ -63,14 +63,14 @@ assert_eq "absent -> default true" "$(run_sourced "$CB" config_bool '.network.to
 assert_eq "absent -> default false" "$(run_sourced "$CB" config_bool '.xvb.tor' false)" "false"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-dashboard.sh
-source "$HERE/test-dashboard.sh"
+# shellcheck source=tests/stack/test-dashboard.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-dashboard.sh" && domain_ran test-dashboard.sh "$_d0" "$?" || domain_ran test-dashboard.sh "$_d0" "$?"
 
-# shellcheck source=tests/stack/test-dashboard-onion.sh
-source "$HERE/test-dashboard-onion.sh"
+# shellcheck source=tests/stack/test-dashboard-onion.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-dashboard-onion.sh" && domain_ran test-dashboard-onion.sh "$_d0" "$?" || domain_ran test-dashboard-onion.sh "$_d0" "$?"
 
-# shellcheck source=tests/stack/test-release.sh
-source "$HERE/test-release.sh"
+# shellcheck source=tests/stack/test-release.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-release.sh" && domain_ran test-release.sh "$_d0" "$?" || domain_ran test-release.sh "$_d0" "$?"
 
 # The XvB tier thresholds are hard-coded in config.py (TIER_DEFAULTS) and stated explicitly in
 # docs/architecture.md. Drift guard: each config value must match the doc's human form, so the
@@ -115,11 +115,11 @@ ver="$(cd "$NOVER" && source "$STACK" && set +e && export_build_provenance && pr
 assert_eq "export_build_provenance empty when no VERSION" "$ver" ""
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-cli.sh
-source "$HERE/test-cli.sh"
+# shellcheck source=tests/stack/test-cli.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-cli.sh" && domain_ran test-cli.sh "$_d0" "$?" || domain_ran test-cli.sh "$_d0" "$?"
 
-# shellcheck source=tests/stack/test-config.sh
-source "$HERE/test-config.sh"
+# shellcheck source=tests/stack/test-config.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-config.sh" && domain_ran test-config.sh "$_d0" "$?" || domain_ran test-config.sh "$_d0" "$?"
 
 echo "== unit: render-quadlet parity vs os/quadlet fixtures (#77 phase 1) =="
 # The renderer must reproduce the spike-proven unit set byte-for-byte from the fixture env — the
@@ -152,8 +152,8 @@ done
 assert_eq "local render emits no wallet units" "$(find "$QLOCAL" -name 'wallet-rpc.container' -o -name 'tari-wallet.container' | wc -l | tr -d ' ')" "0"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-doctor-appliance.sh
-source "$HERE/test-doctor-appliance.sh"
+# shellcheck source=tests/stack/test-doctor-appliance.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-doctor-appliance.sh" && domain_ran test-doctor-appliance.sh "$_d0" "$?" || domain_ran test-doctor-appliance.sh "$_d0" "$?"
 
 echo "== unit: firstboot wizard token + spool consume (#77 phase 3) =="
 # Token: pit- prefix + 6 chars from the unambiguous alphabet (never 0, O, 1, I, or l).
@@ -368,8 +368,8 @@ printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","n
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-backup.sh
-source "$HERE/test-backup.sh"
+# shellcheck source=tests/stack/test-backup.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-backup.sh" && domain_ran test-backup.sh "$_d0" "$?" || domain_ran test-backup.sh "$_d0" "$?"
 
 echo "== unit: install.sh host gate (#77 phase 1) =="
 # The installer hard-fails on the platforms the stack cannot run on, before any download.
@@ -493,16 +493,16 @@ rm -rf "$ISB"
 unset -f irun
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-secrets.sh
-source "$HERE/test-secrets.sh"
+# shellcheck source=tests/stack/test-secrets.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-secrets.sh" && domain_ran test-secrets.sh "$_d0" "$?" || domain_ran test-secrets.sh "$_d0" "$?"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-rig-worker.sh
-source "$HERE/test-rig-worker.sh"
+# shellcheck source=tests/stack/test-rig-worker.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-rig-worker.sh" && domain_ran test-rig-worker.sh "$_d0" "$?" || domain_ran test-rig-worker.sh "$_d0" "$?"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-monero-tari.sh
-source "$HERE/test-monero-tari.sh"
+# shellcheck source=tests/stack/test-monero-tari.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-monero-tari.sh" && domain_ran test-monero-tari.sh "$_d0" "$?" || domain_ran test-monero-tari.sh "$_d0" "$?"
 
 # xmrig-proxy wrapper entrypoint: optional stratum access-password (#152). The flag moved out of the
 # compose command (a `${VAR:+--flag}` list element rendered a stray '' positional arg when the password
@@ -545,8 +545,8 @@ assert_eq "xmrig-proxy entrypoint: TLS on but keypair incomplete appends nothing
 rm -rf "$XPTLS"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-tor-network.sh
-source "$HERE/test-tor-network.sh"
+# shellcheck source=tests/stack/test-tor-network.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-tor-network.sh" && domain_ran test-tor-network.sh "$_d0" "$?" || domain_ran test-tor-network.sh "$_d0" "$?"
 
 # ---------------------------------------------------------------------------
 echo "== black-box: dashboard control channel (#33) =="
@@ -1209,8 +1209,8 @@ assert_eq "config.json keeps no worker descriptors" "$(jq -r '.dashboard.workers
 # workers.list[]'s add-only exception (#893's click-to-adopt) + the #122 SSRF floor on a newly
 # appended entry's host — split into its own file purely for the file-budget ratchet; it shares
 # this section's $C/$UUID5/gate_try exactly like test-control-deploy.sh shares its own section's.
-# shellcheck source=tests/stack/test-control-add-only-ssrf.sh
-source "$HERE/test-control-add-only-ssrf.sh"
+# shellcheck source=tests/stack/test-control-add-only-ssrf.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-control-add-only-ssrf.sh" && domain_ran test-control-add-only-ssrf.sh "$_d0" "$?" || domain_ran test-control-add-only-ssrf.sh "$_d0" "$?"
 
 # dashboard.energy (#504) is the ONE config.json-only block a commit MAY change: it never renders
 # to .env, so the host previews it as a normal INFO row (not the old non-committable HOST note) and
@@ -1553,8 +1553,8 @@ assert_contains "next run drains the remainder" "$out" "Processed 10 control req
 assert_eq "spool empty after the second run" "$(ls "$REQS" | wc -l | tr -d ' ')" "0"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-control-deploy.sh
-source "$HERE/test-control-deploy.sh"
+# shellcheck source=tests/stack/test-control-deploy.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-control-deploy.sh" && domain_ran test-control-deploy.sh "$_d0" "$?" || domain_ran test-control-deploy.sh "$_d0" "$?"
 
 echo "== control channel: Telegram lifecycle verbs (#338) =="
 # The #33 runner dispatches the two bounded Telegram control verbs to FIXED pithead commands and
@@ -1739,8 +1739,8 @@ assert_eq "a non-kit result is left untouched" \
     "$(jq -r '.change_id' "$BKC/results/other.json")" "c"
 unset PITHEAD_SELF SELF_LOG PASS_LOG FAKE_ARCHIVE CONTROL_BACKUP_KIT_TTL_S bid1 bid2 bid3 bid4 bid5 pass1 old_ts now_ts
 
-# shellcheck source=tests/stack/test-wizard-setup.sh
-source "$HERE/test-wizard-setup.sh"
+# shellcheck source=tests/stack/test-wizard-setup.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-wizard-setup.sh" && domain_ran test-wizard-setup.sh "$_d0" "$?" || domain_ran test-wizard-setup.sh "$_d0" "$?"
 
 echo "== unit: provision_control_runner only removes units this checkout owns (#33) =="
 # The pithead-control.{path,service} names are box-global, but a release bench holds several
@@ -2521,11 +2521,11 @@ unset -f hbl
 rm -rf "$HSB"
 unset HSB hout hstart hlen
 
-# shellcheck source=tests/stack/test-appliance-install.sh
-source "$HERE/test-appliance-install.sh"
+# shellcheck source=tests/stack/test-appliance-install.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-install.sh" && domain_ran test-appliance-install.sh "$_d0" "$?" || domain_ran test-appliance-install.sh "$_d0" "$?"
 
-# shellcheck source=tests/stack/test-appliance-rig-miner.sh
-source "$HERE/test-appliance-rig-miner.sh"
+# shellcheck source=tests/stack/test-appliance-rig-miner.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-rig-miner.sh" && domain_ran test-appliance-rig-miner.sh "$_d0" "$?" || domain_ran test-appliance-rig-miner.sh "$_d0" "$?"
 
 echo "== unit: pithead-boot wiring — the miner leg rides AFTER the slot commit =="
 # Ordering is the contract: the stack serving is the product's health and gates the A/B commit;
@@ -2913,11 +2913,11 @@ unset -f okrun
 rm -rf "$OKSB"
 unset OKSB
 
-# shellcheck source=tests/stack/test-appliance-os-update.sh
-source "$HERE/test-appliance-os-update.sh"
+# shellcheck source=tests/stack/test-appliance-os-update.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-os-update.sh" && domain_ran test-appliance-os-update.sh "$_d0" "$?" || domain_ran test-appliance-os-update.sh "$_d0" "$?"
 
-# shellcheck source=tests/stack/test-appliance-os-update-verbs.sh
-source "$HERE/test-appliance-os-update-verbs.sh"
+# shellcheck source=tests/stack/test-appliance-os-update-verbs.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-os-update-verbs.sh" && domain_ran test-appliance-os-update-verbs.sh "$_d0" "$?" || domain_ran test-appliance-os-update-verbs.sh "$_d0" "$?"
 
 # --- os/rauc stale-tarball guard (verify_tarball_commit in populate-slot.sh). A present-but-stale
 # os/build/pithead-root.tar looks identical to a fresh one to `[ -s ]` — a bench deploy once
@@ -3665,8 +3665,8 @@ assert_eq "empty inputs (unset shell vars): treated as not-logged, fails cleanly
     "$(rpv "" "" "")" "1 the pre-fill branch's own log line never appeared this boot — a wallet match alone cannot prove which code path produced it (#1038)"
 unset -f rpv
 
-# shellcheck source=tests/stack/test-appliance-media.sh
-source "$HERE/test-appliance-media.sh"
+# shellcheck source=tests/stack/test-appliance-media.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-media.sh" && domain_ran test-appliance-media.sh "$_d0" "$?" || domain_ran test-appliance-media.sh "$_d0" "$?"
 
 echo "== unit: os/build-image.sh — --fresh-index flag parsing + the 404 remedy hint (#929) =="
 # PITHEAD_BUILD_IMAGE_TEST makes the script return right after arg parsing (before docker), so
@@ -3828,8 +3828,8 @@ lw_run "$LW/loop0"
 assert_rc "regular files at p1/p2 do not satisfy the wait — block devices required" "$?" "1"
 
 # ---------------------------------------------------------------------------
-# shellcheck source=tests/stack/test-lifecycle.sh
-source "$HERE/test-lifecycle.sh"
+# shellcheck source=tests/stack/test-lifecycle.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-lifecycle.sh" && domain_ran test-lifecycle.sh "$_d0" "$?" || domain_ran test-lifecycle.sh "$_d0" "$?"
 
 # ---------------------------------------------------------------------------
 echo ""
