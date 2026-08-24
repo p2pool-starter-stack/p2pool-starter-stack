@@ -279,6 +279,11 @@ def compute_topology(
     monero_clearnet_sync,
     tari_clearnet_sync,
     remote_monero,
+    # Defaulted, unlike remote_monero: the egress posture does not model a remote Tari
+    # node's gRPC route yet (#1350), so the two functions no longer take identical knobs
+    # and the shared sweep fixtures splat into both. topology_from_config passes it, and
+    # test_topology_graph asserts that it does rather than trusting the signature to.
+    remote_tari=False,
     healthchecks_enabled,
     telegram_enabled,
     price_feed_enabled=False,
@@ -396,7 +401,8 @@ def compute_topology(
         else:
             edge["leak"] = True
 
-    return {"nodes": TOPOLOGY_NODES, "edges": edges, "summary": posture["summary"]}
+    nodes = topology_nodes(remote_monero=remote_monero, remote_tari=remote_tari)
+    return {"nodes": nodes, "edges": edges, "summary": posture["summary"]}
 
 
 def topology_from_config():
@@ -408,7 +414,8 @@ def topology_from_config():
         xvb_tor=config.XVB_TOR_ENABLED,
         monero_clearnet_sync=config.MONERO_CLEARNET_SYNC,
         tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
-        remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
+        remote_monero=not config.monero_is_local(),
+        remote_tari=not config.tari_is_local(),
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
         price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],

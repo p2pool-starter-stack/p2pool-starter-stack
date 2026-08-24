@@ -39,7 +39,7 @@ import { MineCartTrain } from "./minecart.mjs";
 import { OsUpdateControl, OsVerdictBanner } from "./osupdate.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 import { SecurityPanel } from "./securityview.mjs";
-import { MoreStats, StatCard, TariStatus } from "./statcards.mjs";
+import { MoreStats, nodeLocation, StatCard, TariStatus } from "./statcards.mjs";
 import { StackTopology } from "./topology.mjs";
 import { WorkerInspect } from "./workerview.mjs";
 
@@ -441,6 +441,8 @@ function NetworkCard({ state }) {
             <${StatCard} label="Difficulty" value=${n.diff} />
             <${StatCard} label="Reward" value=${n.reward} />`;
   const detail = html`
+            <${StatCard} label="Node" value=${nodeLocation(state.sync?.monero?.local)}
+                title="Whether this stack runs its own monerod or points at somebody else's" />
             <${StatCard} label="Node Mode" value=${m.mode} />
             <${StatCard} label="DB Size" value=${m.db_size} />
             <div class="stat-card col-span-2"><h5>Current Block Hash</h5><p class="font-mono text-xs">${n.hash}</p></div>
@@ -448,7 +450,7 @@ function NetworkCard({ state }) {
   return html`
     <div class="card card-advanced" id="card-network">
         <h3>XMR Network</h3>
-        <${MoreStats} prefKey="dashboardCardNetwork" headline=${headline} detail=${detail} count=${7} />
+        <${MoreStats} prefKey="dashboardCardNetwork" headline=${headline} detail=${detail} count=${8} />
     </div>`;
 }
 
@@ -1009,7 +1011,7 @@ function CadenceCard({ cadence }) {
     </div>`;
 }
 
-function TariCard({ tari }) {
+function TariCard({ tari, local }) {
   return html`
     <div class="card card-advanced" id="card-tari">
         <h3>Tari Merge-Mining</h3>
@@ -1018,6 +1020,8 @@ function TariCard({ tari }) {
             <${StatCard} label="Reward" value=${tari.reward} />
             <${StatCard} label="Height" value=${tari.height} />
             <${StatCard} label="Difficulty" value=${tari.diff} />
+            <${StatCard} label="Node" value=${nodeLocation(local)}
+                title="Whether this stack runs its own Tari base node or points at somebody else's" />
         </div>
         <div class="wallet-text">Wallet: ${tari.wallet}</div>
     </div>`;
@@ -1278,7 +1282,7 @@ function DashboardView({
             <${EarningsCard} earnings=${state.earnings} xvb=${state.xvb_calc} energy=${state.energy} />
             <${NodeStats} state=${state} />
             <${ExpectedVsActualCard} summary=${state.earnings_summary} />
-            <${TariCard} tari=${state.tari} />
+            <${TariCard} tari=${state.tari} local=${state.sync?.tari?.local} />
             <${CadenceCard} cadence=${state.cadence} />
         </div>
         <div class="grid-section-label">The Wider Pool</div>

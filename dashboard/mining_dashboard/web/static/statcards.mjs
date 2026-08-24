@@ -57,3 +57,10 @@ export const TariStatus = ({ tari }) => html`
     <p class=${tari.connected ? "status-ok" : tari.active ? "status-warn" : ""}>
         ${tari.status}${tari.connected ? html` <span class="check-inline">✔</span>` : null}
     </p>`;
+
+// Local vs remote for the two nodes an operator can run somewhere else (#1040). A remote node's
+// health is not theirs to fix, which is the whole reason a card has to say which it is. An absent
+// flag is a payload from before this shipped, NOT a location, so it reads as unknown rather than
+// quietly claiming "Local" — the one answer that would send someone to the wrong machine.
+export const nodeLocation = (local) =>
+  local === true ? "Local" : local === false ? "Remote" : "—";

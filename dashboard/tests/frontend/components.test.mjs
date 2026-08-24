@@ -16,25 +16,7 @@ import { App } from '../../mining_dashboard/web/static/components.mjs';
 import { WORKER_COLUMNS } from '../../mining_dashboard/web/static/logic.mjs';
 import { StatsTable } from '../../mining_dashboard/web/static/workerview.mjs';
 import { render } from './helpers/render.mjs';
-
-const BASE = JSON.parse(readFileSync(new URL('./fixtures/state.json', import.meta.url)));
-const clone = () => structuredClone(BASE);
-
-// Default client UI state; the handlers are no-ops (the renderer never invokes them).
-const UI = {
-    view: 'advanced', range: 'all', window: null, series: {}, avg: '10m',
-    theme: 'auto', sortIndex: null, sortAsc: true,
-};
-const noop = () => {};
-const HANDLERS = {
-    onRange: noop, onSort: noop, onView: noop, onTheme: noop,
-    onZoom: noop, onResetZoom: noop, onToggleSeries: noop, onAvgWindow: noop,
-    onDismissHint: noop, onInspect: noop, onCloseInspect: noop,
-};
-
-function renderApp({ state = BASE, connected = true, ui = UI } = {}) {
-    return render(App, { state, connected, ui, ...HANDLERS });
-}
+import { cardSlice, clone, renderApp, UI } from './harness.mjs';
 
 // --- App shell / connection states -----------------------------------------------------
 
@@ -137,14 +119,6 @@ test('operational App renders the remaining advanced cards', () => {
 // until toggled. Several sibling cards reuse the same labels (Overview and My P2Pool Node Stats
 // both have a "Mining Mode" stat, for instance), so `cardSlice` scopes assertions to one card's
 // own markup — from its id up to the next card's id — rather than matching against the whole page.
-function cardSlice(html, id) {
-    const marker = `id="${id}"`;
-    const start = html.indexOf(marker);
-    assert.notEqual(start, -1, `missing ${id}`);
-    const next = html.indexOf('id="card-', start + marker.length);
-    return next === -1 ? html.slice(start) : html.slice(start, next);
-}
-
 test('Global P2Pool Stats collapses to the headline stats by default (progressive disclosure)', () => {
     const card = cardSlice(renderApp(), 'card-global');
     // Headline: the pool's own money/health figures.
@@ -185,7 +159,7 @@ test('XMR Network collapses to the headline stats by default', () => {
     assert.doesNotMatch(card, /Current Block Hash/);
     assert.doesNotMatch(card, /Network Time/);
     assert.match(card, /class="more-stats-toggle" aria-expanded="false"/);
-    assert.match(card, /Show all \(7\)/);
+    assert.match(card, /Show all \(8\)/); // 7 + the node's local/remote location (#1040)
 });
 
 test('MoreStats expands to show every stat when toggled, and persists the choice per card, independently of siblings', () => {

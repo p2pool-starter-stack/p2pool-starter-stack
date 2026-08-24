@@ -6,13 +6,13 @@ dashboard/mining_dashboard/service/alert_service.py	928
 dashboard/mining_dashboard/service/algo_service.py	558
 dashboard/mining_dashboard/service/control_service.py	414
 dashboard/mining_dashboard/service/data_service.py	1852
-dashboard/mining_dashboard/service/egress.py	435
+dashboard/mining_dashboard/service/egress.py	424
 dashboard/mining_dashboard/service/storage_service.py	1603
 dashboard/mining_dashboard/service/telegram_commands.py	1023
 dashboard/mining_dashboard/sim/donation_model.py	539
 dashboard/mining_dashboard/web/server.py	645
 dashboard/mining_dashboard/web/static/chart.mjs	681
-dashboard/mining_dashboard/web/static/components.mjs	1400
+dashboard/mining_dashboard/web/static/components.mjs	1354
 dashboard/mining_dashboard/web/static/configview.mjs	591
 dashboard/mining_dashboard/web/static/dashboard.css	1579
 dashboard/mining_dashboard/web/static/logic.mjs	609
@@ -23,7 +23,7 @@ dashboard/mining_dashboard/web/views.py	2339
 dashboard/mining_dashboard/wizard.py	674
 dashboard/tests/client/test_xmrig_client.py	537
 dashboard/tests/config/test_config.py	458
-dashboard/tests/frontend/components.test.mjs	1219
+dashboard/tests/frontend/components.test.mjs	1193
 dashboard/tests/frontend/configview.test.mjs	492
 dashboard/tests/frontend/logic.test.mjs	836
 dashboard/tests/frontend/wizard.test.mjs	765
