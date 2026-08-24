@@ -105,6 +105,12 @@ jobs:
         # kernel between releases, and since #1162 that eye is finally open on a schedule.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          # Explicit on purpose (#1290), and it matters more here than on ci.yml's step. The weekly
+          # rootfs sweep fires from the DEFAULT branch, so the scan that runs unattended reads THIS
+          # copy while every PR scan of the same rootfs reads develop-v2's, pinned since #1290. One
+          # artifact, two vulnerability databases, invisible from the Actions tab. Kept by hand:
+          # `make lint-trivy-parity` is develop-v2's.
+          version: v0.74.0
           image-ref: pithead-os-rootfs:ci
           scanners: vuln
           severity: HIGH,CRITICAL

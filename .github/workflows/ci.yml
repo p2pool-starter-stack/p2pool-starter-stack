@@ -121,6 +121,12 @@ jobs:
         # the repo's 10 GB Actions cache budget, which was 92% near-duplicate copies of this one DB.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          # Explicit on purpose (#1290): the action's own default engine moves whenever the action
+          # is bumped, so an unpinned step scans with whatever database that week's action resolved
+          # to. develop-v2 holds both gate workflows to one value with `make lint-trivy-parity`;
+          # that lint and the script it reads from live on that lane only, so on develop the pin is
+          # kept by hand.
+          version: v0.74.0
           image-ref: pithead-${{ matrix.service }}:ci
           scanners: vuln
           severity: HIGH,CRITICAL
