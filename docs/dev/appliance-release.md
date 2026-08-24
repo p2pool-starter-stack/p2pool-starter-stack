@@ -395,8 +395,8 @@ the thing you will want at 3am:
   machine stays up with the reason in the journal instead of looping. Publish a fixed
   version; the fleet takes it on the next update.
 - **It boots, passes its checks, and is still wrong** — this one is on us, not the
-  updater. Publish `v+1` with the fix. Operators who already committed roll back with
-  `rauc status mark-bad booted && reboot`, which the dashboard exposes as a button.
+  updater. Publish `v+1` with the fix. An operator who already committed rolls back from
+  a root shell with `rauc status mark-bad booted && reboot`; the dashboard has no button.
 
 What bounds the damage in every case: `/data` is never touched by an update. Wallets,
 config and the synced chain survive a rollback, a bad release, and a factory reset of the
