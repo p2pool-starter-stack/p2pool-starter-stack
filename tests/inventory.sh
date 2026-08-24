@@ -100,25 +100,58 @@ for f in tests/stack/*.sh; do
     fi
 done
 
-# Every domain file run.sh claims to source must exist. This is the only thing standing between a
-# renamed or deleted domain file and a green suite: run.sh's `source` of a missing file does not
-# stop it (see above), and the per-file loop cannot miss what the glob no longer matches. The 18
-# hyphen-named domain files have no standalone CI invocation of their own — the underscore-named
-# test_*.sh suites do, and fail their own step — so for them this check is the whole safety net.
-n_sourced=0
+# run.sh's `source` line and the file it names have to agree, and they can disagree in EITHER
+# direction. Both ways end identically: `source` of a missing file does not stop run.sh (see
+# above), so the suite goes green having skipped every assertion in that domain, and neither the
+# aggregate nor the per-file gate can see it. The hyphen-named domain files have no standalone CI
+# invocation of their own — the underscore-named test_*.sh suites do, and fail their own step — so
+# for them these two checks are the whole safety net. Both read one SOURCED list, so the pattern
+# cannot drift between them, and a pattern that stops matching trips the emptiness guard rather
+# than quietly satisfying both loops at once.
+#
+# The pattern is anchored to the start of the line, and that anchor is load-bearing: without it a
+# commented-out `# source "$HERE/x.sh"` reads here as a live one, so the file counts as sourced
+# while run.sh never runs it — the same silent skip by another route, and the likeliest thing for
+# a conflict resolution to leave behind. What stays out of reach is a line that is live text but
+# dead code: a `source` inside a branch that never runs, or inside a function nothing calls, still
+# reads as present. Telling those apart needs control flow rather than grep, and is not claimed.
+SOURCED=$(grep -oE '^[[:space:]]*source "\$HERE/[A-Za-z0-9_.-]+\.sh"' tests/stack/run.sh |
+    sed -E 's|^[[:space:]]*source "\$HERE/||; s|"$||')
+if [ -z "$SOURCED" ]; then # the grep itself going quiet must not read as "all present"
+    echo "inventory drift: no 'source \"\$HERE/...\"' lines found in run.sh — the split's shape" \
+        "changed; update the pattern in tests/inventory.sh" >&2
+    exit 1
+fi
+
+# Direction 1 (#1336) — every file run.sh claims to source must exist. Catches a domain file
+# deleted or renamed out from under a live `source` line.
 while read -r want; do
-    n_sourced=$((n_sourced + 1))
     if [ ! -f "tests/stack/$want" ]; then
         echo "inventory drift: run.sh sources tests/stack/$want, which does not exist — the file" \
             "was moved or renamed and the suite would still pass, silently skipping it" >&2
         exit 1
     fi
-done < <(grep -oE 'source "\$HERE/[A-Za-z0-9_.-]+\.sh"' tests/stack/run.sh | sed -E 's|source "\$HERE/||; s|"$||')
-if [ "$n_sourced" -eq 0 ]; then # the grep itself going quiet must not read as "all present"
-    echo "inventory drift: no 'source \"\$HERE/...\"' lines found in run.sh — the split's shape" \
-        "changed; update the pattern in tests/inventory.sh" >&2
+done <<<"$SOURCED"
+
+# Direction 2 (#1357) — every domain file on disk must be sourced. The loop above can only examine
+# the `source` lines that are PRESENT, so a line deleted while its file stays on disk is never
+# looked at; the per-file section gate then finds the orphaned file with its headers intact and
+# passes it. Nothing else asks the question in this direction.
+# Not sourced by run.sh, by design — each is invoked as its own CI step and fails there:
+UNSOURCED="test_appliance_hugepages.sh test_compose.sh test_data_reset.sh \
+    test_firstboot_journal.sh test_os_update_recovery.sh"
+for f in tests/stack/*.sh; do
+    base="${f#tests/stack/}"
+    if [ "$base" = "run.sh" ]; then continue; fi # the sourcer itself
+    case " $UNSOURCED " in *" $base "*) continue ;; esac
+    # Matched between newlines, not spaces: a filename containing a space would survive the glob
+    # above (it is iterated directly) only to be split apart by a space-delimited lookup here.
+    case $'\n'"$SOURCED"$'\n' in *$'\n'"$base"$'\n'*) continue ;; esac
+    echo "inventory drift: tests/stack/$base is on disk but nothing sources it — a 'source' line" \
+        "was deleted and the suite would still pass, silently skipping the file's sections;" \
+        "restore the line, or add the file to UNSOURCED with a reason" >&2
     exit 1
-fi
+done
 
 # --- emit -----------------------------------------------------------------
 cat <<EOF
