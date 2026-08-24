@@ -160,11 +160,13 @@ echo "== dying DURING the apply is covered — which is what mark-before-write b
 # The window the ordering exists for, and the only thing that makes it falsifiable at this tier: a
 # stub that never returns, because the process dies inside the apply itself. Move the mark below
 # the write in any leg and this is the assertion that reds — with an instantaneous stub, every
-# other assertion here passes either way.
+# other assertion here passes either way. The stub's sleep only has to outlast the command
+# substitution the parent is blocked in — the SIGINT is already pending by then — so 0.2s does the
+# job 2s did and gives the file back ~1.8s. Checked at both values against the mutation above.
 scenario 'source "$INT_DIR/rigforge-apply-settle.sh"' \
     'source "$INT_DIR/rigforge-writable-keys.sh"' \
     '_worker_detail() { printf "%s" "{\"rig_config\":{\"DONATION\":7}}"; }' \
-    '_worker_apply() { printf "dash|%s\n" "$2" >>"$APPLY_LOG"; kill -INT $$; sleep 2; }' \
+    '_worker_apply() { printf "dash|%s\n" "$2" >>"$APPLY_LOG"; kill -INT $$; sleep 0.2; }' \
     'run_rigforge_writable_keys rig1 >/dev/null 2>&1' \
     'sleep 5' >/dev/null
 assert_eq "a death inside the apply still restores the original (#1379)" \
