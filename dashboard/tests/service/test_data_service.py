@@ -1962,7 +1962,7 @@ class _RecordingGet:
     async def __aenter__(self):
         resp = MagicMock()
         resp.status = 200
-        resp.json = AsyncMock(return_value={"ok": True})
+        resp.content.read = AsyncMock(side_effect=[json.dumps({"ok": True}).encode(), b""])
         return resp
 
     async def __aexit__(self, *exc):

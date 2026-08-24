@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from mining_dashboard.client import xmrig_client as xc
@@ -46,12 +48,24 @@ RIGFORGE_BLOCK = {
 
 
 class FakeResponse:
+    """Mimics aiohttp's ClientResponse for the one thing the client uses: a BOUNDED read off
+    ``response.content``. It never calls ``.json()`` — reading with a byte limit is the whole
+    point of the size cap (#1347), so a fake offering an unbounded ``.json()`` would test a path
+    that no longer exists. The ceiling's own tests live in test_summary_size_cap.py."""
+
     def __init__(self, status, payload=None):
         self.status = status
-        self._payload = payload if payload is not None else {}
+        self._raw = json.dumps(payload if payload is not None else {}).encode()
+        self._pos = 0
+        self.content = self  # the client reads response.content.read(n)
 
-    async def json(self):
-        return self._payload
+    async def read(self, n=-1):
+        # A SHORT read, like aiohttp's StreamReader: returns what is buffered, never necessarily
+        # n bytes. A fake that always hands back the full slice would let a client that reads
+        # once — and so truncates any split body — pass every test here. See #1347.
+        end = len(self._raw) if n < 0 else min(len(self._raw), self._pos + min(n, 8))
+        chunk, self._pos = self._raw[self._pos : end], end
+        return chunk
 
 
 class FakeGet:
@@ -400,18 +414,8 @@ async def test_spoofed_name_cannot_redirect_the_token_to_the_miner_ip_when_host_
     assert session.calls[0][0] == "http://192.168.7.9:8080/1/summary"
 
 
-# --- RigForge enriched feed parse (#235) ---------------------------------------------------------
-# The enriched feed is a SUPERSET of /1/summary: the whole XMRig object plus one `rigforge` key.
-# parse_rigforge lifts the display-relevant fields, nullable-safe; a plain-xmrig body → None.
-
-
-def test_parse_rigforge_absent_is_none():
-    # A plain-xmrig worker (no `rigforge` key) parses to None — the UI renders it as today.
-    assert parse_rigforge({"hashrate": {"total": [100]}, "api_ok": True}) is None
-    assert parse_rigforge({}) is None
-    assert parse_rigforge(["not", "a", "dict"]) is None
-
-
+# Kept here, not with the other parse tests: it shares RIGFORGE_BLOCK with the
+# control-status tests below.
 def test_parse_rigforge_full_block():
     rf = parse_rigforge({"hashrate": {"total": [100]}, "rigforge": RIGFORGE_BLOCK, "api_ok": True})
     assert rf["version"] == "1.7.0"
@@ -429,43 +433,6 @@ def test_parse_rigforge_full_block():
         "thermal_hold": False,
         "temp_c": 62,
         "max_temp_c": 85,
-    }
-
-
-def test_parse_rigforge_miner_down_has_no_xmrig_keys():
-    # Miner-down body: XMRig keys drop, only the rigforge block with xmrig_api unreachable remains.
-    rf = parse_rigforge({"rigforge": {"version": "1.7.0", "xmrig_api": "unreachable"}})
-    assert rf["miner_down"] is True
-    assert rf["version"] == "1.7.0"
-    # Absent sub-objects default cleanly — no chip data, no crash.
-    assert rf["power"] == {"watts": None, "hs_per_watt": None}
-    assert rf["watchdog"]["enabled"] is False
-
-
-def test_parse_rigforge_all_null_fields():
-    # Every enriched field is nullable on the wire (no RAPL, non-root, watchdog disabled).
-    block = {
-        "version": "1.7.0",
-        "tune": {"target": None, "autotune": {"enabled": False, "next": None}},
-        "power": {"watts": None, "hs_per_watt": None},
-        "health": {"governor": None, "throttling": None, "firmware": {}, "hugepages_total": None},
-        "watchdog": {"mode": "disabled"},
-    }
-    rf = parse_rigforge({"rigforge": block})
-    assert rf["power"] == {"watts": None, "hs_per_watt": None}
-    assert rf["health"] == {
-        "governor": None,
-        "throttling": None,
-        "board": None,
-        "hugepages_total": None,
-    }
-    assert rf["tune"] == {"target": None, "autotune_enabled": False, "autotune_next": None}
-    # A disabled watchdog masks its temp fields.
-    assert rf["watchdog"] == {
-        "enabled": False,
-        "thermal_hold": None,
-        "temp_c": None,
-        "max_temp_c": None,
     }
 
 

@@ -21,7 +21,7 @@ dashboard/mining_dashboard/web/static/wizard.mjs	889
 dashboard/mining_dashboard/web/static/workerview.mjs	479
 dashboard/mining_dashboard/web/views.py	2339
 dashboard/mining_dashboard/wizard.py	674
-dashboard/tests/client/test_xmrig_client.py	537
+dashboard/tests/client/test_xmrig_client.py	504
 dashboard/tests/config/test_config.py	458
 dashboard/tests/frontend/components.test.mjs	1193
 dashboard/tests/frontend/configview.test.mjs	492
