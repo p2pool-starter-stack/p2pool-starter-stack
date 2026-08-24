@@ -86,7 +86,7 @@ function XvbDecisionTable({ calc, coeffDay, hr, energy }) {
             </div>
             ${
               energy && energy.xmr_price > 0 && best
-                ? html`<p class="text-muted text-xs mt-1" id="xvb-fiat-line">
+                ? html`<p class="text-muted text-xs mt-1" id="xvb-fiat-line" title=${bandNote(best.net)}>
                     ${best.name}: net ≈ ${formatFiat(coinFiat((best.net[0] + best.net[1]) / 2, energy.xmr_price), energy.currency)} per year at the current XMR price</p>`
                 : null
             }

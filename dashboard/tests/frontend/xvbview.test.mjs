@@ -224,7 +224,7 @@ test('XvB decision table: all tiers at once, study column, coloured net verdict 
     assert.match(up, /Study est\./);
     assert.match(up, /winners receiving 33% of face/);
     // Whale: cost 3.65; study band 1.6659…2.3446 collapses to its midpoint 2.0053, and the net
-    // band (negative at both ends -> red) to -1.6448. Four dp, not eight: the negative no longer
+    // band (negative at both ends -> red) to -1.6447. Four dp, not eight: the negative no longer
     // falls through coinDp's magnitude test (#1316).
     assert.match(up, /2\.0053 XMR/);
     assert.match(up, /-1\.6447 XMR/);
@@ -398,4 +398,34 @@ test('XvB decision block: in the operator\'s render state (XvB OFF) no figure is
     const figures = visible.match(/-?\d+\.\d+ XMR/g) || [];
     assert.ok(figures.length >= 12, `expected a figure per net and input, got ${figures.length}`);
     assert.doesNotMatch(visible, /-\d+\.\d{8} XMR/);
+});
+
+test('XvB decision block: the fiat verdict line keeps the band it was collapsed from (#1316)', () => {
+    // The one line that states the verdict in the operator's own currency is also a midpoint, and
+    // it is the line most likely to be read alone. Every other collapsed figure in this block keeps
+    // its range in a tooltip; this one lost it in the rewrite, which is a figure with no recovery
+    // path rather than a spread moved one hover away.
+    const base = clone();
+    base.earnings.available = true;
+    base.earnings.coeff_day = 1e-7;
+    base.earnings.p2pool_hr = 200000;
+    base.earnings.p2pool_hr_str = '200.00 kH/s';
+    base.energy.xmr_price = 150;
+    base.xvb_calc = {
+        enabled: true, max_fraction: 0.85, estimates_available: true, estimates_stale: false,
+        current_tier: 'None', target_tier: 'Vip (10.00 kH/s+)', target_threshold: 10000,
+        sustainable: true, note: 'An XvB tier is raffle status, not an XMR payout.',
+        mode_note: null, realization_pct: null, realization_wins: null,
+        tiers: [
+            { name: 'Vip (10.00 kH/s+)', threshold: 10000, expected_reward_year: 0.81,
+              realized_reward_year: null, assumed_reward_year_range: [0.81 * 0.27, 0.81 * 0.38],
+              win_odds_day: 0.12, players_avg: 31.4 },
+        ],
+    };
+    const up = renderApp({ state: base });
+    const line = up.match(/<p[^>]*id="xvb-fiat-line"[^>]*>/);
+    assert.ok(line, 'the fiat verdict line should render when a price is known');
+    // Not merely "has a title": the title must carry the RANGE. A title holding anything else
+    // would satisfy a laxer assertion while the spread stayed gone.
+    assert.match(line[0], /title="[^"]*Range: [^"]*…[^"]*"/);
 });
