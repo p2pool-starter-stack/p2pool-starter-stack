@@ -4,10 +4,6 @@
 # distro CVEs are reported but don't block. The entries below are the currently-accepted *fixable*
 # findings, each with a rationale and how it clears. Revisit whenever Dependabot bumps a base image.
 
-# openssl: the fix is a base-distro point release (Debian deb13u2 / Ubuntu 3.0.13-0ubuntu3.11) not
-# yet in our digest-pinned bases. Cleared when Dependabot (docker) bumps the base image digests.
-CVE-2026-45447
-
 # Base-image build tooling living in the python:3.11-slim *system* site-packages — NOT in the app's
 # /app/.venv and never invoked at runtime (the entrypoint runs the venv's python). Cleared by a base bump.
 CVE-2026-23949
@@ -53,7 +49,8 @@ CVE-2026-34040
 # base bump — only by upstream rebuilding the image on the fixed Debian packages. Verified by
 # pulling the tag and reading dpkg, not from the release notes (#1156).
 #
-# Same shape as CVE-2026-45447 above: `--ignore-unfixed` hid these until Debian published a fix, at
+# Same shape as the openssl mute this file carried until 2026-08-24 (CVE-2026-45447, cleared once the
+# pinned bases took the fix): `--ignore-unfixed` hid these until Debian published a fix, at
 # which point they reddened every branch at once with no change on our side. 53615 arrived that way
 # on 2026-08-19 and the other three on 2026-08-20, between one CI run and the next on a branch
 # nobody had touched.
