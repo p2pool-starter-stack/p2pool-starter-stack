@@ -524,7 +524,19 @@ VANISHED at 2026-08-24T01:25:57+00:00
 
     printf '== unit: #1059 watcher arming ==\n'
     # pgrep found it: a watcher is on the guest, and arming has nothing to report.
-    _fe_precapture_case "a watcher confirmed running arms quietly" "QUIET" "" "UP"
+    #
+    # The evidence reply is not empty, and that is the assertion rather than scenery. This case is
+    # what holds the anchor on the precapture grep, and an empty reply gives an un-anchored grep
+    # nothing to mistake for a header — the case would then pass on there being no input, not on the
+    # anchor. So the readlink target carries the marker with a real header's five-space indentation
+    # INSIDE the line. Anchored, it cannot match: the rendered line opens with the evidence prefix,
+    # not with the header's indentation. Drop the ^ here and this case fails. Reachability is lower
+    # than on the report side, which renders a /proc sweep and has been poisoned for real twice —
+    # ls -la and readlink output carrying an indented marker is contrived. Same class either way,
+    # and a guard proven only against an implausible mutation is what this branch keeps finding.
+    _fe_precapture_case "a watcher confirmed running arms quietly" "QUIET" \
+        "lrwxrwxrwx 1 root root 42 Aug 24 01:00 /data/pithead/config.json -> /data/pithead/     --- #1059: WATCHER UNREADABLE, and not a header ---" \
+        "UP"
     # pgrep found nothing: the detached launch did not take. Said at the START of the window, where
     # it still reads as a warning — the report will say it again at the end, and the two are
     # deliberately different sentences so neither can stand in for the other.
