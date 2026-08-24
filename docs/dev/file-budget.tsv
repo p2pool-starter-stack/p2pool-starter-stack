@@ -41,6 +41,7 @@ dashboard/tests/web/test_views.py	3576
 dashboard/tests/web/test_wizard.py	974
 os/rootfs/Dockerfile	406
 scripts/release.sh	851
+scripts/trivyignore-watch.sh	599
 tests/integration/e2e.sh	766
 tests/integration/lib.sh	692
 tests/integration/run.sh	2551

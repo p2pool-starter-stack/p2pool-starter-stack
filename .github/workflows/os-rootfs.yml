@@ -105,6 +105,10 @@ jobs:
         # kernel between releases, and since #1162 that eye is finally open on a schedule.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          # Explicit on purpose (#1290) — the action's default engine moves whenever the action is
+          # bumped, and scripts/trivyignore-watch.sh's verdicts only mean something when it scans
+          # with the engine the gate runs. `make lint-trivy-parity` holds the two to one value.
+          version: v0.74.0
           image-ref: pithead-os-rootfs:ci
           scanners: vuln
           severity: HIGH,CRITICAL

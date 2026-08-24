@@ -63,7 +63,9 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
      `make lint` after merging onto the tip. Generated
      code, vendored files, data/config, and prose docs are exempt by glob — see `is_exempt()` in
      the script — and so is the shipped `pithead` artifact itself, for now: its future `lib/*.sh`
-     sources are what the gate will govern once Phase 2 splits it), `lint-proto` (buf),
+     sources are what the gate will govern once Phase 2 splits it), `lint-trivy-parity` (the CVE
+     gate's two trivy-action steps and `scripts/trivyignore-watch.sh` must name one trivy engine
+     version — issue #1290), `lint-proto` (buf),
      `lint-toml` (taplo). The
      non-Python tools run via `npx`/`uvx`/`docker`, so a contributor needs **Node, uv, and Docker**
      on PATH (plus `shfmt`); `pre-commit` runs the same checks on changed files. Link-checking
