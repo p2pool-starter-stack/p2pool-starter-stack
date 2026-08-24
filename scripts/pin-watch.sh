@@ -94,7 +94,11 @@ latest_release() { # <owner/repo> -> tag on stdout, rc 1 on any failure
 # prints in its _COMMIT warning below, and the comparison is sha against sha.
 #
 # The resolution is a SECOND network call, and it gets the first one's treatment: a failure returns
-# rc 1 so the caller renders an unchecked row. It must never fall through to `current`.
+# rc 1 so the caller renders an unchecked row. MEASURED with both refusals removed, so this names the
+# real failure rather than the one it is tempting to assume: the fall-through is not a wrong verdict
+# but a CONFIDENT one — the row reads `stale`, `failed` stays 0, the run exits 0 and stamps itself
+# fully successful. A watcher that has stopped working then looks exactly like one with nothing to
+# report, which is the defect this script's own header says it exists to prevent.
 
 comparable() { # <component> <owner/repo> <tag> -> the tag in that pin's spelling, rc 1 on failure
     local sha
@@ -151,8 +155,8 @@ if [ "${1:-}" = "--self-test" ]; then
             gh() { printf '%s' 4ce29b3daf063fd1b45e050649e93aa9592618e1; }
             comparable rigforge foo/bar v1.16.0
         )" "4ce29b3daf063fd1b45e050649e93aa9592618e1"
-    # The issue's own requirement: a resolution that cannot run reaches the unchecked row, never
-    # `current`. It is not uniquely load-bearing — see the overlap note on the next case but one.
+    # The issue's own requirement: a resolution that cannot run reaches the unchecked row rather than
+    # any verdict at all. It is not uniquely load-bearing — see the overlap note on the next case but one.
     st "a commit resolution that cannot run fails" \
         "$(
             gh() { return 1; }
