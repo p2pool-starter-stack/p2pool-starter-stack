@@ -496,7 +496,7 @@ echo hi >"$RELTMP/pithead/f"
 xattr -w com.test val "$RELTMP/pithead/f" 2>/dev/null ||
     setfattr -n user.test -v val "$RELTMP/pithead/f" 2>/dev/null || true
 tar --no-xattrs -czf "$RELTMP/b.tar.gz" -C "$RELTMP" pithead 2>/dev/null
-if gzip -dc "$RELTMP/b.tar.gz" 2>/dev/null | grep -qa -e 'LIBARCHIVE.xattr' -e 'SCHILY.xattr'; then
+if grep -qa -e 'LIBARCHIVE.xattr' -e 'SCHILY.xattr' <(gzip -dc "$RELTMP/b.tar.gz" 2>/dev/null); then
     bad "tar --no-xattrs yields an xattr-free bundle" "xattr pax headers present despite --no-xattrs"
 else
     ok "tar --no-xattrs yields an xattr-free bundle"

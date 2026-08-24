@@ -251,7 +251,7 @@ assert_contains "plain build declares no migration" "$plain_manifest" "data_migr
 mig_manifest="$(cd "$ROOT" && . os/rauc/populate-slot.sh && render_bundle_manifest 1.18.0 release true 1.18.0)"
 assert_contains "a migrating build names its floor" "$mig_manifest" "minimum_os_version=1.18.0"
 # No key may ever render with an empty value — that is the exact shape rauc rejects.
-if printf '%s\n' "$plain_manifest" "$mig_manifest" | grep -qE '^[a-z_]+=$'; then
+if grep -qE '^[a-z_]+=$' <(printf '%s\n' "$plain_manifest" "$mig_manifest"); then
     bad "no manifest key renders with an empty value" "found one"
 else
     ok "no manifest key renders with an empty value"
