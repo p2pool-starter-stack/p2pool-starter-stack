@@ -10,7 +10,12 @@ reaches us wearing the same ``source`` and the same change id as the one that he
 
 import pytest
 
-from mining_dashboard.client.rig_config_meta import config_origin, parse_config_meta
+from mining_dashboard.client.rig_config_meta import (
+    HELD_STATUSES,
+    REVERTED_STATUSES,
+    config_origin,
+    parse_config_meta,
+)
 from mining_dashboard.client.xmrig_client import parse_rigforge
 
 GOOD = {
@@ -73,8 +78,8 @@ def test_a_timestamp_the_rig_did_not_stamp_is_not_shown():
         assert parse_config_meta({**GOOD, "changed_at": junk})["changed_at"] is None
 
 
-def test_a_control_change_we_have_a_record_of_is_ours():
-    assert config_origin(GOOD, change_id_known=True) == "here"
+def test_a_control_change_we_have_a_record_of_and_that_held_is_ours():
+    assert config_origin(GOOD, change_id_known=True, change_status="applied") == "here"
 
 
 @pytest.mark.parametrize("status", ["rolled_back", "failed", "rejected"])
@@ -84,11 +89,61 @@ def test_a_control_change_our_history_says_did_not_hold_is_not_claimed_as_runnin
     assert config_origin(GOOD, change_id_known=True, change_status=status) == "reverted"
 
 
-@pytest.mark.parametrize("status", ["applied", "noop", "throttled", None])
-def test_a_change_that_was_not_reverted_still_reads_as_ours(status):
-    # The negative control for the guard above: it must catch reverted rows WITHOUT swallowing the
-    # ordinary ones. ``None`` covers a history row from before the status column carried a value.
-    assert config_origin(GOOD, change_id_known=True, change_status=status) == "here"
+@pytest.mark.parametrize(
+    "status",
+    [
+        # REACHABLE, and the reason this issue exists. ``accepted`` is what
+        # ``add_worker_config_version`` writes when the rig returns a 202, and
+        # ``reconcile_worker_config_status`` is the only thing that ever moves it off. A rollback
+        # slower than the host runner's status-poll deadline leaves the row here forever, so the
+        # rig names a change it has already thrown away while our row still says "accepted".
+        "accepted",
+        # Written only by the control-UPGRADE path (rigforge server.py's ``_record_worker_result``
+        # with ``change_type="upgrade"``; its own comment reads "noop/throttled are upgrade-only").
+        # Those rows DO land in ``worker_config`` and this scan DOES walk them — but an upgrade's
+        # change id can never become a rig's ``last_change_id``, because ``_control_upgrade_do``
+        # ends by exec'ing ``rigforge.sh upgrade`` as a CHILD PROCESS and
+        # ``RIGFORGE_CONFIG_SOURCE`` / ``RIGFORGE_CONFIG_CHANGE_ID`` are declared ``local`` and
+        # never exported, so the child stamps ``source=local`` with an empty id. One ``export`` on
+        # that line would silently break that, and nothing at this call site would show it — which
+        # is exactly why the cautious answer is asserted here rather than assumed.
+        "noop",
+        "throttled",
+        # NOT reachable through today's writer: ``_record_worker_result`` filters on
+        # ``_RECORDABLE_WORKER_STATUSES`` and ``reconcile_worker_config_status`` on
+        # ``_RECONCILE_TERMINAL``, and no member of either is missing above. They are asserted
+        # anyway, because that is the entire property an allowlist buys: a status nobody here
+        # anticipated — a future RigForge outcome, a row from an older schema, a NULL column — is
+        # refused BY CONSTRUCTION rather than by someone remembering to add it to a denylist.
+        "pending",
+        "unknown",
+        "timeout",
+        "error",
+        None,
+        "",
+    ],
+)
+def test_a_change_our_history_cannot_confirm_held_is_never_claimed_as_running(status):
+    assert config_origin(GOOD, change_id_known=True, change_status=status) == "unconfirmed"
+
+
+def test_the_reassuring_verdict_is_reached_only_through_the_allowlist():
+    # The property, stated as a test rather than as a comment: ``here`` is not the fall-through.
+    # The first shape of this check returned ``here`` for everything outside REVERTED_STATUSES,
+    # which is why every status above used to read as "Last changed from this dashboard".
+    #
+    # The emptiness guard below is load-bearing, not a formality. Without it every assertion in
+    # this test is vacuous the moment ``HELD_STATUSES`` is empty: the loop does not run and
+    # ``all()`` over nothing is True, so a test named for the allowlist passes with no allowlist
+    # at all. Caught by mutation — emptying the tuple redded four other tests and left this one
+    # green, which is the one result a test asserting this property must never give.
+    assert HELD_STATUSES, "an empty allowlist makes every assertion below vacuous"
+    for status in HELD_STATUSES:
+        assert config_origin(GOOD, change_id_known=True, change_status=status) == "here"
+    assert all(s not in REVERTED_STATUSES for s in HELD_STATUSES)
+    # Omitting the argument entirely must not be the calm answer either — a caller that cannot say
+    # what our row records has told us nothing, not that the change held.
+    assert config_origin(GOOD, change_id_known=True) == "unconfirmed"
 
 
 def test_a_control_change_we_have_no_record_of_is_not_claimed_as_ours():

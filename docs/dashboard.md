@@ -430,12 +430,18 @@ what applied it and a change id, and the dashboard looks for that id among this 
 rows — the table directly below — so the verdict is one you can check by eye:
 
 - **Last changed from this dashboard** — the id matches a change in the history below, and that
-  change held.
+  change is recorded as having been applied. Only that outcome earns this line: every other one,
+  including an outcome that was never recorded at all, gets one of the lines below instead.
 - **Last change from this dashboard was rolled back** — the id matches a change the history below
   records as rolled back or failed. When a control change does not come back live, RigForge
   restores the previous config and stamps that restore with the *same* change id it just reverted,
   so the rig goes on naming a change it is no longer running. The rig is on whatever config came
   before it.
+- **Last change from this dashboard is unconfirmed** — the id matches a change in the history
+  below, and no outcome was ever recorded for it. The dashboard waits on the rig for the result of
+  a change it sends; when the rig has not said what it did within that wait, the change is recorded
+  as acknowledged but unsettled. It may be running, or the rig may have rolled it back. This line
+  says only that the record cannot tell you which, and it can still resolve on a later reading.
 - **Last changed from another dashboard** — applied over a control channel, but with an id this
   dashboard has never issued. Another host drove this rig, or its record here is gone.
 - **Last changed on the rig itself** — applied on the rig, not over a control channel at all.

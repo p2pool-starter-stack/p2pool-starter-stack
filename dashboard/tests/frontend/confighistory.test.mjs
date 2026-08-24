@@ -8,7 +8,9 @@
 // so the assertions are about what it may and may not CLAIM, not about markup:
 //   - silence when the rig cannot answer (never the word "unknown");
 //   - "restored" never phrased as someone having edited the rig;
-//   - "unrecorded" never phrased as a change having happened.
+//   - "unrecorded" never phrased as a change having happened;
+//   - "unconfirmed" phrased as neither of its neighbours — it may not read as the change having
+//     held, and it may not state the rollback it has no record of either.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -87,6 +89,19 @@ test("a rolled-back change of ours is never dressed up as the running config", (
   const note = configOriginNote("reverted", META);
   assert.notEqual(note.label, here.label);
   assert.match(note.title, /came before/i);
+});
+
+test("an unconfirmed change of ours neither claims it held nor accuses the rig", () => {
+  const out = renderToString(ConfigProvenance({ origin: "unconfirmed", meta: META }));
+  const note = configOriginNote("unconfirmed", META);
+  // This verdict exists to say "we do not know", so it has to fail BOTH ways. It must not read as
+  // the calm `here` line over a change the rig may have rolled back...
+  assert.doesNotMatch(out, /Last changed from this dashboard/);
+  assert.match(out, /status-warn/);
+  // ...and it must not state the rolled-back outcome either, which we have no record of.
+  assert.notEqual(note.label, configOriginNote("reverted", META).label);
+  assert.doesNotMatch(note.label, /rolled back/i);
+  assert.match(note.title, /has not reported an outcome/i);
 });
 
 test("unrecorded claims no change happened and no change did not", () => {
