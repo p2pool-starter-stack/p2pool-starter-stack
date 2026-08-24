@@ -39,12 +39,12 @@ bullets() { sed 's/^/- /'; }
 
 # --- gather ---------------------------------------------------------------
 PY_DASH_FILES=$(find dashboard/tests -name 'test_*.py' | sort)
-PY_FAKE_FILE="tests/integration/fakes/test_contract.py"
 NODE_FILES=$(find dashboard/tests/frontend -name '*.test.mjs' 2>/dev/null | sort)
 
 n_py_dash=0
 for f in $PY_DASH_FILES; do n_py_dash=$((n_py_dash + $(py_tests "$f" | count))); done
-n_py_fake=$(py_tests "$PY_FAKE_FILE" | count)
+n_py_fake=0
+for f in tests/integration/fakes/test_*.py; do n_py_fake=$((n_py_fake + $(py_tests "$f" | count))); done
 n_node=0
 for f in $NODE_FILES; do n_node=$((n_node + $(node_tests "$f" | count))); done
 # Every tests/stack suite, not just run.sh — #1105 moves sections out of run.sh into per-domain
@@ -54,7 +54,14 @@ for f in $NODE_FILES; do n_node=$((n_node + $(node_tests "$f" | count))); done
 # instead of splitting into two nonexistent ones and reporting phantom drift.
 n_stack=0
 for f in tests/stack/*.sh; do n_stack=$((n_stack + $(sh_sections "$f" | count))); done
-n_selftest=$(sh_sections tests/integration/selftest.sh | count)
+# Every tests/integration/selftest*.sh, not just selftest.sh. Makefile and ci.yml both glob these,
+# so all of them are run and linted, while counting the one filename published a third of the
+# sections and hid the rest (#1388). The self-tests grew from one file to five and the singular
+# name never followed. Same enumerate-vs-glob shape the stack aggregate above was fixed for; the
+# tell is a gate line naming paths one by one beside a sibling line that globs. The glob is
+# iterated directly rather than through a word-split string, for the reason given above it.
+n_selftest=0
+for f in tests/integration/selftest*.sh; do n_selftest=$((n_selftest + $(sh_sections "$f" | count))); done
 n_scen=$(awk -F'\t' 'NF>1{print $1}' <(sed -n '/scenario_matrix() {/,/^EOF/p' tests/integration/scenarios.sh | grep -E '\t') | count)
 n_axes=$(grep -cE '=' <(sed -n '/axis_coverage() {/,/^EOF/p' tests/integration/scenarios.sh | grep -E '^[a-z].*='))
 n_mini=$(grep -cE 'log "scenario [0-9]' tests/integration/mini-stack/run-mini-stack.sh)
@@ -96,6 +103,20 @@ for f in tests/stack/*.sh; do
     if [ "$(sh_sections "$f" | count)" -eq 0 ]; then
         echo "inventory drift: $f has no '== section ==' header — it moved, was renamed, or" \
             "changed shape; fix the file, or add it to SECTIONLESS with a reason" >&2
+        exit 1
+    fi
+done
+
+# The same per-FILE check for the harness self-tests, and it is the half the aggregate above cannot
+# do. Now that n_selftest globs, one self-test dropping to zero sections hides inside a comfortably
+# non-zero sum exactly as a stack suite did — the aggregate can see a whole tier go dark and never a
+# single file. Every self-test carries headers today, so there is no SECTIONLESS counterpart here;
+# if one ever legitimately has none, give it one rather than adding an exception, since these files
+# exist to be enumerated.
+for f in tests/integration/selftest*.sh; do
+    if [ "$(sh_sections "$f" | count)" -eq 0 ]; then
+        echo "inventory drift: $f has no '== section ==' header — it moved, was renamed, or" \
+            "changed shape; fix the file, or fold it into a sibling self-test" >&2
         exit 1
     fi
 done
@@ -225,9 +246,9 @@ cat <<EOF
 
 ## Tier 2 — Contract (real clients vs controllable fakes)
 
-### tests/integration/fakes/test_contract.py — ${n_py_fake} tests
+### tests/integration/fakes/test_*.py — ${n_py_fake} tests
 EOF
-py_tests "$PY_FAKE_FILE" | bullets
+for f in tests/integration/fakes/test_*.py; do py_tests "$f"; done | bullets
 
 cat <<EOF
 
@@ -263,9 +284,9 @@ grep -hoE '(assert_[a-z_]+|it_pass) "[^"]+"' tests/integration/run.sh |
 
 cat <<EOF
 
-### Harness self-test (tests/integration/selftest.sh) — ${n_selftest} sections
+### Harness self-test (tests/integration/selftest*.sh) — ${n_selftest} sections
 EOF
-sh_sections tests/integration/selftest.sh | bullets
+for f in tests/integration/selftest*.sh; do sh_sections "$f"; done | bullets
 
 cat <<EOF
 
