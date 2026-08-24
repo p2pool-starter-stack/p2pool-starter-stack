@@ -3058,16 +3058,16 @@ class TestEgressTopology:
         assert st["egress"]["summary"]["leaks"] >= 1
 
     def test_remote_monerod_is_reflected_in_the_payload(self, monkeypatch):
-        # A remote (non-local) monerod RPC host is a clearnet hop; with the firewall on it's blocked,
-        # not leaked, so the badge stays green but the blocked count rises — end to end.
-        _set_egress_config(monkeypatch, MONERO_NODE_HOST="10.0.0.9", LOCAL_MONERO_HOST="127.0.0.1")
-        st = build_state(_data(), _state_mgr(), "all")
-        assert st["egress"]["summary"]["all_tor"] is True
-        assert st["egress"]["summary"]["blocked_by_firewall"] >= 1
-        assert any(
-            e["from"] == "p2pool" and e["to"] == "monerod" and e["route"] == "clearnet"
-            for e in st["topology"]["edges"]
-        )
+        # #1350: a private-addressed remote monerod is a LAN hop and charges neither counter; a
+        # public one is clearnet, blocked not leaked. Both hops read — they used to disagree.
+        def _payload(host):
+            _set_egress_config(monkeypatch, MONERO_NODE_HOST=host, LOCAL_MONERO_HOST="127.0.0.1")
+            st = build_state(_data(), _state_mgr(), "all")
+            hops = {e["from"]: e["route"] for e in st["topology"]["edges"] if e["to"] == "monerod"}
+            return hops, st["egress"]["summary"]["blocked_by_firewall"]
+
+        assert _payload("10.0.0.9") == ({"p2pool": "lan", "dashboard": "lan"}, 0)
+        assert _payload("8.8.8.8") == ({"p2pool": "clearnet", "dashboard": "clearnet"}, 1)
 
     def test_payload_stays_json_serializable_with_a_leak(self, monkeypatch):
         _set_egress_config(monkeypatch, P2POOL_CLEARNET=True, TOR_EGRESS_FIREWALL=False)

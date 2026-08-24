@@ -12,6 +12,7 @@ from mining_dashboard.service.egress import (
     compute_egress_posture,
     compute_topology,
 )
+from mining_dashboard.service.topology_graph import NODE_ROUTES
 
 # The privacy-safe resting config: firewall on, p2pool over Tor, XvB over Tor, local node, no sync,
 # healthchecks off (no ping URL configured), no alert sinks configured.
@@ -22,7 +23,7 @@ SAFE = {
     "xvb_tor": True,
     "monero_clearnet_sync": False,
     "tari_clearnet_sync": False,
-    "remote_monero": False,
+    "monero_route": LOCAL,
     "healthchecks_enabled": False,
     "telegram_enabled": False,
     "notify_sinks_enabled": False,
@@ -197,9 +198,9 @@ def test_xvb_standby_topology_edge_tracks_route():
     assert standby_edges(_topo(xvb_standby_source="http://192.168.1.5/x")) == []  # LAN, no node
 
 
-def test_remote_monerod_rpc_is_clearnet():
-    assert _conn(_posture(remote_monero=False), "p2pool", "monerod RPC")["route"] != CLEARNET
-    assert _conn(_posture(remote_monero=True), "p2pool", "monerod RPC")["route"] == CLEARNET
+def test_the_monerod_rpc_conn_carries_the_route_it_was_given():
+    assert _conn(_posture(monero_route=LOCAL), "p2pool", "monerod RPC")["route"] == LOCAL
+    assert _conn(_posture(monero_route=CLEARNET), "p2pool", "monerod RPC")["route"] == CLEARNET
 
 
 def test_clearnet_initial_sync_surfaces_only_when_enabled():
@@ -351,7 +352,6 @@ _KNOBS = (
     "xvb_tor",
     "monero_clearnet_sync",
     "tari_clearnet_sync",
-    "remote_monero",
     "healthchecks_enabled",
     "telegram_enabled",
     "notify_sinks_enabled",
@@ -361,9 +361,9 @@ _KNOBS = (
 
 
 def _all_configs():
-    """Every one of the 2**len(_KNOBS) combinations of the boolean knobs."""
-    for combo in itertools.product((False, True), repeat=len(_KNOBS)):
-        yield dict(zip(_KNOBS, combo, strict=True))
+    """Every boolean-knob combination, run once per route the monerod hop can take (#1350)."""
+    for r, *c in itertools.product(NODE_ROUTES, *[(False, True)] * len(_KNOBS)):
+        yield {"monero_route": r, **dict(zip(_KNOBS, c, strict=True))}
 
 
 # Canonical node ids — MUST stay in lockstep with the frontend's POS map in
@@ -401,7 +401,7 @@ def test_every_edge_endpoint_is_a_placeable_node_for_all_configs():
 
 
 def test_every_edge_is_well_formed_for_all_configs():
-    routes = {TOR, CLEARNET, LOCAL, INACTIVE}
+    routes = {TOR, INACTIVE, *NODE_ROUTES}
     kinds = {"ingress", "egress", "p2p", "internal"}
     for cfg in _all_configs():
         for e in compute_topology(**cfg)["edges"]:
@@ -431,7 +431,7 @@ def test_firewall_off_counts_every_clearnet_path_as_a_leak():
         xvb_tor=False,
         monero_clearnet_sync=True,
         tari_clearnet_sync=True,
-        remote_monero=True,
+        monero_route=CLEARNET,
     )
     clearnet = sum(1 for comp in p["components"] for c in comp["conns"] if c["route"] == CLEARNET)
     assert clearnet >= 5  # sidechain, RPC, monero IBD, tari IBD, XvB donation
@@ -451,7 +451,7 @@ def test_firewall_on_blocks_every_clearnet_path():
         xvb_tor=False,
         monero_clearnet_sync=True,
         tari_clearnet_sync=True,
-        remote_monero=True,
+        monero_route=CLEARNET,
     )
     assert p["summary"]["leaks"] == 0
     assert _conn(p, "dashboard", "XvB stats")["route"] == TOR

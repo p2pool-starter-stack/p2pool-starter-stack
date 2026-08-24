@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    POS, ROUTE_COLOR, ROUTE_NAME, edgePath,
+    POS, ROUTE_COLOR, ROUTE_NAME, ROUTES, edgePath,
 } from '../../mining_dashboard/web/static/topology.mjs';
 
 // Canonical node ids — MUST equal service/egress.py TOPOLOGY_NODES ids. The backend half of this
@@ -63,10 +63,39 @@ test('edgePath: column-crossing edges route orthogonally through a clear lane', 
     );
 });
 
+// Every route token egress.py can put on an edge. MUST stay in lockstep with NODE_ROUTES in
+// service/topology_graph.py plus the two routes only non-node hops take. The backend half of this
+// contract is tests/service/test_egress.py::test_every_edge_is_well_formed_for_all_configs.
+const SERVER_ROUTES = ['tor', 'clearnet', 'lan', 'unknown', 'local', 'inactive'];
+
 test('route palette + names cover every route the server can emit', () => {
-    // egress.py emits exactly these four route tokens; the diagram must colour & label them all.
-    for (const r of ['tor', 'clearnet', 'local', 'inactive']) {
+    // A route with no colour falls through `ROUTE_COLOR[key] || ROUTE_COLOR.local` and renders as
+    // an ordinary grey local hop — no error, no blank edge, just a quiet lie about the network.
+    for (const r of SERVER_ROUTES) {
         assert.ok(ROUTE_COLOR[r], `no colour for route "${r}"`);
         assert.ok(ROUTE_NAME[r], `no label for route "${r}"`);
     }
+});
+
+test('every route gets an arrowhead marker generated for it', () => {
+    // ROUTES drives the <defs> marker ids that `marker-end=url(#topo-a-<route>)` points at. A
+    // route missing here still draws its line, in the right colour, with NO arrowhead — which
+    // reads as a rendering quirk rather than as the missing state it actually is.
+    for (const r of SERVER_ROUTES) {
+        assert.ok(ROUTES.includes(r), `route "${r}" has no arrowhead marker`);
+    }
+});
+
+test('lan and unknown are visually distinct from local and from clearnet', () => {
+    // #1350's whole point. `unknown` is the state with no natural failure mode: nothing in the
+    // stack breaks if it renders wrong, so this assertion is the only thing standing between a
+    // correct backend and a diagram that quietly shows an unverified hop as a proven-local one.
+    // `lan` must not take clearnet's colour either — that was option (a), rejected because
+    // `leaks` counts "clearnet egress that actually exposes the host IP" and a LAN hop does not.
+    for (const r of ['lan', 'unknown']) {
+        assert.notEqual(ROUTE_COLOR[r], ROUTE_COLOR.local, `"${r}" is indistinguishable from local`);
+        assert.notEqual(ROUTE_COLOR[r], ROUTE_COLOR.clearnet, `"${r}" is coloured as a leak`);
+        assert.notEqual(ROUTE_NAME[r], ROUTE_NAME.local, `"${r}" is labelled as local`);
+    }
+    assert.notEqual(ROUTE_COLOR.lan, ROUTE_COLOR.unknown, 'lan and unknown share a colour');
 });
