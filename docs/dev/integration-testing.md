@@ -136,7 +136,7 @@ Useful flags (full list in `run.sh --help`):
 | `--lifecycle` | Also run the lifecycle phase (restart, apply secret-preservation). |
 | `--fault-injection` | Also break monerod (stop / SIGSTOP / remove) and assert `status`' down/unhealthy/missing verdicts and the failover→recovery cycle, plus a dashboard DB-write fault (data dir made read-only → `/api/state` reports `db_healthy:false` → write access restored, [#202](https://github.com/p2pool-starter-stack/pithead/issues/202)). Destructive-then-restored; local mode only; slow. |
 | `--auth-fail-closed` | Also empty `PROXY_AUTH_TOKEN` in `.env` and assert `pithead up` refuses to start (the live counterpart to the tier-1 compose-config check, [#153](https://github.com/p2pool-starter-stack/pithead/issues/153)/[#203](https://github.com/p2pool-starter-stack/pithead/issues/203)), then restore the exact token and recover. Destructive-then-restored; ssh or local mode. |
-| `--rigforge-control` | Also drive the RigForge WRITE paths against a real rig with `dashboard.control` on and the rig pinned in `workers.list[]` (#506; a baseline that still carries the deprecated `dashboard.workers[]` fallback is left as-is, so that shape stays exercised too): the enriched read survives a populated masked-token descriptor ([#514](https://github.com/p2pool-starter-stack/pithead/issues/514)), the rig is editable and a reversible Worker Inspect edit lands on it on two of the six writable keys — `max_temp_c` ([#508](https://github.com/p2pool-starter-stack/pithead/issues/508)/[#513](https://github.com/p2pool-starter-stack/pithead/issues/513)) and `pools` (needs `IT_RIG_POOLS_PROBE`) — a rig-side edit reflects back in the feed + masked prefill ([#516](https://github.com/p2pool-starter-stack/pithead/issues/516)), and an auto-rollback is recorded end-to-end ([#517](https://github.com/p2pool-starter-stack/pithead/issues/517)). Destructive-then-restored; local mode only; each leg self-skips without its prerequisites (see below). |
+| `--rigforge-control` | Also drive the RigForge WRITE paths against a real rig with `dashboard.control` on and the rig pinned in `workers.list[]` (#506; a baseline that still carries the deprecated `dashboard.workers[]` fallback is left as-is, so that shape stays exercised too): the enriched read survives a populated masked-token descriptor ([#514](https://github.com/p2pool-starter-stack/pithead/issues/514)), the rig is editable and a reversible Worker Inspect edit lands on it on four of the six writable keys — `max_temp_c` ([#508](https://github.com/p2pool-starter-stack/pithead/issues/508)/[#513](https://github.com/p2pool-starter-stack/pithead/issues/513)), `DONATION` and `watchdog_interval_min` ([#1236](https://github.com/p2pool-starter-stack/pithead/issues/1236)), and `pools` (needs `IT_RIG_POOLS_PROBE`); `autotune` and `watchdog` are refused on purpose — a rig-side edit reflects back in the feed + masked prefill ([#516](https://github.com/p2pool-starter-stack/pithead/issues/516)), and an auto-rollback is recorded end-to-end ([#517](https://github.com/p2pool-starter-stack/pithead/issues/517)). Destructive-then-restored; local mode only; each leg self-skips without its prerequisites (see below). |
 | `--rig-host <h>` / `--rig-control-port <p>` | The borrowed rig's LAN host and writable control API port (default `8082`), used to inject a `workers.list[]` descriptor when the box's baseline lacks one ([#185](https://github.com/p2pool-starter-stack/pithead/issues/185)/#506). Pair with `IT_RIG_TOKEN` (env; never a flag). |
 | `--rigforge-upgrade` | With `--rigforge-control`, also POST the rig's own already-installed version through `/api/control/worker-upgrade` and assert it converges on `noop` — non-destructive, never rebuilds the rig. Proves the dashboard → host-runner → rig `/upgrade` route end to end, including the noop/throttled/failed poll vocabulary `control_worker_upgrade` learned when it started matching the rig's own terminal states. |
 | `--subnet` | Also bring the stack down then up on a non-default `network.subnet` (`10.84.0.0/24`) and assert the moved prefix reached `.env`, the docker bridge, Tor's render-at-start IP, monerod's proxy IP, the dashboard SSRF CIDR, and the [#344](https://github.com/p2pool-starter-stack/pithead/issues/344) onion vhost, then run the standard battery ([#201](https://github.com/p2pool-starter-stack/pithead/issues/201)/[#180](https://github.com/p2pool-starter-stack/pithead/issues/180)). Destructive-then-restored; local mode only. |
@@ -321,15 +321,32 @@ loudly without its prerequisite:
   Worker Inspect reports the rig `editable`, and a `max_temp_c` nudge applied via
   `/api/control/worker-apply` lands on the rig's `/status` and is recorded in the per-worker
   history, then reverted.
-- A second writable key, `pools` (the repoint-your-hashrate key): unlike `max_temp_c`, the
-  enriched feed carries no writable-config *values* at all, so there is no live telemetry to read
-  the current value back from before mutating it — the real Worker Inspect editor has the exact
-  same limitation and prefills from the dashboard's own last-applied record instead
-  (`GET /api/worker`'s `.last_applied.pools`). This leg does the same: it reads that record as the
-  restore target, applies an operator-supplied probe value (`IT_RIG_POOLS_PROBE` — pithead treats
-  `pools` as opaque passthrough, so a guessed value risks a real `rejected` instead of proving the
-  round trip), asserts it landed, then reverts. Self-skips if the dashboard has never applied a
-  `pools` value to this rig before (nothing to safely restore).
+- Two more writable keys, `DONATION` and `watchdog_interval_min`
+  ([#1236](https://github.com/p2pool-starter-stack/pithead/issues/1236)): RigForge v1.10.0 serves
+  the rig's own effective writable config on the enriched feed, and the dashboard re-exposes it at
+  `GET /api/worker`'s `.rig_config` — the same values the Worker Inspect editor prefills from. So
+  each leg reads the original off the rig itself, derives a probe from it, asserts the **rig**
+  reports the new value, and restores. No new environment variable, no direct rig dial. `DONATION`
+  only ever moves toward zero (a rig already at 0 is nudged to RigForge's default 1), and
+  `watchdog_interval_min` steps one minute away from wherever it sits, inside RigForge's 1–1440
+  range. The restore runs whatever the assertions said, so a mid-leg failure cannot strand a
+  borrowed rig on a probe value.
+- **Three writable keys are deliberately never driven, and this is a decision rather than a gap.**
+  `autotune` would start a real tuning run — it moves hashrate and thermals and may not settle
+  inside the leg. `watchdog` would remove thermal protection from a rig mining at its temperature
+  ceiling. `pools` cannot be round-tripped from the rig's own reading at all: RigForge strips `pass`
+  and `tls-fingerprint` before serving the config, and the dashboard strips them again, so the value
+  that comes back is lossy — and `pass` is the stack's stratum password
+  ([#113](https://github.com/p2pool-starter-stack/pithead/issues/113)), which the proxy rejects a
+  login without. Worse, the harness cannot tell "this rig has no password" from "this rig's password
+  was stripped on the way to me": both arrive as `{"url": …}`. Writing that back would silently
+  strand a borrowed miner.
+- `pools`, the operator-supplied route (the repoint-your-hashrate key): because the rig's own
+  reading cannot be written back, the restore target is the dashboard's record of what *it* last
+  pushed (`GET /api/worker`'s `.last_applied.pools`), which is un-stripped, and the probe is
+  operator-supplied (`IT_RIG_POOLS_PROBE` — pithead treats `pools` as opaque passthrough, so a
+  guessed value risks a real `rejected` instead of proving the round trip). Self-skips if the
+  dashboard has never applied a `pools` value to this rig before (nothing to safely restore).
 - Rig-side edit reflects ([#516](https://github.com/p2pool-starter-stack/pithead/issues/516)):
   a change made straight on the rig's control API shows up in the dashboard's enriched feed, and a
   `config.json` hand-edit shows up in the masked prefill (with the token still masked).

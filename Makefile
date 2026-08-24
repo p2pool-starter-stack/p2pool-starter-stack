@@ -24,9 +24,9 @@ test-compose: ## Validate docker-compose.yml interpolation + hardening invariant
 	bash tests/stack/test_compose.sh
 
 test-integration-selftest: ## Integration harness pure-logic self-test (no server needed)
-	bash tests/integration/selftest.sh
-	bash tests/integration/selftest-rigforge-apply-settle.sh
-	bash tests/integration/selftest-compose-profiles.sh
+	# Globbed, not enumerated — the same reason as ci.yml: an enumerated list silently omits
+	# any self-test added later, and a check that never runs reads exactly like one that passed.
+	for t in tests/integration/selftest*.sh; do bash "$$t" || exit 1; done
 
 test-fakes: ## Fake-daemon contract test — real dashboard clients vs controllable fakes (no docker)
 	uv run --locked --project dashboard --extra test python -m pytest tests/integration/fakes -q
