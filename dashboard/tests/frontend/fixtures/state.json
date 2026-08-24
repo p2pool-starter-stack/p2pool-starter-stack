@@ -373,7 +373,8 @@
     "monero": {
       "current": 3000000,
       "db_size": "\u2014",
-      "mode": "Pruned",
+      "local": true,
+    "mode": "Pruned",
       "percent": 100,
       "remaining": 0,
       "state": "done",
@@ -381,7 +382,8 @@
     },
     "tari": {
       "current": 50000,
-      "percent": 100,
+      "local": true,
+    "percent": 100,
       "remaining": 0,
       "state": "done",
       "target": 50000
@@ -616,12 +618,14 @@
       {
         "id": "monerod",
         "label": "monerod",
-        "zone": "host"
+        "remote": false,
+          "zone": "host"
       },
       {
         "id": "tari",
         "label": "tari",
-        "zone": "host"
+        "remote": false,
+          "zone": "host"
       },
       {
         "id": "docker",

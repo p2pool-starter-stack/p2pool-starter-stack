@@ -21,6 +21,8 @@ from mining_dashboard.config.config import (
     MONERO_PRUNE,
     XVB_DONATION_LEVEL,
     XVB_MAX_DONATION_FRACTION,
+    monero_is_local,
+    tari_is_local,
 )
 from mining_dashboard.helper.utils import (
     DEFAULT_PPLNS_WINDOW,
@@ -115,6 +117,11 @@ class Metrics:
     # otherwise be judged against the wrong baseline. History retention (30 days) covers it
     # exactly. Defaulted so direct Metrics(...) constructors needn't set it.
     p2pool_30d: float = 0.0
+    # Does each node run on THIS machine, or somebody else's (#1040)? A remote node's health is
+    # not the operator's to fix, which is the whole reason the UI has to say which it is. Both
+    # default to local — the stock setup — so direct Metrics(...) constructors needn't set them.
+    monero_local: bool = True
+    tari_local: bool = True
 
 
 def build_metrics(latest_data, state_mgr, history=None):
@@ -238,6 +245,8 @@ def build_metrics(latest_data, state_mgr, history=None):
         monero=_sync_metric(data.get("monero_sync", {})),
         tari=_sync_metric(data.get("tari_sync", {})),
         monero_mode=_monero_mode(),
+        monero_local=monero_is_local(),
+        tari_local=tari_is_local(),
         tari_mining=bool(data.get("tari", {}).get("active", False)),
         tari_difficulty=data.get("tari", {}).get("difficulty", 0) or 0,
         tari_reward=data.get("tari", {}).get("reward", 0) or 0,

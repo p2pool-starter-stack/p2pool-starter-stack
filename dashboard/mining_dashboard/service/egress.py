@@ -27,6 +27,10 @@ import ipaddress
 from urllib.parse import urlsplit
 
 from mining_dashboard.config import config
+from mining_dashboard.service.topology_graph import (  # noqa: F401  (re-exported)
+    TOPOLOGY_NODES,
+    topology_nodes,
+)
 
 TOR = "tor"
 CLEARNET = "clearnet"
@@ -255,28 +259,6 @@ def _notify_knobs():
 # stack wired?" — every component and the route of each link (ingress, egress, internal). Same
 # config-derived routes, so the two views can never disagree (the summary is shared verbatim).
 
-# Zones, left-to-right by trust: your LAN, the host's container bridge, the Tor hub, the Internet.
-ZONE_LAN = "lan"
-ZONE_HOST = "host"
-ZONE_TOR = "tor"
-ZONE_NET = "internet"
-
-# Nodes bracket the host components with the external actors they actually talk to. ``internal``
-# nodes (the socket proxies) only appear when the operator expands the internal mesh.
-TOPOLOGY_NODES = [
-    {"id": "rigs", "label": "Mining rigs", "zone": ZONE_LAN},
-    {"id": "browser", "label": "Browser", "zone": ZONE_LAN},
-    {"id": "xmrig-proxy", "label": "xmrig-proxy", "zone": ZONE_HOST},
-    {"id": "caddy", "label": "caddy", "zone": ZONE_HOST},
-    {"id": "dashboard", "label": "dashboard", "zone": ZONE_HOST},
-    {"id": "p2pool", "label": "p2pool", "zone": ZONE_HOST},
-    {"id": "monerod", "label": "monerod", "zone": ZONE_HOST},
-    {"id": "tari", "label": "tari", "zone": ZONE_HOST},
-    {"id": "docker", "label": "docker-proxy", "zone": ZONE_HOST, "internal": True},
-    {"id": "tor", "label": "tor", "zone": ZONE_TOR},
-    {"id": "internet", "label": "Tor network", "zone": ZONE_NET},
-]
-
 
 def _edge(src, dst, route, label, kind):
     return {"from": src, "to": dst, "route": route, "label": label, "kind": kind}
@@ -297,6 +279,11 @@ def compute_topology(
     monero_clearnet_sync,
     tari_clearnet_sync,
     remote_monero,
+    # Defaulted, unlike remote_monero: the egress posture does not model a remote Tari
+    # node's gRPC route yet (#1350), so the two functions no longer take identical knobs
+    # and the shared sweep fixtures splat into both. topology_from_config passes it, and
+    # test_topology_graph asserts that it does rather than trusting the signature to.
+    remote_tari=False,
     healthchecks_enabled,
     telegram_enabled,
     price_feed_enabled=False,
@@ -414,7 +401,8 @@ def compute_topology(
         else:
             edge["leak"] = True
 
-    return {"nodes": TOPOLOGY_NODES, "edges": edges, "summary": posture["summary"]}
+    nodes = topology_nodes(remote_monero=remote_monero, remote_tari=remote_tari)
+    return {"nodes": nodes, "edges": edges, "summary": posture["summary"]}
 
 
 def topology_from_config():
@@ -426,7 +414,8 @@ def topology_from_config():
         xvb_tor=config.XVB_TOR_ENABLED,
         monero_clearnet_sync=config.MONERO_CLEARNET_SYNC,
         tari_clearnet_sync=config.TARI_CLEARNET_SYNC,
-        remote_monero=config.MONERO_NODE_HOST != config.LOCAL_MONERO_HOST,
+        remote_monero=not config.monero_is_local(),
+        remote_tari=not config.tari_is_local(),
         healthchecks_enabled=bool(config.HEALTHCHECKS_PING_URL),
         telegram_enabled=config.TELEGRAM_ENABLED,
         price_feed_enabled=config.DASHBOARD_ENERGY["price_feed"],

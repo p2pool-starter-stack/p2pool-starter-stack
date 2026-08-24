@@ -1243,10 +1243,10 @@ def build_sync(metrics, monero_db_size):
             out.update(extra)
         return out
 
-    return {
-        "monero": section(metrics.monero, {"mode": metrics.monero_mode, "db_size": monero_db_size}),
-        "tari": section(metrics.tari),
-    }
+    # `local` (#1040) lives here: sync.* is the only per-node block covering BOTH chains.
+    mono = {"mode": metrics.monero_mode, "db_size": monero_db_size, "local": metrics.monero_local}
+    tari = {"local": metrics.tari_local}
+    return {"monero": section(metrics.monero, mono), "tari": section(metrics.tari, tari)}
 
 
 # How long the "payout wallet changed" banner stays in the top bar after a change (#375).

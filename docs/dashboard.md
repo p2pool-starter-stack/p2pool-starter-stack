@@ -466,6 +466,14 @@ detail: **My P2Pool Node Stats**, **Global P2Pool Stats**, **XvB Donation Stats*
 **P2Pool Earnings (estimated)** calculator below. The
 expected-vs-actual table stays in both views. The choice is remembered across reloads.
 
+**XMR Network** and **Tari Merge-Mining** each carry a **Node** row saying whether that node runs
+here or somewhere else, and the **Stack Topology & Egress** diagram captions `monerod` and `tari`
+the same way. The difference is operational: a node you run is yours to restart and resync, and a
+node you point at (`monero.mode: remote`, `tari.mode: remote`) is somebody else's to fix, so it is
+the first thing worth knowing when one stalls. It also makes the remote-node setting visible
+without opening `config.json`. A row reads `—` when the dashboard cannot tell — a payload from
+before this shipped, rather than a node it has decided is local.
+
 The what-if earnings calculator and the XvB tier calculator live only in Advanced view. Simple view
 shows a one-time banner pointing there; it goes away once you dismiss it or open Advanced view, and
 stays away across reloads.

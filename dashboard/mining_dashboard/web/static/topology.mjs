@@ -7,7 +7,7 @@
 // this file is presentation only — it carries no routing logic of its own (the #61 principle).
 
 import { boxAnchor, loadPref, savePref } from "./logic.mjs";
-import { Component, html } from "./preact.mjs";
+import { Component, Fragment, html } from "./preact.mjs";
 
 // Fixed layout — the stack is a known, fixed set of components, so positions are hand-placed
 // (left→right by trust: your LAN, the host bridge, the Tor hub, the internet) rather than solved.
@@ -113,11 +113,20 @@ export class StackTopology extends Component {
           ${nodes.map((n) => {
             const p = POS[n.id];
             if (!p) return null;
+            // #1040: monerod and tari are the only nodes an operator can run elsewhere, so only
+            // they carry `remote` and only they get a location caption. It rides as a SIBLING of
+            // the node group, not a child: `.topo-node text` outranks `.topo-zone`, so a caption
+            // inside the group would silently render as a second full-size label.
+            const loc = n.remote === true ? "remote" : n.remote === false ? "local" : null;
+            const cx = p.x + p.w / 2;
             return html`
-              <g class=${nodeCls(n.zone)}>
-                <rect x=${p.x} y=${p.y} width=${p.w} height=${p.h} rx="6" />
-                <text x=${p.x + p.w / 2} y=${p.y + p.h / 2 + 4} text-anchor="middle">${n.label}</text>
-              </g>`;
+              <${Fragment}>
+                <g class=${nodeCls(n.zone)}>
+                  <rect x=${p.x} y=${p.y} width=${p.w} height=${p.h} rx="6" />
+                  <text x=${cx} y=${loc ? p.y + 14 : p.y + p.h / 2 + 4} text-anchor="middle">${n.label}</text>
+                </g>
+                ${loc && html`<text x=${cx} y=${p.y + 26} class="topo-zone">${loc}</text>`}
+              <//>`;
           })}
         </svg>
       </div>`;
