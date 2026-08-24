@@ -22,6 +22,7 @@ import {
   buildChartMarkers,
   buildFields,
   buildTableChanges,
+  fieldNote,
   jsonSyntaxError,
   parseJsonChanges,
 } from "./workerlogic.mjs";
@@ -143,7 +144,8 @@ function WorkerField({ field, edits, onEdit, busy }) {
     input = html`<input type=${field.type === "number" ? "number" : "text"} disabled=${busy} value=${value}
         onInput=${(e) => onEdit(field.key, e.target.value)} />`;
   }
-  return html`<label class="config-field"><span class="config-field-name">${field.key}</span>${input}</label>`;
+  const note = fieldNote(field.source);
+  return html`<label class="config-field"><span class="config-field-name">${field.key}${note && html` <span class="text-muted text-xs">${note}</span>`}</span>${input}</label>`;
 }
 
 export class WorkerInspect extends Component {
@@ -252,7 +254,7 @@ export class WorkerInspect extends Component {
       }
       changes = out.changes;
     } else {
-      const fields = buildFields(detail.writable_keys, detail.last_applied);
+      const fields = buildFields(detail.writable_keys, detail.last_applied, detail.rig_config);
       try {
         changes = buildTableChanges(fields, tableEdits);
       } catch {
@@ -387,9 +389,7 @@ export class WorkerInspect extends Component {
             ${
               canEdit
                 ? html`
-            <p class="text-muted text-xs">Writable keys: <span class="font-mono">${(detail.writable_keys || []).join(", ")}</span>.
-               Prefilled with the last config applied from the dashboard — the rig's live feed doesn't expose these values.
-               The rig validates and rolls back if the miner doesn't come back live.</p>
+            <p class="text-muted text-xs">Writable keys: <span class="font-mono">${(detail.writable_keys || []).join(", ")}</span>. Prefilled with what the rig is running now, read from its own feed. A box falls back to the last config applied from here, or says so when the value cannot be read at all — a rig that is offline, or one running a RigForge older than the release that started publishing them. The rig validates and rolls back if the miner doesn't come back live.</p>
             <div class="toggle-group mb-1" role="group" aria-label="Worker config mode">
                 <button class=${"btn-toggle" + (mode === "table" ? " active" : "")} aria-pressed=${mode === "table"}
                     title="View the config as a table" onClick=${() => this.setMode("table")}>Table</button>
@@ -399,7 +399,7 @@ export class WorkerInspect extends Component {
             ${
               mode === "table"
                 ? html`<div>
-                    ${buildFields(detail.writable_keys, detail.last_applied).map(
+                    ${buildFields(detail.writable_keys, detail.last_applied, detail.rig_config).map(
                       (f) => html`<${WorkerField} field=${f} edits=${tableEdits} busy=${busy}
                           onEdit=${(k, v) => this.setState({ tableEdits: { ...tableEdits, [k]: v } })} />`,
                     )}

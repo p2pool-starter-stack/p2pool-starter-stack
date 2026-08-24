@@ -11,6 +11,12 @@ from mining_dashboard.config.config import (
     XMRIG_API_TOKEN,
 )
 
+# The writable-key allowlist lives with the WRITE path (control_service) and is imported here
+# rather than restated: a second literal would be a third copy of the same list, and the existing
+# drift guard only compares the dashboard's copy against pithead's. control_service imports only
+# `config`, so this does not close an import cycle.
+from mining_dashboard.service.control_service import WORKER_WRITABLE_KEYS
+
 # Per-worker endpoint descriptors (#172): the validated dashboard.workers[] list from config.json.
 # Module-level (not from-import at call sites) so tests can swap it per case. Fleets are small, so
 # the per-poll lookups below are linear scans — no index to keep in sync.
@@ -43,6 +49,12 @@ def parse_rigforge(payload):
     governor read → ``governor`` null — so each access is defaulted. A present-but-miner-down rig
     (``xmrig_api == "unreachable"``, XMRig keys absent) is flagged via ``miner_down`` so the UI can
     show it as up-but-miner-down rather than offline. Returns a compact dict for the UI, or ``None``.
+
+    ``config`` is the rig's EFFECTIVE writable config (rigforge#253, shipped in RigForge v1.10.0),
+    riding this same poll. It is what the Worker Inspect editor prefills from (#1235): the rig's
+    own current values, rather than Pithead's record of what it last pushed — which is empty on a
+    never-edited rig and stale on one changed directly with ``rigforge.sh apply``. A rig older than
+    v1.10.0 sends no ``config`` and this stays ``None``, so the editor falls back to the record.
     """
     rf = payload.get("rigforge") if isinstance(payload, dict) else None
     if not isinstance(rf, dict):
@@ -76,7 +88,58 @@ def parse_rigforge(payload):
             "temp_c": watchdog.get("temp_c") if wd_on else None,
             "max_temp_c": watchdog.get("max_temp_c") if wd_on else None,
         },
+        "config": _rig_writable_config(rf.get("config")),
     }
+
+
+# Pool keys that are a credential and must never reach the dashboard, let alone an editor box that
+# can POST them back. RigForge already deletes both before serving the block (its read is
+# token-OPTIONAL, so it masks at the source), but this is the same defence-in-depth posture
+# ``mask_secrets`` takes with the host config: the rig is remote, and a rig running an older or
+# patched build is exactly the case a single mask would miss.
+_POOL_CREDENTIAL_KEYS = ("pass", "tls-fingerprint")
+
+# How deep the strip below will walk before it stops trusting the value. A real writable config is
+# three deep at most (pools -> a pool -> its fields); anything past this is not a config we can
+# read, and refusing it also keeps a hostile rig from driving the recursion down our own stack.
+_MAX_CONFIG_DEPTH = 6
+
+
+def _strip_credentials(value, depth=0):
+    """Drop the credential keys from ``value`` at ANY depth and in ANY container shape.
+
+    Shape-agnostic deliberately. Stripping only ``pools`` when it arrived as a list of dicts was a
+    filter that assumed the shape of the very input it was defending against: a rig serving
+    ``pools`` as a dict, or nesting the credential one level deeper, walked straight past it with
+    the credential intact. A hostile or patched rig picks its own response shape, so the only
+    assumption safe to make here is none.
+    """
+    if depth > _MAX_CONFIG_DEPTH:
+        return None
+    if isinstance(value, dict):
+        return {
+            k: _strip_credentials(v, depth + 1)
+            for k, v in value.items()
+            if k not in _POOL_CREDENTIAL_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_credentials(v, depth + 1) for v in value]
+    return value
+
+
+def _rig_writable_config(cfg):
+    """The rig's own values for the writable keys, filtered to the keys we would ever write (#1235).
+
+    Filtered rather than passed through: this is remote-supplied data that prefills an editor whose
+    contents can be POSTed straight back at the rig. Anything outside ``WORKER_WRITABLE_KEYS`` would
+    be a key the apply path rejects anyway, so carrying it can only mislead the operator or widen
+    what a compromised rig can put in front of them. Returns ``None`` when the rig sent nothing
+    usable, which the UI must render as "could not read" rather than as an empty value.
+    """
+    if not isinstance(cfg, dict):
+        return None
+    out = {k: v for k, v in cfg.items() if k in WORKER_WRITABLE_KEYS}
+    return _strip_credentials(out) or None
 
 
 # Terminal control outcomes the rig may mirror: applied/rejected/rolled_back/failed from a

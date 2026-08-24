@@ -2074,15 +2074,13 @@ def build_worker_hashrate_history(state_mgr, worker, range_arg, window=None):
 
 
 def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
-    """Per-worker Inspect payload (#185): the rig's current enriched telemetry, the writable config
-    the dashboard last applied (the editor prefill — the rig's feed does not expose the writable
-    config values, so Pithead's own last-applied record is the honest source), and the change history
-    (each row's ``changes`` is a diff by construction, since we only ever record deltas we authored).
-    ``hashrate_by_config`` (#492) is that same version timeline with each version's measured
-    hashrate (worker_history) aggregated over its active window, so an operator can compare config
-    versions empirically. ``hashrate_history`` (#1013) is the same rig's hashrate as a chartable
-    time series, honoring the same ``range_arg``/``window`` ``/api/state`` already uses.
-
+    """Per-worker Inspect payload (#185): the rig's current enriched telemetry, the writable config (the editor
+    prefills from the rig's own current values (#1235), falling back to Pithead's last-applied record when the
+    rig has none), and the change history (each row's ``changes`` is a diff by construction, since we only ever
+    record deltas we authored). ``hashrate_by_config`` (#492) is that same version timeline with each version's
+    measured hashrate (worker_history) aggregated over its active window, so an operator can compare config
+    versions empirically. ``hashrate_history`` (#1013) is the same rig's hashrate as a chartable time series,
+    honoring the same ``range_arg``/``window`` ``/api/state`` already uses.
     ``editable`` is whether the worker has an operator-set ``host`` in ``dashboard.workers[]`` — the
     precondition for the host-side write path. The rig's token is masked out of this container (#440),
     so the container cannot verify it; the host runner re-checks it and fails closed if it is missing.
@@ -2113,6 +2111,8 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
         # {available, latest, url} | None — this rig runs an older RigForge (#596).
         "rigforge_update": rigforge_update_for(worker, (data or {}).get("rigforge_release")),
         "writable_keys": sorted(WORKER_WRITABLE_KEYS),
+        # Rig's own current writable-key values (#1235); None means "could not read", not empty.
+        "rig_config": (worker.get("rigforge") or {}).get("config") if worker else None,
         "last_applied": state_mgr.get_last_applied_worker_config(name),
         "history": history,
         "hashrate_by_config": hashrate_by_config,
