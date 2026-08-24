@@ -195,16 +195,22 @@ Two runs of the matrix are required, and the automated one is the smaller of the
    read the run's output rather than its exit code alone. The readiness gate does not satisfy
    this requirement; abort the release on any failure.
 
-   A run that does not finish leaves the rig's writable config where it stopped. The `EXIT`
-   trap restores the rig's xmrig pool config and the baseline stack; it does not restore the
-   RigForge writable keys, and `run.sh` — which writes them — has no trap at all
-   ([#1379](https://github.com/p2pool-starter-stack/pithead/issues/1379)). So a `Ctrl-C`, an
-   SSH drop, or a cancelled job mid-leg can leave `max_temp_c` a degree above where it started,
-   or whichever key the run died inside. Every probe is a near neighbour of the value it read
-   off the rig, so nothing is damaged — but the rig is not where you left it, and the restore
-   summary will not mention it. Read the rig's current values in Worker Inspect against what
-   you expect, and put a stray one back the same way. This is the same shape as `--keep`: the
-   run tells you it did not restore, and the rest is yours.
+   A run that does not finish now unwinds its own writable-key changes
+   ([#1379](https://github.com/p2pool-starter-stack/pithead/issues/1379)). Each key is recorded
+   when its write goes out and retired only when its revert is confirmed, and an `EXIT` trap
+   restores whatever is still outstanding — so a `Ctrl-C`, a `kill`, an SSH drop or a cancelled
+   job mid-leg puts `max_temp_c`, `DONATION`, `watchdog_interval_min` or `pools` back the way the
+   run found it, by the same route that changed it. The unwind names every key it restores on
+   stderr; a run that ends cleanly has nothing outstanding and says nothing.
+
+   Two limits are worth knowing before you rely on it. The restore is **best-effort**: it dials
+   the dashboard or the rig while the run is already dying, and if that dial fails there is
+   nothing further it can do. And it cannot run at all if the shell never gets to exit — a
+   `kill -9`, an OOM kill, or the box losing power. In either case the rig is left on a probe
+   value, which is always a near neighbour of what it read off the rig, so nothing is damaged.
+   If a run ended in one of those ways, read the rig's current values in Worker Inspect against
+   what you expect and put a stray one back the same way. This is the same shape as `--keep`:
+   what the run could not restore, it tells you about, and the rest is yours.
 
 After deploying the published release to the bench, run the non-destructive live sweep as the
 closing check: `tests/integration/run.sh --local --dir <stack-dir> --check`. On a bench with no

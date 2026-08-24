@@ -161,9 +161,9 @@ echo "== dying DURING the apply is covered — which is what mark-before-write b
 scenario 'source "$INT_DIR/rigforge-apply-settle.sh"' \
     'source "$INT_DIR/rigforge-writable-keys.sh"' \
     '_worker_detail() { printf "%s" "{\"rig_config\":{\"DONATION\":7}}"; }' \
-    '_worker_apply() { printf "dash|%s\n" "$2" >>"$APPLY_LOG"; kill -INT $$; sleep 30; }' \
+    '_worker_apply() { printf "dash|%s\n" "$2" >>"$APPLY_LOG"; kill -INT $$; sleep 2; }' \
     'run_rigforge_writable_keys rig1 >/dev/null 2>&1' \
-    'sleep 30' >/dev/null
+    'sleep 5' >/dev/null
 assert_eq "a death inside the apply still restores the original (#1379)" \
     "$(restores | tail -1)" 'dash|{"DONATION":7}'
 assert_eq "the probe went out and the original came back — two POSTs, in that order" \
