@@ -38,7 +38,7 @@ test = [
 ]
 # Developer tooling (Wave 7, #280). Pinned so local, pre-commit, and CI all run the SAME ruff
 # — lint output is version-sensitive, so a floor would let CI and a contributor disagree.
-dev = ["ruff==0.16.3", "pre-commit>=4.6.2"]
+dev = ["ruff==0.16.4", "pre-commit>=4.6.2"]
 
 [tool.setuptools.packages.find]
 include = ["mining_dashboard*"]
