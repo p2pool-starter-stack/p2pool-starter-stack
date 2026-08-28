@@ -1,0 +1,121 @@
+{
+  "examples": {
+    "applied": {
+      "age_seconds": "NORMALIZED",
+      "applied_at": "NORMALIZED",
+      "backup": null,
+      "change_id": "2222222222222222",
+      "changed_keys": [
+        "version"
+      ],
+      "reason": "upgraded to v9.9.9",
+      "source": "control",
+      "status": "applied",
+      "warnings": []
+    },
+    "failed": {
+      "age_seconds": "NORMALIZED",
+      "applied_at": "NORMALIZED",
+      "backup": null,
+      "change_id": "5555555555555555",
+      "changed_keys": [
+        "version"
+      ],
+      "reason": "staged upgrade target malformed (want vX.Y.Z)",
+      "source": "control",
+      "status": "failed",
+      "warnings": []
+    },
+    "noop": {
+      "age_seconds": "NORMALIZED",
+      "applied_at": "NORMALIZED",
+      "backup": null,
+      "change_id": "3333333333333333",
+      "changed_keys": [
+        "version"
+      ],
+      "reason": "already on v9.9.9 — nothing to upgrade",
+      "source": "control",
+      "status": "noop",
+      "warnings": []
+    },
+    "pending": {
+      "accepted_at": "NORMALIZED",
+      "age_seconds": "NORMALIZED",
+      "change_id": "NORMALIZED",
+      "status": "pending"
+    },
+    "rejected": {
+      "age_seconds": "NORMALIZED",
+      "applied_at": "NORMALIZED",
+      "backup": null,
+      "change_id": "6666666666666666",
+      "changed_keys": [
+        "DONATION"
+      ],
+      "reason": "rejected merge-failed",
+      "source": "control",
+      "status": "rejected",
+      "warnings": []
+    },
+    "rolled_back": {
+      "age_seconds": "NORMALIZED",
+      "applied_at": "NORMALIZED",
+      "backup": "/b",
+      "change_id": "7777777777777777",
+      "changed_keys": [
+        "watchdog",
+        "DONATION"
+      ],
+      "reason": "miner did not return to a live hashrate; rolled back and live",
+      "source": "control",
+      "status": "rolled_back",
+      "warnings": [
+        "thermal protection changed: watchdog"
+      ]
+    },
+    "started": {
+      "age_seconds": "NORMALIZED",
+      "applied_at": "NORMALIZED",
+      "backup": null,
+      "change_id": "1111111111111111",
+      "changed_keys": [
+        "version"
+      ],
+      "reason": null,
+      "source": "control",
+      "status": "started",
+      "warnings": []
+    },
+    "throttled": {
+      "age_seconds": "NORMALIZED",
+      "applied_at": "NORMALIZED",
+      "backup": null,
+      "change_id": "4444444444444444",
+      "changed_keys": [
+        "version"
+      ],
+      "reason": "throttled — too soon since the last upgrade attempt",
+      "source": "control",
+      "status": "throttled",
+      "warnings": []
+    }
+  },
+  "no_history": {
+    "body": {
+      "status": "no change applied yet"
+    },
+    "http_status": 503
+  },
+  "statuses": [
+    "applied",
+    "failed",
+    "noop",
+    "pending",
+    "rejected",
+    "rolled_back",
+    "started",
+    "throttled"
+  ],
+  "version": 1
+}

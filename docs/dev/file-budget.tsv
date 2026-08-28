@@ -47,6 +47,7 @@ scripts/release.sh	851
 scripts/shipped-image-sweep-report.sh	429
 scripts/trivyignore-watch.sh	599
 tests/integration/e2e.sh	766
+tests/integration/fakes/test_contract.py	451
 tests/integration/lib.sh	692
 tests/integration/run.sh	2551
 tests/integration/selftest.sh	686

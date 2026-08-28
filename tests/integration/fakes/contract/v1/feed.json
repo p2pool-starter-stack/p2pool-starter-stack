@@ -1,0 +1,94 @@
+{
+  "connection": {
+    "accepted": 42,
+    "failures": 0,
+    "pool": "poolbox.lan:3333",
+    "rejected": 1,
+    "uptime": 93700
+  },
+  "hashrate": {
+    "total": [
+      1234.5,
+      0,
+      0
+    ]
+  },
+  "hugepages": [
+    1248,
+    1248
+  ],
+  "rigforge": {
+    "config": {
+      "DONATION": 1,
+      "autotune": "disabled",
+      "max_temp_c": 85,
+      "pools": [
+        {
+          "url": "h:3333"
+        }
+      ],
+      "watchdog": "enabled",
+      "watchdog_interval_min": 5
+    },
+    "config_meta": {
+      "changed_at": null,
+      "last_change_id": null,
+      "revision": "50c51399833d2a28",
+      "source": null
+    },
+    "control": {
+      "change_id": "7777777777777777",
+      "reason": "miner did not return to a live hashrate; rolled back and live",
+      "status": "rolled_back"
+    },
+    "health": {
+      "clock_pct_of_boost": null,
+      "firmware": {
+        "board": null,
+        "vendor": null
+      },
+      "governor": null,
+      "hugepages_1g": null,
+      "hugepages_total": null,
+      "msr": "none",
+      "ram": {
+        "channels": 0,
+        "modules": 0,
+        "mts": 0,
+        "rated_mts": 0
+      },
+      "service_active": false,
+      "smt": null,
+      "throttling": null,
+      "xmp": null
+    },
+    "power": {
+      "hs_per_watt": null,
+      "watts": null
+    },
+    "tune": {
+      "applied": null,
+      "autotune": {
+        "enabled": false,
+        "next": null,
+        "schedule": null,
+        "target": null
+      },
+      "candidates_tried": null,
+      "last_best_hs": null,
+      "target": null
+    },
+    "version": "NORMALIZED",
+    "watchdog": {
+      "max_temp_c": 85,
+      "mode": "enabled",
+      "resumes_below_c": 80,
+      "strikes": 0,
+      "temp_c": null,
+      "thermal_hold": false
+    },
+    "xmrig_commit": "NORMALIZED",
+    "xmrig_version": "NORMALIZED"
+  },
+  "uptime": 93780
+}
