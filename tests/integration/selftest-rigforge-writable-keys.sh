@@ -54,6 +54,10 @@ _worker_apply() { # <rig> <changes-json> — record it, then answer as a converg
     printf '%s\n' "$2" >>"$APPLY_LOG"
     printf '{"status":"accepted","change_id":"c-%s"}' "$(printf '%s' "$2" | jq -r 'keys[0]')"
 }
+# Silent on purpose, and blind on purpose: these stubs prove the LEGS' logic, not the settle's
+# stream discipline. The real wait_for opens with a progress banner on stdout, and a stub that
+# omits it cannot see #1454 (the banner landing in the settle's captured result). That case is
+# covered where the defect lives — selftest-rigforge-apply-settle.sh, with the REAL wait_for.
 wait_for() { return 0; } # the rig converges; the timeout half is exercised explicitly below
 
 # Drive something whose asserts are expected to red, without polluting this file's own verdict.

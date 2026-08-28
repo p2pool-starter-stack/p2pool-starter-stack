@@ -400,6 +400,24 @@ loudly without its prerequisite:
 - Auto-rollback ([#517](https://github.com/p2pool-starter-stack/pithead/issues/517), rigforge#236):
   a change the rig rolls back is recorded as `rolled_back` in the worker-apply result and history.
 
+### Settling an apply that comes back `accepted`
+
+RigForge answers a worker-apply immediately and applies asynchronously (rigforge#344), so the dial
+result is often `accepted` rather than a terminal `applied`. The harness settles that itself: it
+polls the rig's own reported value until the requested change shows up, then treats the change as
+applied, and leaves a genuine `rejected` / `failed` / timeout exactly as it found it. The `#513`
+`max_temp_c` leg and both `#1236` legs share one settle for this
+([#1309](https://github.com/p2pool-starter-stack/pithead/issues/1309)).
+
+That settle hands its result back on stdout, which makes its output discipline load-bearing rather
+than cosmetic. The wait's progress line goes to stderr for that reason; on stdout it would be read
+back as the result itself, and every assertion downstream would fail whatever the rig had done. The
+first hardware run to exercise the wait hit precisely that
+([#1454](https://github.com/p2pool-starter-stack/pithead/issues/1454)): the rig recorded both
+`DONATION` changes applied, eighteen seconds apart, while the gate reported four failures. The
+self-test that covers the settle now runs the real wait rather than a silent stub, because a stub
+that prints nothing cannot see this class at all.
+
 ### The abort-safe unwind
 
 Every leg above restores what it changed when it finishes. That covers a leg that *fails*; it does

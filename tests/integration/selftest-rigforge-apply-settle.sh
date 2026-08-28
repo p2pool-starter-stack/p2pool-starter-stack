@@ -19,6 +19,30 @@ res='{"status":"applied","changed_keys":["max_temp_c"],"change_id":"c1"}'
 out="$(_settle_worker_apply_maxt rig1 101 "$res")"
 assert_eq "an immediate 'applied' passes through untouched" "$out" "applied|max_temp_c|c1"
 
+echo "== _settle_worker_apply: wait_for's banner must not reach the RESULT (#1454) =="
+# The one case in this file that does NOT stub wait_for, and that is the whole point. Every other
+# case below replaces it with a silent `return 0` / `return 1`, and that silence is what let #1454
+# ship: the REAL wait_for opens with an it_step progress banner on STDOUT, and this function's
+# stdout is its return value. So the stubbed cases prove the settle's logic and are blind to the
+# only defect the settle has ever actually had on hardware.
+#
+# Driven through the generic _settle_worker_apply with a trivially-true predicate rather than
+# _settle_worker_apply_maxt, so it stays hermetic (no dashboard, no rig) while still running the
+# genuine lib.sh wait_for — including its genuine banner.
+#
+# Kills the mutant precisely: drop the `>&2` in rigforge-apply-settle.sh and the capture becomes two
+# lines, `read` takes the banner as $status, and both assertions red with the exact strings the
+# 2026-08-28 gate run printed ("expected [applied], got [  → waiting for …]" and "[] missing").
+_pred_settles_now() { return 0; }
+res='{"status":"accepted","change_id":"c-banner"}'
+out="$(_settle_worker_apply max_temp_c "the rig to report max_temp_c=101 applied" "$res" _pred_settles_now)"
+assert_eq "the settle's stdout is the result and nothing else" "$out" "applied|max_temp_c|c-banner"
+# Second conjunct, and a DIFFERENT mechanism on purpose: the wrong fix for the above is to delete
+# the banner from wait_for, which would silence progress reporting for every other wait in the
+# harness. Assert it is still emitted — on stderr, where wait_for's own timeout warning goes.
+err="$(_settle_worker_apply max_temp_c "the rig to report max_temp_c=101 applied" "$res" _pred_settles_now 2>&1 >/dev/null)"
+assert_contains "the progress banner is redirected, not deleted" "$err" "waiting for the rig to report max_temp_c=101 applied"
+
 echo "== _settle_worker_apply_maxt: RigForge #344 async apply (#1309) =="
 # This is the load-bearing mutation-kill: if the "accepted is terminal" bug (#1309) were
 # reintroduced — treating status verbatim instead of polling for it to settle — this would still
