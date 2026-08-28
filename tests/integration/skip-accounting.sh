@@ -17,6 +17,28 @@ IT_SKIPPED_PHASES=0
 IT_SKIPPED_LEGS=0
 IT_SKIPPED_NAMES=""
 
+# --- Why it did not run, not just that it did not (#1083) ---------------------------------------
+# Counting and naming the drops (#1365) still left the summary unable to answer the question a
+# reader actually has: is this hole one we accepted, or one we could have filled today? #1083 is
+# that complaint — five stable scenario skips read as "known and fine" precisely because the
+# number never moves. So every skip now also carries a CLASS, and the classes are not decoration:
+# only one of them is a gap.
+#
+#   by-design  Structurally inapplicable to THIS run's configuration. No input, flag or env var
+#              would make it run — remote mode genuinely has no local monerod to stop. Covering
+#              it means running a different scenario, not fixing anything.
+#   covered    Exercised somewhere else, and the reason says where. Not an absence of evidence;
+#              an absence of DUPLICATE evidence. Counting it as a gap is what made the number
+#              wallpaper in the first place.
+#   missing    Would have run if a named input had been supplied. THIS IS THE ONLY ONE THAT IS A
+#              GAP, and it is the number worth reading.
+#
+# The distinguishing test, applied at each call site: could a different invocation of this same
+# harness against this same box have covered it? Yes -> missing. No -> by-design.
+IT_SKIPPED_BY_DESIGN=0
+IT_SKIPPED_COVERED=0
+IT_SKIPPED_MISSING=0
+
 # --- Counted skips ----------------------------------------------------------
 # Each takes WHAT did not run and WHY. Both halves are load-bearing: a bare count tells the
 # reader how much is missing but not what, and a run that ends "skipped legs: 6 (pools,
@@ -27,22 +49,43 @@ IT_SKIPPED_NAMES=""
 # leg skip drops one assertion group. They are separate buckets rather than one total because
 # they are not the same event and must not average out — losing the whole rigforge-control phase
 # is not the same size of hole as losing its pools leg.
+#
+# The class is the OPTIONAL third argument and it defaults to "missing". The default is deliberate
+# and it is the pessimistic one: an unclassified skip is an unexplained absence, so it lands in the
+# bucket that counts as a gap. Getting the default wrong in the other direction would let a real
+# hole disappear by omission — which is the #1083 failure mode itself, one level up.
+#
+# An unrecognised class is a hard error rather than a silently-created fourth bucket. A typo that
+# invents its own bucket would drop that skip out of every total while still printing a plausible
+# line, and a miscount that reads as a count is worse than a crash.
 _it_skip_record() {
-    IT_SKIPPED_NAMES="${IT_SKIPPED_NAMES}\n    - ${1} ${2} — ${3}"
+    case "$4" in
+    by-design) IT_SKIPPED_BY_DESIGN=$((IT_SKIPPED_BY_DESIGN + 1)) ;;
+    covered) IT_SKIPPED_COVERED=$((IT_SKIPPED_COVERED + 1)) ;;
+    missing) IT_SKIPPED_MISSING=$((IT_SKIPPED_MISSING + 1)) ;;
+    *)
+        # Loud AND still counted, in the pessimistic bucket. Erroring without counting would
+        # make the three class totals stop summing to the bucket totals, and a summary whose
+        # own arithmetic does not reconcile is a worse instrument than a wrong label.
+        it_err "skip-accounting: unknown skip class '${4}' (expected by-design|covered|missing) — counted as missing"
+        IT_SKIPPED_MISSING=$((IT_SKIPPED_MISSING + 1))
+        ;;
+    esac
+    IT_SKIPPED_NAMES="${IT_SKIPPED_NAMES}\n    - [${4}] ${1} ${2} — ${3}"
 }
 it_skip_scenario() {
     IT_SKIPPED=$((IT_SKIPPED + 1))
-    _it_skip_record "scenario" "$1" "$2"
+    _it_skip_record "scenario" "$1" "$2" "${3:-missing}"
     it_warn "SKIPPED scenario ${1}: ${2}"
 }
 it_skip_phase() {
     IT_SKIPPED_PHASES=$((IT_SKIPPED_PHASES + 1))
-    _it_skip_record "PHASE   " "$1" "$2"
+    _it_skip_record "PHASE   " "$1" "$2" "${3:-missing}"
     it_warn "▲ SKIPPED WHOLE PHASE ${1}: ${2}"
 }
 it_skip_leg() {
     IT_SKIPPED_LEGS=$((IT_SKIPPED_LEGS + 1))
-    _it_skip_record "leg     " "$1" "$2"
+    _it_skip_record "leg     " "$1" "$2" "${3:-missing}"
     it_warn "skipped leg ${1}: ${2}"
 }
 

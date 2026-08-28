@@ -54,7 +54,7 @@ assert_eq "a leg skip increments only the leg bucket" "$(counts it_skip_leg)" "0
 # Mutation proof for the counting itself: a helper whose increment is removed must NOT still read
 # as counted. Without this the three assertions above would pass against a body that only warns.
 _mutated="$(
-    it_skip_leg() { _it_skip_record "leg     " "$1" "$2"; } # the increment, deliberately gone
+    it_skip_leg() { _it_skip_record "leg     " "$1" "$2" "missing"; } # the increment, deliberately gone
     it_skip_leg "some-name" "some-reason"
     printf '%s' "$IT_SKIPPED_LEGS"
 )"
@@ -195,6 +195,102 @@ printf '%s\n' '    it_warn "--keep: leaving the safety backup"' '    return 0' >
 assert_eq "the shape rule leaves the allowlisted --keep cleanup alone (negative control)" \
     "$(census_shape "$_tmp")" ""
 rm -f "$_tmp"
+
+echo "== every skip carries a CLASS, and only \"missing\" is a gap (#1083) =="
+# --- The class axis (#1083) --------------------------------------------------------------------
+# #1365 made the harness say WHAT did not run. It still could not say whether a hole was one we
+# had accepted or one we could have filled that day, which is exactly why five stable scenario
+# skips read as "known and fine" for months. The class is that missing axis, and its whole value
+# is that ONE of the three buckets is a gap and the other two are not.
+classes() { # <helper> <class...> -> "<by-design> <covered> <missing>"
+    (
+        "$1" "some-name" "some-reason" ${2+"$2"} 2>/dev/null
+        printf '%s %s %s' "$IT_SKIPPED_BY_DESIGN" "$IT_SKIPPED_COVERED" "$IT_SKIPPED_MISSING"
+    )
+}
+assert_eq "an unclassified skip defaults to missing, the pessimistic bucket" "$(classes it_skip_leg)" "0 0 1"
+assert_eq "an explicit by-design skip lands in by-design only" "$(classes it_skip_leg by-design)" "1 0 0"
+assert_eq "an explicit covered skip lands in covered only" "$(classes it_skip_phase covered)" "0 1 0"
+assert_eq "a scenario skip is classified too, not just legs" "$(classes it_skip_scenario by-design)" "1 0 0"
+
+# The default is the load-bearing half: if it ever flips to a non-gap bucket, every unannotated
+# skip in the harness silently stops counting as a hole — the #1083 failure mode, one level up.
+# Mutation proof, so the assertion above cannot pass against a body that defaults the other way.
+_mutdefault="$(
+    it_skip_leg() {
+        IT_SKIPPED_LEGS=$((IT_SKIPPED_LEGS + 1))
+        _it_skip_record "leg     " "$1" "$2" "${3:-covered}"
+    }
+    it_skip_leg "some-name" "some-reason" 2>/dev/null
+    printf '%s %s' "$IT_SKIPPED_COVERED" "$IT_SKIPPED_MISSING"
+)"
+assert_eq "a default flipped to covered is visible (mutation proof)" "$_mutdefault" "1 0"
+
+# An unknown class must be LOUD and must still be counted. Counting it nowhere would break the
+# reconciliation below, and a summary whose own totals do not add up misleads more than a bad label.
+_unknown="$(
+    it_skip_leg "some-name" "some-reason" "bydesign" 2>&1
+    printf '|%s %s %s' "$IT_SKIPPED_BY_DESIGN" "$IT_SKIPPED_COVERED" "$IT_SKIPPED_MISSING"
+)"
+assert_contains "an unknown class is reported, not silently bucketed" "$_unknown" "unknown skip class 'bydesign'"
+assert_contains "an unknown class still lands in the pessimistic bucket" "$_unknown" "|0 0 1"
+
+# Reconciliation: the three class totals must always sum to the three bucket totals. This is what
+# makes the breakdown citable — without it the two lines could drift apart and both look fine.
+_recon="$(
+    {
+        it_skip_scenario "s" "r" by-design
+        it_skip_phase "p" "r" covered
+        it_skip_leg "l1" "r"
+        it_skip_leg "l2" "r" by-design
+    } 2>/dev/null
+    printf '%s %s' "$((IT_SKIPPED + IT_SKIPPED_PHASES + IT_SKIPPED_LEGS))" \
+        "$((IT_SKIPPED_BY_DESIGN + IT_SKIPPED_COVERED + IT_SKIPPED_MISSING))"
+)"
+assert_eq "class totals reconcile with bucket totals" "$_recon" "4 4"
+
+echo "== the REAL summary() renders the class breakdown, and the named list tags each drop =="
+_rendered_cls="$(
+    {
+        it_skip_scenario "prune-remote" "no pruned chain supplied"
+        it_skip_phase "hardening" "remote mode: no local containers" by-design
+        it_skip_leg "Worker Inspect read/write (#185)" "covered by the hardening phase" covered
+    } 2>/dev/null
+    IT_PASS=7
+    render_summary
+)"
+assert_contains "the summary breaks the skips down by class" "$_rendered_cls" \
+    "of which: 1 missing (an input would have run it), 1 by-design"
+assert_contains "the breakdown names the covered bucket too" "$_rendered_cls" "1 covered elsewhere"
+assert_contains "the named list tags a by-design drop" "$_rendered_cls" "[by-design]"
+assert_contains "the named list tags a covered drop" "$_rendered_cls" "[covered]"
+assert_contains "the named list tags an unannotated drop as missing" "$_rendered_cls" "[missing]"
+
+echo "== census: every class argument in the shipped harness is one of the three (#1083) =="
+# --- CENSUS: no call site may invent a class ---------------------------------------------------
+# The runtime guard above only fires on a path that actually RUNS, and most of these skip sites
+# fire only on a bench with a rig attached. A typo like "bydesign" on a leg that skips once a
+# quarter would sit in the tree unnoticed. This census is static, so it sees every site every run.
+census_class() { # <file> -> call sites whose trailing class argument is not one of the three
+    grep -nE 'it_skip_(scenario|phase|leg) .*"[a-z-]+"[[:space:]]*$' "$1" |
+        grep -vE '"(by-design|covered|missing)"[[:space:]]*$'
+}
+for f in "$HERE"/*.sh; do
+    case "$(basename "$f")" in selftest*) continue ;; esac
+    _badcls="$(census_class "$f")"
+    assert_eq "no invented skip class in $(basename "$f")" "${_badcls:-none}" "none"
+done
+
+# ...and it can fire. A near-miss is the case that matters: an obviously-wrong class would be
+# caught by eye, a missing hyphen would not.
+_tmp2="$(mktemp)"
+printf '%s\n' '    it_skip_leg "some leg" "some reason" "bydesign"' >"$_tmp2"
+assert_ne "the class census fires on a near-miss class (positive control)" "$(census_class "$_tmp2")" ""
+printf '%s\n' '    it_skip_leg "some leg" "some reason" "by-design"' >"$_tmp2"
+assert_eq "the class census leaves a valid class alone (negative control)" "$(census_class "$_tmp2")" ""
+printf '%s\n' '    it_skip_leg "some leg" "a reason ending in a word"' >"$_tmp2"
+assert_eq "the class census leaves a plain two-argument call alone (negative control)" "$(census_class "$_tmp2")" ""
+rm -f "$_tmp2"
 
 echo "selftest-skip-accounting: $IT_PASS passed, $IT_FAIL failed"
 [ "$IT_FAIL" -eq 0 ] || exit 1
