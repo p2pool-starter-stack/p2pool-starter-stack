@@ -130,14 +130,17 @@ done
 # cannot drift between them, and a pattern that stops matching trips the emptiness guard rather
 # than quietly satisfying both loops at once.
 #
-# The pattern is anchored to the start of the line, and that anchor is load-bearing: without it a
-# commented-out `# source "$HERE/x.sh"` reads here as a live one, so the file counts as sourced
-# while run.sh never runs it — the same silent skip by another route, and the likeliest thing for
-# a conflict resolution to leave behind. What stays out of reach is a line that is live text but
-# dead code: a `source` inside a branch that never runs, or inside a function nothing calls, still
-# reads as present. Telling those apart needs control flow rather than grep, and is not claimed.
-SOURCED=$(grep -oE '^[[:space:]]*source "\$HERE/[A-Za-z0-9_.-]+\.sh"' tests/stack/run.sh |
-    sed -E 's|^[[:space:]]*source "\$HERE/||; s|"$||')
+# The pattern is anchored to the start of the line and admits no `#` ahead of the `source`, and
+# that is the load-bearing half: without it a commented-out `# source "$HERE/x.sh"` reads here as
+# a live one, so the file counts as sourced while run.sh never runs it — the same silent skip by
+# another route, and the likeliest thing for a conflict resolution to leave behind. It does not
+# require `source` to open the line, deliberately: #1400 put a guard prefix on every domain
+# stanza, and a pattern that only matched a bare `source` stopped seeing 24 of the 25. What stays
+# out of reach is a line that is live text but dead code: a `source` inside a branch that never
+# runs, or inside a function nothing calls, still reads as present. Telling those apart needs
+# control flow rather than grep, and is not claimed.
+SOURCED=$(grep -oE '^[^#]*source "\$HERE/[A-Za-z0-9_.-]+\.sh"' tests/stack/run.sh |
+    sed -E 's|^.*source "\$HERE/||; s|"$||')
 if [ -z "$SOURCED" ]; then # the grep itself going quiet must not read as "all present"
     echo "inventory drift: no 'source \"\$HERE/...\"' lines found in run.sh — the split's shape" \
         "changed; update the pattern in tests/inventory.sh" >&2

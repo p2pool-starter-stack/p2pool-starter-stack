@@ -29,6 +29,38 @@ assert_contains() { case "$2" in *"$3"*) ok "$1" ;; *) bad "$1" "[$2] missing [$
 assert_not_contains() { case "$2" in *"$3"*) bad "$1" "[$2] unexpectedly contains [$3]" ;; *) ok "$1" ;; esac }
 assert_rc() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected rc $3, got $2"; fi; }
 
+# A domain file that fails to source is skipped SILENTLY and the suite still exits 0 (#1400):
+# run.sh runs under `set -uo pipefail` with no `-e`, and its verdict is computed from PASS/FAIL
+# alone, so a file that never ran contributes nothing to either counter and nothing goes red.
+#
+# The guard is a POSITIVE control -- did this file move the assertion counters? -- rather than a
+# check of `source`'s exit status. That is deliberate: `source` returns the status of the file's
+# LAST command, which answers a different question. It reads 0 for a top-level `return`, the one
+# failure mode that leaves no diagnostic anywhere, and would read non-zero for a healthy file
+# that merely ended on a cleanup that failed. Counting assertions asks what we actually mean, so
+# the status is carried only into the message, never into the verdict.
+#
+# Limit, stated rather than implied: this proves a domain contributed at least one assertion,
+# not that it ran to completion. A file that dies half way through still passes. Covering that
+# needs a per-domain expected count, which collides with the nondeterminism in #1325.
+#
+# `return 0` pins this function's status instead of inheriting whatever `bad` last ran. run.sh
+# calls it through `... && domain_ran f "$_d0" "$?" || domain_ran f "$_d0" "$?"`, and only a
+# non-zero return here would reach the second branch at all. Nothing double-counts even if one
+# did: `bad` moves FAIL, the very counter the guard tests, so a second call finds
+# `$((PASS + FAIL))` already past `before` and does nothing. That idempotence is what makes the
+# duplicated call safe, and it is exactly what SC2015 cannot see. Measured, because an earlier
+# version of this comment claimed the opposite and was wrong: without `return 0` both paths
+# already return 0, and with an explicit `return 1` the chain still counts FAIL=1, not 2.
+domain_ran() {
+    local file="$1" before="$2" st="${3:-0}"
+    if [ "$((PASS + FAIL))" -eq "$before" ]; then
+        bad "domain file $file contributed no assertions (#1400)" \
+            "source returned $st: non-zero means it failed to load, zero means a top-level return"
+    fi
+    return 0
+}
+
 # Run a command with pithead sourced (functions available, no cd/main side effects),
 # from a given working directory. Usage: run_sourced <dir> <cmd> [args...]
 # shellcheck disable=SC1090  # STACK path is dynamic by design
