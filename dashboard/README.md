@@ -52,7 +52,9 @@ mining_dashboard/
 │                      #   views.py (build_state: the JSON state object), charts.py (the chart
 │                      #   window/range hub views.py re-exports), xvb_views.py (XvB, earnings
 │                      #   and top-bar badges), infra_views.py (host, rig, energy, proxy,
-│                      #   Tari and sync sections), templates/index.html (static shell),
+│                      #   Tari and sync sections), series_views.py (share health, blocks,
+│                      #   payouts, disk growth, XvB history, hashrate and cadence),
+│                      #   templates/index.html (static shell),
 │                      #   static/ (Preact app + dashboard.css + vendored libs)
 └── helper/            # formatting utilities
 ```

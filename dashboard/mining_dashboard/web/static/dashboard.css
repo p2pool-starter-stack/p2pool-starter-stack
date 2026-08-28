@@ -1055,7 +1055,7 @@ button.upgrade-btn {
   margin-right: 5px;
 }
 
-/* Pool/mode palette. The server picks one of these classes (see views._mode_palette)
+/* Pool/mode palette. The server picks one of these classes (see series_views._mode_palette)
  * instead of emitting an inline style="color:#..." — keeps the CSP free of
  * style-src 'unsafe-inline' and makes #43 (theming) a stylesheet change. The hexes match
  * the --ok/--purple/--accent/--text-muted variables they replace. */
