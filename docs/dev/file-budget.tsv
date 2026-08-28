@@ -77,7 +77,7 @@ tests/stack/test-control-upgrade.sh	795
 tests/stack/test-dashboard-onion.sh	422
 tests/stack/test-dashboard.sh	592
 tests/stack/test-doctor.sh	507
-tests/stack/test-lifecycle.sh	854
+tests/stack/test-lifecycle.sh	891
 tests/stack/test-monero-tari.sh	582
 tests/stack/test-release.sh	504
 tests/stack/test-release-signing.sh	454

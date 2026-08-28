@@ -852,3 +852,40 @@ assert_eq "a lock timeout spends no A/B fallback, is not counted, and says it is
 assert_eq "any other failed up still reads as a bad slot and falls back" \
     "$(boot_up_probe 1)" "1|rebooted|other+slotfailure"
 unset -f boot_up_probe
+
+# THE WIZARD'S HALF OF THE SAME ROUTING — the leg #1342 left unrouted, recreating #1059's shape.
+#
+# The block above proves the BOOT leg tells contention from a bad slot. `setup` runs inside a
+# mutating window too and can lose the same race, but every non-zero (setup) was routed as a
+# provisioning failure: the operator is told their configuration is wrong and asked to correct it,
+# on a first boot where there is no shell to contradict it. Worse, that path calls
+# wizard_keep_failed_config, which REMOVES config.json when the machine-role marker never landed —
+# and record_machine_role is best-effort (`printf ... || true`).
+#
+# THE FIXTURE IS CHOSEN TO MAKE THE REMOVAL REACHABLE: config.json present, machine-role ABSENT.
+# With the marker present nothing is removed on either branch, both rows would read "kept", and
+# this pair could not fail for any change to the routing.
+WIZC="$SANDBOX/wizcontend"
+wizard_fail_probe() { # <exit status of setup> -> "<config>|<copy>|<verdict>|<rc>"
+    local out rc=0 verdict=other
+    rm -rf "$WIZC"
+    mkdir -p "$WIZC"
+    printf '{"monero":{}}\n' >"$WIZC/config.json"
+    out=$(run_sourced "$WIZC" wizard_setup_failed "$1" 2>&1) || rc=$?
+    # Keyed on a sentence ONLY one branch writes, for the reason the boot probe above gives: both
+    # branches mention reopening the setup window, so that shared phrase would let either stand in
+    # for the other.
+    case "$out" in *"contention, NOT a problem with the configuration"*) verdict=contended ;; esac
+    case "$out" in *"so it can be corrected"*) verdict="$verdict+badconfig" ;; esac
+    printf '%s|%s|%s|%s' \
+        "$([ -f "$WIZC/config.json" ] && echo kept || echo DELETED)" \
+        "$([ -f "$WIZC/config.json.failed" ] && echo copied || echo no-copy)" \
+        "$verdict" "$rc"
+}
+# rc is the prefill signal: 0 means a config.json.failed copy was kept and the reopened page fills
+# from it, 1 means the live config.json is what the operator gets back.
+assert_eq "a lock-timeout setup keeps the operator's configuration and names it as contention" \
+    "$(wizard_fail_probe 75)" "kept|no-copy|contended|1"
+assert_eq "any other failed setup still copies the config aside and asks for a correction" \
+    "$(wizard_fail_probe 1)" "DELETED|copied|other+badconfig|0"
+unset -f wizard_fail_probe

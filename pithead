@@ -1787,6 +1787,37 @@ wizard_keep_failed_config() {
     return 1
 }
 
+# CONTENTION IS NOT A BAD CONFIG — the wizard's half of #1342's routing, and it was missing.
+#
+# os/overlay/pithead-boot has the boot leg's half (fail_boot_contended): a lock timeout there is
+# contention, not a bad A/B slot, so the fallback is not spent. `setup` runs inside a mutating
+# window too, and can lose exactly the same race — but every non-zero (setup) was routed as a
+# provisioning failure, which tells the operator their configuration is wrong and asks them to
+# correct it. On a first boot there is no shell to contradict it with.
+#
+# Worse than misleading. That path calls wizard_keep_failed_config, which removes config.json
+# whenever the machine-role marker never landed — and record_machine_role is best-effort
+# (`printf ... || true`). So contention could take a VALID configuration away from the operator
+# and then blame them for it: #1059's own shape, on the one leg #1059's fix did not route.
+#
+# Kept as a function rather than inline at the call site, for the reason boot_up_failed gives on
+# the other leg: the two halves of one decision drift apart when they are written twice.
+#
+# rc 0 = a config.json.failed copy was kept (so the reopened page prefills from it), 1 = not.
+# Contention deliberately returns 1 WITHOUT calling wizard_keep_failed_config: nothing is copied,
+# nothing is removed, and the live config.json the operator submitted is what prefills the retry.
+wizard_setup_failed() { # <exit status of setup>
+    if [ "$1" = "$PITHEAD_EX_LOCK_TIMEOUT" ]; then
+        warn "Another pithead operation still held the machine, and provisioning timed out waiting for it."
+        warn "That is contention, NOT a problem with the configuration you submitted — it is kept exactly as it is."
+        warn "Reopening the setup window so it can be resubmitted once the other operation has finished."
+        return 1
+    fi
+    warn "Provisioning failed. A copy of the submitted configuration is kept as config.json.failed;"
+    warn "reopening the setup window so it can be corrected."
+    wizard_keep_failed_config
+}
+
 # The marker, read back. Anything unrecognised (or absent) is a coordinator: every machine
 # provisioned before this contract existed had no marker and was one.
 machine_role() { # echoes pithead|both|rig
@@ -2943,19 +2974,25 @@ firstboot_wizard() {
                 # teed: the console keeps its live narration, and the tail becomes the reopened
                 # page's error — a refusal that lives only in console scrollback cost a bench
                 # session an hour of believing the machine had crashed.
-                local setup_log
+                local setup_log setup_rc=0
                 setup_log=$(mktemp)
-                if (setup) 2>&1 | tee "$setup_log"; then
+                # The STATUS is captured, not just its truthiness: `if (setup) | tee` collapses
+                # every failure to one, and a lock timeout (PITHEAD_EX_LOCK_TIMEOUT) has to be
+                # told apart from a bad configuration — see wizard_setup_failed. PIPESTATUS is not
+                # needed here because `pipefail` is set, so the pipeline carries setup's own
+                # non-zero status; `|| setup_rc=$?` is what keeps `set -e` from taking the branch
+                # away before it can be read.
+                { (setup) 2>&1 | tee "$setup_log"; } || setup_rc=$?
+                if [ "$setup_rc" -eq 0 ]; then
                     rm -f "$setup_log"
                     return
                 fi
-                warn "Provisioning failed. A copy of the submitted configuration is kept as config.json.failed;"
-                warn "reopening the setup window so it can be corrected."
                 # The machine KEEPS its configuration (#1059) — this used to move it aside, which
                 # on this path can only cost. The reasoning, and why the removal that remains is
-                # conditional, is at wizard_keep_failed_config's definition.
+                # conditional, is at wizard_keep_failed_config's definition. Which of the two
+                # failures this was, and whether a copy is taken at all, is wizard_setup_failed's.
                 local kept_copy=0
-                if wizard_keep_failed_config; then kept_copy=1; fi
+                if wizard_setup_failed "$setup_rc"; then kept_copy=1; fi
                 mkdir -p "$spool"
                 chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
                 # The reopened page gets BOTH halves of a usable retry: the reason it failed, and
