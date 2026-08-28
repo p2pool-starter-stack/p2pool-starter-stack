@@ -874,10 +874,10 @@ class TestStatusWarnings:
     def test_bad_and_flagged_warn_badges_included_stripped(self, monkeypatch):
         # Low RAM (⚠ warn) + DB failing (bad) both surface; the leading ⚠ is stripped for the list.
         # Modes pinned full-local so the mode-aware floor (14) makes 8 GB a real warning.
-        import mining_dashboard.web.views as views_mod
+        import mining_dashboard.web.xvb_views as xvb_mod
 
-        monkeypatch.setattr(views_mod, "monero_is_local", lambda: True)
-        monkeypatch.setattr(views_mod, "tari_is_local", lambda: True)
+        monkeypatch.setattr(xvb_mod, "monero_is_local", lambda: True)
+        monkeypatch.setattr(xvb_mod, "tari_is_local", lambda: True)
         warnings = tc.status_warnings(
             {"system": {"memory": {"total_gb": 8}}}, _metrics(), db_healthy=False
         )

@@ -50,8 +50,9 @@ mining_dashboard/
 ├── sim/               # donation_model (the XvB donation simulator; property-tested, #284)
 ├── web/               # server.py (transport: / shell + /api/state + middleware),
 │                      #   views.py (build_state: the JSON state object), charts.py (the chart
-│                      #   window/range hub views.py re-exports), templates/index.html (static
-│                      #   shell), static/ (Preact app + dashboard.css + vendored libs)
+│                      #   window/range hub views.py re-exports), xvb_views.py (XvB, earnings
+│                      #   and top-bar badges), templates/index.html (static shell),
+│                      #   static/ (Preact app + dashboard.css + vendored libs)
 └── helper/            # formatting utilities
 ```
 
