@@ -30,6 +30,7 @@ source "$HERE/lib.sh"
 
 RUN_SRC="$HERE/run.sh"
 
+echo "== the three counted-skip helpers exist at all (fail closed if one is renamed away) =="
 # --- The helpers exist at all -----------------------------------------------------------------
 # Fail CLOSED. If a refactor renames or removes one, this file must go red rather than quietly
 # stop testing — a self-test whose subject evaporates is the same shape of lie it exists to catch.
@@ -37,6 +38,7 @@ for fn in it_skip_scenario it_skip_phase it_skip_leg; do
     assert_eq "lib.sh defines $fn" "$(type -t "$fn")" "function"
 done
 
+echo "== each helper moves its OWN bucket, and a helper without its increment counts nothing =="
 # --- Each helper moves its OWN bucket, and only its own ----------------------------------------
 # Run in a subshell with the warn output discarded: the subject here is the counters, not the text.
 counts() { # <helper> -> "<scenarios> <phases> <legs>"
@@ -58,6 +60,7 @@ _mutated="$(
 )"
 assert_eq "an it_skip_leg with its increment removed counts 0 (mutation proof)" "$_mutated" "0"
 
+echo "== every skip is NAMED with its reason, and a phase drop is louder than a leg drop =="
 # --- Every skip is NAMED, with its reason ------------------------------------------------------
 # A bare count says how big the hole is and nothing about where. The names are the deliverable.
 _names="$(
@@ -80,6 +83,7 @@ _warned="$(
 assert_contains "a phase drop announces itself as a whole phase" "$_warned" "SKIPPED WHOLE PHASE rigforge-control"
 assert_contains "a leg drop announces itself as one leg" "$_warned" "skipped leg pools write (#1002b)"
 
+echo "== the REAL summary() out of run.sh reports all three buckets and names the omissions =="
 # --- The REAL summary() out of run.sh renders all three buckets --------------------------------
 # Extracted rather than re-spelled: a re-implementation would pass happily while the shipped file
 # printed something else, which is precisely the class of green this lane exists to remove.
@@ -130,6 +134,7 @@ case "$_clean" in
 *) it_pass "a run that skipped nothing prints no omissions block" ;;
 esac
 
+echo "== census: no skip may leave the harness through a bare it_warn, by wording OR by shape =="
 # --- CENSUS: no skip may leave through a bare it_warn again ------------------------------------
 # The counted helpers are the only sanctioned exit for a skip. This is the half that holds: the 34
 # converted sites drifted in one at a time over the harness's life, and each looked reasonable on
