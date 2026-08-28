@@ -202,6 +202,12 @@ PROBE
     #                                   "not the branch's" is a weaker claim than "built from
     #                                   RESTORE_DIR". Settling that would need the image's own build
     #                                   provenance, and the dashboard's ships empty (#1449).
+    # Where a false RED would come from, named rather than discovered later: 'gone' turns a service
+    # that is not running into a proof failure, and wait_bench_healthy above only WARNS on a timeout.
+    # So a stack that is genuinely still coming up after its 300s poll now fails the restore instead
+    # of passing with a warning. That is the intended reading — a service that ran before the run and
+    # does not run after it is a failed restore, whatever the reason — but it is a behaviour change on
+    # a slow box, and it is the first thing to look at if a restore starts failing here.
     local now_images verdicts line stale=0 rebuilt=0 kept=0 gone=0
     now_images="$(stack_image_census)"
     if [ -z "$BASELINE_IMAGES" ]; then
