@@ -189,8 +189,20 @@ while read -r base; do
     MISSING="${MISSING}${base}"$'\n'
 done <<<"$EXPECTED"
 n_missing=$(printf '%s' "$MISSING" | count)
+n_expected=$(printf '%s' "$EXPECTED" | count)
+# Nothing to compare is itself drift, and it is the ONE case a set-difference floor cannot see. If
+# every domain file and every stanza disappear TOGETHER — a botched revert of the #1105 split, or a
+# merge that drops the directory — then SOURCED and EXPECTED collapse to empty at the same time,
+# MISSING is empty, and the floor above is vacuously satisfied. The emptiness test this floor
+# replaced DID catch that, so it is asserted explicitly rather than quietly lost with it. Its own
+# sentence, not a share of the floor's: two guards on one string means either can cover for the
+# other's deletion.
+if [ "$n_expected" -eq 0 ]; then
+    echo "inventory drift: tests/stack/ holds no sourced domain files at all — the split's shape" \
+        "changed, or the directory was emptied; there is nothing for the drift floor to compare" >&2
+    exit 1
+fi
 if [ "$n_missing" -gt 0 ]; then
-    n_expected=$(printf '%s' "$EXPECTED" | count)
     echo "inventory drift: $n_missing of $n_expected domain files on disk are not sourced by" \
         "run.sh — a 'source' line was deleted, or, the closer this count runs to $n_expected, the" \
         "pattern above stopped matching. Either way the suite would still pass, silently skipping" \
