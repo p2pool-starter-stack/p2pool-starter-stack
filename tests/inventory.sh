@@ -181,7 +181,12 @@ done <<<"$SOURCED"
 # none. Exiting on the first offender was the other half: it named one file, alphabetically first,
 # for a 24-file regression, and the reader sizes the problem from that message.
 MISSING=""
-while read -r base; do
+# `IFS=` is load-bearing: `read -r` into a single variable strips leading and trailing IFS
+# whitespace, so a file on disk whose name STARTS with a space, sourced by nothing, would be
+# stripped to its bare name — which IS in SOURCED — and silently accepted. A mid-name space was
+# caught either way, which is what made this invisible. Direction 1's identical construct above
+# needs no such fix: SOURCED comes from a character class that cannot emit a space.
+while IFS= read -r base; do
     if [ -z "$base" ]; then continue; fi
     # Matched between newlines, not spaces: a filename containing a space would survive the glob
     # above (it is iterated directly) only to be split apart by a space-delimited lookup here.
@@ -190,16 +195,21 @@ while read -r base; do
 done <<<"$EXPECTED"
 n_missing=$(printf '%s' "$MISSING" | count)
 n_expected=$(printf '%s' "$EXPECTED" | count)
-# Nothing to compare is itself drift, and it is the ONE case a set-difference floor cannot see. If
-# every domain file and every stanza disappear TOGETHER — a botched revert of the #1105 split, or a
-# merge that drops the directory — then SOURCED and EXPECTED collapse to empty at the same time,
-# MISSING is empty, and the floor above is vacuously satisfied. The emptiness test this floor
-# replaced DID catch that, so it is asserted explicitly rather than quietly lost with it. Its own
-# sentence, not a share of the floor's: two guards on one string means either can cover for the
-# other's deletion.
+# Nothing to compare is itself drift, and it is the ONE case the set difference above cannot see. If
+# every expected domain file and every stanza disappear TOGETHER — a botched revert of the #1105
+# split — then SOURCED and EXPECTED empty at the same time, MISSING is empty, and the comparison is
+# vacuously satisfied. The emptiness test this replaced DID catch that, so it is asserted explicitly
+# rather than quietly lost with it. Its own sentence, not a share of the one below: two guards on
+# one string means either can silently cover for the other's deletion.
+# Scope, stated because a comment that names a case this guard never sees is worse than no comment:
+# dropping the WHOLE directory does not reach here — `n_stack` counts 0 and the aggregate gate above
+# exits first, with byte-identical output whether this guard is alive or dead. What is unique to
+# this check is the narrower case where run.sh and the sectioned UNSOURCED files survive, keeping
+# `n_stack` non-zero, while the expected domain files and their stanzas both go.
 if [ "$n_expected" -eq 0 ]; then
-    echo "inventory drift: tests/stack/ holds no sourced domain files at all — the split's shape" \
-        "changed, or the directory was emptied; there is nothing for the drift floor to compare" >&2
+    echo "inventory drift: no domain files are expected to be sourced — every tests/stack file is" \
+        "run.sh, UNSOURCED, or gone, so there is nothing to check run.sh's stanzas against;" \
+        "restore the domain files, or update the pattern in tests/inventory.sh" >&2
     exit 1
 fi
 if [ "$n_missing" -gt 0 ]; then
