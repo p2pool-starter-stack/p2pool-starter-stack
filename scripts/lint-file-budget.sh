@@ -11,9 +11,9 @@
 #      branch, $BASE_REF below) — and a file that shrinks back to <=400 must drop its entry.
 #
 # Exemptions are enumerated by path/glob in is_exempt() below, each with its own reason —
-# generated code, vendored files, data/config, prose docs, and (for now) the shipped `pithead`
-# artifact itself, whose future lib/*.sh sources are what this gate will govern once #1105
-# Phase 2 makes it a build product. Binary files are detected generically (grep -I), not listed.
+# generated code, vendored files, data/config, prose docs, and the shipped `pithead` artifact
+# itself, which #1105 Phase 2 made a build product: it is generated from lib/pithead/*.sh, and
+# those slices carry the rows. Binary files are detected generically (grep -I), not listed.
 #
 # Run `--self-test` first (fixtures for every failure mode, including the empty-enumeration
 # guard); `--generate` reprints the budget for every current non-exempt offender, for seeding or
@@ -99,8 +99,8 @@ is_exempt() {
     docs/research/*) return 0 ;;
     # Captured benchmark run data, not source.
     docs/benchmarks/data/*) return 0 ;;
-    # The shipped pithead CLI artifact — exempt for now (#1105 Phase 0). Its future lib/*.sh
-    # sources are what this gate will govern once Phase 2 makes it a build product.
+    # The shipped pithead CLI artifact — generated, not written (#1105 Phase 2): it is built from
+    # lib/pithead/*.sh, and those slices carry the budget rows instead.
     pithead) return 0 ;;
     *) return 1 ;;
     esac

@@ -1,5 +1,5 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml lint-topology lint-file-budget lint-trivy-parity release release-smoke
+.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml lint-topology lint-file-budget lint-pithead-parity lint-trivy-parity release release-smoke
 
 test: lint test-dashboard test-frontend test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
@@ -44,7 +44,7 @@ test-inventory: ## Write the test coverage inventory to docs/dev/test-inventory.
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
-lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-file-budget lint-trivy-parity lint-proto lint-toml ## Lint/format-check every surface
+lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-file-budget lint-pithead-parity lint-trivy-parity lint-proto lint-toml ## Lint/format-check every surface
 
 # Two shellcheck invocations, not one, and the split is load-bearing. shellcheck resolves a
 # `# shellcheck source=` directive only when the sourced file is ALSO named on the same command
@@ -73,6 +73,17 @@ lint-sh: ## shellcheck + shfmt over the CLI, build/* + dashboard/ container scri
 # names neither the script nor the three globals and needs no company; pithead-boot moved up to
 # the invocation that lints the domain files, where its readers now live. Verified both ways:
 # the domain file alone reports the three SC2034, and beside pithead-boot reports none.
+#
+# `lib/pithead/*.sh` is DELIBERATELY absent from the shellcheck lines above, and adding it would
+# make this target worse, not stricter. Those files are the slices `scripts/build-pithead.sh`
+# concatenates into `pithead` (#1105 Phase 2), and `pithead` is the first name on the line above —
+# so shellcheck already reads every one of their lines, in context, which is strictly more than it
+# can learn from the fragments. `make lint-pithead-parity` is what proves the artifact it reads IS
+# the slices. Checking them separately would instead re-create the SC2034 pairing problem this
+# comment already describes, one slice boundary at a time, and add an ~12k-line second analysis
+# root to the target that has OOM-killed sessions on this box. shfmt DOES cover them, via the
+# `git ls-files '*.sh'` glob below: format is a per-file property, so it transfers; the semantic
+# checks do not. If you came here to add them, that is the argument to beat.
 	shellcheck --severity=warning tests/stack/run.sh
 	@# Three non-.sh files are named outright below, so a dead enumeration still hands shfmt
 	@# three real arguments and exits 0 — 3 files checked of 100, reported as a pass. Guard the
@@ -108,6 +119,10 @@ lint-topology: ## Fail if a real-looking IPv6/IPv4/hostname/path/user@host liter
 lint-file-budget: ## Fail if a tracked file crosses the 800-line hard ceiling, or an existing offender grows past its docs/dev/file-budget.tsv ceiling (#1105 Phase 0)
 	bash scripts/lint-file-budget.sh --self-test
 	bash scripts/lint-file-budget.sh
+
+lint-pithead-parity: ## Fail if the shipped pithead artifact is not exactly what lib/pithead/*.sh builds (#1105 Phase 2)
+	bash scripts/build-pithead.sh --self-test
+	bash scripts/build-pithead.sh --check
 
 lint-trivy-parity: ## Fail if ci.yml's and os-rootfs.yml's trivy-action steps drift from the version scripts/trivyignore-watch.sh scans with (#1290)
 	bash scripts/trivyignore-watch.sh --self-test
