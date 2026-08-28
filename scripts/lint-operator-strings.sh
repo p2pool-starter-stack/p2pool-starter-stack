@@ -105,8 +105,10 @@ scan_frontend() {
     ' "$@"
 }
 
-# An empty enumeration is broken, never a clean tree — 28 files match the globs below. Skipping
-# the scan on empty leaves `fail` at 0 while the closing line still claims the frontend was scanned.
+# An empty enumeration is broken, never a clean tree: the globs below match tracked files in any
+# real checkout. Skipping the scan on empty leaves `fail` at 0 while the closing line still claims
+# the frontend was scanned. (No count here on purpose — one would be wrong twice over, since the
+# globs and the surviving set differ by the *.min.js bundles, and both drift with the frontend.)
 enforce_nonempty_frontend() { # <newline-separated file list>
     [ -n "$1" ] && return 0
     echo "operator strings: the dashboard frontend enumeration returned zero files." >&2
@@ -179,6 +181,25 @@ if [ "${1:-}" = "--self-test" ]; then
         st_fail=1
     fi
 
+    # The two rows above prove the FUNCTION. Neither proves the CALL SITE: delete the
+    # `enforce_nonempty_frontend "$files"` line and every row above still passes while the real
+    # invocation goes back to reporting a frontend it never read. That is this repo's recurring
+    # shape — a green assertion compatible with the feature not being wired in — and it is the very
+    # shape this script was changed to refuse, so it is checked here rather than described in a PR.
+    # Run the real script end to end in a throwaway git repo whose index is empty, which is the only
+    # way to make the enumeration return nothing without editing the globs.
+    self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+    wire="$tmp/wire"
+    mkdir -p "$wire"
+    (cd "$wire" && git init -q . && : >pithead) >/dev/null 2>&1
+    wire_out=$(cd "$wire" && bash "$self" 2>&1 </dev/null) && wire_rc=0 || wire_rc=$?
+    if [ "$wire_rc" -ne 0 ] && printf '%s\n' "$wire_out" | grep -q 'frontend enumeration returned zero files'; then
+        echo "  self-test ok: the real invocation refuses an empty frontend enumeration"
+    else
+        echo "  self-test FAIL: the real invocation accepted an empty frontend enumeration (rc=$wire_rc)"
+        st_fail=1
+    fi
+
     [ "$st_fail" -eq 0 ] && {
         echo "lint-operator-strings self-test OK"
         exit 0
@@ -218,6 +239,12 @@ fi
 files=$(git ls-files 'dashboard/mining_dashboard/web/static/*.mjs' \
     'dashboard/mining_dashboard/web/static/*.js' \
     'dashboard/mining_dashboard/web/templates/*.html' | grep -v '\.min\.js$' || true)
+#
+# THIS REFUSAL MUST STAY ABOVE THE SCAN. `scan_frontend` ends in `awk '...' "$@"`, and awk with zero
+# file arguments reads STDIN — so folding this check into the `if` below, or moving it after the
+# scan, converts the false green into a job that HANGS instead of failing. Measured both ways: with
+# this line here the script refuses in milliseconds; with it deleted and stdin held open, the scan
+# blocks until the runner's timeout.
 enforce_nonempty_frontend "$files" || exit 1
 
 # shellcheck disable=SC2086
