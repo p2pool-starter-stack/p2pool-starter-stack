@@ -126,8 +126,8 @@ enforce_nonempty_frontend() { # <newline-separated file list>
 # Same false green as the empty enumeration above, reached from a missing target rather than an
 # empty list (issue #1434).
 enforce_scan_target_present() { # <path>
-    [ -f "$1" ] && return 0
-    echo "operator strings: the file this linter scans is not here: $1" >&2
+    [ -r "$1" ] && return 0
+    echo "operator strings: the file this linter scans cannot be read: $1" >&2
     echo "A missing target and a clean scan both report zero hits — refusing to call either a pass." >&2
     echo "Run this from the repo root; if the CLI moved, update the path in this script." >&2
     return 1
@@ -226,6 +226,19 @@ if [ "${1:-}" = "--self-test" ]; then
         echo "  self-test FAIL: a present scan target was refused"
         st_fail=1
     fi
+    # A target that exists but cannot be read reproduces the same false green as a missing one, which
+    # is why the check is `-r` and not `-f`. The staging can fail on its own terms — a user that
+    # bypasses file permissions cannot make a file unreadable to itself — so the row says it skipped
+    # rather than reporting a pass it did not earn.
+    unread="$tmp/unreadable"
+    : >"$unread"
+    chmod 000 "$unread"
+    if [ -r "$unread" ]; then
+        echo "  self-test skipped: this user bypasses file permissions, so an unreadable target cannot be staged"
+    elif enforce_scan_target_present "$unread" 2>/dev/null; then
+        echo "  self-test FAIL: an unreadable scan target was accepted"
+        st_fail=1
+    else echo "  self-test ok: an unreadable scan target is refused"; fi
 
     # Same reasoning as the wire test above, for the pithead legs: the two rows immediately above
     # prove the FUNCTION, and only this one proves the CALL SITE. Scored on the printed refusal
@@ -233,11 +246,19 @@ if [ "${1:-}" = "--self-test" ]; then
     # rc-only assertion here would pass a "fix" that never prints anything an operator can act on.
     # Delete the `enforce_scan_target_present pithead` line and every row above still passes while
     # the real invocation goes back to reporting a clean CLI it never opened.
+    # The fixture needs a NON-EMPTY frontend, and that is the whole point of it. Without one, the
+    # row's two conjuncts come from unlinked mechanisms: the message from this function, and the
+    # non-zero rc from `enforce_nonempty_frontend`, which refuses a checkout that has no frontend
+    # either. Both then survive a call site mutated to `|| true` or folded into the `if` below — the
+    # original defect, fully restored, with every row here still printing ok. With a frontend
+    # present, the pithead guard is the only thing that can make this run non-zero. Do not "simplify"
+    # this fixture back to a bare `git init`.
     bare="$tmp/bare"
-    mkdir -p "$bare"
-    (cd "$bare" && git init -q .) >/dev/null 2>&1
+    mkdir -p "$bare/dashboard/mining_dashboard/web/static"
+    printf '%s\n' 'const t = "clean";' >"$bare/dashboard/mining_dashboard/web/static/app.mjs"
+    (cd "$bare" && git init -q . && git add -A) >/dev/null 2>&1
     bare_out=$(cd "$bare" && bash "$self" 2>&1 </dev/null) && bare_rc=0 || bare_rc=$?
-    if [ "$bare_rc" -ne 0 ] && printf '%s\n' "$bare_out" | grep -q 'the file this linter scans is not here'; then
+    if [ "$bare_rc" -ne 0 ] && printf '%s\n' "$bare_out" | grep -q 'the file this linter scans cannot be read'; then
         echo "  self-test ok: the real invocation refuses a missing pithead"
     else
         echo "  self-test FAIL: the real invocation accepted a missing pithead (rc=$bare_rc)"
@@ -254,9 +275,11 @@ fi
 
 fail=0
 
-# THIS REFUSAL MUST STAY ABOVE BOTH pithead legs. Folding it into either `if` condition below puts
-# it back inside the very errexit exemption that caused the defect, and moving it after the scans
-# lets a missing CLI read as a clean one for the length of the run.
+# THIS REFUSAL MUST STAY ABOVE BOTH pithead legs, and the self-test enforces it rather than merely
+# asking. Folding it into either `if` condition below puts it back inside the errexit exemption that
+# caused the defect, and returns rc 0 with the closing OK line — the original defect intact. Moving
+# it down is milder but still wrong: below the scans it still refuses, after two fail-open scans and
+# six stderr fatals nothing reads; below the closing echo it stops mattering at all.
 enforce_scan_target_present pithead || exit 1
 
 if
