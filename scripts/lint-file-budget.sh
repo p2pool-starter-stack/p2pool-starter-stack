@@ -9,6 +9,8 @@
 #      ceiling. A PR may not grow that file past its recorded ceiling. Ceilings only ever go
 #      DOWN — this script rejects any budget edit that raises one (checked against the base
 #      branch, $BASE_REF below) — and a file that shrinks back to <=400 must drop its entry.
+#      One row is exempt from the "only DOWN" half, because it measures work remaining rather
+#      than a file: monotonic_exempt() carries the reasoning.
 #
 # Exemptions are enumerated by path/glob in is_exempt() below, each with its own reason —
 # generated code, vendored files, data/config, prose docs, and the shipped `pithead` artifact
@@ -196,10 +198,32 @@ run_gate() {
     return 0
 }
 
+# The one row whose ceiling may RISE, and why that is not a loosened ratchet (#1464).
+#
+# lib/pithead/99-remainder.sh is not a file anyone writes. It is whatever of the generated
+# `pithead` artifact #1105 Phase 2 has not split out yet, so its ceiling measures work
+# REMAINING, not the size of a source file. `pithead` itself is exempt in is_exempt() precisely
+# so a CLI bug fix may add lines; routing those same lines through a ratcheting row turned that
+# exemption into a hard freeze, because no value of the row passed — run_gate refused the growth
+# and check_monotonic refused the raise.
+#
+# What keeps it honest is what is NOT changed here: run_gate's `lines > ceiling` rule is
+# untouched, so a PR that grows the artifact must still record the new count, and the row stays a
+# per-PR measurement rather than a ceiling nobody reads. Every Phase 2 slice cut LOWERS it —
+# the progress signal the row exists for — and it retires itself when the remainder drops to the
+# target. Keep this list to rows with that property; a row naming a real source file does not
+# have it.
+monotonic_exempt() {
+    case "$1" in
+    lib/pithead/99-remainder.sh) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
 # Ceilings only ever go down. Compare the working-tree budget against the base branch's: any
 # path present in both whose ceiling ROSE is a rejected edit, proving the ratchet is real.
 check_monotonic() {
-    local base old_lines fail=0 path old_ceiling new_ceiling
+    local base old_lines fail=0 path old_ceiling new_ceiling actual
     base=$(resolve_base_ref)
     if [ -z "$base" ]; then
         echo "file-budget: NOTE — no base ref (origin/develop or develop) resolvable; skipping the" \
@@ -214,6 +238,24 @@ check_monotonic() {
         [ -n "$path" ] || continue
         new_ceiling=$(parse_budget <"$BUDGET_FILE" | awk -F'\t' -v p="$path" '$1==p {print $2; exit}')
         if [ -n "$new_ceiling" ] && [ "$new_ceiling" -gt "$old_ceiling" ]; then
+            if monotonic_exempt "$path"; then
+                # A rise must RECORD the artifact, not grant it headroom. Without this the
+                # exemption would let one PR set the row to any number it liked, and nothing
+                # mechanical would object again until the file actually reached it — which
+                # would retire the per-PR measurement while still reading as a ratchet.
+                actual=$(count_lines "$path")
+                if [ "$new_ceiling" != "$actual" ]; then
+                    echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling to $new_ceiling," \
+                        "but the file is $actual lines. That row records the un-split remainder, so a" \
+                        "rise must state the real count, not reserve headroom."
+                    fail=1
+                    continue
+                fi
+                echo "file-budget: NOTE — $path's ceiling rises from $old_ceiling to $new_ceiling," \
+                    "matching the file. That row records the un-split remainder of the generated" \
+                    "pithead artifact, so it tracks it both ways (#1464). Every Phase 2 cut lowers it." >&2
+                continue
+            fi
             echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling from $old_ceiling to" \
                 "$new_ceiling. Ceilings only go down."
             fail=1
@@ -233,164 +275,25 @@ generate_budget() {
     list_candidates | awk -F'\t' -v t="$TARGET_LINES" '$2 > t {print}' | sort
 }
 
-# --- self-test: every failure mode against fixtures, in an isolated throwaway git repo ----------
-self_test() {
-    local tmp out st_fail=0 rc=0
-    tmp=$(mktemp -d)
-    out=$(mktemp)
-    # Double-quoted so $tmp/$out are embedded now, as literal paths — the trap still fires after
-    # self_test's own locals have gone out of scope, so a deferred expansion would see them unset.
-    # shellcheck disable=SC2064
-    trap "rm -rf '$tmp' '$out'" EXIT
-    git -C "$tmp" init -q -b develop
-    git -C "$tmp" config user.email test@example.invalid
-    git -C "$tmp" config user.name test
-
-    expect() { # <desc> <expected-rc> <actual-rc>
-        if [ "$2" -eq "$3" ]; then
-            echo "  self-test ok: $1"
-        else
-            echo "  self-test FAIL: $1 (expected rc $2, got $3)"
-            st_fail=1
-        fi
-    }
-    seq 1 500 >"$tmp/budgeted.sh"
-    mkdir -p "$tmp/$(dirname "$BUDGET_FILE")"
-    printf '# test budget\nbudgeted.sh\t500\n' >"$tmp/$BUDGET_FILE"
-    git -C "$tmp" add budgeted.sh "$BUDGET_FILE"
-    git -C "$tmp" commit -q -m base
-
-    rc=0
-    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "calibration: budgeted file at its ceiling passes" 0 "$rc"
-
-    seq 1 501 >"$tmp/budgeted.sh"
-    rc=0
-    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "growing a budgeted file past its ceiling FAILS" 1 "$rc"
-    if grep -q "budgeted.sh is 501" "$out"; then
-        echo "  self-test ok: names the offending file"
-    else
-        echo "  self-test FAIL: did not name the offending file"
-        st_fail=1
-    fi
-
-    seq 1 500 >"$tmp/budgeted.sh"
-    rc=0
-    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "reverting the growth passes again" 0 "$rc"
-
-    seq 1 800 >"$tmp/new.sh"
-    git -C "$tmp" add new.sh
-    rc=0
-    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "an over-target file with NO entry FAILS (800, inside the hard ceiling)" 1 "$rc"
-    if grep -q "new.sh is 800 lines (> 400 target) but has no" "$out"; then
-        echo "  self-test ok: names the missing entry, not the hard ceiling"
-    else
-        echo "  self-test FAIL: did not name the missing entry"
-        st_fail=1
-    fi
-    printf '# test budget\nbudgeted.sh\t500\nnew.sh\t800\n' >"$tmp/$BUDGET_FILE"
-    rc=0
-    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "recording the entry is the fix — the same file then passes" 0 "$rc"
-    printf '# test budget\nbudgeted.sh\t500\n' >"$tmp/$BUDGET_FILE"
-    seq 1 801 >"$tmp/new.sh"
-    rc=0
-    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "a new 801-line file FAILS the hard ceiling" 1 "$rc"
-    rm -f "$tmp/new.sh"
-    git -C "$tmp" rm -q --cached new.sh >/dev/null 2>&1 || true
-
-    printf '# test budget\nbudgeted.sh\t400\n' >"$tmp/$BUDGET_FILE"
-    rc=0
-    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "lowering a ceiling below the file's real size FAILS (reality check)" 1 "$rc"
-
-    printf '# test budget\nbudgeted.sh\t900\n' >"$tmp/$BUDGET_FILE"
-    rc=0
-    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "raising a ceiling FAILS (monotonicity, vs the committed base)" 1 "$rc"
-    if grep -q "raises budgeted.sh's ceiling" "$out"; then
-        echo "  self-test ok: names the ceiling raise"
-    else
-        echo "  self-test FAIL: did not name the ceiling raise"
-        st_fail=1
-    fi
-    printf '# test budget\nbudgeted.sh\t500\n' >"$tmp/$BUDGET_FILE"
-
-    seq 1 300 >"$tmp/budgeted.sh"
-    rc=0
-    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "a budgeted file dropped below target still listed FAILS (stale entry)" 1 "$rc"
-    seq 1 500 >"$tmp/budgeted.sh"
-
-    # Two-lane shape: a develop-v2 branch cut BEFORE the lane tip advanced must still
-    # ratchet against develop-v2, not fall back to develop and read this lane's larger
-    # ceiling as a raise — the false RED that bit two live PRs the day the tip moved.
-    local tmp3
-    tmp3=$(mktemp -d)
-    git -C "$tmp3" init -q -b develop
-    git -C "$tmp3" config user.email test@example.invalid
-    git -C "$tmp3" config user.name test
-    mkdir -p "$tmp3/$(dirname "$BUDGET_FILE")"
-    seq 1 500 >"$tmp3/budgeted.sh"
-    printf '# test budget\nbudgeted.sh\t500\n' >"$tmp3/$BUDGET_FILE"
-    git -C "$tmp3" add -A && git -C "$tmp3" commit -q -m dev-base
-    git -C "$tmp3" checkout -q -b develop-v2
-    seq 1 600 >"$tmp3/budgeted.sh"
-    printf '# test budget\nbudgeted.sh\t600\n' >"$tmp3/$BUDGET_FILE"
-    git -C "$tmp3" add -A && git -C "$tmp3" commit -q -m v2-larger
-    git -C "$tmp3" checkout -q -b feature
-    git -C "$tmp3" checkout -q develop-v2
-    echo x >"$tmp3/other.txt"
-    git -C "$tmp3" add other.txt && git -C "$tmp3" commit -q -m v2-advances
-    git -C "$tmp3" checkout -q feature
-    seq 1 580 >"$tmp3/budgeted.sh"
-    printf '# test budget\nbudgeted.sh\t580\n' >"$tmp3/$BUDGET_FILE"
-    rc=0
-    (cd "$tmp3" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "a v2-lane branch behind the moved lane tip still ratchets against develop-v2" 0 "$rc"
-    rc=0
-    (cd "$tmp3" && [ "$(resolve_base_ref)" = develop-v2 ]) || rc=1
-    expect "lane detection reads history, not tip-levelness" 0 "$rc"
-    git -C "$tmp3" checkout -q -f develop
-    rc=0
-    (cd "$tmp3" && [ "$(resolve_base_ref)" = develop ]) || rc=1
-    expect "a develop-lane checkout still resolves to develop" 0 "$rc"
-    rm -rf "$tmp3"
-
-    rc=0
-    (
-        cd "$tmp" || exit 90
-        list_candidates() { :; }
-        run_gate
-    ) >"$out" 2>&1 || rc=$?
-    expect "an empty candidate scan FAILS loudly, never a vacuous pass" 1 "$rc"
-
-    local tmp2
-    tmp2=$(mktemp -d)
-    git -C "$tmp2" init -q -b develop
-    git -C "$tmp2" config user.email test@example.invalid
-    git -C "$tmp2" config user.name test
-    rc=0
-    (cd "$tmp2" && run_gate) >"$out" 2>&1 || rc=$?
-    expect "a repo with zero tracked files FAILS loudly (enumeration guard)" 1 "$rc"
-    rm -rf "$tmp2"
-
-    if [ "$st_fail" -eq 0 ]; then
-        echo "lint-file-budget self-test OK"
-        return 0
-    fi
-    echo "lint-file-budget self-test FAILED"
-    return 1
-}
+# The fixtures live in lint-file-budget-selftest.sh, which SOURCES this file for the functions
+# above (#1464 — this script sat at a ceiling equal to its own length, and its own header rule
+# says a file back under the target drops its entry, so the split is the documented remedy).
+# Sourcing must therefore define everything and run nothing: without this guard, `source` would
+# fall straight into the dispatch below and run the gate against whatever directory the caller
+# happened to be in. Executing this script directly dispatches exactly as it always did.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+    return 0
+fi
 
 case "${1:-}" in
 --self-test)
-    self_test
-    exit $?
+    # Resolve the link before taking the dirname: through a symlink, `dirname "$0"` gives the
+    # LINK's directory, so the exec misses and the gate exits 127 — a mis-typed failure rather
+    # than a self-test verdict. No call site symlinks this today (the Makefile and CI both run
+    # the tracked file), so this is closing a hole rather than fixing a live break. There is
+    # deliberately no fixture for it: a case that ran --self-test through a symlink would
+    # re-enter the self-test and recurse.
+    exec bash "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/lint-file-budget-selftest.sh"
     ;;
 --generate)
     generate_budget
