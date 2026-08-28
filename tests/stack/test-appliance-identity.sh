@@ -29,6 +29,15 @@
 # Left behind, deliberately: preflight_remote_nodes' dial-before-commit check, which follows this
 # block and reads as identity-adjacent because provisioning is what consumes both. It belongs to
 # the remote-node contract, not to who the machine is.
+#
+# `$WALLET` is read below and is not this file's to assume. lib.sh's two sandbox builders default it
+# (build_val_sandbox, build_control_sandbox), and neither is called from here — so in the suite it
+# survives only because an earlier run.sh section happened to build a sandbox first. Sourcing in
+# place preserves that accident, which is why the suite is green with or without this line. Seed it
+# from the same constant those builders use, so the file states its own dependency rather than
+# inheriting one; `:-` keeps a caller's value, so nothing in the suite changes.
+WALLET="${WALLET:-$VALID_PRIMARY}"
+
 echo "== unit: headless setup resolves the appliance's browsable name, never the bare hostname =="
 # 'interactive' with no terminal is an EOF that silently picked $(hostname) — the appliance's
 # dashboard then served a name no LAN client resolves (a bench machine showed a BLANK page:
