@@ -60,16 +60,16 @@ IT_SKIPPED_MISSING=0
 # line, and a miscount that reads as a count is worse than a crash.
 _it_skip_record() {
     case "$4" in
-        by-design) IT_SKIPPED_BY_DESIGN=$((IT_SKIPPED_BY_DESIGN + 1)) ;;
-        covered) IT_SKIPPED_COVERED=$((IT_SKIPPED_COVERED + 1)) ;;
-        missing) IT_SKIPPED_MISSING=$((IT_SKIPPED_MISSING + 1)) ;;
-        *)
-            # Loud AND still counted, in the pessimistic bucket. Erroring without counting would
-            # make the three class totals stop summing to the bucket totals, and a summary whose
-            # own arithmetic does not reconcile is a worse instrument than a wrong label.
-            it_err "skip-accounting: unknown skip class '${4}' (expected by-design|covered|missing) — counted as missing"
-            IT_SKIPPED_MISSING=$((IT_SKIPPED_MISSING + 1))
-            ;;
+    by-design) IT_SKIPPED_BY_DESIGN=$((IT_SKIPPED_BY_DESIGN + 1)) ;;
+    covered) IT_SKIPPED_COVERED=$((IT_SKIPPED_COVERED + 1)) ;;
+    missing) IT_SKIPPED_MISSING=$((IT_SKIPPED_MISSING + 1)) ;;
+    *)
+        # Loud AND still counted, in the pessimistic bucket. Erroring without counting would
+        # make the three class totals stop summing to the bucket totals, and a summary whose
+        # own arithmetic does not reconcile is a worse instrument than a wrong label.
+        it_err "skip-accounting: unknown skip class '${4}' (expected by-design|covered|missing) — counted as missing"
+        IT_SKIPPED_MISSING=$((IT_SKIPPED_MISSING + 1))
+        ;;
     esac
     IT_SKIPPED_NAMES="${IT_SKIPPED_NAMES}\n    - [${4}] ${1} ${2} — ${3}"
 }

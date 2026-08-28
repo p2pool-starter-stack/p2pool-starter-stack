@@ -522,10 +522,10 @@ same box have covered it? Yes means `missing`; no means `by-design`.
 
 The class is the optional third argument and it defaults to `missing`. The default is the
 pessimistic one on purpose — an unclassified skip is an unexplained absence, so it lands in the
-bucket that counts. Defaulting the other way would let a real hole disappear by omission, which is
-#1083's own failure mode one level up. An unrecognised class is reported loudly and still counted
-as `missing`, so the class totals always reconcile with the bucket totals; a summary whose own
-arithmetic does not add up misleads more than a wrong label does.
+bucket that counts. Defaulting the other way would let a real hole disappear by omission,
+which is #1083's own failure mode one level up. An unrecognised class is reported loudly and
+still counted as `missing`, so the class totals always reconcile with the bucket totals; a
+summary whose own arithmetic does not add up misleads more than a wrong label does.
 
 `selftest-skip-accounting.sh` holds both halves: the helpers behave, and a static census refuses
 any call site that invents a class. The census is static because most of these legs fire only on a

@@ -217,7 +217,10 @@ assert_eq "a scenario skip is classified too, not just legs" "$(classes it_skip_
 # skip in the harness silently stops counting as a hole — the #1083 failure mode, one level up.
 # Mutation proof, so the assertion above cannot pass against a body that defaults the other way.
 _mutdefault="$(
-    it_skip_leg() { IT_SKIPPED_LEGS=$((IT_SKIPPED_LEGS + 1)); _it_skip_record "leg     " "$1" "$2" "${3:-covered}"; }
+    it_skip_leg() {
+        IT_SKIPPED_LEGS=$((IT_SKIPPED_LEGS + 1))
+        _it_skip_record "leg     " "$1" "$2" "${3:-covered}"
+    }
     it_skip_leg "some-name" "some-reason" 2>/dev/null
     printf '%s %s' "$IT_SKIPPED_COVERED" "$IT_SKIPPED_MISSING"
 )"
