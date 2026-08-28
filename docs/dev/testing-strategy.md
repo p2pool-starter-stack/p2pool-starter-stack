@@ -35,6 +35,12 @@ CI, with no chain and no test box.
 Every situation, its trigger, and the tier(s) that cover it. ✅ = covered today; ▶ = exercised by
 the live matrix / mini-stack when run.
 
+Where a tier-1 shell row names `tests/stack/run.sh`, read that as the tier-1 shell **suite**, not as the
+file holding the assertions. The #1105 split moves domains out of `run.sh` into `tests/stack/test-*.sh`
+files beside it one at a time, and `run.sh` sources each one, so a behaviour's own file is found there.
+The rows are deliberately not re-pointed cut by cut — that goes stale again at the next one — and this
+note stands until the split finishes and each row can name its domain file.
+
 ### A. Configuration permutations
 
 The deploy-time axes — each changes a real runtime path. Full table and assertions in
