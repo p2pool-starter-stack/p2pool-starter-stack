@@ -44,11 +44,19 @@ redact() {
 }
 
 # --- Assertions -------------------------------------------------------------
-# Counters are global so the runner can total them across scenarios.
+# Counters are global so the runner can total them across scenarios. The skip buckets and the
+# three helpers that move them live next door; sourced here so anything that has lib.sh has them.
+# Fail CLOSED: sourced as a bare name this resolves to "lib.sh/skip-accounting.sh", and a
+# harness that merely warns would then miscount every skip in silence — the exact defect below.
+# shellcheck source=tests/integration/skip-accounting.sh
+source "${BASH_SOURCE[0]%/*}/skip-accounting.sh" ||
+    {
+        echo "lib.sh: skip-accounting.sh must sit beside it (source lib.sh by a path, not a bare name)" >&2
+        exit 1
+    }
 IT_PASS=0
 IT_FAIL=0
 IT_FAILED_NAMES=""
-
 it_pass() {
     IT_PASS=$((IT_PASS + 1))
     printf '    %b✓%b %s\n' "$IT_GREEN" "$IT_RESET" "$1"
@@ -600,21 +608,6 @@ wait_monero_synced() { wait_for "${1:-300}" 10 "Monero sync complete" _pred_mone
 wait_miner_running() { wait_for "${1:-180}" 5 "miner released" _pred_miner_running; }
 wait_tari_synced() { wait_for "${1:-300}" 10 "Tari sync complete" _pred_tari_synced; }
 wait_pool_ready() { wait_for "${1:-180}" 5 "pool type determinate (${2})" _pred_pool_ready "$2"; }
-
-# Mining-liveness verdict (#905/#1082), factored out of assert_running_state so selftest can
-# prove --no-mining-asserts is a CONDITIONAL skip, not a permanent one: the two assertions must
-# still run — and be able to go red — every time the flag is unset. Only the caller-set skip
-# flag suppresses them; there is no auto-detection here (a live worker-count of zero from a
-# genuinely fallen-off rig must stay indistinguishable from a parked bench unless the operator
-# says so explicitly — see #1082's fail-open discussion).
-assert_mining_state() { # <skip: 0|1> <workers> <hashes> <expected-workers>
-    if [ "$1" = "1" ]; then
-        it_warn "SKIPPED workers online + stratum total hashes: no miner attached to this box (--no-mining-asserts) — drop the flag (and attach a miner) to make these binding again (#905/#1082)"
-        return 0
-    fi
-    assert_num_ge "workers online (>= $4)" "${2:-0}" "$4"
-    assert_num_gt "stratum total hashes > 0" "${3:-0}" 0
-}
 
 # Ground truth for the sidechain axis (#746): the rendered P2POOL_FLAGS in the box's .env carry
 # --mini / --nano (main carries neither). The dashboard classifies the sidechain by counting

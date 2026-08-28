@@ -123,7 +123,7 @@ run_rigforge_writable_keys() { # <rig>
     it_log "   #1236: autotune and watchdog are deliberately NOT driven (a real tuning run; and dropping thermal protection on a rig at its temperature ceiling), and pools is never derived from the rig's own read (credential-stripped, #113) — see docs/dev/integration-testing.md"
     detail="$(_worker_detail "$rig")"
     if ! printf '%s' "$detail" | jq -e '(.rig_config | type) == "object"' >/dev/null 2>&1; then
-        it_warn "rig '$rig' reports no writable config (.rig_config is null — 'could not read', or a RigForge older than v1.10.0/rigforge#253) — skipping the writable-key legs (#1236)"
+        it_skip_phase "rigforge writable-key legs (#1236)" "rig '$rig' reports no writable config (.rig_config is null — 'could not read', or a RigForge older than v1.10.0/rigforge#253)"
         return 0
     fi
 
@@ -132,7 +132,7 @@ run_rigforge_writable_keys() { # <rig>
     # is RigForge's own default. Bounds are 0-100 (rigforge.sh:406), so both directions are valid.
     orig="$(_rig_config_key "$detail" DONATION)"
     if [ -z "$orig" ]; then
-        it_warn "rig '$rig' reports no DONATION in its writable config — skipping that leg (can't read the original to restore it) (#1236)"
+        it_skip_leg "DONATION write (#1236)" "rig '$rig' reports no DONATION in its writable config — can't read the original to restore it"
     elif ! printf '%s' "$orig" | grep -qE '^[0-9]+$'; then
         it_fail "the rig's reported DONATION is a number (#1236)" "got [$orig]"
     else
@@ -146,7 +146,7 @@ run_rigforge_writable_keys() { # <rig>
     # (rigforge.sh:556); step away from whichever end we are on so the probe is always in range.
     orig="$(_rig_config_key "$detail" watchdog_interval_min)"
     if [ -z "$orig" ]; then
-        it_warn "rig '$rig' reports no watchdog_interval_min in its writable config — skipping that leg (can't read the original to restore it) (#1236)"
+        it_skip_leg "watchdog_interval_min write (#1236)" "rig '$rig' reports no watchdog_interval_min in its writable config — can't read the original to restore it"
     elif ! printf '%s' "$orig" | grep -qE '^[0-9]+$' || [ "$orig" -lt 1 ] || [ "$orig" -gt 1440 ]; then
         it_fail "the rig's reported watchdog_interval_min is in RigForge's 1-1440 range (#1236)" "got [$orig]"
     else
@@ -166,7 +166,7 @@ run_rigforge_writable_keys() { # <rig>
 run_rigforge_pools() { # <rig>
     local rig="$1" orig_pools res status ckeys
     if [ -z "${IT_RIG_POOLS_PROBE:-}" ]; then
-        it_warn "no IT_RIG_POOLS_PROBE (a JSON pools value safe to apply to rig '$rig') — skipping the pools write leg (#1002b)"
+        it_skip_leg "pools write (#1002b)" "no IT_RIG_POOLS_PROBE (a JSON pools value safe to apply to rig '$rig')"
         return 0
     fi
     if ! printf '%s' "${IT_RIG_POOLS_PROBE:-}" | jq -e . >/dev/null 2>&1; then
@@ -175,7 +175,7 @@ run_rigforge_pools() { # <rig>
     fi
     orig_pools="$(_worker_detail "$rig" | jq -c '.last_applied.pools // empty' 2>/dev/null)"
     if [ -z "$orig_pools" ]; then
-        it_warn "rig '$rig' has no dashboard-applied pools on record (.last_applied.pools) — skipping the pools write leg (can't read a restorable original; the rig's own .rig_config.pools is credential-stripped and must not be written back) (#1002b)"
+        it_skip_leg "pools write (#1002b)" "rig '$rig' has no dashboard-applied pools on record (.last_applied.pools) — can't read a restorable original; the rig's own .rig_config.pools is credential-stripped and must not be written back"
         return 0
     fi
     it_step "Worker Inspect edit: pools -> the operator-supplied probe via /api/control/worker-apply…"
