@@ -117,6 +117,22 @@ enforce_nonempty_frontend() { # <newline-separated file list>
     return 1
 }
 
+# A missing scan target is broken, never a clean tree. Both pithead legs below name the CLI as a
+# literal path, and `scan_pithead`/`scan_pithead_docs` end in grep and awk over that path inside an
+# `if` condition, where errexit is exempt by design. With the file gone they fatal to stderr, the
+# substitution yields the empty string, `[ -n "$hits" ]` is false, `fail` stays 0 — and the closing
+# line still states that no issue/PR numbers were found in pithead output. Nothing downstream
+# consumes stderr: the make target, the CI step and a local run all decide on the exit code alone.
+# Same false green as the empty enumeration above, reached from a missing target rather than an
+# empty list (issue #1434).
+enforce_scan_target_present() { # <path>
+    [ -f "$1" ] && return 0
+    echo "operator strings: the file this linter scans is not here: $1" >&2
+    echo "A missing target and a clean scan both report zero hits — refusing to call either a pass." >&2
+    echo "Run this from the repo root; if the CLI moved, update the path in this script." >&2
+    return 1
+}
+
 # --- self-test: prove the scanners catch a planted #NNN and skip the tricky exemptions ----------
 if [ "${1:-}" = "--self-test" ]; then
     tmp=$(mktemp -d)
@@ -200,6 +216,34 @@ if [ "${1:-}" = "--self-test" ]; then
         st_fail=1
     fi
 
+    if enforce_scan_target_present "$tmp/absent" 2>/dev/null; then
+        echo "  self-test FAIL: a missing scan target was accepted"
+        st_fail=1
+    else echo "  self-test ok: a missing scan target is refused"; fi
+    if enforce_scan_target_present "$tmp/hit.sh"; then
+        echo "  self-test ok: a present scan target is accepted"
+    else
+        echo "  self-test FAIL: a present scan target was refused"
+        st_fail=1
+    fi
+
+    # Same reasoning as the wire test above, for the pithead legs: the two rows immediately above
+    # prove the FUNCTION, and only this one proves the CALL SITE. Scored on the printed refusal
+    # rather than on the exit code, because a script that dies anonymously also exits non-zero — an
+    # rc-only assertion here would pass a "fix" that never prints anything an operator can act on.
+    # Delete the `enforce_scan_target_present pithead` line and every row above still passes while
+    # the real invocation goes back to reporting a clean CLI it never opened.
+    bare="$tmp/bare"
+    mkdir -p "$bare"
+    (cd "$bare" && git init -q .) >/dev/null 2>&1
+    bare_out=$(cd "$bare" && bash "$self" 2>&1 </dev/null) && bare_rc=0 || bare_rc=$?
+    if [ "$bare_rc" -ne 0 ] && printf '%s\n' "$bare_out" | grep -q 'the file this linter scans is not here'; then
+        echo "  self-test ok: the real invocation refuses a missing pithead"
+    else
+        echo "  self-test FAIL: the real invocation accepted a missing pithead (rc=$bare_rc)"
+        st_fail=1
+    fi
+
     [ "$st_fail" -eq 0 ] && {
         echo "lint-operator-strings self-test OK"
         exit 0
@@ -209,6 +253,11 @@ if [ "${1:-}" = "--self-test" ]; then
 fi
 
 fail=0
+
+# THIS REFUSAL MUST STAY ABOVE BOTH pithead legs. Folding it into either `if` condition below puts
+# it back inside the very errexit exemption that caused the defect, and moving it after the scans
+# lets a missing CLI read as a clean one for the length of the run.
+enforce_scan_target_present pithead || exit 1
 
 if
     hits=$(scan_pithead pithead)
