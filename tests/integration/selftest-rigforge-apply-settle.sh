@@ -21,18 +21,12 @@ assert_eq "an immediate 'applied' passes through untouched" "$out" "applied|max_
 
 echo "== _settle_worker_apply: wait_for's banner must not reach the RESULT (#1454) =="
 # The one case in this file that does NOT stub wait_for, and that is the whole point. Every other
-# case below replaces it with a silent `return 0` / `return 1`, and that silence is what let #1454
-# ship: the REAL wait_for opens with an it_step progress banner on STDOUT, and this function's
-# stdout is its return value. So the stubbed cases prove the settle's logic and are blind to the
-# only defect the settle has ever actually had on hardware.
-#
-# Driven through the generic _settle_worker_apply with a trivially-true predicate rather than
-# _settle_worker_apply_maxt, so it stays hermetic (no dashboard, no rig) while still running the
-# genuine lib.sh wait_for — including its genuine banner.
-#
-# Kills the mutant precisely: drop the `>&2` in rigforge-apply-settle.sh and the capture becomes two
-# lines, `read` takes the banner as $status, and both assertions red with the exact strings the
-# 2026-08-28 gate run printed ("expected [applied], got [  → waiting for …]" and "[] missing").
+# case replaces it with a silent `return 0` / `return 1`, and that silence is what let #1454 ship:
+# the real wait_for opens with an it_step banner on stdout, and this function's stdout is its
+# return value. Drop the `>&2` in rigforge-apply-settle.sh and the capture becomes two lines, so
+# `read` takes the banner as $status — the exact four reds the 2026-08-28 gate run printed.
+# Driven through the generic _settle_worker_apply with a trivially-true predicate so it stays
+# hermetic (no dashboard, no rig) while still running the genuine lib.sh wait_for.
 _pred_settles_now() { return 0; }
 res='{"status":"accepted","change_id":"c-banner"}'
 out="$(_settle_worker_apply max_temp_c "the rig to report max_temp_c=101 applied" "$res" _pred_settles_now)"

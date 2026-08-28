@@ -37,18 +37,13 @@ _settle_worker_apply() { # <ckeys-on-success> <wait-desc> <dial-result-json> <pr
     status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
     ckeys="$(printf '%s' "$res" | jq -r '(.changed_keys // []) | join(",")' 2>/dev/null)"
     change_id="$(printf '%s' "$res" | jq -r '.change_id // empty' 2>/dev/null)"
-    # `>&2` is load-bearing, not tidiness (#1454). This function's stdout IS its return value —
-    # every call site captures it with `$(...)` and splits it with `IFS='|' read`. wait_for's own
-    # progress banner goes through it_step, which writes to STDOUT, so without this redirection the
-    # banner lands in the capture as the FIRST line and `read` takes it as $status: the caller then
-    # sees status = "  → waiting for the rig to report …", ckeys = "" and change_id = "", and reds
-    # all three assertions no matter what the rig did. It fires on every settle that actually waits
-    # — i.e. exactly the RigForge #344 async path this module exists for — so the settle looked
-    # correct only while it was never exercised. Confirmed on hardware: the rig's own
-    # /var/lib/rigforge-control/changes/<cid>.json recorded both DONATION changes "applied", 18s
-    # apart, while the gate reported four reds. The banner keeps its visibility on stderr, which is
-    # where wait_for's matching "timed out after Ns" warning already goes, and e2e.sh merges both
-    # into the harness log (2>&1).
+    # `>&2` is load-bearing (#1454). This function's stdout IS its return value — every call site
+    # captures it with `$(...)` and splits it with `IFS='|' read` — and wait_for opens with an
+    # it_step banner, which goes to STDOUT. Without the redirection that banner is the FIRST line of
+    # the capture, `read` takes it as $status, ckeys and change_id come back empty, and all three
+    # of the caller's assertions red whatever the rig did. It fires only on a settle that actually
+    # waits, i.e. exactly the RigForge #344 path this module exists for. stderr is where wait_for's
+    # own "timed out after Ns" warning already goes, and e2e.sh merges both into the harness log.
     if [ "$status" = "accepted" ] && wait_for 90 5 "$desc" "$@" >&2; then
         status="applied"
         ckeys="$key"
