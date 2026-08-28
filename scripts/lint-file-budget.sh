@@ -223,7 +223,7 @@ monotonic_exempt() {
 # Ceilings only ever go down. Compare the working-tree budget against the base branch's: any
 # path present in both whose ceiling ROSE is a rejected edit, proving the ratchet is real.
 check_monotonic() {
-    local base old_lines fail=0 path old_ceiling new_ceiling
+    local base old_lines fail=0 path old_ceiling new_ceiling actual
     base=$(resolve_base_ref)
     if [ -z "$base" ]; then
         echo "file-budget: NOTE — no base ref (origin/develop or develop) resolvable; skipping the" \
@@ -239,9 +239,21 @@ check_monotonic() {
         new_ceiling=$(parse_budget <"$BUDGET_FILE" | awk -F'\t' -v p="$path" '$1==p {print $2; exit}')
         if [ -n "$new_ceiling" ] && [ "$new_ceiling" -gt "$old_ceiling" ]; then
             if monotonic_exempt "$path"; then
-                echo "file-budget: NOTE — $path's ceiling rises from $old_ceiling to $new_ceiling." \
-                    "That row measures the un-split remainder of the generated pithead artifact, so" \
-                    "it tracks the artifact both ways (#1464). Every Phase 2 cut must lower it." >&2
+                # A rise must RECORD the artifact, not grant it headroom. Without this the
+                # exemption would let one PR set the row to any number it liked, and nothing
+                # mechanical would object again until the file actually reached it — which
+                # would retire the per-PR measurement while still reading as a ratchet.
+                actual=$(count_lines "$path")
+                if [ "$new_ceiling" != "$actual" ]; then
+                    echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling to $new_ceiling," \
+                        "but the file is $actual lines. That row records the un-split remainder, so a" \
+                        "rise must state the real count, not reserve headroom."
+                    fail=1
+                    continue
+                fi
+                echo "file-budget: NOTE — $path's ceiling rises from $old_ceiling to $new_ceiling," \
+                    "matching the file. That row records the un-split remainder of the generated" \
+                    "pithead artifact, so it tracks it both ways (#1464). Every Phase 2 cut lowers it." >&2
                 continue
             fi
             echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling from $old_ceiling to" \
@@ -275,7 +287,13 @@ fi
 
 case "${1:-}" in
 --self-test)
-    exec bash "$(dirname -- "$0")/lint-file-budget-selftest.sh"
+    # Resolve the link before taking the dirname: through a symlink, `dirname "$0"` gives the
+    # LINK's directory, so the exec misses and the gate exits 127 — a mis-typed failure rather
+    # than a self-test verdict. No call site symlinks this today (the Makefile and CI both run
+    # the tracked file), so this is closing a hole rather than fixing a live break. There is
+    # deliberately no fixture for it: a case that ran --self-test through a symlink would
+    # re-enter the self-test and recurse.
+    exec bash "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/lint-file-budget-selftest.sh"
     ;;
 --generate)
     generate_budget

@@ -10,7 +10,9 @@
 # anything; see the bottom of that script.
 set -euo pipefail
 
-HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# readlink -f for the same reason the gate's --self-test dispatch uses it: through a symlink the
+# bare dirname would point at the link's directory and the source below would miss.
+HERE=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)
 # shellcheck source=scripts/lint-file-budget.sh
 source "$HERE/lint-file-budget.sh"
 
@@ -155,18 +157,26 @@ self_test() {
     mkdir -p "$tmp4/$(dirname "$BUDGET_FILE")" "$tmp4/lib/pithead"
     seq 1 500 >"$tmp4/budgeted.sh"
     seq 1 500 >"$tmp4/lib/pithead/99-remainder.sh"
-    printf '# test budget\nbudgeted.sh\t500\nlib/pithead/99-remainder.sh\t500\n' >"$tmp4/$BUDGET_FILE"
+    # A SIBLING SLICE, and it is the reason this fixture has three files rather than two.
+    # #1105 Phase 2 keeps adding real source files under lib/pithead/, so the plausible future
+    # mistake is not deleting the exemption — it is widening its pattern to lib/pithead/*.
+    # With only the remainder here, that widening kept every case green.
+    seq 1 500 >"$tmp4/lib/pithead/01-prelude.sh"
+    printf '# test budget\nbudgeted.sh\t500\nlib/pithead/01-prelude.sh\t500\nlib/pithead/99-remainder.sh\t500\n' \
+        >"$tmp4/$BUDGET_FILE"
     git -C "$tmp4" add -A && git -C "$tmp4" commit -q -m remainder-base
     # The shape a pithead bug fix produces: the artifact grows, the row is updated to match.
     seq 1 600 >"$tmp4/lib/pithead/99-remainder.sh"
-    printf '# test budget\nbudgeted.sh\t500\nlib/pithead/99-remainder.sh\t600\n' >"$tmp4/$BUDGET_FILE"
+    printf '# test budget\nbudgeted.sh\t500\nlib/pithead/01-prelude.sh\t500\nlib/pithead/99-remainder.sh\t600\n' \
+        >"$tmp4/$BUDGET_FILE"
     rc=0
     (cd "$tmp4" && run_gate) >"$out" 2>&1 || rc=$?
     expect "the un-split-remainder ceiling may rise with the artifact it measures (#1464)" 0 "$rc"
 
     # THE LOAD-BEARING CASE. Without it the pass above is indistinguishable from a monotonic
     # check that stopped checking: same raise, a row that is NOT exempt, in the same run.
-    printf '# test budget\nbudgeted.sh\t900\nlib/pithead/99-remainder.sh\t600\n' >"$tmp4/$BUDGET_FILE"
+    printf '# test budget\nbudgeted.sh\t900\nlib/pithead/01-prelude.sh\t500\nlib/pithead/99-remainder.sh\t600\n' \
+        >"$tmp4/$BUDGET_FILE"
     rc=0
     (cd "$tmp4" && run_gate) >"$out" 2>&1 || rc=$?
     expect "control: a NON-exempt ceiling raise still FAILS in the same run" 1 "$rc"
@@ -178,10 +188,43 @@ self_test() {
         st_fail=1
     fi
 
+    # NARROWNESS CONTROL: the sibling slice is a real source file that happens to live in the
+    # same directory. Raising ITS ceiling must still be refused — the exemption is one row, not
+    # a directory. This is the case that reddens if the pattern is ever widened to lib/pithead/*.
+    seq 1 600 >"$tmp4/lib/pithead/01-prelude.sh"
+    printf '# test budget\nbudgeted.sh\t500\nlib/pithead/01-prelude.sh\t600\nlib/pithead/99-remainder.sh\t600\n' \
+        >"$tmp4/$BUDGET_FILE"
+    rc=0
+    (cd "$tmp4" && run_gate) >"$out" 2>&1 || rc=$?
+    expect "control: the exemption is ONE row, not lib/pithead/ — a sibling slice still FAILS" 1 "$rc"
+    if grep -q "raises lib/pithead/01-prelude.sh's ceiling" "$out"; then
+        echo "  self-test ok: names the sibling slice, so the exemption did not leak to it"
+    else
+        echo "  self-test FAIL: the exemption leaked to a sibling lib/pithead slice"
+        st_fail=1
+    fi
+    seq 1 500 >"$tmp4/lib/pithead/01-prelude.sh"
+
+    # A rise must RECORD the artifact, never reserve headroom. Otherwise one PR sets the row to
+    # any number it likes and nothing objects again until the file reaches it — a ratchet in
+    # name only. The file is 600 here, so a row of 999999 is a headroom grant, not a measurement.
+    printf '# test budget\nbudgeted.sh\t500\nlib/pithead/01-prelude.sh\t500\nlib/pithead/99-remainder.sh\t999999\n' \
+        >"$tmp4/$BUDGET_FILE"
+    rc=0
+    (cd "$tmp4" && run_gate) >"$out" 2>&1 || rc=$?
+    expect "a rise on the exempt row must match the file, not reserve headroom" 1 "$rc"
+    if grep -q "but the file is 600 lines" "$out"; then
+        echo "  self-test ok: names the count the row should have stated"
+    else
+        echo "  self-test FAIL: did not name the mismatch between row and file"
+        st_fail=1
+    fi
+
     # The exempt row is still a real per-PR measurement: run_gate's `lines > ceiling` rule is
     # untouched, so growing the artifact without recording the new count still REDs.
     seq 1 700 >"$tmp4/lib/pithead/99-remainder.sh"
-    printf '# test budget\nbudgeted.sh\t500\nlib/pithead/99-remainder.sh\t600\n' >"$tmp4/$BUDGET_FILE"
+    printf '# test budget\nbudgeted.sh\t500\nlib/pithead/01-prelude.sh\t500\nlib/pithead/99-remainder.sh\t600\n' \
+        >"$tmp4/$BUDGET_FILE"
     rc=0
     (cd "$tmp4" && run_gate) >"$out" 2>&1 || rc=$?
     expect "the exempt row is not a free pass: growing past it still FAILS" 1 "$rc"
