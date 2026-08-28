@@ -127,8 +127,8 @@ done
 # aggregate nor the per-file gate can see it. The hyphen-named domain files have no standalone CI
 # invocation of their own — the underscore-named test_*.sh suites do, and fail their own step — so
 # for them these two checks are the whole safety net. Both read one SOURCED list, so the pattern
-# cannot drift between them, and a pattern that stops matching trips the emptiness guard rather
-# than quietly satisfying both loops at once.
+# cannot drift between them, and a pattern that stops matching cannot quietly satisfy both loops at
+# once: direction 2 compares the list against the files on disk and reports how many are missing.
 #
 # The pattern is anchored to the start of the line and admits no `#` ahead of the `source`, and
 # that is the load-bearing half: without it a commented-out `# source "$HERE/x.sh"` reads here as
@@ -141,15 +141,26 @@ done
 # control flow rather than grep, and is not claimed.
 SOURCED=$(grep -oE '^[^#]*source "\$HERE/[A-Za-z0-9_.-]+\.sh"' tests/stack/run.sh |
     sed -E 's|^.*source "\$HERE/||; s|"$||')
-if [ -z "$SOURCED" ]; then # the grep itself going quiet must not read as "all present"
-    echo "inventory drift: no 'source \"\$HERE/...\"' lines found in run.sh — the split's shape" \
-        "changed; update the pattern in tests/inventory.sh" >&2
-    exit 1
-fi
+# The domain files run.sh is expected to source: every tests/stack/*.sh but the sourcer itself and
+# the suites that carry their own CI step and fail there. Hoisted above both directions because the
+# floor below needs its size, and both loops need its membership.
+# Not sourced by run.sh, by design — each is invoked as its own CI step and fails there:
+UNSOURCED="test_appliance_hugepages.sh test_compose.sh test_data_reset.sh \
+    test_firstboot_journal.sh test_os_update_recovery.sh"
+EXPECTED=""
+for f in tests/stack/*.sh; do
+    base="${f#tests/stack/}"
+    if [ "$base" = "run.sh" ]; then continue; fi # the sourcer itself
+    case " $UNSOURCED " in *" $base "*) continue ;; esac
+    EXPECTED="${EXPECTED}${base}"$'\n'
+done
 
 # Direction 1 (#1336) — every file run.sh claims to source must exist. Catches a domain file
 # deleted or renamed out from under a live `source` line.
 while read -r want; do
+    # A here-string over an empty SOURCED yields ONE blank line, not zero, so without this the
+    # loop would test `tests/stack/` and report a garbled name for a pattern that matched nothing.
+    if [ -z "$want" ]; then continue; fi
     if [ ! -f "tests/stack/$want" ]; then
         echo "inventory drift: run.sh sources tests/stack/$want, which does not exist — the file" \
             "was moved or renamed and the suite would still pass, silently skipping it" >&2
@@ -161,21 +172,55 @@ done <<<"$SOURCED"
 # the `source` lines that are PRESENT, so a line deleted while its file stays on disk is never
 # looked at; the per-file section gate then finds the orphaned file with its headers intact and
 # passes it. Nothing else asks the question in this direction.
-# Not sourced by run.sh, by design — each is invoked as its own CI step and fails there:
-UNSOURCED="test_appliance_hugepages.sh test_compose.sh test_data_reset.sh \
-    test_firstboot_journal.sh test_os_update_recovery.sh"
-for f in tests/stack/*.sh; do
-    base="${f#tests/stack/}"
-    if [ "$base" = "run.sh" ]; then continue; fi # the sourcer itself
-    case " $UNSOURCED " in *" $base "*) continue ;; esac
+#
+# This is a FLOOR, not an emptiness test, and it collects rather than exiting on the first offender
+# (#1420). It used to be guarded by `[ -z "$SOURCED" ]`, on the reasoning that the pattern going
+# quiet must not read as "all present" — and that guard failed open on a real 24-of-25 breakage,
+# because lib.sh's stanza is bare by design and kept matching. A fallback condition of "the set is
+# empty" is defeated by a single survivor. Comparing the two sets makes one survivor as loud as
+# none. Exiting on the first offender was the other half: it named one file, alphabetically first,
+# for a 24-file regression, and the reader sizes the problem from that message.
+MISSING=""
+# `IFS=` is load-bearing: `read -r` into a single variable strips leading and trailing IFS
+# whitespace, so a file on disk whose name STARTS with a space, sourced by nothing, would be
+# stripped to its bare name — which IS in SOURCED — and silently accepted. A mid-name space was
+# caught either way, which is what made this invisible. Direction 1's identical construct above
+# needs no such fix: SOURCED comes from a character class that cannot emit a space.
+while IFS= read -r base; do
+    if [ -z "$base" ]; then continue; fi
     # Matched between newlines, not spaces: a filename containing a space would survive the glob
     # above (it is iterated directly) only to be split apart by a space-delimited lookup here.
     case $'\n'"$SOURCED"$'\n' in *$'\n'"$base"$'\n'*) continue ;; esac
-    echo "inventory drift: tests/stack/$base is on disk but nothing sources it — a 'source' line" \
-        "was deleted and the suite would still pass, silently skipping the file's sections;" \
-        "restore the line, or add the file to UNSOURCED with a reason" >&2
+    MISSING="${MISSING}${base}"$'\n'
+done <<<"$EXPECTED"
+n_missing=$(printf '%s' "$MISSING" | count)
+n_expected=$(printf '%s' "$EXPECTED" | count)
+# Nothing to compare is itself drift, and it is the ONE case the set difference above cannot see. If
+# every expected domain file and every stanza disappear TOGETHER — a botched revert of the #1105
+# split — then SOURCED and EXPECTED empty at the same time, MISSING is empty, and the comparison is
+# vacuously satisfied. The emptiness test this replaced DID catch that, so it is asserted explicitly
+# rather than quietly lost with it. Its own sentence, not a share of the one below: two guards on
+# one string means either can silently cover for the other's deletion.
+# Scope, stated because a comment that names a case this guard never sees is worse than no comment:
+# dropping the WHOLE directory does not reach here — `n_stack` counts 0 and the aggregate gate above
+# exits first, with byte-identical output whether this guard is alive or dead. What is unique to
+# this check is the narrower case where run.sh and the sectioned UNSOURCED files survive, keeping
+# `n_stack` non-zero, while the expected domain files and their stanzas both go.
+if [ "$n_expected" -eq 0 ]; then
+    echo "inventory drift: no domain files are expected to be sourced — every tests/stack file is" \
+        "run.sh, UNSOURCED, or gone, so there is nothing to check run.sh's stanzas against;" \
+        "restore the domain files, or update the pattern in tests/inventory.sh" >&2
     exit 1
-done
+fi
+if [ "$n_missing" -gt 0 ]; then
+    echo "inventory drift: $n_missing of $n_expected domain files on disk are not sourced by" \
+        "run.sh — a 'source' line was deleted, or, the closer this count runs to $n_expected, the" \
+        "pattern above stopped matching. Either way the suite would still pass, silently skipping" \
+        "every section in these files. Restore the line, fix the pattern, or add the file to" \
+        "UNSOURCED with a reason:" >&2
+    printf '%s' "$MISSING" | sed 's/^/  /' >&2
+    exit 1
+fi
 
 # --- emit -----------------------------------------------------------------
 cat <<EOF
