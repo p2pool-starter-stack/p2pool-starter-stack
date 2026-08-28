@@ -44,9 +44,14 @@ assert_rc() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected rc $3, g
 # not that it ran to completion. A file that dies half way through still passes. Covering that
 # needs a per-domain expected count, which collides with the nondeterminism in #1325.
 #
-# `return 0` is load-bearing, not decoration. run.sh calls this through
-# `... && domain_ran f "$_d0" "$?" || domain_ran f "$_d0" "$?"`, so a non-zero return here would
-# run the second branch as well and count the same failure twice.
+# `return 0` pins this function's status instead of inheriting whatever `bad` last ran. run.sh
+# calls it through `... && domain_ran f "$_d0" "$?" || domain_ran f "$_d0" "$?"`, and only a
+# non-zero return here would reach the second branch at all. Nothing double-counts even if one
+# did: `bad` moves FAIL, the very counter the guard tests, so a second call finds
+# `$((PASS + FAIL))` already past `before` and does nothing. That idempotence is what makes the
+# duplicated call safe, and it is exactly what SC2015 cannot see. Measured, because an earlier
+# version of this comment claimed the opposite and was wrong: without `return 0` both paths
+# already return 0, and with an explicit `return 1` the chain still counts FAIL=1, not 2.
 domain_ran() {
     local file="$1" before="$2" st="${3:-0}"
     if [ "$((PASS + FAIL))" -eq "$before" ]; then
