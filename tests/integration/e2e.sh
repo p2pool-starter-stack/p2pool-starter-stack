@@ -250,25 +250,25 @@ restore_all() {
     stranded) step "control units before restore: STRANDED (expected — the branch deploy repoints them); the apply below must converge them" ;;
     *) step "control units before restore: $CONTROL_VERDICT_BEFORE" ;;
     esac
-    # #272, on the other end of the run. deploy_branch deliberately does NOT restore-shaped `apply`,
-    # because "apply runs `compose up --pull` (never --build), so it would test whatever images were
-    # last built on the box, not this branch" — and this restore used exactly that pairing. On a
-    # RELEASE-BUNDLE baseline it is right: STACK_VERSION is v<VERSION>, so the baseline's images are
-    # versioned tags the branch never touched, and a rebuild here would be waste. On a SOURCE-CHECKOUT
-    # baseline it is wrong, and silently: `pithead` exports STACK_VERSION=dev for any source checkout
-    # (export_build_provenance), so the baseline and the branch under test SHARE the `:dev` tag, and
-    # deploy_branch's build has already overwritten it. `apply && up` then brings the BRANCH back up
-    # under the baseline's name; the pull policy is `never` in a source checkout, so nothing corrects
-    # it, and checks 1-3 below are all green on it. Rebuild from the baseline's own tree instead.
-    # `is_source_checkout` is `[ -f dashboard/Dockerfile ]` (pithead:180) — mirrored, not re-invented.
-    # Falls back to the old pairing if the rebuild fails: a restore that half-ran is worse than one
-    # that ran the cheaper way, and check 4 reports either outcome honestly.
+    # #272, on the other end of the run. deploy_branch deliberately avoids a restore-shaped `apply`,
+    # because "apply runs `compose up --pull` (never --build), so it would test whatever images were last
+    # built on the box, not this branch" — and this restore used exactly that pairing. On a RELEASE-BUNDLE
+    # baseline that is right: STACK_VERSION is v<VERSION>, so the baseline's images are versioned tags the
+    # branch never touched. On a SOURCE-CHECKOUT baseline it is wrong, and silently: `pithead` exports
+    # STACK_VERSION=dev for any source checkout (export_build_provenance), so baseline and branch SHARE the
+    # `:dev` tag, which deploy_branch's build has already overwritten. `apply && up` then brings the BRANCH
+    # back up under the baseline's name; the pull policy is `never` here, so nothing corrects it, and checks
+    # 1-3 below are all green on it. Rebuild from the baseline's own tree instead, falling back to the old
+    # pairing if that fails; check 4 grades either outcome honestly. `is_source_checkout` is
+    # `[ -f dashboard/Dockerfile ]` (pithead:180) — mirrored, not reinvented. The `{ }` below is
+    # load-bearing: unbraced, a failed `cd` runs the FALLBACK in the ssh session's default directory and
+    # STILL returns 0 — a restore that never entered RESTORE_DIR, reported as run. Proven, not read off.
     local restore_cmd="./pithead apply -y >/dev/null 2>&1 && ./pithead up >/dev/null 2>&1"
     if on_bench "test -f '$RESTORE_DIR/dashboard/Dockerfile'"; then
         step "$RESTORE_DIR is a source checkout — restoring with 'pithead upgrade' so ITS images are rebuilt, not the branch's reused (#272)"
         restore_cmd="./pithead upgrade >/dev/null 2>&1 || { $restore_cmd; }"
     fi
-    if on_bench "cd '$RESTORE_DIR' && $restore_cmd"; then
+    if on_bench "cd '$RESTORE_DIR' && { $restore_cmd; }"; then
         wait_bench_healthy 300 && ok "baseline stack healthy again" || warn "baseline stack came up but isn't reporting healthy yet — check 'pithead status' on $BENCH_HOST"
         # Proof, even when the health wait timed out: a stack running the WRONG creds looks
         # exactly this healthy — that's the incident (#971). Never trust "up" alone.

@@ -165,7 +165,7 @@ drive_restore() { # <is-source-checkout: yes|no> -> the `cd RESTORE_DIR && ...` 
             # restore command.
             "test -f "*dashboard/Dockerfile*) [ "$SRC_CHECKOUT" = yes ] && return 0 || return 1 ;;
             "cd '$RESTORE_DIR' && "*)
-                printf '%s' "${1#cd \'$RESTORE_DIR\' && }" >"$CMD_FILE"
+                printf '%s' "$1" >"$CMD_FILE"
                 return 0
                 ;;
             esac
@@ -179,8 +179,13 @@ drive_restore() { # <is-source-checkout: yes|no> -> the `cd RESTORE_DIR && ...` 
 }
 
 echo "== the restore command, by baseline kind =="
-SRC_CMD="$(drive_restore yes)"
-BUNDLE_CMD="$(drive_restore no)"
+# The capture is the WHOLE `cd ... && ...` string, because section 2b runs it; the leading cd is
+# stripped here only so the by-kind assertions below read as before.
+SRC_FULL="$(drive_restore yes)"
+BUNDLE_FULL="$(drive_restore no)"
+SRC_CMD="${SRC_FULL#*&& }"
+BUNDLE_CMD="${BUNDLE_FULL#*&& }"
+assert_contains "the capture is the full command, cd included" "$SRC_FULL" "cd '/srv/code/baseline' &&"
 
 # The fix. A source-checkout baseline shares `:dev` with the branch, so the restore must REBUILD
 # from the baseline's tree. Kills the mutation that reverts the restore to `apply && up`.
@@ -193,6 +198,45 @@ assert_contains "the source-checkout restore falls back to apply/up if the rebui
 assert_eq "a release-bundle baseline is NOT rebuilt" \
     "$(case "$BUNDLE_CMD" in *upgrade*) echo yes ;; *) echo no ;; esac)" "no"
 assert_contains "a release-bundle baseline still gets apply + up" "$BUNDLE_CMD" "./pithead apply -y"
+
+# --- 2b. The grouping, DRIVEN --------------------------------------------------------------------
+# `cd D && upgrade || { apply && up; }` does not mean what it looks like: the `||` binds to the whole
+# `cd D && upgrade`, so a FAILED cd runs the FALLBACK in the ssh session's default directory and the
+# whole command still returns 0 — a restore that never entered RESTORE_DIR, reported as having run.
+# The braces in e2e.sh are what prevent that. This runs the SHIPPED command string against a cd that
+# cannot succeed, rather than asserting on its text: a text assertion here would pass on any string
+# that happens to contain a brace.
+grouping_probe() { # <full-command> -> "<rc> ran|clean"
+    local sandbox cmd rc ran
+    sandbox="$(mktemp -d)"
+    # A `pithead` in the DEFAULT directory is the whole hazard: if the fallback runs after a failed
+    # cd, this is what it would find and execute.
+    printf '#!/bin/sh\nprintf %%s "$1" >>"%s/ran"\nexit 0\n' "$sandbox" >"$sandbox/pithead"
+    chmod +x "$sandbox/pithead"
+    cmd="$(printf '%s' "$1" | sed "s#/srv/code/baseline#$sandbox/no-such-dir#")"
+    (cd "$sandbox" && eval "$cmd") >/dev/null 2>&1
+    rc=$?
+    [ -s "$sandbox/ran" ] && ran=ran || ran=clean
+    rm -rf "$sandbox"
+    printf '%s %s' "$rc" "$ran"
+}
+
+echo "== a failed cd must not run the restore anyway =="
+assert_eq "a failed cd fails the restore and executes nothing" "$(grouping_probe "$SRC_FULL")" "1 clean"
+
+# Negative control. Without it "1 clean" is equally consistent with a probe that never ran anything
+# at all, which is the likelier of the two failure modes and the one that reads exactly like a pass.
+# Assert the transform CHANGED the string first — an unapplied mutation reads as a guard that held.
+UNBRACED="$(printf '%s' "$SRC_FULL" | sed 's/&& { /\&\& /; s/; }$//')"
+assert_eq "negative control: the unbracing actually changed the command" \
+    "$(if [ "$UNBRACED" = "$SRC_FULL" ]; then echo unchanged; else echo changed; fi)" "changed"
+# ...and that it is still a RUNNABLE command. The first draft of this transform produced a syntax
+# error, which the probe reported as rc=2/clean — a control that fails to fire looks like the
+# defect being absent, so the shape has to be checked as well as the difference.
+assert_eq "negative control: the unbraced command still parses" \
+    "$(bash -n -c "$UNBRACED" 2>/dev/null && echo parses || echo broken)" "parses"
+assert_eq "negative control: the UNBRACED shape runs the fallback in the wrong dir, and returns 0" \
+    "$(grouping_probe "$UNBRACED")" "0 ran"
 
 # --- 3. Mutation battery ----------------------------------------------------------------------
 # Each entry restores a real defect in a COPY of the shipped module and requires the classifier
