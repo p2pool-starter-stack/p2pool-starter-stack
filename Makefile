@@ -64,13 +64,16 @@ lint-sh: ## shellcheck + shfmt over the CLI, build/* + dashboard/ container scri
 		os/installer/pithead-install os/build-image.sh os/rauc/*.sh os/overlay/pithead-sync \
 		os/overlay/pithead-data-reset os/overlay/pithead-mount-generator os/overlay/pithead-ssh-host-keys \
 		os/overlay/pithead-machine-id os/overlay/pithead-media-config os/overlay/pithead-hugepages \
-		os/overlay/pithead-journal-persist \
+		os/overlay/pithead-journal-persist os/overlay/pithead-boot \
 		tests/os/*.sh
-# run.sh by itself, keeping company only with the one file outside tests/stack that it sources:
-# os/overlay/pithead-boot, whose gate_ready and os_update_rollback_verdict read three globals
-# run.sh sets for them. Drop pithead-boot from this line and those three report as SC2034 — it
-# costs ~300 lines to keep here, not the 294 KB of domain files.
-	shellcheck --severity=warning tests/stack/run.sh os/overlay/pithead-boot
+# run.sh by itself. os/overlay/pithead-boot used to keep it company on this line, because
+# gate_ready and os_update_rollback_verdict read three globals their caller sets for them and
+# shellcheck reports those as SC2034 unless the reader is named alongside the setter. The #1105
+# appliance-boot cut moved those callers into tests/stack/test-appliance-boot.sh, so run.sh now
+# names neither the script nor the three globals and needs no company; pithead-boot moved up to
+# the invocation that lints the domain files, where its readers now live. Verified both ways:
+# the domain file alone reports the three SC2034, and beside pithead-boot reports none.
+	shellcheck --severity=warning tests/stack/run.sh
 	@# Three non-.sh files are named outright below, so a dead enumeration still hands shfmt
 	@# three real arguments and exits 0 — 3 files checked of 100, reported as a pass. Guard the
 	@# enumeration itself, the way lint-toml already does. (lint-yaml needs no guard: yamllint
