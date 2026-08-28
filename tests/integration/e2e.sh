@@ -606,6 +606,7 @@ borrow_miner() {
     leftover="$(on_miner "ls -1 '$MINER_XMRIG_CONFIG'.e2e-orig.* 2>/dev/null | sort | head -n1" || true)"
     borrowed="$(on_miner "jq -r --arg b '$BENCH_HOST' 'if (((.pools[0].url // \"\") | ascii_downcase | contains(\$b | ascii_downcase)) or any(.pools[]?; .[\"rig-id\"]? == \"pithead-e2e\")) then \"yes\" else \"no\" end' '$MINER_XMRIG_CONFIG' 2>/dev/null" || true)"
     if [ "$borrowed" = "yes" ] && [ -n "$leftover" ]; then
+        verdict="it survived the recovery above, which restored this rig from its OLDEST backup — so this pool predates the borrow: the rig's own permanent bench pool."
         warn "$MINER_HOST is still borrowed by an earlier e2e run that never restored it; $leftover holds its pre-borrow config. Restoring from it now, BEFORE this run's backup is minted (#1178)."
         on_miner "cp -a '$leftover' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG' && rm -f '$MINER_XMRIG_CONFIG'.e2e-orig.*" || die "Failed to restore $MINER_HOST from $leftover."
     elif [ "$borrowed" = "yes" ]; then

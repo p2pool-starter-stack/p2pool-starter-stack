@@ -349,7 +349,7 @@ drive_recovery() { # <pools-json> <n-backups> -> $OUT (the warn lines), $CFGDIR 
     CFGDIR="$(mktemp -d)"
     printf '%s' "$1" >"$CFGDIR/config.json"
     while [ "$i" -le "$2" ]; do
-        printf '{"pools":[{"url":"orig%s.example:3333"}]}' "$i" >"$CFGDIR/config.json.e2e-orig.$i"
+        printf '{"pools":[{"url":"orig%s.example:3333"},{"url":"bench.example:3333"}]}' "$i" >"$CFGDIR/config.json.e2e-orig.$i"
         i=$((i + 1))
     done
     OUT="$(
@@ -382,14 +382,15 @@ assert_eq "an un-undoable reorder says so" "$(contains "$OUT" "HAND-REPAIR")" "y
 assert_eq "  and does NOT also report there was no un-restored borrow to undo (#1415 F1)" "$(contains "$OUT" "found no un-restored borrow to undo")" "no"
 
 # Arm 1: a borrow WITH surviving backups restores from the OLDEST, then prunes them all.
-drive_recovery '{"pools":[{"url":"bench.example:3333","rig-id":"pithead-e2e"}]}' 2
+drive_recovery '{"pools":[{"url":"pithead.example:3333"},{"url":"bench.example:3333","rig-id":"pithead-e2e"}]}' 2
 assert_eq "a leftover borrow is restored from the oldest backup" "$(jq -r '.pools[0].url' "$CFGDIR/config.json")" "orig1.example:3333"
 assert_eq "  and every backup is pruned once the bytes are back" "$(ls -1 "$CFGDIR" | wc -l)" "1"
+assert_eq "  and the report does NOT then deny the borrow it just undid (#1415 F1, arm 1)" "$(contains "$OUT" "found no un-restored borrow to undo")" "no"
 
 # Unreadable must cost nothing — a config half-written by a run that died mid-restore looks like this.
 drive_recovery 'not json at all' 1
 assert_eq "an unreadable config leaves the only surviving backup alone" "$(ls -1 "$CFGDIR" | wc -l)" "2"
-assert_eq "  and the silence is not reported as clean" "$(contains "$OUT" "do NOT read the silence as clean")" "yes"
+assert_eq "  and the silence is not reported as clean" "$(contains "$OUT" "leaving the config AND any backup(s) untouched")" "yes"
 
 echo ""
 echo "selftest-e2e-phases: $IT_PASS passed, $IT_FAIL failed"
