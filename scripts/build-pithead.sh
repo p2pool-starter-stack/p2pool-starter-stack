@@ -141,8 +141,12 @@ write_artifact() {
     # The temp file must live in the artifact's own directory: a rename is only atomic within one
     # filesystem, and `mktemp` alone would put it under /tmp, which is very often another one.
     tmp=$(mktemp "$ROOT/.pithead.build.XXXXXX")
+    # EXIT, not RETURN. A RETURN trap fires on a normal return only, and the whole point of this
+    # temp file is the path where the build does NOT return normally: `set -e` aborts the shell on
+    # a refused build, RETURN never runs, and a 0-byte .pithead.build.XXXXXX is left in the repo
+    # root. It is untracked and not in .gitignore, so the next `git add -A` would stage it.
     # shellcheck disable=SC2064  # expand now: the trap must name THIS file, not whatever $tmp is later
-    trap "rm -f -- '$tmp'" RETURN
+    trap "rm -f -- '$tmp'" EXIT
     build >"$tmp"
     if [ -e "$ARTIFACT" ]; then
         chmod --reference="$ARTIFACT" "$tmp"
@@ -401,6 +405,14 @@ self_test() {
             echo "  ok   — and left the existing artifact intact"
         else
             echo "  FAIL — a refused build ($desc) overwrote or truncated the existing artifact"
+            fail=1
+        fi
+        # The refused build must not leave its scratch file behind: it is untracked, it is not in
+        # .gitignore, and `git add -A` would stage it into someone's commit.
+        if [ -z "$(echo "$badroot"/.pithead.build.* 2>/dev/null | grep -v '\*')" ]; then
+            echo "  ok   — and cleaned up its build temp file"
+        else
+            echo "  FAIL — a refused build ($desc) left $badroot/.pithead.build.* behind"
             fail=1
         fi
         rm -rf "$badroot"

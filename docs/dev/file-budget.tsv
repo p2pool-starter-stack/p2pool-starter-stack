@@ -43,7 +43,7 @@ dashboard/tests/web/test_wizard.py	974
 .github/workflows/ci.yml	513
 lib/pithead/99-remainder.sh	11870
 os/rootfs/Dockerfile	406
-scripts/build-pithead.sh	425
+scripts/build-pithead.sh	437
 scripts/lint-file-budget.sh	407
 scripts/release.sh	851
 scripts/shipped-image-sweep-report.sh	429
