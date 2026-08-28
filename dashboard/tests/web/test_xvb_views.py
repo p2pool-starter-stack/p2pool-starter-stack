@@ -12,7 +12,7 @@ tree has no ``__init__.py``, so neither a sibling module nor ``conftest`` is imp
 converting these to pytest fixtures would rewrite every call site and cost the verbatim move. The
 same trade is already recorded for this pair at ``tests/web/test_views.py``'s ``_state_mgr``. These
 copies mirror the ``Metrics`` dataclass, so any drift breaks them loudly rather than silently.
-Consolidating them into real fixtures is tracked as a follow-up once #1105 stops requiring
+Consolidating them into real fixtures is tracked as #1459, once #1105 stops requiring
 byte-identity.
 """
 
