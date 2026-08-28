@@ -37,7 +37,14 @@ _settle_worker_apply() { # <ckeys-on-success> <wait-desc> <dial-result-json> <pr
     status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
     ckeys="$(printf '%s' "$res" | jq -r '(.changed_keys // []) | join(",")' 2>/dev/null)"
     change_id="$(printf '%s' "$res" | jq -r '.change_id // empty' 2>/dev/null)"
-    if [ "$status" = "accepted" ] && wait_for 90 5 "$desc" "$@"; then
+    # `>&2` is load-bearing (#1454). This function's stdout IS its return value — every call site
+    # captures it with `$(...)` and splits it with `IFS='|' read` — and wait_for opens with an
+    # it_step banner, which goes to STDOUT. Without the redirection that banner is the FIRST line of
+    # the capture, `read` takes it as $status, ckeys and change_id come back empty, and all three
+    # of the caller's assertions red whatever the rig did. It fires only on a settle that actually
+    # waits, i.e. exactly the RigForge #344 path this module exists for. stderr is where wait_for's
+    # own "timed out after Ns" warning already goes, and e2e.sh merges both into the harness log.
+    if [ "$status" = "accepted" ] && wait_for 90 5 "$desc" "$@" >&2; then
         status="applied"
         ckeys="$key"
     fi
