@@ -105,6 +105,18 @@ scan_frontend() {
     ' "$@"
 }
 
+# A frontend enumeration that comes back empty is a broken enumeration, never a clean tree: the
+# globs below match 28 tracked files today and have never legitimately matched none. Skipping the
+# scan on empty would leave `fail` at 0 and let this script's closing line still claim the frontend
+# was scanned, so a moved or renamed `web/` directory would read as clean indefinitely.
+enforce_nonempty_frontend() { # <newline-separated file list>
+    [ -n "$1" ] && return 0
+    echo "operator strings: the dashboard frontend enumeration returned zero files." >&2
+    echo "A broken enumeration and a clean scan both report zero hits — refusing to call either a pass." >&2
+    echo "Check the git ls-files globs in this script against dashboard/mining_dashboard/web/." >&2
+    return 1
+}
+
 # --- self-test: prove the scanners catch a planted #NNN and skip the tricky exemptions ----------
 if [ "${1:-}" = "--self-test" ]; then
     tmp=$(mktemp -d)
@@ -158,6 +170,17 @@ if [ "${1:-}" = "--self-test" ]; then
     printf '%s\n' '<!-- design ref #99 -->' >"$tmp/comment.html"
     expect "a #NNN in an HTML comment is not flagged" clean "$(scan_frontend "$tmp/comment.html")"
 
+    if enforce_nonempty_frontend "" 2>/dev/null; then
+        echo "  self-test FAIL: an empty frontend enumeration was accepted"
+        st_fail=1
+    else echo "  self-test ok: an empty frontend enumeration is refused"; fi
+    if enforce_nonempty_frontend "$tmp/hit.mjs" 2>/dev/null; then
+        echo "  self-test ok: a non-empty frontend enumeration is accepted"
+    else
+        echo "  self-test FAIL: a non-empty frontend enumeration was refused"
+        st_fail=1
+    fi
+
     [ "$st_fail" -eq 0 ] && {
         echo "lint-operator-strings self-test OK"
         exit 0
@@ -188,19 +211,25 @@ then
 fi
 
 # The static frontend, minus the *.min.js bundles.
+#
+# `|| true` is load-bearing and must stay. Under `set -o pipefail` an empty enumeration makes
+# `grep -v` exit 1, which errexit turns into a silent death AT THIS ASSIGNMENT — before the
+# refusal below can run. Swallowing that status is only safe BECAUSE the refusal checks the
+# result; the two are one mechanism. Remove either and a broken enumeration stops explaining
+# itself: without `|| true` the script dies anonymously, without the refusal it reports success.
 files=$(git ls-files 'dashboard/mining_dashboard/web/static/*.mjs' \
     'dashboard/mining_dashboard/web/static/*.js' \
     'dashboard/mining_dashboard/web/templates/*.html' | grep -v '\.min\.js$' || true)
-if [ -n "$files" ]; then
-    # shellcheck disable=SC2086
-    if
-        hits=$(scan_frontend $files)
-        [ -n "$hits" ]
-    then
-        echo "operator strings: issue/PR number in a dashboard frontend user-visible string:"
-        echo "$hits"
-        fail=1
-    fi
+enforce_nonempty_frontend "$files" || exit 1
+
+# shellcheck disable=SC2086
+if
+    hits=$(scan_frontend $files)
+    [ -n "$hits" ]
+then
+    echo "operator strings: issue/PR number in a dashboard frontend user-visible string:"
+    echo "$hits"
+    fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then
