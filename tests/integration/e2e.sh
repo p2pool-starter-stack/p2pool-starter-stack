@@ -599,16 +599,17 @@ borrow_miner() {
     # so a surviving .e2e-orig.* is an un-restored borrow and the OLDEST is the true original.
     # Without one the pre-borrow state is gone — strip the tag, and say plainly that a pure reorder
     # cannot be undone. Not borrowed but leftovers present means RigForge regenerated the file since
-    # (it does, on every apply): clear them, which is what keeps "oldest" meaning the original.
+    # (rigforge.sh:3979, on every apply — but NOT on a fast-path control-apply of watchdog_interval_min or max_temp_c, which skips _apply_runtime outright, rigforge.sh:4203/:4228): clear them, which keeps "oldest" meaning the original.
     # Unreadable clears and restores NOTHING — a config half-written by a run that died mid-restore
     # looks exactly like this, and must not cost the only copy of the original.
-    local leftover borrowed
+    local leftover borrowed verdict="the recovery above found no un-restored borrow to undo. Read as the rig's own permanent bench pool: the backup taken next records it and the restore returns to it."
     leftover="$(on_miner "ls -1 '$MINER_XMRIG_CONFIG'.e2e-orig.* 2>/dev/null | sort | head -n1" || true)"
     borrowed="$(on_miner "jq -r --arg b '$BENCH_HOST' 'if (((.pools[0].url // \"\") | ascii_downcase | contains(\$b | ascii_downcase)) or any(.pools[]?; .[\"rig-id\"]? == \"pithead-e2e\")) then \"yes\" else \"no\" end' '$MINER_XMRIG_CONFIG' 2>/dev/null" || true)"
     if [ "$borrowed" = "yes" ] && [ -n "$leftover" ]; then
         warn "$MINER_HOST is still borrowed by an earlier e2e run that never restored it; $leftover holds its pre-borrow config. Restoring from it now, BEFORE this run's backup is minted (#1178)."
         on_miner "cp -a '$leftover' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG' && rm -f '$MINER_XMRIG_CONFIG'.e2e-orig.*" || die "Failed to restore $MINER_HOST from $leftover."
     elif [ "$borrowed" = "yes" ]; then
+        verdict="the recovery above could NOT undo the borrow it found — no .e2e-orig.* survived, so this is EITHER the rig's own permanent bench pool OR that un-undoable REORDER, and nothing on the rig tells them apart. HAND-REPAIR before trusting this run's restore."
         warn "$MINER_HOST looks borrowed but NO .e2e-orig.* backup survives, so the pre-borrow state is unrecoverable. Stripping any tagged pool; a pure REORDER cannot be undone and this run's backup will record it."
         on_miner "jq '.pools |= [.[] | select(.[\"rig-id\"]? != \"pithead-e2e\")]' '$MINER_XMRIG_CONFIG' > '$MINER_XMRIG_CONFIG.e2e.tmp' && mv '$MINER_XMRIG_CONFIG.e2e.tmp' '$MINER_XMRIG_CONFIG' && chmod 600 '$MINER_XMRIG_CONFIG'" || die "Failed to strip leftover tagged pool(s) from $MINER_HOST config."
     elif [ "$borrowed" = "no" ] && [ -n "$leftover" ]; then
@@ -618,9 +619,9 @@ borrow_miner() {
         warn "could not read $MINER_HOST's pool list, so it cannot be judged borrowed or clean — leaving the config AND any backup(s) untouched. A half-written config looks exactly like this."
     fi
 
-    # Report an untagged bench-naming pool that SURVIVED the recovery above — the recovery found no
-    # un-restored borrow, so this is the rig's own permanent bench pool: the backup records it and
-    # the restore returns to it, which is right. Said BEFORE the backup, because the backup is what
+    # Report an untagged bench-naming pool that SURVIVED the recovery above. Its MEANING depends on
+    # which arm ran, so the arms set $verdict: normally the rig's own permanent bench pool, but
+    # ambiguous if the unrecoverable arm fired. Said BEFORE the backup, because the backup is what
     # "restore" means afterwards. `.url // ""` and a lowercased needle because one sibling entry
     # with no .url makes jq exit non-zero for the WHOLE expression; and the answer is a three-way,
     # not a boolean — a probe that goes quiet exactly when the fault is present must not read clean.
@@ -633,8 +634,8 @@ borrow_miner() {
         ;;
     0) ;;
     *)
-        warn "$MINER_HOST's xmrig config ALREADY names $BENCH_HOST in $bench_pools untagged pool(s), and the recovery above found no un-restored borrow to undo."
-        warn "  Read as the rig's own permanent bench pool: the backup taken next records it and the restore returns to it. Verify by hand if that surprises you: jq '.pools[].url' $MINER_XMRIG_CONFIG on $MINER_HOST"
+        warn "$MINER_HOST's xmrig config ALREADY names $BENCH_HOST in $bench_pools untagged pool(s), and $verdict"
+        warn "  Verify by hand if that surprises you: jq '.pools[].url' $MINER_XMRIG_CONFIG on $MINER_HOST"
         ;;
     esac
     MINER_CFG_BACKUP="$MINER_XMRIG_CONFIG.e2e-orig.$(on_miner 'date +%Y%m%d-%H%M%S')"

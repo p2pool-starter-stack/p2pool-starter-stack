@@ -207,9 +207,16 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
    repoint finds the bench already named, so it only reorders the pool list and tags nothing — the
    contamination leaves no marker, and a tag-based check cannot see it. Two other outcomes are worth
    knowing: when the rig does not look borrowed, leftover backups are cleared as stale, because
-   RigForge regenerates the xmrig config from its own source on every apply; and when the config
-   cannot be read at all, nothing is cleared and nothing is restored, since a config half-written by a
-   run that died mid-restore looks exactly like that and must not cost the only copy of the original.
+   RigForge regenerates the xmrig config from its own source on every apply (`rigforge.sh:3979` at the
+   baked pin — though a fast-path control-apply of `watchdog_interval_min` or `max_temp_c` deliberately
+   skips that path, `rigforge.sh:4203` and `:4228`); and when the config cannot be read at all, nothing
+   is cleared and nothing is restored, since a config half-written by a run that died mid-restore looks
+   exactly like that and must not cost the only copy of the original.
+
+   One outcome cannot be resolved from the rig alone. When it looks borrowed and no backup survives,
+   the pre-borrow state is gone: a surviving untagged bench pool is then either the rig's own permanent
+   one or an un-undoable reorder, and nothing on the rig separates them. The run says so and asks for a
+   hand repair, rather than reporting the reassuring reading of the two.
 5. Deploys the branch (`pithead upgrade` — re-renders the generated configs and rebuilds the
    first-party images from `build/`, so a Dockerfile or entrypoint change is actually under test;
    `apply` never builds and would reuse whatever images were last built on the box,
