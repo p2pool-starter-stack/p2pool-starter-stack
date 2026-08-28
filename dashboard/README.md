@@ -49,8 +49,9 @@ mining_dashboard/
 │                      #   metrics (typed computed domain values consumed by the view layer)
 ├── sim/               # donation_model (the XvB donation simulator; property-tested, #284)
 ├── web/               # server.py (transport: / shell + /api/state + middleware),
-│                      #   views.py (build_state: the JSON state object), templates/index.html
-│                      #   (static shell), static/ (Preact app + dashboard.css + vendored libs)
+│                      #   views.py (build_state: the JSON state object), charts.py (the chart
+│                      #   window/range hub views.py re-exports), templates/index.html (static
+│                      #   shell), static/ (Preact app + dashboard.css + vendored libs)
 └── helper/            # formatting utilities
 ```
 
