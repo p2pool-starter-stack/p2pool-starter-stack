@@ -963,7 +963,7 @@ test('ExpectedVsActualCard compares combined Monero+XvB with a percent and parti
 });
 
 test('ExpectedVsActualCard drops the percent when the server withholds it, tooltip explains (#992)', () => {
-    // A near-zero expectation makes the server withhold pct (views.py caps at 999%) — the
+    // A near-zero expectation makes the server withhold pct (xvb_views.py caps at 999%) — the
     // actual figure stands alone and the row tooltip owns the missing percent.
     const s = clone();
     s.earnings_summary.xmr = {
