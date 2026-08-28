@@ -229,6 +229,14 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
    dir, not `CANONICAL_DIR`. That keeps the restore from handing the `pithead` project locally-built
    `:dev` images. If the label can't be read (stack down), it falls back to `CANONICAL_DIR`; override
    with `CANONICAL_DIR=<dir>`. The synced chains are never touched (asserted post-restore).
+   How the baseline comes back depends on what it is. A release bundle gets `pithead apply` then
+   `pithead up`: its images are versioned tags the branch never touched, so rebuilding them would be
+   waste. A **source checkout** gets `pithead upgrade` instead, and the difference is not an
+   optimisation. `pithead` exports `STACK_VERSION=dev` for any source checkout, so a source-checkout
+   baseline and the branch under test resolve to the same `:dev` tag — which deploying the branch has
+   already overwritten, with a pull policy of `never` to correct it. `apply` + `up` would bring the
+   branch back up under the baseline's name. The rebuild falls back to `apply` + `up` if it fails, so
+   a baseline that cannot rebuild is no worse off than before.
 7. Proves the restored stack matches the on-disk config
    ([#971](https://github.com/p2pool-starter-stack/pithead/issues/971)): the credential marker
    baked into the running dashboard container (`docker inspect`) must equal the on-disk `.env`
@@ -248,6 +256,19 @@ What it does, then reverses on exit (even on failure / Ctrl-C, via an `EXIT` tra
    all-clear on exactly the stranded box. That needs the live install on v1.19.2 or newer, the
    release whose `doctor` gained the check; an older one is reported as unproven rather than as a
    pass.
+   Last, the proof asks what code is actually running. The three checks above are all green on a
+   stack running the branch's images under the baseline's name: the credentials are read from the
+   on-disk `.env` at runtime, monerod answers with them, and the control units name the install
+   either way. So the run records each service's image **ID** before it touches anything and again
+   after the restore, and grades them per service — kept, rebuilt, still-the-branch's, or gone. Image
+   IDs, not tags: a tag that moved is the defect, so the tag cannot be the instrument. Per service,
+   not as one list: a branch that changes two Dockerfiles rebuilds two images, and the rest carry an
+   ID that legitimately matches both sides. A service still on the image the run built for the branch
+   fails the proof and names itself. A rebuilt image is reported as "not the branch's" and no more:
+   settling "built from the install directory" would need the image's own build provenance, and the
+   dashboard's `org.opencontainers.image.revision` ships empty
+   ([#1449](https://github.com/p2pool-starter-stack/pithead/issues/1449)) while the other four
+   images carry it.
 
 `--mode`: `targeted` (default, lean) validates the dashboard and the sync logic against the
 already-synced node: `check` + `--lifecycle` (one controlled restart exercises the sync gate /
