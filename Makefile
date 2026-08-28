@@ -71,6 +71,11 @@ lint-sh: ## shellcheck + shfmt over the CLI, build/* + dashboard/ container scri
 # run.sh sets for them. Drop pithead-boot from this line and those three report as SC2034 — it
 # costs ~300 lines to keep here, not the 294 KB of domain files.
 	shellcheck --severity=warning tests/stack/run.sh os/overlay/pithead-boot
+	@# Three non-.sh files are named outright below, so a dead enumeration still hands shfmt
+	@# three real arguments and exits 0 — 3 files checked of 100, reported as a pass. Guard the
+	@# enumeration itself, the way lint-toml already does. (lint-yaml needs no guard: yamllint
+	@# with no arguments is rc=2.)
+	@test -n "$$(git ls-files '*.sh' | grep -v '^docs/research/')" || { echo "lint-sh: zero tracked *.sh files — refusing a vacuous pass"; exit 1; }
 	shfmt -i 4 -d pithead pithead-completion.bash os/installer/pithead-install $(shell git ls-files '*.sh' | grep -v '^docs/research/')
 
 lint-py: ## ruff lint + format check on all repo Python (ruff runs via uv from the locked dev extra)
