@@ -366,9 +366,9 @@ def test_vendored_contract_matches_the_baked_rigforge_pin():
     """The vendored fixtures are from the RigForge the appliance actually bakes.
 
     A vendored snapshot with no freshness mechanism is just a slower drift: it agrees with the
-    producer on the day it is copied and silently stops. Pinning it to `RIGFORGE_REF` means a pin
-    bump that leaves these fixtures stale reddens here, at the tier that is cheap, instead of on a
-    live box.
+    producer on the day it is copied and silently stops. A pin bump that leaves these fixtures
+    stale reddens here, cheaply, instead of on a live box — but only until someone edits
+    PROVENANCE. This compares two hand-edited strings; it cannot see the bytes (#1426).
     """
     provenance = dict(line.split("=", 1) for line in (_CONTRACT / "PROVENANCE").read_text().split())
     dockerfile = (_REPO / "os" / "rootfs" / "Dockerfile").read_text()
@@ -376,8 +376,8 @@ def test_vendored_contract_matches_the_baked_rigforge_pin():
     assert baked, "RIGFORGE_REF not found in os/rootfs/Dockerfile — did the pin move or rename?"
     assert provenance["ref"] == baked.group(1), (
         "the baked RigForge pin moved and tests/integration/fakes/contract/v1/ was not re-vendored. "
-        "Re-copy tests/contract/v1/{feed,control-status}.json from RigForge at the new ref and "
-        "update PROVENANCE, then run this suite — a shape change will show up as a failure above."
+        "Re-copy tests/contract/v1/{feed,control-status}.json from RigForge at the new ref, THEN "
+        "update PROVENANCE — this guard reads the ref line only, never the bytes (#1426)."
     )
 
 
@@ -391,11 +391,11 @@ def test_every_pinned_control_status_is_classified():
     caught. Fail-closed by construction — a word in neither set is an error, not a default.
     """
     pinned = set(json.loads((_CONTRACT / "control-status.json").read_text())["statuses"])
-    # Words we have looked at and deliberately class as NOT terminal: the rig has accepted or begun
-    # a change and has not said how it ended. Listed rather than inferred, so adding one is a
-    # decision someone makes on purpose.
+    # Words we deliberately class as NOT terminal: the rig has begun a change and has not said how
+    # it ended. Listed, not inferred, so adding one is deliberate. `pinned` must be non-empty — a
+    # difference against an empty left side is empty, so an emptied `statuses` checks nothing.
     non_terminal = {"pending", "started"}
-    assert pinned - set(_CONTROL_TERMINAL) - non_terminal == set()
+    assert pinned and pinned - set(_CONTROL_TERMINAL) - non_terminal == set()
 
 
 def test_worker_config_prefill_parses_over_the_wire():
