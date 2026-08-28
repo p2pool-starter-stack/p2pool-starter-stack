@@ -333,6 +333,66 @@ for flag in $(printf '%s %s %s %s' "$TARGETED" "$MATRIX" "$CHECK" "$NOMINER" | t
         "$(grep -cE "^[[:space:]]*(\-\-[a-z-]+ \| )*${flag}\)" "$RUN_SRC" | awk '{print ($1>0)?"yes":"no"}')" "yes"
 done
 
+echo "== borrow_miner's recovery block, fired on known instances (#1178) =="
+# F2 of the #1415 review: nothing in the repo ever fired this detector, so its only evidence was
+# PR-body prose from a harness never committed. Drives the REAL block out of the shipped e2e.sh with
+# on_miner running each command LOCALLY against a temp config — ssh is the only substitution, and it
+# is the whole of on_miner (e2e.sh:172). Extraction is asserted first, so a refactor reds.
+RECOVERY_SRC="$(sed -n '/^    local leftover borrowed/,/^    esac$/p' "$E2E_SRC")"
+assert_eq "the recovery-block extraction opens and closes" \
+    "$(printf '%s\n' "$RECOVERY_SRC" | sed -n '1p;$p' | awk '{print $1}' | tr '\n' ' ')" "local esac "
+
+drive_recovery() { # <pools-json> <n-backups> -> $OUT (the warn lines), $CFGDIR (the resulting tree)
+    local i=1
+    CFGDIR="$(mktemp -d)"
+    printf '%s' "$1" >"$CFGDIR/config.json"
+    while [ "$i" -le "$2" ]; do
+        printf '{"pools":[{"url":"orig%s.example:3333"},{"url":"bench.example:3333"}]}' "$i" >"$CFGDIR/config.json.e2e-orig.$i"
+        i=$((i + 1))
+    done
+    OUT="$(
+        exec </dev/null
+        # SC2034/SC2329: the config vars and the stubs are read and called by the eval'd block,
+        # which shellcheck cannot follow into.
+        # shellcheck disable=SC2034,SC2329
+        MINER_HOST=rig1 BENCH_HOST=bench.example MINER_XMRIG_CONFIG="$CFGDIR/config.json"
+        on_miner() { eval "$1"; }
+        warn() { echo "WARN $*"; }
+        die() { echo "DIE $*" && exit 1; }
+        eval "recovery() { $RECOVERY_SRC; }"
+        recovery
+    )"
+}
+
+# The case the review named: a rig that merely KEEPS a permanent bench pool, at index 1, untagged.
+# `.pools[0]` positionality is the only reason that reads as clean, and nothing said so. Broaden that
+# jq to any(.pools[]?; ...) and arm 1 cp's a stale backup over the operator's live config, every gate
+# still green. Asserting the BYTES catches it; a message assert would not, because arm 1 warns too.
+BEFORE='{"pools":[{"url":"pithead.example:3333"},{"url":"bench.example:3333"}]}'
+drive_recovery "$BEFORE" 1
+assert_eq "a permanent bench pool at [1] is not treated as a leftover borrow" "$(cat "$CFGDIR/config.json")" "$BEFORE"
+assert_eq "  its stale backup is cleared, so 'oldest' keeps meaning the original" "$(ls -1 "$CFGDIR" | wc -l)" "1"
+assert_eq "  and it is reported as the rig's own permanent bench pool" "$(contains "$OUT" "permanent bench pool")" "yes"
+
+# F1: the unrecoverable arm must not be followed by the reassuring verdict that cancels it.
+drive_recovery '{"pools":[{"url":"bench.example:3333"}]}' 0
+assert_eq "an un-undoable reorder says so" "$(contains "$OUT" "HAND-REPAIR")" "yes"
+assert_eq "  and does NOT also report there was no un-restored borrow to undo (#1415 F1)" "$(contains "$OUT" "found no un-restored borrow to undo")" "no"
+
+# Arm 1: a borrow WITH surviving backups restores from the OLDEST, then prunes them all.
+drive_recovery '{"pools":[{"url":"pithead.example:3333"},{"url":"bench.example:3333","rig-id":"pithead-e2e"}]}' 2
+assert_eq "a leftover borrow is restored from the oldest backup" "$(jq -r '.pools[0].url' "$CFGDIR/config.json")" "orig1.example:3333"
+assert_eq "  and every backup is pruned once the bytes are back" "$(ls -1 "$CFGDIR" | wc -l)" "1"
+assert_eq "  and the report does NOT then deny the borrow it just undid (#1415 F1, arm 1)" "$(contains "$OUT" "found no un-restored borrow to undo")" "no"
+assert_eq "  positive control for the line above: the report DOES fire here" "$(contains "$OUT" "untagged pool(s)")" "yes"
+
+# Unreadable must cost nothing — a config half-written by a run that died mid-restore looks like this.
+drive_recovery 'not json at all' 1
+assert_eq "an unreadable config leaves the only surviving backup alone" "$(ls -1 "$CFGDIR" | wc -l)" "2"
+assert_eq "  and the silence is not reported as clean" "$(contains "$OUT" "leaving the config AND any backup(s) untouched")" "yes"
+assert_eq "  and the REPORT block says so in its own words, which is a SECOND guard" "$(contains "$OUT" "do NOT read the silence as clean")" "yes"
+assert_eq "  and the config bytes are untouched too — that message claims BOTH halves" "$(cat "$CFGDIR/config.json")" "not json at all"
+
 echo ""
 echo "selftest-e2e-phases: $IT_PASS passed, $IT_FAIL failed"
 [ "$IT_FAIL" -eq 0 ] || exit 1
