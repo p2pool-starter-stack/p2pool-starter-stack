@@ -634,7 +634,7 @@ assert_running_state() {
     #    timeout.
     if [ "$SKIP_MINING_ASSERTS" = "1" ]; then
         # #905: no miner is connected on purpose (e2e --no-miner), so a live worker/hash count
-        # would fail a healthy stack. assert_mining_state (lib.sh) skips these two loudly; every
+        # would fail a healthy stack. assert_mining_state (skip-accounting.sh) skips these two loudly; every
         # other assertion in the scenario stays binding.
         assert_mining_state "1" "" "" "$EXPECTED_WORKERS"
     else
