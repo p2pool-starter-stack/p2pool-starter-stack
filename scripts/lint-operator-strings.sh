@@ -105,10 +105,8 @@ scan_frontend() {
     ' "$@"
 }
 
-# A frontend enumeration that comes back empty is a broken enumeration, never a clean tree: the
-# globs below match 28 tracked files today and have never legitimately matched none. Skipping the
-# scan on empty would leave `fail` at 0 and let this script's closing line still claim the frontend
-# was scanned, so a moved or renamed `web/` directory would read as clean indefinitely.
+# An empty enumeration is broken, never a clean tree — 28 files match the globs below. Skipping
+# the scan on empty leaves `fail` at 0 while the closing line still claims the frontend was scanned.
 enforce_nonempty_frontend() { # <newline-separated file list>
     [ -n "$1" ] && return 0
     echo "operator strings: the dashboard frontend enumeration returned zero files." >&2
@@ -174,7 +172,7 @@ if [ "${1:-}" = "--self-test" ]; then
         echo "  self-test FAIL: an empty frontend enumeration was accepted"
         st_fail=1
     else echo "  self-test ok: an empty frontend enumeration is refused"; fi
-    if enforce_nonempty_frontend "$tmp/hit.mjs" 2>/dev/null; then
+    if enforce_nonempty_frontend "$tmp/hit.mjs"; then
         echo "  self-test ok: a non-empty frontend enumeration is accepted"
     else
         echo "  self-test FAIL: a non-empty frontend enumeration was refused"
