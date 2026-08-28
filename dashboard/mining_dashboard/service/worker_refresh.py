@@ -2,7 +2,7 @@
 companion to #893).
 
 The per-rig RigForge version shown to the operator is derived at the render seam from the rig's
-own last-reported ``/1/summary`` (``views.py`` ``build_worker_update``/``rigforge_update_for`` —
+own last-reported ``/1/summary`` (``web/infra_views.py``'s ``rigforge_update_for`` —
 never stored, so it can't outlive its input, the #664 lesson). That read normally happens once per
 ``UPDATE_INTERVAL`` on the shared poll loop (``DataService.run``), so after an upgrade the operator
 watches a stale badge for up to a full cycle even though the dashboard already knows the exact

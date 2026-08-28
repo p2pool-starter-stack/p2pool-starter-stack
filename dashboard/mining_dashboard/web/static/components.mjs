@@ -859,7 +859,7 @@ function PoolBadge({ pool }) {
 }
 
 // RigForge enriched feed (#235): a monospace version badge plus health / power / tune / watchdog
-// chips, all built server-side (views._rigforge_display) so the client stays a dumb renderer. A
+// chips, all built server-side (infra_views._rigforge_display) so the client stays a dumb renderer.
 // plain-xmrig worker has no `rigforge` block and renders nothing extra — no chips, no error, no
 // empty placeholder, exactly as today. Each chip is a {text, variant, title}; only present-data
 // chips are emitted, so a rig with no RAPL shows no power chip.

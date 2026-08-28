@@ -10,6 +10,7 @@ dashboard/mining_dashboard/service/egress.py	424
 dashboard/mining_dashboard/service/storage_service.py	1603
 dashboard/mining_dashboard/service/telegram_commands.py	1023
 dashboard/mining_dashboard/sim/donation_model.py	539
+dashboard/mining_dashboard/web/infra_views.py	507
 dashboard/mining_dashboard/web/server.py	645
 dashboard/mining_dashboard/web/static/chart.mjs	681
 dashboard/mining_dashboard/web/static/components.mjs	1177
@@ -19,7 +20,7 @@ dashboard/mining_dashboard/web/static/logic.mjs	534
 dashboard/mining_dashboard/web/static/osupdate.mjs	415
 dashboard/mining_dashboard/web/static/wizard.mjs	889
 dashboard/mining_dashboard/web/static/workerview.mjs	443
-dashboard/mining_dashboard/web/views.py	1129
+dashboard/mining_dashboard/web/views.py	660
 dashboard/mining_dashboard/web/xvb_views.py	827
 dashboard/mining_dashboard/wizard.py	674
 dashboard/tests/client/test_xmrig_client.py	504
@@ -38,8 +39,9 @@ dashboard/tests/service/test_egress.py	480
 dashboard/tests/service/test_metrics.py	463
 dashboard/tests/service/test_storage_service.py	1646
 dashboard/tests/service/test_telegram_commands.py	1240
+dashboard/tests/web/test_infra_views.py	865
 dashboard/tests/web/test_server.py	1319
-dashboard/tests/web/test_views.py	1978
+dashboard/tests/web/test_views.py	1228
 dashboard/tests/web/test_wizard.py	974
 dashboard/tests/web/test_xvb_views.py	1342
 .github/workflows/ci.yml	513
