@@ -811,6 +811,72 @@ assert_eq "restore gives its window back when it finishes" \
     "$(lock_wiring_balance stack_restore -y "$LKW/wiring-archive.tar.gz")" "depth=0 state=free"
 assert_eq "apply takes its window once and gives it back, however it reached the recreate" \
     "$(lock_wiring_balance apply -y)" "depth=0 state=free"
+
+# THE RUNNING-STACK BACKUP BRANCH — unreachable by every case above, and that is the point.
+#
+# stack_backup takes the window in TWO places, chosen on `docker compose ps --status running -q`.
+# make_stubs' docker (tests/stack/lib.sh) has NO case arm for that query and falls through to
+# `exit 0` with empty stdout, so `running` is always empty and BOTH backup cases above take the
+# stack-already-stopped branch. Deleting the running branch's acquire outright left this whole
+# file green — the same shape as apply's two unreached windows, and it hides more: without it the
+# archive is taken in a THIRD window rather than one, with `tar` running UNLOCKED between
+# stack_down's release and stack_up's re-acquire. A concurrent setup or apply can then bring
+# containers up mid-archive, which is a torn backup — #970's retry failure mode arriving for a
+# reason the retry cannot fix.
+#
+# A balance case CANNOT see this: with or without that acquire the verb ends depth=0 and free. The
+# property that discriminates is WHEN the window is held, so the probe asks the only question that
+# separates them — was it held at the moment the archive was taken?
+LKWRUN="$LKW/runningstack"
+LKWRUNLK="$LKW/running.lock"
+lock_backup_running_probe() { # -> "<which branch>|<window while the archive is taken>"
+    local log="$LKWRUN/docker.log" branch=stopped
+    rm -rf "$LKWRUN"
+    lock_wiring_fixture "$LKWRUN"
+    mkdir -p "$LKWRUN/bin"
+    : >"$log"
+    rm -f "$LKWRUNLK" "$LKWRUN/window"
+    # A docker that reports a RUNNING stack — the one answer the shared stub cannot give.
+    cat >"$LKWRUN/bin/docker" <<'DOCKEREOF'
+#!/usr/bin/env bash
+echo "[docker] $*" >>"${DOCKER_LOG:-/dev/null}"
+case "$*" in
+"compose ps --status running -q") echo "c0ffeec0ffee" ;;
+esac
+exit 0
+DOCKEREOF
+    # A sudo that runs nothing and records whether the mutation window is held at the instant the
+    # archive is taken. `flock -n` from this child opens its OWN descriptor, so the parent's fd 9
+    # hold denies it — the same mechanism the balance cases use to read the lock's state.
+    cat >"$LKWRUN/bin/sudo" <<'SUDOEOF'
+#!/usr/bin/env bash
+case "$1" in
+tar)
+    if flock -n "$PITHEAD_LOCK_FILE" true 2>/dev/null; then
+        printf 'free' >"$WINDOW_OUT"
+    else
+        printf 'held' >"$WINDOW_OUT"
+    fi
+    ;;
+esac
+exit 0
+SUDOEOF
+    chmod +x "$LKWRUN/bin/docker" "$LKWRUN/bin/sudo"
+    (cd "$LKWRUN" && PITHEAD_LOCK_FILE="$LKWRUNLK" PITHEAD_APPLIANCE=0 DOCKER_LOG="$log" \
+        WINDOW_OUT="$LKWRUN/window" PATH="$LKWRUN/bin:$PATH" env -u PITHEAD_LOCK_HELD \
+        bash -c 'source "$1"; set +e; shift; "$@"' _ "$STACK" \
+        stack_backup -y --no-encrypt) >/dev/null 2>&1
+    # Which branch actually ran, read from the stack having been STOPPED for the backup. Without
+    # this half the row is vacuous in exactly the way it exists to fix: if the stub ever stops
+    # answering the query, the stopped branch takes its own window, the archive is still taken
+    # under it, and a "held" verdict would read as coverage of a branch that never ran.
+    grep -Eq 'compose .*\bdown\b' "$log" 2>/dev/null && branch=running
+    printf '%s|%s' "$branch" "$(cat "$LKWRUN/window" 2>/dev/null || printf 'never-archived')"
+}
+assert_eq "a backup that stops a running stack holds one window across the archive" \
+    "$(lock_backup_running_probe)" "running|held"
+unset -f lock_backup_running_probe
+
 unset -f lock_hold_bg lock_await_record lock_state lock_reinvoke_probe lock_nest_probe
 unset -f lock_sibling_probe lock_wiring_fixture lock_wiring_probe lock_wiring_pair lock_wiring_balance
 
