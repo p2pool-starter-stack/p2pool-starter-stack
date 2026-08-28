@@ -435,8 +435,7 @@ run_scenario() {
     it_log "── scenario: ${name} ───────────────────────────────"
 
     if ! resolve_overrides "$overrides"; then
-        it_warn "SKIPPED ${name}: ${SKIP_REASON}"
-        IT_SKIPPED=$((IT_SKIPPED + 1))
+        it_skip_scenario "$name" "$SKIP_REASON"
         return 0
     fi
 
@@ -635,7 +634,7 @@ assert_running_state() {
     #    timeout.
     if [ "$SKIP_MINING_ASSERTS" = "1" ]; then
         # #905: no miner is connected on purpose (e2e --no-miner), so a live worker/hash count
-        # would fail a healthy stack. assert_mining_state (lib.sh) skips these two loudly; every
+        # would fail a healthy stack. assert_mining_state (skip-accounting.sh) skips these two loudly; every
         # other assertion in the scenario stays binding.
         assert_mining_state "1" "" "" "$EXPECTED_WORKERS"
     else
@@ -892,7 +891,7 @@ assert_metrics_via_caddy() {
     local host secure scheme port curl_auth="" body
     host="$(env_on_box HOST_IP)"
     if [ -z "$host" ]; then
-        it_warn "skipping /metrics-via-Caddy (no HOST_IP in .env)"
+        it_skip_leg "/metrics via Caddy" "no HOST_IP in .env"
         return 0
     fi
     secure="$(env_on_box DASHBOARD_SECURE)"
@@ -908,7 +907,7 @@ assert_metrics_via_caddy() {
     fi
     if [ -n "$(env_on_box DASHBOARD_AUTH_HASH_B64)" ]; then
         if [ -z "${IT_DASHBOARD_PASSWORD:-}" ]; then
-            it_warn "skipping /metrics-via-Caddy (dashboard login is set — export IT_DASHBOARD_PASSWORD to test through it)"
+            it_skip_leg "/metrics via Caddy" "dashboard login is set — export IT_DASHBOARD_PASSWORD to test through it"
             return 0
         fi
         curl_auth="-u $(quote_arg "$(env_on_box DASHBOARD_AUTH_USER):$IT_DASHBOARD_PASSWORD")"
@@ -1164,7 +1163,7 @@ run_lifecycle() {
         pithead status >/dev/null 2>&1
         assert_rc "status OK after node recovery" "$?" "0"
     else
-        it_warn "skipping node-down failover (remote mode: no local monerod to stop)"
+        it_skip_leg "node-down failover" "remote mode: no local monerod to stop"
     fi
 
     # backup → restore round-trip (#102): a backup archives config/.env/onions/dashboard; a
@@ -1278,7 +1277,7 @@ fault_db_readonly() {
     local ddir
     ddir="$(env_on_box DASHBOARD_DATA_DIR)"
     if [ -z "$ddir" ]; then
-        it_warn "skipping db-readonly fault (no DASHBOARD_DATA_DIR in .env)"
+        it_skip_leg "db-readonly fault" "no DASHBOARD_DATA_DIR in .env"
         return 0
     fi
     it_step "fault: make the dashboard data dir read-only (#131/#202)…"
@@ -1308,7 +1307,7 @@ fault_db_readonly() {
 # run_fault_injection's belt-and-braces) reinstate it — hence opt-in, local-box only.
 fault_firewall_rollback() {
     if [ "$(env_on_box TOR_EGRESS_FIREWALL)" = "false" ]; then
-        it_warn "skipping firewall-rollback fault (network.tor_egress_firewall=false)"
+        it_skip_leg "firewall-rollback fault" "network.tor_egress_firewall=false"
         return 0
     fi
     it_step "fault: force an iptables -I failure during the firewall apply…"
@@ -1408,12 +1407,12 @@ fault_disk_enospc() {
     local ddir
     ddir="$(env_on_box DASHBOARD_DATA_DIR)"
     if [ -z "$ddir" ]; then
-        it_warn "skipping ENOSPC fault (no DASHBOARD_DATA_DIR in .env)"
+        it_skip_leg "ENOSPC fault" "no DASHBOARD_DATA_DIR in .env"
         return 0
     fi
     it_step "fault: mount a 1MiB tmpfs over the dashboard data dir and fill it (real ENOSPC, #383)…"
     if ! rx "sudo mount -t tmpfs -o size=1m,uid=1000,gid=1000 tmpfs $(quote_arg "$ddir")" >/dev/null 2>&1; then
-        it_warn "could not mount a tmpfs over the data dir (no root / tmpfs support?) — skipping the ENOSPC fault"
+        it_skip_leg "ENOSPC fault" "could not mount a tmpfs over the data dir (no root / tmpfs support?)"
         return 0
     fi
     rx "dd if=/dev/zero of=$(quote_arg "$ddir/.itest-fill") bs=1M count=4 >/dev/null 2>&1" >/dev/null 2>&1 || true
@@ -1435,7 +1434,7 @@ run_fault_injection() {
     echo ""
     it_log "── fault-injection phase ───────────────────────────"
     if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
-        it_warn "skipping fault injection (remote mode: no local monerod to break)"
+        it_skip_phase "fault-injection" "remote mode: no local monerod to break"
         return 0
     fi
 
@@ -1596,7 +1595,7 @@ run_hardening() {
     it_log "── v1.4 hardening phase (#377/#33/#424) ────────────"
 
     if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
-        it_warn "skipping hardening phase (remote mode: no local containers/systemd to exercise)"
+        it_skip_phase "hardening" "remote mode: no local containers/systemd to exercise"
         return 0
     fi
 
@@ -1629,14 +1628,14 @@ run_hardening() {
     #    stays with the doctor egress check, which is the stack self-checking its own egress.)
     local pre_onion=0
     if [ "$(env_on_box DASHBOARD_ONION_ADDRESS)" = "placeholder" ] || [ -z "$(env_on_box DASHBOARD_ONION_ADDRESS)" ]; then
-        it_warn "dashboard onion not provisioned on this box — skipping the external-reachability checks (#424/#343)"
+        it_skip_leg "dashboard onion external reachability (#424/#343)" "onion not provisioned on this box"
     else
         it_step "external Tor client: reach the dashboard onion before the restart (baseline)…"
         _onion_reachable_external && pre_onion=1
         if [ "$pre_onion" = "1" ]; then
             it_pass "dashboard onion reachable from an independent external Tor client (#343/#360)"
         else
-            it_warn "dashboard onion not reachable from outside before the restart (live Tor network) — can't prove recovery, skipping the post-restart check (#424)"
+            it_skip_leg "dashboard onion post-restart recovery (#424)" "onion not reachable from outside before the restart (live Tor network) — can't prove recovery"
         fi
         it_step "restart tor (the #424 heal action)…"
         pithead restart tor >/dev/null 2>&1
@@ -1681,7 +1680,7 @@ run_hardening() {
     local cdir
     cdir="$(env_on_box CONTROL_DIR)"
     if [ -z "$cdir" ]; then
-        it_warn "CONTROL_DIR not set on the box — skipping the spool round-trips"
+        it_skip_leg "control spool round-trips" "CONTROL_DIR not set on the box"
     else
         # 3a. A NON-sensitive change (an allowlisted alert toggle) committed via the spool must be
         #     applied BY THE PATH UNIT — not by us calling control-run-pending.
@@ -1761,7 +1760,7 @@ run_auth_fail_closed() {
     local orig
     orig="$(env_on_box PROXY_AUTH_TOKEN)"
     if [ -z "$orig" ]; then
-        it_warn "skipping: PROXY_AUTH_TOKEN already empty on the box (run 'pithead setup'/'apply' first)"
+        it_skip_leg "proxy auth fail-closed" "PROXY_AUTH_TOKEN already empty on the box (run 'pithead setup'/'apply' first)"
         return 0
     fi
 
@@ -1858,7 +1857,15 @@ summary() {
     echo ""
     it_log "════════════════ summary ════════════════"
     it_log "passed:  $IT_PASS"
-    it_log "skipped: $IT_SKIPPED"
+    it_log "skipped: $IT_SKIPPED scenarios, $IT_SKIPPED_PHASES phases, $IT_SKIPPED_LEGS legs"
+    # Name what did not run (#1365). The count says how big the hole is; only the names say
+    # where it is, and a summary that cannot distinguish "checked and clean" from "never ran"
+    # is not a verdict. Goes to stderr with the other warnings so a log split by stream keeps
+    # the omissions next to the reasons that caused them.
+    if [ -n "$IT_SKIPPED_NAMES" ]; then
+        it_warn "did NOT run:"
+        echo -e "$IT_SKIPPED_NAMES" >&2
+    fi
     if [ "$IT_FAIL" -gt 0 ]; then
         it_err "failed:  $IT_FAIL"
         echo -e "$IT_FAILED_NAMES" >&2
@@ -1888,14 +1895,14 @@ run_rigforge_integration() {
     local st rig
     st="$(api_state)"
     if [ -z "$st" ]; then
-        it_warn "rigforge-integration: /api/state unreachable — skipping"
+        it_skip_phase "rigforge-integration" "/api/state unreachable"
         return 0
     fi
     # A worker whose enriched rigforge block is present (version populated) = a real RigForge rig
     # whose sister API the dashboard reached and parse_rigforge parsed (#235).
     rig="$(printf '%s' "$st" | jq -r 'first(.workers[]? | select(.rigforge != null and .rigforge.version != null) | .name) // empty' 2>/dev/null)"
     if [ -z "$rig" ]; then
-        it_warn "no worker exposes a RigForge enriched feed (a real rigforge rig with api:enabled on :8081?) — enriched-feed consumption not asserted here; the parse contract is covered by the tier-2 test"
+        it_skip_phase "rigforge-integration" "no worker exposes a RigForge enriched feed (a real rigforge rig with api:enabled on :8081?); the parse contract is covered by the tier-2 test"
         return 0
     fi
     it_pass "dashboard consumed a real RigForge rig's enriched feed: $rig (#235)"
@@ -1912,7 +1919,7 @@ run_rigforge_integration() {
     #    exists when dashboard.control is on. Off here → the enriched-feed leg above still proves
     #    #235/#260; the control path itself is covered by the hardening phase + the tier-2 test.
     if [ "$(printf '%s' "$st" | jq -r '.control_enabled // false' 2>/dev/null)" != "true" ]; then
-        it_warn "dashboard.control off — Worker Inspect (#185) read/write not exposed here (covered by the hardening phase + tier-2 contract); enriched-feed consumption validated"
+        it_skip_leg "Worker Inspect read/write (#185)" "dashboard.control off — not exposed here (covered by the hardening phase + tier-2 contract); enriched-feed consumption validated"
         return 0
     fi
 
@@ -2013,11 +2020,11 @@ run_subnet_scenario() {
     it_log "── moved-subnet phase (#201/#180) ──────────────────"
 
     if [ "$IT_MODE" != "local" ]; then
-        it_warn "skipping moved-subnet phase (needs local mode: it brings the stack down/up and inspects the live docker network)"
+        it_skip_phase "moved-subnet" "needs local mode: it brings the stack down/up and inspects the live docker network"
         return 0
     fi
     if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
-        it_warn "skipping moved-subnet phase (remote mode: monerod's moved-prefix proxy is one of the named checks)"
+        it_skip_phase "moved-subnet" "remote mode: monerod's moved-prefix proxy is one of the named checks"
         return 0
     fi
 
@@ -2108,11 +2115,11 @@ run_rigforge_control() {
     it_log "── RigForge control phase (#513/#514/#516/#517) ────"
 
     if [ "$IT_MODE" != "local" ]; then
-        it_warn "skipping rigforge-control (needs local mode: it edits config.json + dials the rig on the mining LAN)"
+        it_skip_phase "rigforge-control" "needs local mode: it edits config.json + dials the rig on the mining LAN"
         return 0
     fi
     if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
-        it_warn "skipping rigforge-control (remote mode: no local dashboard container to drive)"
+        it_skip_phase "rigforge-control" "remote mode: no local dashboard container to drive"
         return 0
     fi
 
@@ -2121,7 +2128,7 @@ run_rigforge_control() {
     st="$(api_state)"
     rig="$(printf '%s' "$st" | jq -r 'first(.workers[]? | select(.rigforge != null and .rigforge.version != null) | .name) // empty' 2>/dev/null)"
     if [ -z "$rig" ]; then
-        it_warn "no worker exposes a RigForge enriched feed — the write paths need a real rig with its :8081 API on; skipping (#513/#514/#516/#517)"
+        it_skip_phase "rigforge-control" "no worker exposes a RigForge enriched feed — the write paths need a real rig with its :8081 API on (#513/#514/#516/#517)"
         return 0
     fi
 
@@ -2137,7 +2144,7 @@ run_rigforge_control() {
         if [ -n "$RIG_HOST" ] && [ -n "${IT_RIG_TOKEN:-}" ]; then
             inject=1
         else
-            it_warn "rig '$rig' has no workers.list[] (or legacy dashboard.workers[]) descriptor and no --rig-host + IT_RIG_TOKEN to inject one — skipping the write paths (#513/#514/#516/#517)"
+            it_skip_phase "rigforge-control" "rig '$rig' has no workers.list[] (or legacy dashboard.workers[]) descriptor and no --rig-host + IT_RIG_TOKEN to inject one (#513/#514/#516/#517)"
             return 0
         fi
     fi
@@ -2204,7 +2211,7 @@ run_rigforge_control() {
     local orig_maxt new_maxt res status ckeys change_id
     orig_maxt="$(printf '%s' "$st" | jq -r --arg n "$rig" 'first(.workers[]? | select(.name==$n) | .rigforge.stats[]? | select(.label=="Temp / max") | .value) // empty' 2>/dev/null | sed -n 's#.*/ *\([0-9][0-9]*\).*#\1#p')"
     if [ -z "$orig_maxt" ]; then
-        it_warn "rig '$rig' watchdog isn't reporting a max_temp_c in the feed — skipping the reversible write leg (can't read the original to restore it) (#513)"
+        it_skip_leg "reversible write, max_temp_c (#513)" "rig '$rig' watchdog isn't reporting a max_temp_c in the feed — can't read the original to restore it"
     else
         new_maxt=$((orig_maxt + 1))
         it_step "Worker Inspect edit: max_temp_c $orig_maxt -> $new_maxt via /api/control/worker-apply…"
@@ -2289,18 +2296,18 @@ run_rigforge_reverse() { # <rig-name> <orig-max_temp_c-or-empty>
         assert_eq "config.json hand-edit shows up in the masked prefill (#516 render_masked_config claim)" \
             "$(rx "cat $(quote_arg "$cdir/masked/config.json") 2>/dev/null" | jq -r --arg n "$rig" 'first((.workers.list // .dashboard.workers // [])[] | select(.name==$n) | .watts) // empty' 2>/dev/null)" "$probe_watts"
     else
-        it_warn "CONTROL_DIR not set — skipping the masked-prefill leg of #516"
+        it_skip_leg "masked prefill (#516)" "CONTROL_DIR not set"
     fi
 
     # Feed leg (needs the raw token to dial the rig directly): change max_temp_c ON the rig via its
     # own control API, then assert the dashboard's enriched feed reflects it — the rig->dashboard
     # direction, independent of the dashboard write path.
     if [ -z "${IT_RIG_TOKEN:-}" ] || [ -z "$RIG_HOST" ]; then
-        it_warn "no IT_RIG_TOKEN + --rig-host to dial the rig directly — skipping the enriched-feed reflection leg of #516"
+        it_skip_leg "enriched-feed reflection (#516)" "no IT_RIG_TOKEN + --rig-host to dial the rig directly"
         return 0
     fi
     if [ -z "$orig_maxt" ]; then
-        it_warn "rig watchdog max_temp_c not visible in the feed — skipping the enriched-feed reflection leg of #516"
+        it_skip_leg "enriched-feed reflection (#516)" "rig watchdog max_temp_c not visible in the feed"
         return 0
     fi
     local reflect=$((orig_maxt + 2)) change_id
@@ -2361,7 +2368,7 @@ run_rigforge_rollback() { # <rig-name>
     local rig="$1" res status
     it_log "   #517: control-apply auto-rollback (rigforge#236)"
     if [ -z "${IT_RIG_ROLLBACK_CHANGES:-}" ]; then
-        it_warn "no IT_RIG_ROLLBACK_CHANGES (a writable-key change the rig's fault-injection rolls back) — skipping the auto-rollback leg (#517)"
+        it_skip_leg "control-apply auto-rollback (#517)" "no IT_RIG_ROLLBACK_CHANGES (a writable-key change the rig's fault-injection rolls back)"
         return 0
     fi
     if ! printf '%s' "$IT_RIG_ROLLBACK_CHANGES" | jq -e 'type == "object"' >/dev/null 2>&1; then
@@ -2423,7 +2430,7 @@ run_rigforge_upgrade() { # <rig-name>
     ver="$(printf '%s' "$(api_state)" | jq -r --arg n "$rig" 'first(.workers[]? | select(.name==$n) | .rigforge.version) // empty' 2>/dev/null)"
     posted="v${ver#v}"
     if ! printf '%s' "$posted" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-        it_warn "rig '$rig' isn't reporting a clean vX.Y.Z version (got [$ver]) — skipping the upgrade leg (#1002a)"
+        it_skip_leg "rig upgrade (#1002a)" "rig '$rig' isn't reporting a clean vX.Y.Z version (got [$ver])"
         return 0
     fi
 
@@ -2449,7 +2456,6 @@ run_rigforge_upgrade() { # <rig-name>
 }
 
 # --- Main -------------------------------------------------------------------
-IT_SKIPPED=0
 
 main() {
     parse_args "$@"

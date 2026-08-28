@@ -473,6 +473,34 @@ On a scenario failure, the harness captures (redacted) to `results/<scenario>/`:
 `api-state.json`, and `logs.txt` (last 200 lines per service). The end-of-run summary lists
 each failed assertion and points at these.
 
+### Reading the verdict — what did not run
+
+The summary counts three kinds of skip separately and names every one:
+
+```
+passed:  312
+skipped: 2 scenarios, 1 phases, 4 legs
+did NOT run:
+    - scenario prune-remote — no pruned chain supplied
+    - PHASE    rigforge-control — no worker exposes a RigForge enriched feed
+    - leg      pools write (#1002b) — no IT_RIG_POOLS_PROBE
+```
+
+A scenario skip drops one matrix row; a phase skip drops every leg under it with one line; a leg
+skip drops one assertion group. They stay in separate buckets because they are not the same size
+of hole, and a phase drop announces itself more loudly in the live output.
+
+Until [#1365](https://github.com/p2pool-starter-stack/pithead/issues/1365) only the scenario
+skips were counted. A run that dropped the whole rigforge-control phase and a run that exercised
+it produced summaries differing by nothing but the pass count, and the pass count moves for a
+dozen unrelated reasons. The output had no way to say a surface had not run, which leaves the
+reader unable to tell "checked and clean" from "never ran" — the distinction the gate exists to
+make.
+
+Every skip leaves through `it_skip_scenario`, `it_skip_phase` or `it_skip_leg`
+(`tests/integration/skip-accounting.sh`). Plain `it_warn` stays for warnings that are not a
+dropped check.
+
 ---
 
 ## The self-test (CI)
@@ -482,6 +510,11 @@ rendering and value typing, expectation derivation (profile gating), secret reda
 SSH/local exec wrapper, JSON parsing, and matrix axis coverage. It runs in CI on every PR (the
 `shell` job) and via `make test-integration-selftest`, so the harness itself is held to the
 same lint/test standard as the rest of the stack.
+
+Several self-tests sit beside it as standalone files, picked up by the same globbed target.
+`selftest-skip-accounting.sh` is the one that keeps the skip accounting honest: besides checking
+the counters and the real `summary()`, it censuses every harness file and fails if a skip leaves
+through a bare `it_warn` — by wording, and by shape for the drops that never say "skipping".
 
 ---
 
