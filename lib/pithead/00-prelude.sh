@@ -115,3 +115,155 @@ if [ "$_STACK_SOURCED" = "0" ]; then
     trap on_err ERR
     trap 'rm -f "${ENV_FILE}.new" "${ENV_FILE}.dryrun" 2>/dev/null || true' EXIT
 fi
+
+# --- Mutation lock (#1342) ---
+#
+# pithead had no mutual exclusion of any kind, so the writers on a box — the firstboot wizard
+# loop, the host-side runner draining the dashboard's spooled intents, and an operator verb from a
+# shell or a harness — could interleave with one another. The observed harm: a concurrent `backup`
+# runs stack_down inside a still-running `setup`, setup fails for a reason that has nothing to do
+# with the configuration, and the wizard treats that as a bad configuration (#1059).
+#
+# The lock goes around mutating WINDOWS, never around a whole verb. `backup` prompts for a
+# passphrase and then for permission to stop the stack, `restore` asks before overwriting, and
+# firstboot-wizard waits on a web form under TimeoutStartSec=infinity
+# (os/overlay/pithead-firstboot.service:35). A verb-scoped lock would sit inside those waits and
+# convert a race into a hang — the harder failure to read out of a journal, because a hang has no
+# message.
+#
+# Re-entrancy needs TWO mechanisms, because pithead DOES re-invoke itself for mutating verbs
+# (run_chain, control_lifecycle, control_backup):
+#   - within one process (backup -> down -> up): a depth counter.
+#   - across a re-invocation: an EXPORTED marker. The child inherits the descriptor across exec,
+#     so the lock is already held on its behalf — but without the marker it runs its own `exec 9>`,
+#     which opens a SECOND open file description on the same file and blocks on its own parent.
+#     Both halves were confirmed against the tools rather than reasoned: a child's `flock -n` on
+#     the inherited fd succeeds, and on a freshly opened one it blocks.
+#
+# fd 9 is a literal on purpose. Descriptors bash allocates itself (`exec {fd}>`) and any fd >= 10
+# are close-on-exec, so a child would not inherit the hold; fds 0-9 named explicitly are not.
+# Nothing else in this script uses fd 9. The lock lives on the descriptor, so the kernel releases
+# it if the holder dies — which matters here because error() is an exit and several of these paths
+# reach it.
+_PITHEAD_LOCK_DEPTH=0
+_PITHEAD_LOCK_OWNED=0
+_PITHEAD_LOCK_PATH=""
+_PITHEAD_LOCK_WARNED=0
+# Long enough that a routine `compose down` (seconds) never turns a backup into a refusal, short
+# enough that a wedged holder is reported instead of waited on forever.
+PITHEAD_LOCK_TIMEOUT="${PITHEAD_LOCK_TIMEOUT:-300}"
+# A timeout exits with THIS, not error()'s 1, because one caller has to tell the two apart:
+# os/overlay/pithead-boot reboots on its first failed boot so the bootloader falls back to the
+# other A/B slot, and declares "the fault is not the slot" on its second. A boot that merely
+# collided with the firstboot wizard's `setup` would spend that fallback on a slot that is fine
+# and then misdiagnose itself. 75 is sysexits.h's EX_TEMPFAIL — retry, nothing is wrong here.
+PITHEAD_EX_LOCK_TIMEOUT=75
+
+# WHERE the lock lives, and it is deliberately not the install directory.
+#
+# `$PWD/.pithead.lock` keys the lock on the directory pithead was run from — but the documented
+# bundle layout (docs/operations.md, "A recommended layout") gives ONE stack SEVERAL of those:
+# `current -> pithead-v1.5.0` sits beside `pithead-v1.4.0`, and the dashboard's one-click upgrade
+# creates a third sibling and runs `./pithead upgrade` INSIDE it (control_upgrade). Every one of
+# them drives the same Compose project (`pithead`, pinned in docker-compose.yml) against the same
+# data dirs, so a directory-keyed lock leaves that upgrade and a concurrent `backup` mutually
+# invisible — a lock that cannot be contended is #1059 again, wearing a green tick.
+#
+# So key it on the DEPLOY ROOT: the one thing every version dir of a stack shares. A plain
+# `pithead/` checkout has no siblings, keeps the directory-local path, and is unaffected.
+# PITHEAD_LOCK_FILE still overrides both, which is what the suite drives.
+is_versioned_install_dir() { # <dir> — the `pithead-vX.Y.Z` shape control_upgrade's #629 deploy creates
+    [[ "$(basename "$1")" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+mutation_lock_path() {
+    if [ -n "${PITHEAD_LOCK_FILE:-}" ]; then
+        printf '%s' "$PITHEAD_LOCK_FILE"
+    elif is_versioned_install_dir "$PWD"; then
+        printf '%s' "$(dirname "$PWD")/.pithead.lock"
+    else
+        printf '%s' "$PWD/.pithead.lock"
+    fi
+}
+
+mutation_lock_acquire() { # <verb label>
+    local label="${1:-pithead}"
+
+    # Already inside a window this process holds (backup -> down/up): count and return.
+    if [ "$_PITHEAD_LOCK_DEPTH" -gt 0 ]; then
+        _PITHEAD_LOCK_DEPTH=$((_PITHEAD_LOCK_DEPTH + 1))
+        return 0
+    fi
+
+    # Held by an ancestor pithead that re-invoked us — we inherited its descriptor, so the lock is
+    # already held on our behalf. Opening our own here is the deadlock described above.
+    if [ -n "${PITHEAD_LOCK_HELD:-}" ]; then
+        _PITHEAD_LOCK_DEPTH=1
+        return 0
+    fi
+
+    if ! command -v flock >/dev/null 2>&1; then
+        # Refusing to run `up` on a box without util-linux would be a worse regression than the
+        # race this closes, so degrade — but loudly and once, never silently.
+        if [ "$_PITHEAD_LOCK_WARNED" -eq 0 ]; then
+            warn "flock is not installed, so pithead cannot serialise itself — another pithead running now can interleave with this one."
+            _PITHEAD_LOCK_WARNED=1
+        fi
+        return 0
+    fi
+
+    _PITHEAD_LOCK_PATH="$(mutation_lock_path)"
+    # Append, never truncate: `9>` empties the file at OPEN time — before the flock is taken — so
+    # it would wipe the holder record the waiter below is about to read.
+    #
+    # Fail OPEN here, matching the missing-flock branch above and for the same reason: a lock file
+    # this user cannot open is an environment fault (a deploy root only root can write, a
+    # read-only mount), and refusing every mutating verb on such a box is a worse regression than
+    # the race this closes. The two environmental failures are now handled the same direction on
+    # purpose — the asymmetry that used to sit here was not deliberate.
+    if ! exec 9>>"$_PITHEAD_LOCK_PATH"; then
+        if [ "$_PITHEAD_LOCK_WARNED" -eq 0 ]; then
+            warn "Cannot open the pithead lock file ($_PITHEAD_LOCK_PATH), so pithead cannot serialise itself — another pithead running now can interleave with this one."
+            _PITHEAD_LOCK_WARNED=1
+        fi
+        _PITHEAD_LOCK_PATH=""
+        return 0
+    fi
+    if ! flock -n 9; then
+        local holder
+        holder=$(head -n 1 "$_PITHEAD_LOCK_PATH" 2>/dev/null | tr -d '[:cntrl:]' | head -c 120)
+        [ -n "$holder" ] || holder="holder unrecorded"
+        warn "Another pithead operation is in progress ($holder) — waiting up to ${PITHEAD_LOCK_TIMEOUT}s for it to finish."
+        if ! flock -w "$PITHEAD_LOCK_TIMEOUT" 9; then
+            exec 9>&-
+            # error()'s message, error()'s exit — except the status, for the reason at
+            # PITHEAD_EX_LOCK_TIMEOUT above. Anything reading only the message is unaffected.
+            echo -e "${C_RED}[ERROR]${C_RESET} Timed out after ${PITHEAD_LOCK_TIMEOUT}s waiting for another pithead operation ($holder) — nothing was changed. Re-run '$0 $label' once it has finished." >&2
+            exit "$PITHEAD_EX_LOCK_TIMEOUT"
+        fi
+    fi
+    _PITHEAD_LOCK_OWNED=1
+    _PITHEAD_LOCK_DEPTH=1
+    # Exported, not merely set: the marker has to survive into a re-invoked child.
+    export PITHEAD_LOCK_HELD="$$"
+    # Record the holder now that we are one. A truncating write through a second descriptor is
+    # safe while we hold the lock, and it is what lets the next waiter name who it is waiting for.
+    printf 'pid=%s verb=%s since=%s\n' "$$" "$label" \
+        "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)" >"$_PITHEAD_LOCK_PATH" 2>/dev/null || true
+    return 0
+}
+
+mutation_lock_release() {
+    [ "$_PITHEAD_LOCK_DEPTH" -gt 0 ] || return 0
+    _PITHEAD_LOCK_DEPTH=$((_PITHEAD_LOCK_DEPTH - 1))
+    [ "$_PITHEAD_LOCK_DEPTH" -eq 0 ] || return 0
+    # An inherited hold belongs to the ancestor: never close its descriptor and never clear its
+    # record. Only the process that took the lock gives it back.
+    [ "$_PITHEAD_LOCK_OWNED" -eq 1 ] || return 0
+    # Clear the record while we still hold the lock, so a stale line can never name a holder that
+    # has already gone.
+    : >"$_PITHEAD_LOCK_PATH" 2>/dev/null || true
+    _PITHEAD_LOCK_OWNED=0
+    unset PITHEAD_LOCK_HELD
+    exec 9>&-
+    return 0
+}

@@ -118,6 +118,7 @@ stack_upgrade() {
     if is_appliance; then
         error "This is a Pithead OS appliance: the program tree is delivered by OS images and resynced from the system slot at every boot, so a tarball upgrade here would silently revert at the next reboot. Updates arrive as signed OS images — see the appliance guide."
     fi
+    mutation_lock_acquire upgrade
     log "Upgrading stack (rebuilding containers)..."
     # A release (git pull) may change config templates, add/rename .env vars, or restructure the
     # Caddyfile / Tari config — all GENERATED files mounted into containers. Re-render them before
@@ -199,6 +200,7 @@ stack_upgrade() {
     # the escape the ownership guard would refuse and leave the units on the previous install.
     provision_control_runner steal
     log "Stack upgraded."
+    mutation_lock_release
 }
 
 # Per-chain "is this node EXPOSED on clearnet right now?" (#183/#234): the flag is on AND the
@@ -1098,6 +1100,37 @@ wizard_keep_failed_config() {
     fi
     warn "Could not keep a copy of the failed configuration as config.json.failed."
     return 1
+}
+
+# CONTENTION IS NOT A BAD CONFIG — the wizard's half of #1342's routing, and it was missing.
+#
+# os/overlay/pithead-boot has the boot leg's half (fail_boot_contended): a lock timeout there is
+# contention, not a bad A/B slot, so the fallback is not spent. `setup` runs inside a mutating
+# window too, and can lose exactly the same race — but every non-zero (setup) was routed as a
+# provisioning failure, which tells the operator their configuration is wrong and asks them to
+# correct it. On a first boot there is no shell to contradict it with.
+#
+# Worse than misleading. That path calls wizard_keep_failed_config, which removes config.json
+# whenever the machine-role marker never landed — and record_machine_role is best-effort
+# (`printf ... || true`). So contention could take a VALID configuration away from the operator
+# and then blame them for it: #1059's own shape, on the one leg #1059's fix did not route.
+#
+# Kept as a function rather than inline at the call site, for the reason boot_up_failed gives on
+# the other leg: the two halves of one decision drift apart when they are written twice.
+#
+# rc 0 = a config.json.failed copy was kept (so the reopened page prefills from it), 1 = not.
+# Contention deliberately returns 1 WITHOUT calling wizard_keep_failed_config: nothing is copied,
+# nothing is removed, and the live config.json the operator submitted is what prefills the retry.
+wizard_setup_failed() { # <exit status of setup>
+    if [ "$1" = "$PITHEAD_EX_LOCK_TIMEOUT" ]; then
+        warn "Another pithead operation still held the machine, and provisioning timed out waiting for it."
+        warn "That is contention, NOT a problem with the configuration you submitted — it is kept exactly as it is."
+        warn "Reopening the setup window so it can be resubmitted once the other operation has finished."
+        return 1
+    fi
+    warn "Provisioning failed. A copy of the submitted configuration is kept as config.json.failed;"
+    warn "reopening the setup window so it can be corrected."
+    wizard_keep_failed_config
 }
 
 # The marker, read back. Anything unrecognised (or absent) is a coordinator: every machine
@@ -2256,19 +2289,25 @@ firstboot_wizard() {
                 # teed: the console keeps its live narration, and the tail becomes the reopened
                 # page's error — a refusal that lives only in console scrollback cost a bench
                 # session an hour of believing the machine had crashed.
-                local setup_log
+                local setup_log setup_rc=0
                 setup_log=$(mktemp)
-                if (setup) 2>&1 | tee "$setup_log"; then
+                # The STATUS is captured, not just its truthiness: `if (setup) | tee` collapses
+                # every failure to one, and a lock timeout (PITHEAD_EX_LOCK_TIMEOUT) has to be
+                # told apart from a bad configuration — see wizard_setup_failed. PIPESTATUS is not
+                # needed here because `pipefail` is set, so the pipeline carries setup's own
+                # non-zero status; `|| setup_rc=$?` is what keeps `set -e` from taking the branch
+                # away before it can be read.
+                { (setup) 2>&1 | tee "$setup_log"; } || setup_rc=$?
+                if [ "$setup_rc" -eq 0 ]; then
                     rm -f "$setup_log"
                     return
                 fi
-                warn "Provisioning failed. A copy of the submitted configuration is kept as config.json.failed;"
-                warn "reopening the setup window so it can be corrected."
                 # The machine KEEPS its configuration (#1059) — this used to move it aside, which
                 # on this path can only cost. The reasoning, and why the removal that remains is
-                # conditional, is at wizard_keep_failed_config's definition.
+                # conditional, is at wizard_keep_failed_config's definition. Which of the two
+                # failures this was, and whether a copy is taken at all, is wizard_setup_failed's.
                 local kept_copy=0
-                if wizard_keep_failed_config; then kept_copy=1; fi
+                if wizard_setup_failed "$setup_rc"; then kept_copy=1; fi
                 mkdir -p "$spool"
                 chown 1000:1000 "$spool" 2>/dev/null || chmod 777 "$spool"
                 # The reopened page gets BOTH halves of a usable retry: the reason it failed, and
@@ -3110,8 +3149,12 @@ stack_backup() {
     # the way every path join should: only prefix $PWD onto a RELATIVE candidate.
     local _cfg_path="$CONFIG_FILE"
     case "$_cfg_path" in /*) ;; *) _cfg_path="$PWD/$_cfg_path" ;; esac
-    local items=("$_cfg_path" "$PWD/$ENV_FILE")
-    backup_require_items "${items[@]}"
+    # Kept as its own array so the check can be REPEATED under the lock below. This one runs
+    # before the passphrase and stop-the-stack prompts, and #1342's point is exactly that a
+    # precondition checked outside mutual exclusion can be false again by the time it is used.
+    local required=("$_cfg_path" "$PWD/$ENV_FILE")
+    local items=("${required[@]}")
+    backup_require_items "${required[@]}"
     [ -f "Caddyfile" ] && items+=("$PWD/Caddyfile")
 
     if [ -d "$TOR_DATA_DIR" ]; then
@@ -3187,8 +3230,21 @@ stack_backup() {
                 return
             fi
         fi
+        # AFTER both prompts (passphrase, and permission to stop the stack): the hold must not
+        # span an unbounded human wait. It runs from here across stack_down -> tar -> stack_up,
+        # so nothing can mutate config.json inside that span. Nested acquisition is a no-op, so
+        # the stack_down/stack_up below take no second lock.
+        mutation_lock_acquire backup
+        # Re-checked under the lock and BEFORE anything is stopped, so a file that vanished while
+        # the operator was at a prompt refuses here rather than failing tar with the stack already
+        # down — the same blast-radius rule as #1244/#1248.
+        backup_require_items "${required[@]}"
         was_running=1
         stack_down
+    else
+        # Stack already stopped: the same hold and the same re-check, still before tar.
+        mutation_lock_acquire backup
+        backup_require_items "${required[@]}"
     fi
 
     log "Creating backup archive..."
@@ -3248,6 +3304,7 @@ stack_backup() {
         stack_up
         log "Stack restarted after the backup."
     fi
+    mutation_lock_release
 }
 
 stack_restore() {
@@ -3326,6 +3383,9 @@ stack_restore() {
             error "Archive fails integrity verification (tampered or truncated) — nothing was restored."
     fi
 
+    # After the confirm and the passphrase prompt, and after the integrity verify (read-only):
+    # the extraction below is the mutating window.
+    mutation_lock_acquire restore
     log "Restoring from $archive ..."
     # The archive stores paths relative to / (leading slash stripped), so extracting at / puts
     # every file back exactly where it came from. sudo so we can write into the 100:101-owned
@@ -3352,6 +3412,7 @@ stack_restore() {
     ensure_owner "$DASHBOARD_DIR" "$APP_UID" "$APP_GID"
 
     log "Restore complete. Start the stack with '$0 up'."
+    mutation_lock_release
 }
 
 show_help() {
@@ -8303,6 +8364,11 @@ setup() {
         fi
     fi
 
+    # After the re-run prompt above, so the hold never spans a human wait. The firstboot
+    # wizard runs `(setup)` in a subshell (#1059), so this IS the wizard's hold and it is not one
+    # line wider than the provisioning itself — the loop's wait for a submitted form is outside it.
+    mutation_lock_acquire setup
+
     check_prerequisites
     ensure_config_exists
     ensure_onion_password # #343: auto-generate a dashboard password if the onion is on without one
@@ -8324,6 +8390,9 @@ setup() {
     update_current_symlink    # #455: versioned deploy dir -> maintain the `current ->` pointer
 
     log "Deployment preparation complete!"
+    # Provisioning is done. Everything below is either a message or an interactive "start now?",
+    # so the hold ends here; the stack_up it may call takes its own.
+    mutation_lock_release
     if [ "$REBOOT_REQUIRED" = true ]; then
         echo -e "\n${C_YELLOW}[!] ATTENTION: System optimization requires a reboot.${C_RESET}"
         echo "Please run: 'sudo reboot' now."
@@ -8846,6 +8915,11 @@ render_derived() {
 }
 
 apply() {
+    # apply reaches its mutating window down two different paths (a normal change, and the retry
+    # after a previous apply committed the config but did not finish recreating containers), so it
+    # tracks its own hold rather than acquiring twice — the depth counter would then never reach
+    # zero and the lock would outlive the verb inside a single process.
+    local lock_held=0
     local assume_yes=0 dry_run=0 porcelain=0 arg
     for arg in "$@"; do
         case "$arg" in
@@ -8949,6 +9023,10 @@ apply() {
             fi
         fi
 
+        # After every confirm above (the typed wallet redirect, the disruptive-change y/N):
+        # committing the rendered .env is where apply starts mutating.
+        mutation_lock_acquire apply
+        lock_held=1
         mv "$newenv" "$ENV_FILE"
         provision_node_onions # #103: a node that just went local needs its onion before it starts
         inject_service_configs
@@ -8978,13 +9056,20 @@ apply() {
             # files, not config.json — so returning here first made `apply` the one thing that
             # could not repair it, while doctor was telling the operator to run exactly that.
             # Idempotent and sudo-free when the units already match.
+            mutation_lock_acquire apply
             provision_control_runner
             log "No configuration changes detected. Nothing to apply."
+            mutation_lock_release
             return 0
         fi
         warn "A previous apply updated the config but did not finish recreating containers — retrying."
     fi
 
+    # The retry branch reaches here without a hold; the changed branch already has one.
+    if [ "$lock_held" -eq 0 ]; then
+        mutation_lock_acquire apply
+        lock_held=1
+    fi
     # Client-auth keys must be written before tor is recreated below, so an onion just turned on (or a
     # client-auth toggle) takes effect on this apply rather than the next (#343).
     provision_onion_client_auth
@@ -9039,6 +9124,7 @@ apply() {
     provision_local_miner || true
     log "Configuration applied."
     announce_dashboard_url
+    mutation_lock_release
 }
 
 # --- Subcommand chaining (#94) ---
@@ -9897,7 +9983,7 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
     # its default paths under the NEW dir and the stack would come up beside its own data.
     local new_dir="" cwd
     cwd=$(pwd -P) # physical path: the guard below compares canonicalized values on BOTH sides
-    if [[ "$(basename "$cwd")" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if is_versioned_install_dir "$cwd"; then
         new_dir="$(dirname "$cwd")/pithead-$tag"
         local dvar dval
         for dvar in MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR TOR_DATA_DIR DASHBOARD_DATA_DIR; do
