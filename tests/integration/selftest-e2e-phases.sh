@@ -334,12 +334,10 @@ for flag in $(printf '%s %s %s %s' "$TARGETED" "$MATRIX" "$CHECK" "$NOMINER" | t
 done
 
 echo "== borrow_miner's recovery block, fired on known instances (#1178) =="
-# F2 of the #1415 review: nothing in the repo ever fired this detector, so its only evidence of
-# working was PR-body prose from a harness that was never committed. Driven like run_harness above —
-# the REAL block out of the shipped e2e.sh — except on_miner runs each command LOCALLY against a temp
-# config, so the actual jq/ls/cp/rm execute and ssh is the only thing substituted. That is the whole
-# of on_miner (e2e.sh:172). Extraction is asserted first: a refactor that moves this must go red
-# rather than silently stop testing.
+# F2 of the #1415 review: nothing in the repo ever fired this detector, so its only evidence was
+# PR-body prose from a harness never committed. Drives the REAL block out of the shipped e2e.sh with
+# on_miner running each command LOCALLY against a temp config — ssh is the only substitution, and it
+# is the whole of on_miner (e2e.sh:172). Extraction is asserted first, so a refactor reds.
 RECOVERY_SRC="$(sed -n '/^    local leftover borrowed/,/^    esac$/p' "$E2E_SRC")"
 assert_eq "the recovery-block extraction opens and closes" \
     "$(printf '%s\n' "$RECOVERY_SRC" | sed -n '1p;$p' | awk '{print $1}' | tr '\n' ' ')" "local esac "
@@ -386,11 +384,14 @@ drive_recovery '{"pools":[{"url":"pithead.example:3333"},{"url":"bench.example:3
 assert_eq "a leftover borrow is restored from the oldest backup" "$(jq -r '.pools[0].url' "$CFGDIR/config.json")" "orig1.example:3333"
 assert_eq "  and every backup is pruned once the bytes are back" "$(ls -1 "$CFGDIR" | wc -l)" "1"
 assert_eq "  and the report does NOT then deny the borrow it just undid (#1415 F1, arm 1)" "$(contains "$OUT" "found no un-restored borrow to undo")" "no"
+assert_eq "  positive control for the line above: the report DOES fire here" "$(contains "$OUT" "untagged pool(s)")" "yes"
 
 # Unreadable must cost nothing — a config half-written by a run that died mid-restore looks like this.
 drive_recovery 'not json at all' 1
 assert_eq "an unreadable config leaves the only surviving backup alone" "$(ls -1 "$CFGDIR" | wc -l)" "2"
 assert_eq "  and the silence is not reported as clean" "$(contains "$OUT" "leaving the config AND any backup(s) untouched")" "yes"
+assert_eq "  and the REPORT block says so in its own words, which is a SECOND guard" "$(contains "$OUT" "do NOT read the silence as clean")" "yes"
+assert_eq "  and the config bytes are untouched too — that message claims BOTH halves" "$(cat "$CFGDIR/config.json")" "not json at all"
 
 echo ""
 echo "selftest-e2e-phases: $IT_PASS passed, $IT_FAIL failed"
