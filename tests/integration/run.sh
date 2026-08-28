@@ -435,7 +435,7 @@ run_scenario() {
     it_log "── scenario: ${name} ───────────────────────────────"
 
     if ! resolve_overrides "$overrides"; then
-        it_skip_scenario "$name" "$SKIP_REASON"
+        it_skip_scenario "$name" "$SKIP_REASON" "$SKIP_CLASS"
         return 0
     fi
 
@@ -1163,7 +1163,7 @@ run_lifecycle() {
         pithead status >/dev/null 2>&1
         assert_rc "status OK after node recovery" "$?" "0"
     else
-        it_skip_leg "node-down failover" "remote mode: no local monerod to stop"
+        it_skip_leg "node-down failover" "remote mode: no local monerod to stop" "by-design"
     fi
 
     # backup → restore round-trip (#102): a backup archives config/.env/onions/dashboard; a
@@ -1434,7 +1434,7 @@ run_fault_injection() {
     echo ""
     it_log "── fault-injection phase ───────────────────────────"
     if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
-        it_skip_phase "fault-injection" "remote mode: no local monerod to break"
+        it_skip_phase "fault-injection" "remote mode: no local monerod to break" "by-design"
         return 0
     fi
 
@@ -1595,7 +1595,7 @@ run_hardening() {
     it_log "── v1.4 hardening phase (#377/#33/#424) ────────────"
 
     if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
-        it_skip_phase "hardening" "remote mode: no local containers/systemd to exercise"
+        it_skip_phase "hardening" "remote mode: no local containers/systemd to exercise" "by-design"
         return 0
     fi
 
@@ -1858,6 +1858,10 @@ summary() {
     it_log "════════════════ summary ════════════════"
     it_log "passed:  $IT_PASS"
     it_log "skipped: $IT_SKIPPED scenarios, $IT_SKIPPED_PHASES phases, $IT_SKIPPED_LEGS legs"
+    # #1083: the totals above say how much did not run; this line says how much of that is a GAP.
+    # Five stable skips read as "known and fine" for months precisely because one number could not
+    # tell an accepted absence from an uncovered path. Only "missing" is the second kind.
+    it_log "  of which: $IT_SKIPPED_MISSING missing (an input would have run it), $IT_SKIPPED_BY_DESIGN by-design (this run's mode excludes it), $IT_SKIPPED_COVERED covered elsewhere"
     # Name what did not run (#1365). The count says how big the hole is; only the names say
     # where it is, and a summary that cannot distinguish "checked and clean" from "never ran"
     # is not a verdict. Goes to stderr with the other warnings so a log split by stream keeps
@@ -1902,7 +1906,7 @@ run_rigforge_integration() {
     # whose sister API the dashboard reached and parse_rigforge parsed (#235).
     rig="$(printf '%s' "$st" | jq -r 'first(.workers[]? | select(.rigforge != null and .rigforge.version != null) | .name) // empty' 2>/dev/null)"
     if [ -z "$rig" ]; then
-        it_skip_phase "rigforge-integration" "no worker exposes a RigForge enriched feed (a real rigforge rig with api:enabled on :8081?); the parse contract is covered by the tier-2 test"
+        it_skip_phase "rigforge-integration" "no worker exposes a RigForge enriched feed (a real rigforge rig with api:enabled on :8081?); the parse contract is covered by the tier-2 test" "covered"
         return 0
     fi
     it_pass "dashboard consumed a real RigForge rig's enriched feed: $rig (#235)"
@@ -1919,7 +1923,7 @@ run_rigforge_integration() {
     #    exists when dashboard.control is on. Off here → the enriched-feed leg above still proves
     #    #235/#260; the control path itself is covered by the hardening phase + the tier-2 test.
     if [ "$(printf '%s' "$st" | jq -r '.control_enabled // false' 2>/dev/null)" != "true" ]; then
-        it_skip_leg "Worker Inspect read/write (#185)" "dashboard.control off — not exposed here (covered by the hardening phase + tier-2 contract); enriched-feed consumption validated"
+        it_skip_leg "Worker Inspect read/write (#185)" "dashboard.control off — not exposed here (covered by the hardening phase + tier-2 contract); enriched-feed consumption validated" "covered"
         return 0
     fi
 
@@ -2020,11 +2024,11 @@ run_subnet_scenario() {
     it_log "── moved-subnet phase (#201/#180) ──────────────────"
 
     if [ "$IT_MODE" != "local" ]; then
-        it_skip_phase "moved-subnet" "needs local mode: it brings the stack down/up and inspects the live docker network"
+        it_skip_phase "moved-subnet" "needs local mode: it brings the stack down/up and inspects the live docker network" "by-design"
         return 0
     fi
     if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
-        it_skip_phase "moved-subnet" "remote mode: monerod's moved-prefix proxy is one of the named checks"
+        it_skip_phase "moved-subnet" "remote mode: monerod's moved-prefix proxy is one of the named checks" "by-design"
         return 0
     fi
 
@@ -2115,11 +2119,11 @@ run_rigforge_control() {
     it_log "── RigForge control phase (#513/#514/#516/#517) ────"
 
     if [ "$IT_MODE" != "local" ]; then
-        it_skip_phase "rigforge-control" "needs local mode: it edits config.json + dials the rig on the mining LAN"
+        it_skip_phase "rigforge-control" "needs local mode: it edits config.json + dials the rig on the mining LAN" "by-design"
         return 0
     fi
     if ! has_compose_profile "$(env_on_box COMPOSE_PROFILES)" local_node; then
-        it_skip_phase "rigforge-control" "remote mode: no local dashboard container to drive"
+        it_skip_phase "rigforge-control" "remote mode: no local dashboard container to drive" "by-design"
         return 0
     fi
 

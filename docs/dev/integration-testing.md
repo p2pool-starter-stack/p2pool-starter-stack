@@ -480,10 +480,12 @@ The summary counts three kinds of skip separately and names every one:
 ```
 passed:  312
 skipped: 2 scenarios, 1 phases, 4 legs
+  of which: 5 missing (an input would have run it), 1 by-design (this run's mode excludes it), 1 covered elsewhere
 did NOT run:
-    - scenario prune-remote — no pruned chain supplied
-    - PHASE    rigforge-control — no worker exposes a RigForge enriched feed
-    - leg      pools write (#1002b) — no IT_RIG_POOLS_PROBE
+    - [missing]   scenario prune-remote — no pruned chain supplied
+    - [by-design] PHASE    hardening — remote mode: no local containers/systemd to exercise
+    - [covered]   leg      Worker Inspect read/write (#185) — dashboard.control off (covered by the hardening phase + tier-2 contract)
+    - [missing]   leg      pools write (#1002b) — no IT_RIG_POOLS_PROBE
 ```
 
 A scenario skip drops one matrix row; a phase skip drops every leg under it with one line; a leg
@@ -500,6 +502,35 @@ make.
 Every skip leaves through `it_skip_scenario`, `it_skip_phase` or `it_skip_leg`
 (`tests/integration/skip-accounting.sh`). Plain `it_warn` stays for warnings that are not a
 dropped check.
+
+### Only one of the three classes is a gap
+
+Counting and naming the drops still left the reader unable to answer the question they actually
+have: is this hole one we accepted, or one we could have filled today? That is
+[#1083](https://github.com/p2pool-starter-stack/pithead/issues/1083) — five scenario skips read as
+"known and fine" for months precisely because the number never moved. So every skip carries a
+class, and the classes are not decoration:
+
+| class | means | is it a gap? |
+|---|---|---|
+| `missing` | An input would have run it — an env var, a flag, a data dir. | **Yes. This is the number worth reading.** |
+| `by-design` | Structurally inapplicable to this run's configuration. Remote mode has no local monerod to stop; no flag changes that. | No. Covering it means running a different scenario. |
+| `covered` | Exercised elsewhere, and the reason says where. | No. It is an absence of duplicate evidence. |
+
+The test applied at each call site: could a different invocation of this same harness against this
+same box have covered it? Yes means `missing`; no means `by-design`.
+
+The class is the optional third argument and it defaults to `missing`. The default is the
+pessimistic one on purpose — an unclassified skip is an unexplained absence, so it lands in the
+bucket that counts. Defaulting the other way would let a real hole disappear by omission, which is
+#1083's own failure mode one level up. An unrecognised class is reported loudly and still counted
+as `missing`, so the class totals always reconcile with the bucket totals; a summary whose own
+arithmetic does not add up misleads more than a wrong label does.
+
+`selftest-skip-accounting.sh` holds both halves: the helpers behave, and a static census refuses
+any call site that invents a class. The census is static because most of these legs fire only on a
+bench with a rig attached — a typo on a leg that skips once a quarter would otherwise sit in the
+tree unnoticed.
 
 ---
 

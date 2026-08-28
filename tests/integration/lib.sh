@@ -135,6 +135,7 @@ resolve_overrides() {
     local overrides="$1" prune mode tari_mode subnet out="$1"
     RESOLVED=""
     SKIP_REASON=""
+    SKIP_CLASS="missing" # #1083: every prerequisite below names an input the caller could supply
 
     prune="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.prune=//p')"
     mode="$(printf '%s' "$overrides" | tr ' ' '\n' | sed -n 's/^monero\.mode=//p')"
@@ -147,6 +148,7 @@ resolve_overrides() {
     # a move it structurally can't do (loud SKIP, never a silent drop).
     if [ -n "$subnet" ]; then
         SKIP_REASON="network.subnet move needs a full down/up — run the --subnet phase (not a hot apply)"
+        SKIP_CLASS="covered" # the --subnet phase DOES exercise this; it is not an uncovered path (#1083)
         return 1
     fi
 
