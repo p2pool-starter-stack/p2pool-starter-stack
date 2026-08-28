@@ -240,9 +240,8 @@ check_monotonic() {
         if [ -n "$new_ceiling" ] && [ "$new_ceiling" -gt "$old_ceiling" ]; then
             if monotonic_exempt "$path"; then
                 echo "file-budget: NOTE — $path's ceiling rises from $old_ceiling to $new_ceiling." \
-                    "That row measures the un-split remainder of the generated pithead artifact," \
-                    "so it tracks the artifact both ways and is exempt from the ratchet (#1464)." \
-                    "Every Phase 2 cut must lower it." >&2
+                    "That row measures the un-split remainder of the generated pithead artifact, so" \
+                    "it tracks the artifact both ways (#1464). Every Phase 2 cut must lower it." >&2
                 continue
             fi
             echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling from $old_ceiling to" \
