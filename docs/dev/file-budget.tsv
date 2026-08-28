@@ -19,7 +19,8 @@ dashboard/mining_dashboard/web/static/logic.mjs	534
 dashboard/mining_dashboard/web/static/osupdate.mjs	415
 dashboard/mining_dashboard/web/static/wizard.mjs	889
 dashboard/mining_dashboard/web/static/workerview.mjs	443
-dashboard/mining_dashboard/web/views.py	1919
+dashboard/mining_dashboard/web/views.py	1129
+dashboard/mining_dashboard/web/xvb_views.py	827
 dashboard/mining_dashboard/wizard.py	674
 dashboard/tests/client/test_xmrig_client.py	504
 dashboard/tests/config/test_config.py	458
@@ -38,8 +39,9 @@ dashboard/tests/service/test_metrics.py	463
 dashboard/tests/service/test_storage_service.py	1646
 dashboard/tests/service/test_telegram_commands.py	1240
 dashboard/tests/web/test_server.py	1319
-dashboard/tests/web/test_views.py	3195
+dashboard/tests/web/test_views.py	1978
 dashboard/tests/web/test_wizard.py	974
+dashboard/tests/web/test_xvb_views.py	1342
 .github/workflows/ci.yml	513
 os/rootfs/Dockerfile	406
 scripts/lint-file-budget.sh	407
