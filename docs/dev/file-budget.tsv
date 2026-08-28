@@ -46,7 +46,7 @@ dashboard/tests/web/test_views.py	861
 dashboard/tests/web/test_wizard.py	974
 dashboard/tests/web/test_xvb_views.py	1342
 .github/workflows/ci.yml	513
-lib/pithead/99-remainder.sh	11870
+lib/pithead/99-remainder.sh	11470
 os/rootfs/Dockerfile	406
 scripts/build-pithead.sh	437
 scripts/release.sh	851
