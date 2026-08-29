@@ -282,7 +282,15 @@ mutation_lock_acquire() { # <verb label>
     export PITHEAD_LOCK_HELD="$$"
     # Record the holder now that we are one. A truncating write through a second descriptor is
     # safe while we hold the lock, and it is what lets the next waiter name who it is waiting for.
-    printf 'pid=%s verb=%s since=%s\n' "$$" "$label" \
+    #
+    # `$BASHPID`, not `$$`, and the difference is load-bearing rather than pedantic: the pid we
+    # write is the one a waiter checks for life, so it has to be the process that actually holds
+    # fd 9. In a subshell `$$` is the PARENT's pid — the firstboot wizard runs `setup` inside
+    # `(setup)` precisely so that the subshell's exit closes fd 9 and releases the window, and a
+    # record naming the parent would stay "alive" after the process holding the lock had gone.
+    # The `PITHEAD_LOCK_HELD` marker above is a different question — it marks the invocation whose
+    # descriptor a child inherits — and correctly stays `$$`.
+    printf 'pid=%s verb=%s since=%s\n' "$BASHPID" "$label" \
         "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)" >"$_PITHEAD_LOCK_PATH" 2>/dev/null || true
     return 0
 }

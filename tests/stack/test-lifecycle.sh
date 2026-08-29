@@ -383,6 +383,12 @@ LKLOG="$LKDIR/docker.log"
 # Take the window in a background process and sit in it. `exec sleep` so the holder is ONE
 # process: a forked sleep would inherit fd 9 and keep the lock alive past the kill below.
 lock_hold_bg() { # -> sets LKHOLDER
+    # Clear the record BEFORE starting, so `lock_await_record` below can only be satisfied by the
+    # holder this call starts. Without it a record left by an earlier holder — a stale one is a
+    # fixture in this file, and abnormal exits leave them in the field — satisfies the poll
+    # instantly, the caller proceeds believing the window is held, and every case that needs
+    # contention silently reports on an uncontended run instead.
+    : >"$LKFILE"
     (
         cd "$LKDIR" || exit 9
         export PITHEAD_LOCK_FILE="$LKFILE"
