@@ -25,6 +25,15 @@ import sqlite3
 import time
 from typing import Any
 
+# The credential strip the rig-read path already uses on ``rig_config``
+# (``client/xmrig_client._rig_writable_config``), reused here rather than restated: a second copy
+# of the key list and the depth walk is a second place for them to drift, and this table feeds the
+# SAME editor prefill that one defends (#1543). The service -> client direction is the one
+# ``data_helpers``, ``worker_refresh`` and ``data_service`` already take; ``xmrig_client`` reaches
+# back only as far as ``control_service``, which imports ``config`` and nothing else, so this
+# closes no cycle.
+from mining_dashboard.client.xmrig_client import strip_credentials
+
 # The full terminal vocabulary the rig's control mirror can report (#1009) — applied/rejected/
 # rolled_back/failed from a control-apply, plus noop (already on target)/throttled (retry-later)
 # from a control-upgrade (rigforge#320). Mirrors xmrig_client._CONTROL_TERMINAL and pithead's own
@@ -41,13 +50,26 @@ _SELECT_CHANGE = "SELECT change_id, ts, status, changes, reason, type FROM worke
 
 def _shaped(row: sqlite3.Row) -> dict:
     """One ``worker_config`` row as the rest of the app reads it: ``changes`` parsed back to a
-    dict (unparseable JSON reads as ``{}`` rather than raising), and a row written before the
-    ``type`` column existed (#1014) reading back as ``"apply"``."""
+    dict (unparseable JSON reads as ``{}`` rather than raising), credentials stripped out of it,
+    and a row written before the ``type`` column existed (#1014) reading back as ``"apply"``.
+
+    The strip is HERE, and not at any of the three places that publish ``changes``, because this
+    is the one point both row-returning reads pass through — ``get_worker_config_history`` and
+    ``get_worker_config_change`` — and therefore the only single edit that covers every consumer
+    of them (#1543). The Inspect payload alone carries a row's ``changes`` in three separate
+    fields: ``last_applied`` (merged here), ``history``, and ``hashrate_history.markers[]``.
+    Stripping at ``get_last_applied_worker_config``, which is where the issue's own text points,
+    would have left the other two serving the credential, and nothing would have gone red.
+
+    It is also what makes an ALREADY-WRITTEN row safe: ``add_worker_config_version`` stops new
+    rows carrying a credential, but rows a previous build wrote still hold one, and this is what
+    keeps those from being served without needing a migration to rewrite them."""
     d = dict(row)
     try:
         d["changes"] = json.loads(d["changes"]) if d["changes"] else {}
     except (TypeError, ValueError):
         d["changes"] = {}
+    d["changes"] = strip_credentials(d["changes"])
     d["type"] = d.get("type") or "apply"
     return d
 
@@ -67,8 +89,23 @@ class WorkerConfigStoreMixin:
     ) -> None:
         """Record one applied/attempted worker change (#185): a config apply, or (``change_type=
         "upgrade"``, #1014) a one-click RigForge upgrade attempt — ``changes`` then carries
-        ``{"version": ...}`` instead of a writable-key diff. Stored as JSON — no secret ever lands
-        here. Forward-only."""
+        ``{"version": ...}`` instead of a writable-key diff. Forward-only.
+
+        Stored as JSON with the pool credentials stripped OUT of it first (#1543). That sentence
+        used to read "no secret ever lands here", which was not a property this method had: the
+        caller hands us the operator's own POSTed ``changes``, ``pools`` is on the writable
+        allowlist, and a pool entry carries ``pass``, so the credential landed here in plain text
+        and stayed — through a restart, and into any backup of the DB.
+
+        The strip is on the RECORD only. ``handle_worker_apply`` sends the operator's unmodified
+        ``changes`` to the rig before calling this, so the password still reaches the pool it is
+        for; what changes is what this dashboard keeps afterwards. ``strip_credentials`` builds
+        new containers rather than mutating, so the caller's dict is untouched either way.
+
+        One disclosed consequence: the strip stops walking past ``_MAX_CONFIG_DEPTH`` (6) and
+        returns ``None`` below it, so a ``changes`` nested deeper than that is recorded truncated.
+        A writable config is three deep at most (``pools`` -> a pool -> its fields), so nothing a
+        rig accepts reaches the bound — but the audit row, not the rig, is what would lose."""
         try:
             with self._db_lock:
                 if not self._conn:
@@ -81,7 +118,7 @@ class WorkerConfigStoreMixin:
                         change_id,
                         ts if ts is not None else time.time(),
                         status,
-                        json.dumps(changes),
+                        json.dumps(strip_credentials(changes)),
                         reason,
                         change_type,
                     ),
