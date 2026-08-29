@@ -3,12 +3,12 @@
 The 14 classes here moved 1:1 and byte-identical out of ``tests/service/test_data_service.py``
 when their subjects moved into ``mining_dashboard/service/data_helpers.py``.
 
-``_totals`` below is a DUPLICATE of the builder in ``tests/service/test_data_service.py``, which
-remains the master copy.  Duplicating shared module-level test builders into each new test module
-is the standing ruling for this split (real pytest fixtures would rewrite the call sites and kill
-the byte-identity claim the split rests on); #1459 tracks consolidating them once byte-identity no
-longer binds.  Here the copy is a single 2-line builder, because these helpers take plain data
-rather than a service.
+``_totals`` used to be defined here, a DUPLICATE of the builder in
+``tests/service/test_data_service.py``.  Duplicating shared module-level test builders into each
+new test module was the standing ruling while the #1105 cuts were in flight, because those cuts
+proved themselves by moving test bodies verbatim and real pytest fixtures would have rewritten the
+call sites inside the same change.  The cuts are finished, so #1541 moved both copies into
+``tests/service/conftest.py`` as a factory fixture; the tests below take it as a parameter.
 
 ``TestXvbWinnersGate`` carries one wiring test that drives ``DataService._sync_xvb_winners``; the
 class moves whole rather than being split, to keep the 1:1 byte-identical property, which is why
@@ -43,10 +43,6 @@ from mining_dashboard.service.data_helpers import (
 from mining_dashboard.service.data_service import DataService
 
 
-def _totals(accepted=0, rejected=0, invalid=0, expired=0):
-    return {"accepted": accepted, "rejected": rejected, "invalid": invalid, "expired": expired}
-
-
 class TestSharesToRecord:
     """#129: how many P2Pool shares to record from the cumulative shares_found counter, + the new baseline."""
 
@@ -69,23 +65,23 @@ class TestSharesToRecord:
 class TestSummaryDeltas:
     """#116: per-poll share-health deltas from consecutive cumulative proxy /summary totals."""
 
-    def test_first_poll_baselines_without_backfill(self):
+    def test_first_poll_baselines_without_backfill(self, _totals):
         cur = _totals(accepted=1000, rejected=5)
         assert _summary_deltas(None, cur) == (None, cur)
 
-    def test_normal_delta(self):
+    def test_normal_delta(self, _totals):
         deltas, baseline = _summary_deltas(
             _totals(accepted=100, rejected=5), _totals(accepted=110, rejected=6, invalid=1)
         )
         assert deltas == _totals(accepted=10, rejected=1, invalid=1)
         assert baseline == _totals(accepted=110, rejected=6, invalid=1)
 
-    def test_any_counter_backwards_rebaselines_without_negative_delta(self):
+    def test_any_counter_backwards_rebaselines_without_negative_delta(self, _totals):
         # Proxy restart: accepted went backwards while rejected advanced — segment break, no row.
         cur = _totals(accepted=3, rejected=9)
         assert _summary_deltas(_totals(accepted=100, rejected=5), cur) == (None, cur)
 
-    def test_all_zero_deltas_skipped(self):
+    def test_all_zero_deltas_skipped(self, _totals):
         # _merge_proxy_summary repeats last-good totals on a bad poll and an idle proxy submits
         # nothing — neither may write an empty row every cycle.
         cur = _totals(accepted=100, rejected=5)

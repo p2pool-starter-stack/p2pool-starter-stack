@@ -109,16 +109,6 @@ def _keys(alerts):
     return [k for k, _ in alerts]
 
 
-def _on(*names):
-    """Worker rows the proxy reports online."""
-    return [{"name": n, "status": "online"} for n in names]
-
-
-def _down(*names):
-    """Worker rows still listed but disconnected — the DOWN state the dashboard shows."""
-    return [{"name": n, "status": "offline"} for n in names]
-
-
 class TestNodeEdges:
     def test_first_cycle_seeds_baseline_silently(self):
         svc = _svc()
@@ -278,7 +268,7 @@ class TestSyncFinished:
 
 
 class TestWorkerEdges:
-    def test_offline_then_recovered(self):
+    def test_offline_then_recovered(self, _down, _on):
         # Offline is driven by the DOWN status the dashboard shows, not by the rig vanishing.
         svc = _svc()
         assert _ev(svc, workers=_on("rig-1"), workers_expected=True, now=0) == []
@@ -291,7 +281,7 @@ class TestWorkerEdges:
             AlertService.EVT_WORKER_RECOVERED
         ]
 
-    def test_not_expected_resets_and_silences(self):
+    def test_not_expected_resets_and_silences(self, _down, _on):
         svc = _svc()
         _ev(svc, workers=_on("rig-1"), workers_expected=True, now=0)
         _ev(svc, workers=_down("rig-1"), workers_expected=True, now=0)
@@ -303,14 +293,14 @@ class TestWorkerEdges:
 
 
 class TestWorkerMembership:
-    def test_joined_after_baseline(self):
+    def test_joined_after_baseline(self, _on):
         svc = _svc()
         _ev(svc, workers=_on("rig-1"), workers_expected=True)  # prime
         assert _keys(_ev(svc, workers=_on("rig-1", "rig-2"), workers_expected=True)) == [
             AlertService.EVT_WORKER_JOINED
         ]
 
-    def test_left_when_rig_drops_off_the_table(self):
+    def test_left_when_rig_drops_off_the_table(self, _on):
         svc = _svc()
         _ev(svc, workers=_on("rig-1", "rig-2"), workers_expected=True)  # prime
         assert _keys(_ev(svc, workers=_on("rig-1"), workers_expected=True)) == [
@@ -636,7 +626,7 @@ class TestIncidentLog:
         _ev(svc, monero_down=False)  # recovery — not counted
         assert svc.drain_incidents() == {"node_down": 1}
 
-    def test_worker_offline_counts_once(self):
+    def test_worker_offline_counts_once(self, _down, _on):
         svc = _svc()
         _ev(svc, workers=_on("r"), workers_expected=True, now=0)  # prime
         _ev(svc, workers=_down("r"), workers_expected=True, now=0)  # DOWN streak
@@ -647,7 +637,7 @@ class TestIncidentLog:
 
 
 class TestEventFiltering:
-    def test_disabled_events_are_dropped(self):
+    def test_disabled_events_are_dropped(self, _down, _on):
         svc = _svc(notifier=_FakeNotifier(allow={AlertService.EVT_NODE_DOWN}))
         _ev(svc, workers=_on("rig-1"), workers_expected=True, now=0)
         _ev(svc, workers=_down("rig-1"), workers_expected=True, now=0)

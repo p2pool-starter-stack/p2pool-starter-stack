@@ -50,10 +50,6 @@ def _make_service():
     return svc, state_manager, proxy_client
 
 
-def _totals(accepted=0, rejected=0, invalid=0, expired=0):
-    return {"accepted": accepted, "rejected": rejected, "invalid": invalid, "expired": expired}
-
-
 class TestInit:
     def test_restores_snapshot(self):
         sm = MagicMock()
@@ -494,7 +490,7 @@ class TestRunIteration:
         sm.update_history.assert_called()
         sm.save_snapshot.assert_called()
 
-    async def test_share_stat_deltas_persisted(self):
+    async def test_share_stat_deltas_persisted(self, _totals):
         # #116 wiring: with a baseline from a previous poll, one iteration writes the counters'
         # deltas via add_share_stats (the delta rules themselves are unit-tested above).
         svc, sm, proxy = _make_service()

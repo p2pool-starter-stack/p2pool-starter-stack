@@ -49,10 +49,14 @@ make test-integration ARGS="--host user@box --dir pithead --check"   # tier-4 li
 
 Add a `test_*` to the matching file under `dashboard/tests/`. Name it for the behavior, add
 a one-line docstring stating the intent, mock at the client boundary (the conftest gives you an
-in-memory `state_manager`). Run `make test-dashboard`; coverage must stay ≥ 80%. Under `dashboard/tests/web/`,
-`conftest.py` supplies the view-layer builders — `_metrics`, `_sync`, `_hashrate`, `_state_mgr`
-and `_data` — as factory fixtures. Take the one you need as a parameter instead of writing
-another copy; what is deliberately not shared, and why, is recorded in that file.
+in-memory `state_manager`). Run `make test-dashboard`; coverage must stay ≥ 80%. Both test directories keep their shared
+builders in a `conftest.py`. Under `dashboard/tests/web/` those are the view-layer builders —
+`_metrics`, `_sync`, `_hashrate`, `_state_mgr` and `_data`; under `dashboard/tests/service/` they
+are `_totals`, `_posture`, `_topo`, `_edge`, `_on` and `_down`, plus the `algo` service and the
+`_SAFE` resting config the posture builders read. All of them are factory fixtures: take the one
+you need as a parameter instead of writing another copy. What is deliberately not shared, and why,
+is recorded in each file — several builders share a name across modules while building different
+things, so check there before assuming two copies are the same builder.
 
 ```python
 def test_pruned_node_is_labelled_pruned(...):

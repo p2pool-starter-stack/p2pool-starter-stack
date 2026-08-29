@@ -22,29 +22,19 @@ def _monitor(offline_after=300, recovery_after=120):
     return m, clock
 
 
-def _on(*names):
-    """Worker rows the proxy reports online."""
-    return [{"name": n, "status": "online"} for n in names]
-
-
-def _down(*names):
-    """Worker rows still listed by the proxy but disconnected — the DOWN state the UI shows."""
-    return [{"name": n, "status": "offline"} for n in names]
-
-
 class TestBaseline:
-    def test_first_sighting_online_is_silent(self):
+    def test_first_sighting_online_is_silent(self, _on):
         # A brand-new worker is baselined ONLINE with no edge — it's not a "recovery".
         m, _ = _monitor()
         assert m.update(_on("rig-1")) == []
 
-    def test_first_sighting_down_is_silent(self):
+    def test_first_sighting_down_is_silent(self, _down):
         # A rig already DOWN at startup baselines OFFLINE silently — a restart must not replay it.
         m, _ = _monitor()
         assert m.update(_down("rig-1")) == []
         assert m._workers["rig-1"]["state"] == "offline"
 
-    def test_steady_online_emits_nothing(self):
+    def test_steady_online_emits_nothing(self, _on):
         m, clock = _monitor()
         m.update(_on("rig-1"))
         for _ in range(5):
@@ -53,7 +43,7 @@ class TestBaseline:
 
 
 class TestOfflineDebounce:
-    def test_not_offline_before_threshold(self):
+    def test_not_offline_before_threshold(self, _down, _on):
         m, clock = _monitor()
         m.update(_on("rig-1"))  # baseline online
         clock.advance(30)
@@ -61,14 +51,14 @@ class TestOfflineDebounce:
         clock.advance(269)
         assert m.update(_down("rig-1")) == []  # 269s DOWN — still under the 300s threshold
 
-    def test_offline_after_threshold(self):
+    def test_offline_after_threshold(self, _down, _on):
         m, clock = _monitor()
         m.update(_on("rig-1"))
         m.update(_down("rig-1"))  # DOWN streak starts here
         clock.advance(300)
         assert m.update(_down("rig-1")) == [("rig-1", "offline")]
 
-    def test_offline_emitted_once(self):
+    def test_offline_emitted_once(self, _down, _on):
         m, clock = _monitor()
         m.update(_on("rig-1"))
         m.update(_down("rig-1"))
@@ -77,7 +67,7 @@ class TestOfflineDebounce:
         clock.advance(300)
         assert m.update(_down("rig-1")) == []  # already offline — no repeat
 
-    def test_brief_down_does_not_trip(self):
+    def test_brief_down_does_not_trip(self, _down, _on):
         m, clock = _monitor()
         m.update(_on("rig-1"))
         clock.advance(60)
@@ -85,7 +75,7 @@ class TestOfflineDebounce:
         clock.advance(30)
         assert m.update(_on("rig-1")) == []  # back well before 300s
 
-    def test_vanishing_from_table_is_left_not_offline(self):
+    def test_vanishing_from_table_is_left_not_offline(self, _on):
         # A rig the proxy stops listing entirely (fell off the worker table) is reported as having
         # LEFT — never aged to "offline", which is reserved for the DOWN-but-still-listed state.
         m, clock = _monitor()
@@ -96,15 +86,15 @@ class TestOfflineDebounce:
 
 
 class TestRecoveryHysteresis:
-    def _take_offline(self, m, clock):
+    def _take_offline(self, m, clock, _down, _on):
         m.update(_on("rig-1"))
         m.update(_down("rig-1"))
         clock.advance(300)
         assert m.update(_down("rig-1")) == [("rig-1", "offline")]
 
-    def test_recovered_only_after_stable_window(self):
+    def test_recovered_only_after_stable_window(self, _down, _on):
         m, clock = _monitor()
-        self._take_offline(m, clock)
+        self._take_offline(m, clock, _down, _on)
         # Reappears online, but "back online" holds until it's been present for recovery_after.
         assert m.update(_on("rig-1")) == []
         clock.advance(119)
@@ -112,10 +102,10 @@ class TestRecoveryHysteresis:
         clock.advance(1)
         assert m.update(_on("rig-1")) == [("rig-1", "recovered")]
 
-    def test_flap_during_recovery_does_not_emit(self):
+    def test_flap_during_recovery_does_not_emit(self, _down, _on):
         # A one-cycle reconnect during an outage must not produce a recovered→offline spam.
         m, clock = _monitor()
-        self._take_offline(m, clock)
+        self._take_offline(m, clock, _down, _on)
         clock.advance(30)
         assert m.update(_on("rig-1")) == []  # blink online (still offline)
         clock.advance(30)
@@ -125,7 +115,7 @@ class TestRecoveryHysteresis:
 
 
 class TestMultipleWorkers:
-    def test_independent_per_worker_state(self):
+    def test_independent_per_worker_state(self, _down, _on):
         m, clock = _monitor()
         m.update(_on("rig-1", "rig-2"))
         # rig-2 stays online; rig-1 goes DOWN.
@@ -135,7 +125,7 @@ class TestMultipleWorkers:
 
 
 class TestReset:
-    def test_reset_clears_state_and_rebaselines_silently(self):
+    def test_reset_clears_state_and_rebaselines_silently(self, _down, _on):
         m, clock = _monitor()
         m.update(_on("rig-1"))
         m.update(_down("rig-1"))
@@ -148,7 +138,7 @@ class TestReset:
 
 
 class TestFalloff:
-    def test_worker_forgotten_when_it_leaves_the_table(self):
+    def test_worker_forgotten_when_it_leaves_the_table(self, _down, _on):
         m, clock = _monitor()
         m.update(_on("rig-1"))
         m.update(_down("rig-1"))
@@ -162,22 +152,22 @@ class TestFalloff:
 
 
 class TestJoinLeave:
-    def test_first_cycle_baselines_silently(self):
+    def test_first_cycle_baselines_silently(self, _on):
         # The startup roster is baselined without joined edges — a restart isn't a fleet change.
         m, _ = _monitor()
         assert m.update(_on("rig-1", "rig-2")) == []
 
-    def test_new_worker_after_prime_joins(self):
+    def test_new_worker_after_prime_joins(self, _on):
         m, _ = _monitor()
         m.update(_on("rig-1"))  # prime
         assert m.update(_on("rig-1", "rig-2")) == [("rig-2", "joined")]
 
-    def test_worker_leaving_emits_left(self):
+    def test_worker_leaving_emits_left(self, _on):
         m, _ = _monitor()
         m.update(_on("rig-1", "rig-2"))  # prime
         assert m.update(_on("rig-1")) == [("rig-2", "left")]
 
-    def test_reset_reprimes_without_joins(self):
+    def test_reset_reprimes_without_joins(self, _on):
         m, _ = _monitor()
         m.update(_on("rig-1"))  # prime
         m.reset()  # e.g. proxy stopped for a failover — clears the prime flag
