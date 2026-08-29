@@ -13,22 +13,28 @@
 # self-arm like its neighbours" is the obvious review note and it is wrong for this domain:
 #
 # - This domain is a pure CONSUMER of the control sandbox. It never calls build_control_sandbox();
-#   run.sh calls that builder once, in a control-core section that stays behind, and $C and
+#   test-control-core.sh calls it once, in the control-core domain sourced ahead, and $C and
 #   $CTRL_LOG reach here from it.
+#   (That section lived in run.sh until #1105 R12 moved it into its own domain file.)
 # - Self-arming would BUILD A SECOND SANDBOX, and that is the defect, not the fix. This domain
 #   drives the control channel repeatedly through `pithead apply -y` and run_pending, and sections
-#   that remain in run.sh AFTER this one count that shared state exactly — the audit log by line
-#   count, the request spool by file count, each against an exact expected number. A fresh $C would
+#   that run AFTER this one, both in test-spool-audit.sh, count that shared state exactly — the
+#   audit log by line count, the request spool by file count, each against an exact expected
+#   number. A fresh $C would
 #   send these writes to a different results dir than those counters read. That is coupling rule A,
 #   and it has a recorded firing: the rig-worker token-mask cluster moved with a re-derived $C, its
 #   applies wrote extra result files into the shared results dir, and a still-in-run.sh assertion
 #   counting that dir went red.
+#   RETRACTED (#1105 R12): that firing's stated MECHANISM does not reproduce at the tip — the
+#   apply path writes nothing into results/ unless is_appliance(), which no sandbox run
+#   satisfies. The RED was real; WHY is not established, and the full re-derivation is in
+#   test-rig-worker.sh's header. This domain's position-lock rests on what it READS, not on it.
 #
 # Re-derivations (audited over this WHOLE file, header included, with split-name-audit.py):
 # - $REQS, $RESULTS, $STAGED and $AUDIT are NOT the builder's. They are assigned by the
-#   control-run-pending section, which stays in run.sh and runs before this stanza — an ordering
+#   control-run-pending section, in test-control-core.sh, sourced before this stanza — an ordering
 #   dependency, same class as any other. They are deliberately NOT seeded here: each is a plain
-#   derivation from $C, so a seed would duplicate run.sh's definitions and could drift from them,
+#   derivation from $C, so a seed would duplicate that file's definitions and could drift from them,
 #   and it would buy nothing, because $C itself keeps this file non-standalone either way.
 #   Disclosure is the contract this file offers instead.
 # - $MASKED is assigned HERE, in the moved text, not inherited.

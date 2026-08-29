@@ -18,7 +18,8 @@
 # spool-audit / confirm-approval disclosure precedent, which a reviewer coming from R9 will reach
 # for first. Those files are pure CONSUMERS of the shared control sandbox and are position-locked
 # by what a sibling section accumulated. This domain is not: it never calls build_control_sandbox
-# (grepped: zero in this file, one in run.sh), it reads nothing under $C/$RESULTS/$STAGED/$AUDIT,
+# (grepped: zero in this file, one in test-control-core.sh, where R12 moved the builder call
+# out of run.sh), it reads nothing under $C/$RESULTS/$STAGED/$AUDIT,
 # and every fixture it needs it builds itself under its own two trees. Run out of position it
 # would still assert exactly what it asserts here.
 #

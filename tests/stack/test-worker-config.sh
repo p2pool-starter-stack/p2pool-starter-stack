@@ -11,18 +11,19 @@
 # Sourced by tests/stack/run.sh.
 #
 # THIS FILE IS POSITION-LOCKED AND IS NOT SOURCEABLE ON ITS OWN — both deliberately. It inherits
-# the control sandbox that run.sh's black-box control-channel run builds once and then mutates in
-# a chain: $C and $CTRL_LOG come from lib.sh's build_control_sandbox, and $AUDIT, $MASKED, $REQS,
-# $RESULTS and $STAGED from run.sh's own earlier sections. Nothing here builds a sandbox, and
-# nothing here should. The sections commit through the real gate, so they write into the shared
-# request spool and append to the shared audit log — and two sections that stay in run.sh AFTER
-# this one count exactly that: "audit log growth is bounded (#349)" measures the audit log's
-# length, and "spool intake cap + symlink refusal + stale sweep (#33 hardening)" asserts the
-# request spool holds exactly ten overflow intents and then none. A fresh sandbox built here, or
-# this file sourced at any other point in run.sh's order, moves those counts and reds two domains
-# that never changed. Sourcing in place is what keeps them right, so the ordering is a contract
-# rather than an accident, and it is stated here because a survived accident and an honoured
-# contract look identical from a green suite.
+# the control sandbox that the black-box control-channel run builds once and then mutates in a
+# chain: $C and $CTRL_LOG come from lib.sh's build_control_sandbox, and $AUDIT, $MASKED, $REQS,
+# $RESULTS and $STAGED from sections that #1105 R12 moved out of run.sh into
+# test-control-core.sh, sourced earlier. Nothing here builds a sandbox, and nothing here should.
+# The sections commit through the real gate, so they write into the shared request spool and
+# append to the shared audit log — and two sections that run AFTER this one, both now in
+# test-spool-audit.sh, count exactly that: "audit log growth is bounded (#349)" measures the
+# audit log's length, and "spool intake cap + symlink refusal + stale sweep (#33 hardening)"
+# asserts the request spool holds exactly ten overflow intents and then none. A fresh sandbox
+# built here, or this file sourced at any other point in the run's order, moves those counts and
+# reds two domains that never changed. Sourcing in place is what keeps them right, so the
+# ordering is a contract rather than an accident, and it is stated here because a survived
+# accident and an honoured contract look identical from a green suite.
 #
 # That is the same contract test-control-add-only-ssrf.sh already ships under: split out for the
 # file-budget ratchet, inheriting the fixtures of the section it came from.

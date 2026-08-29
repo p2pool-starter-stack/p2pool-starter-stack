@@ -13,26 +13,26 @@
 #
 # Left behind, code-checked (not markers):
 # - The "xmrig-proxy entrypoint: unset password appends no flag" assertion sitting inside
-#   "rotate-secrets failure path" (#378, run.sh's secrets-domain sections) is a side-effect check
-#   of THAT test group, not this domain — it stays there for the future secrets-domain cut.
-# - The per-worker token-mask pair ("per-worker token mask + host-side restore", both the legacy
-#   dashboard.workers[] and the current workers.list[] shapes, #172/#679/#506) is a NAMED
-#   leave-behind, deferred to the future $C-sandbox-cluster pass per the #1252 map's "clusters
-#   last" rule. It looked cleanly re-derivable — render_masked_config() only reads a valid
-#   config.json, not any specific mutation history, and test-control-upgrade.sh's precedent
-#   already re-derives a FRESH $C for two of its own sections. That analysis was right about
-#   render_masked_config, but incomplete: a first attempt at moving this pair (re-deriving $C via
-#   build_control_sandbox + control_config + apply) made the after-proof suite go 2901/1 —
-#   `./pithead apply -y` on the fresh sandbox writes into $C/data/control/results/, and the LATER
-#   "control-run-pending (#33)" section (still in run.sh, reading the AMBIENT $C) counts result
-#   files in that same directory as part of a malformed-id assertion; the re-derivation's apply
-#   calls leaked extra result files into that shared, ambient results dir and threw the count off
-#   by exactly the number of applies this pair runs. That is the real $C-coupling the map's
-#   "clusters last" rule is protecting against — not config.json's read-side content (which IS
-#   generic), but write-side pollution of a directory a much later, still-in-run.sh section
-#   counts. Moving just this pair without carrying (or isolating) every section that shares $C's
-#   results/audit/staged dirs is not a clean re-derivation, so it stays with the ambient $C in
-#   run.sh until the control-core/control-gates cluster is cut as a whole.
+#   "rotate-secrets failure path" (#378) is a side-effect check of THAT test group, not this
+#   domain — it stays with it, and that group now lives in test-secrets.sh.
+# - The per-worker token-mask pair ("per-worker token mask + host-side restore", legacy
+#   dashboard.workers[] and workers.list[], #172/#679/#506) was a NAMED leave-behind here,
+#   deferred to a future $C-sandbox-cluster pass. It has since moved to test-worker-config.sh,
+#   and the control-core cluster it was waiting on was cut into test-control-core.sh by #1105
+#   R12 — so this bullet survives only for the episode below, and for the RETRACTION of it.
+#   RETRACTED (#1105 R12): the mechanism this bullet gave for that episode does NOT reproduce
+#   at the tip. It claimed `./pithead apply -y` on a fresh sandbox writes into
+#   $C/data/control/results/, so a re-derived $C leaked extra result files into the directory a
+#   later malformed-id assertion counts. Four independent re-derivations agree it cannot: every
+#   control_write_result call sits on the run-pending/upgrade/verb/backup paths and none on
+#   apply; the only apply-path write into results/ is os_state_write inside
+#   prepare_control_dirs, gated behind is_appliance(); is_appliance() needs PITHEAD_APPLIANCE=1
+#   or both /etc/rauc/system.conf and /usr/local/sbin/pithead-install, which no sandbox run has;
+#   and lib.sh control_config() writes only $C/config.json. THE RED WAS REAL — the attempt did
+#   take the suite to 2901/1 — but it was never committed, so no tree can settle WHY, and no
+#   replacement mechanism is guessed here in place of the refuted one. The RULE it was cited for
+#   — a pure consumer of the control sandbox must not build a second one — rests on its own
+#   evidence, argued in test-control-core.sh and in the consumer domains own headers.
 #
 # Re-derivations:
 # - $V / $WALLET: lib.sh's build_val_sandbox() sets both; run.sh's "config validation" black-box

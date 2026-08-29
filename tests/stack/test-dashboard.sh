@@ -27,8 +27,8 @@
 #   calling it again here is a safe no-op re-affirm, the same re-derivation test-lifecycle.sh uses.
 # - Everything else below sources the real $STACK fresh per subshell against a throwaway dir under
 #   $SANDBOX and needs no re-derivation: none of it reads or writes the shared $C control sandbox
-#   ($REQS/$RESULTS/$STAGED/$AUDIT/$MASKED) — that is not built until run.sh's later "dashboard
-#   control channel" section, well after both this file and test-dashboard-onion.sh have run.
+#   ($REQS/$RESULTS/$STAGED/$AUDIT/$MASKED) — that is not built until the "dashboard control
+#   channel" section in test-control-core.sh, sourced after this file and test-dashboard-onion.sh.
 build_val_sandbox
 
 echo "== unit: dashboard auth (#8) =="
