@@ -309,6 +309,36 @@ assert_eq "the restore uses last_applied, credential intact" \
 assert_eq "the restore is NOT the rig's credential-stripped self-read" \
     "$(applies | grep -c 'stripped:1')" "0"
 
+# #1546: the guard tests the CREDENTIAL, never emptiness as a proxy for it. These cases are the
+# reason this section could not be trusted before: the STUB_DETAIL above hardcodes `"pass":"secret"`,
+# so every assertion in this file stays green whether the guard tests `pass` or not — the coverage
+# was structurally blind, not merely thin. Measured against the pre-#1546 function, both shapes below
+# POSTed twice (the probe AND a credential-less restore, at a real miner); after it, zero. The
+# pass-present rows above are the positive control that the leg still runs and still POSTs.
+for _shape in '[{"url":"real:1"}]' '[{"url":"real:1","pass":""}]'; do
+    STUB_DETAIL="$(jq -cn --argjson p "$_shape" '{last_applied: {pools: $p}}')"
+    reset_applies
+    counts="$(quietly run_rigforge_pools rig1)"
+    assert_eq "a last_applied.pools with no usable pass POSTs nothing at the rig [$_shape]" \
+        "$(applies | grep -c .)" "0"
+    assert_eq "and self-skips rather than passing or failing [$_shape]" "$counts" "0,0"
+done
+# A skip that announces the wrong reason is its own small lie, and this leg now has two reasons to
+# skip. Assert each names itself, or a passless record would read as "nothing on record".
+STUB_DETAIL='{"last_applied":{"pools":[{"url":"real:1"}]}}'
+reset_applies
+err="$(drive_err run_rigforge_pools rig1)"
+assert_contains "the passless skip says the CREDENTIAL is what is missing" "$err" "no usable credential"
+STUB_DETAIL='{"last_applied":{}}'
+reset_applies
+err="$(drive_err run_rigforge_pools rig1)"
+assert_contains "the absent-record skip still says the RECORD is what is missing" \
+    "$err" "no dashboard-applied pools on record"
+assert_eq "and the absent-record skip does not claim a credential problem" \
+    "$(printf '%s' "$err" | grep -c 'no usable credential')" "0"
+
+STUB_DETAIL='{"rig_config":{"pools":[{"url":"stripped:1"}]},"last_applied":{"pools":[{"url":"real:1","pass":"secret"}]}}'
+
 export IT_RIG_POOLS_PROBE='not json'
 reset_applies
 counts="$(quietly run_rigforge_pools rig1)"
