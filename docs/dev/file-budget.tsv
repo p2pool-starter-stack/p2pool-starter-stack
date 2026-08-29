@@ -34,6 +34,7 @@ dashboard/tests/frontend/workerview.test.mjs	518
 dashboard/tests/frontend/xvbview.test.mjs	431
 dashboard/tests/service/test_alert_service.py	1092
 dashboard/tests/service/test_algo_service.py	822
+dashboard/tests/service/test_collapsed_return_channels.py	563
 dashboard/tests/service/test_control_service.py	500
 dashboard/tests/service/test_data_helpers.py	618
 dashboard/tests/service/test_data_service.py	2538
