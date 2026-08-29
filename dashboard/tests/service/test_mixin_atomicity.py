@@ -37,20 +37,13 @@ _MIXIN_FILES = ("telemetry_store.py", "worker_config_store.py")
 # somebody else's atomic scope; the same call after the block closes does not.
 _GUARDS = ("_db_lock", "_conn")
 
-# StateManager's retained in-memory state (from its `__init__`), as opposed to the DB handle the
-# mixins legitimately share. A moved method touching any of these would be reaching back into
-# state that did not move with it — the second half of the ruling's question.
-_RETAINED_STATE = (
-    "state",
-    "_lock",
-    "_xvb_rewards",
-    "_xvb_round_stats",
-    "table_health",
-    "db_healthy",
-    "db_reset_count",
-    "last_db_reset",
-    "db_unrecoverable",
-)
+# The handle the mixins legitimately share — one connection, one lock, one logger, one path. Every
+# OTHER attribute `StateManager` assigns to itself is retained in-memory state, and a moved method
+# touching one would be reaching back into state that did not move with it: the second half of the
+# ruling's question. That set is DERIVED from the subject below rather than listed here, because a
+# hardcoded mirror of another file's `__init__` stops covering a new attribute the day someone adds
+# one, and Q2 would go on reporting clean — the exact false pass this file exists to prevent.
+_SHARED_HANDLE = {"_conn", "_db_lock", "logger", "db_path"}
 
 
 def _methods(source: str) -> dict[str, ast.FunctionDef]:
@@ -94,7 +87,22 @@ def _guarded_calls(method: ast.AST, targets: set[str]) -> list[str]:
     return sorted(hits)
 
 
-def _state_reads(method: ast.AST) -> list[str]:
+def _retained_state(subject: str) -> set[str]:
+    """Every attribute ``StateManager`` assigns to itself, minus the shared DB handle."""
+    return {
+        target.attr
+        for node in ast.walk(ast.parse(subject))
+        if isinstance(node, ast.ClassDef) and node.name == "StateManager"
+        for assign in ast.walk(node)
+        if isinstance(assign, ast.Assign)
+        for target in assign.targets
+        if isinstance(target, ast.Attribute)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "self"
+    } - _SHARED_HANDLE
+
+
+def _state_reads(method: ast.AST, retained_state: set[str]) -> list[str]:
     """Retained in-memory attributes this method reads or writes through ``self``."""
     return sorted(
         {
@@ -103,41 +111,45 @@ def _state_reads(method: ast.AST) -> list[str]:
             if isinstance(node, ast.Attribute)
             and isinstance(node.value, ast.Name)
             and node.value.id == "self"
-            and node.attr in _RETAINED_STATE
+            and node.attr in retained_state
         }
     )
 
 
 @pytest.fixture(scope="module")
 def split():
-    """The real split: every retained method name, and every moved method by name."""
-    retained = set(_methods(_SUBJECT.read_text()))
+    """The real split: retained method names, moved methods, and retained state names."""
+    subject = _SUBJECT.read_text()
+    retained = set(_methods(subject))
     moved = {}
     for name in _MIXIN_FILES:
         moved.update(_methods((_SERVICE / name).read_text()))
-    return retained - set(moved), moved
+    return retained - set(moved), moved, _retained_state(subject)
 
 
 class TestTheSplitHoldsItsAtomicityProperty:
     def test_the_two_sets_are_real_and_disjoint(self, split):
         """An empty or overlapping enumeration would make every assertion below vacuous."""
-        retained, moved = split
+        retained, moved, state = split
         assert len(retained) > 20 and len(moved) > 5
         assert retained & set(moved) == set()
+        # The derived state set must be real too, or Q2 below is a check against an empty needle
+        # list — which passes for exactly the reason it should not.
+        assert {"state", "table_health", "_lock"} <= state
         # The callee the controls below lean on has to be a real retained method, not an invented
         # name that would make them pass by matching nothing.
         assert "_db_error" in retained
 
     def test_no_moved_method_calls_a_retained_one_under_the_db_guard(self, split):
         """Q1 — the ruling's actual test."""
-        retained, moved = split
+        retained, moved, _ = split
         spanning = {n: c for n, fn in moved.items() if (c := _guarded_calls(fn, retained))}
         assert spanning == {}
 
     def test_no_moved_method_touches_retained_in_memory_state(self, split):
         """Q2 — the mixins share the DB handle by design; they must not share anything else."""
-        _, moved = split
-        reaching = {n: s for n, fn in moved.items() if (s := _state_reads(fn))}
+        _, moved, state = split
+        reaching = {n: s for n, fn in moved.items() if (s := _state_reads(fn, state))}
         assert reaching == {}
 
 
@@ -165,7 +177,7 @@ class SeededMixin:
     def test_the_checker_flags_a_moved_method_calling_a_retained_one_inside_the_guard(self, split):
         """POSITIVE CONTROL, seeded ACROSS the moved/retained boundary — a moved method with a
         retained call inside its transaction block, which is the direction Q1 asks about."""
-        retained, _ = split
+        retained, _, _ = split
         seeded = _methods(self._INSIDE)["write_row_and_report_inside"]
         # Arming readback: the seed is a control only if it is really there, in that shape.
         assert "with self._db_lock:" in self._INSIDE
@@ -176,7 +188,7 @@ class SeededMixin:
         """NEGATIVE CONTROL. This is the shape every real moved method has — the error path runs
         after the context managers have exited — so a checker that could not tell the two apart
         would report the real split as unsafe, and its clean result would prove nothing."""
-        retained, _ = split
+        retained, _, _ = split
         seeded = _methods(self._OUTSIDE)["write_row_then_report"]
         assert "self._db_error" in self._OUTSIDE  # same call, same names, only the position moved
         assert _guarded_calls(seeded, retained) == []
@@ -186,14 +198,15 @@ class SeededMixin:
         `_prune_quarantined` and `_apply_schema` inside `with self._db_lock:`. All three are
         retained, so these are not findings — Q1 is about moved methods — but a walk that came
         back empty here would be one that never matched anything on this file at all."""
-        retained, _ = split
+        retained, _, _ = split
         subject = _methods(_SUBJECT.read_text())
         assert _guarded_calls(subject["_recover_corrupt_db"], retained) == [
             "_apply_schema",
             "_prune_quarantined",
         ]
 
-    def test_the_state_check_flags_a_moved_method_reaching_back_into_retained_state(self):
+    def test_the_state_check_flags_a_moved_method_reaching_back_into_retained_state(self, split):
         """POSITIVE CONTROL for Q2, in the same direction: a moved method touching `self.state`."""
+        _, _, state = split
         seeded = _methods("class M:\n    def f(self):\n        return self.state['x']\n")["f"]
-        assert _state_reads(seeded) == ["state"]
+        assert _state_reads(seeded, state) == ["state"]
