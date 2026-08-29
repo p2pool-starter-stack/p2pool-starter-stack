@@ -32,8 +32,8 @@
 #   helper probes the #1252 domain map does not name for this module, and this PR moves exactly what
 #   the map names.
 # - "black-box: editable-allowlist commit round-trip, every key (#522)" — the multi-key
-#   describe_change exercise. It is a control-channel black-box against the ambient $C sandbox and
-#   stays for the $C-cluster pass, per the map's "clusters last" rule.
+#   describe_change exercise. A control-channel black-box against the ambient $C sandbox, so it was
+#   left for the $C-cluster pass; #1105 R14 has since cut it to test-control-editable-allowlist.sh.
 # - "unit: render-quadlet parity vs os/quadlet fixtures (#77 phase 1)" — a render test by name, but
 #   it checks the appliance's Quadlet unit set against the os/quadlet fixtures; it belongs to the
 #   appliance module, cut next.

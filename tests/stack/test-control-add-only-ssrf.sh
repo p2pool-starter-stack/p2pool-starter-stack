@@ -24,8 +24,8 @@
 # false — that file's own header states its sections are fully self-contained (#1462).
 #
 # WHAT OUTLIVES THE SOURCE. gate_try() and $UUID5 are defined here and not unset at the end, so they
-# outlive the source as they outlived the old in-run.sh position: run.sh's #522 section still calls
-# gate_try() and reads $UUID5, and test-spool-audit.sh reuses $UUID5. Hence the stanza stays put.
+# outlive the source as they outlived the old in-run.sh position: the editable-allowlist domain file
+# run.sh sources next reads both, as test-spool-audit.sh reuses $UUID5. Hence the stanza stays put.
 #
 # MUTATION PROOF: reverting pithead's add-only prefix check back to "refuse any workers.list
 # diff" turns the ADD-ONLY-append assertion red; reverting _control_host_is_internal's
