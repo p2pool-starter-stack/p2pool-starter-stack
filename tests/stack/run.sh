@@ -214,6 +214,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-kernel-boot.sh" && domain_r
 # shellcheck source=tests/stack/test-appliance-reset.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-reset.sh" && domain_ran test-appliance-reset.sh "$_d0" "$?" || domain_ran test-appliance-reset.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-appliance-reset-lock.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-reset-lock.sh" && domain_ran test-appliance-reset-lock.sh "$_d0" "$?" || domain_ran test-appliance-reset-lock.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-appliance-identity-boot.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-identity-boot.sh" && domain_ran test-appliance-identity-boot.sh "$_d0" "$?" || domain_ran test-appliance-identity-boot.sh "$_d0" "$?"
 
