@@ -52,6 +52,134 @@ local_miner_hugepages_blocked() {
     [ "$pages" -gt 0 ] && [ "$pages" -lt "$PITHEAD_HUGEPAGES" ]
 }
 
+# --- #1103: the total-pool CEILING, the other half of the hand-off -----------------------------
+# hugepages_reserve_extra_mb tells RigForge what the stack HOLDS; this tells it how large the pool
+# may ever GET. Different levers, and only the second one bounds the measured defect. RigForge's
+# grow-only write is target = current + required - avail, and a co-resident holding pages at that
+# instant is subtracted from avail while the same pages already sit inside required — so they are
+# counted twice and the pool is inflated by exactly the amount held.
+#
+# MEASURED, not reasoned (~/appliance-suite-logs/1103/RESULTS.md, two KVM legs on a 16 GiB guest):
+# THE DOUBLE COUNT IS A RACE, NOT A CONSTANT. p2pool holds 1296 pages for ~6 s while it allocates
+# its RandomX dataset; the sync gate then stops it and it releases them. If RigForge's setup lands
+# inside that window the pool goes to 5618 pages and STAYS there until the next reboot; outside it,
+# 4322. Two consecutive boots of one image gave both numbers. That is why the fix is a ceiling and
+# not a re-ordering of the units: re-ordering would make the common case correct and leave the
+# failure intact under load, while a ceiling bounds the pool whoever wins the race.
+#
+# WHY 9216 MB (4608 pages) — the three bounds it has to sit between, each re-derived from rigforge's
+# own util/proposed-grub.sh at the pinned commit rather than taken from the issue text:
+#   > 6144 MB   _ensure_hugepages SKIPS THE WRITE ENTIRELY when ceiling_pages <= current, and the
+#               full tier's current is PITHEAD_HUGEPAGES = 3072 pages = 6144 MB. At or below that
+#               the miner would get nothing beyond the boot pool — a cap that reads as a cap and
+#               silently switches the reservation off.
+#   >= 8592 MB  required on the supported machine is the fallback branch (the appliance reserves no
+#               1G pages, so proposed-grub.sh takes it): 1168*NUMA + THREADS + 50 + (extra_mb+1)/2.
+#               ⛔ THAT BOUND IS NOT A CONSTANT — IT CARRIES A NODE COUNT, and 8592 is only its
+#               NUMA=1 evaluation (1168*1 + 6 + 50 + 3072 = 4296 pages). The node term is the only
+#               one that scales: EXTRA_2MB_PAGES does not (proposed-grub.sh L85-88). At NUMA=2 the
+#               requirement is 5464 pages = 10,928 MB and a 4608-page ceiling would cap a HEALTHY
+#               box 856 pages short; at NUMA=4, 7800 pages, short by 3192. RigForge caps and
+#               continues, so that under-reservation would be SILENT — the same failure direction
+#               the version gate below exists to avoid. This is why the value is gated on a
+#               detected single node (local_miner_numa_nodes) and not merely documented as one.
+#   <  11236 MB the contended landing measured above, 5618 pages. At or above it the ceiling would
+#               never bind and the over-reserve would survive the fix.
+# 4608 pages clears all three AT ONE NODE, with 312 pages of slack over required.
+#
+# NOT the guest's 4322: that reading is a KVM artifact (4 vCPUs presented as 4 sockets -> L3 64 MiB
+# -> THREADS 32). The same physical X5690 reports one 12 MiB L3 -> THREADS 6. Immaterial to the
+# ceiling, wrong to quote as the requirement.
+#
+# THIS VALUE AND hugepages_reserve_extra_mb MOVE TOGETHER: extra_mb contributes (extra_mb+1)/2 =
+# 3072 of those 4296 required pages, so raising the declared headroom raises required toward the
+# ceiling and would eventually make the cap bite on a healthy box. Re-derive both if
+# PITHEAD_HUGEPAGES changes.
+readonly PITHEAD_HUGEPAGES_POOL_CEILING_MB=9216
+
+# The RigForge release that first honours the key. VERSION-GATED because the failure is SILENT in
+# the worse direction: rigforge's _warn_unknown_config_keys warns and never errors on a key it does
+# not know ("an unknown key is at worst a no-op, and erroring would brick fleet applies on any
+# future rename"), so declaring the ceiling into an older tree FAILS OPEN — the rendered config
+# would read as capped and behave exactly as it does today. A config that lies about being bounded
+# is worse than one that plainly is not, so declare it only where it is honoured.
+readonly PITHEAD_RIGFORGE_POOL_CEILING_FLOOR=1.16.0
+
+# The node count the ceiling is valid for. MIRRORS RigForge's OWN precedence, step for step
+# (util/proposed-grub.sh L52-61 at the pinned ref), and that fidelity is the whole point: this
+# function exists to PREDICT the node count rigforge will size against, so any disagreement between
+# the two reintroduces the very defect the gate is here to stop — quietly, and in the silent
+# direction. Three steps, not two: lscpu's "NUMA node(s)", then the sysfs node count, then THE
+# SOCKET COUNT, then 1. The socket fallback is not hypothetical padding — the #1103 bench guest
+# reports Socket(s)=4 with NUMA node(s)=1, so a mirror that stopped at sysfs would read 1 where
+# rigforge read 4. rigforge's own L48-50 says the same thing from the other side: node count is not
+# socket count, and a single-socket EPYC can expose 2/4/8 nodes.
+# Prints its answer, so it must call nothing that writes to stdout.
+local_miner_numa_nodes() {
+    local n
+    n=$(lscpu 2>/dev/null | awk -F: '/^NUMA node\(s\):/ {gsub(/[^0-9]/, "", $2); print $2; exit}')
+    if ! { [ -n "$n" ] && [ "$n" -gt 0 ]; } 2>/dev/null; then
+        n=$(find "${PITHEAD_NODE_SYS:-/sys/devices/system/node}" -maxdepth 1 -name 'node[0-9]*' 2>/dev/null | wc -l | tr -d ' ')
+    fi
+    if ! { [ -n "$n" ] && [ "$n" -gt 0 ]; } 2>/dev/null; then
+        n=$(lscpu 2>/dev/null | awk '/Socket\(s\):/ {print $2; exit}')
+    fi
+    if ! { [ -n "$n" ] && [ "$n" -gt 0 ]; } 2>/dev/null; then
+        n=1
+    fi
+    echo "$n"
+}
+
+# The ceiling this machine may declare, in MB, or 0 for "declare nothing" — 0 is RigForge's own
+# documented default for "no ceiling", so an omitted key and a declared 0 mean the same to it.
+# Prints its answer, so it must never call log (stdout); warn goes to stderr and is safe here.
+local_miner_pool_ceiling_mb() {
+    local dir=$1 ver
+    # THE FULL TIER ONLY — the one tier the value was measured on. The reduced tier never reaches
+    # here (local_miner_hugepages_blocked refuses it outright, and leg B measured why: lifting that
+    # refusal asks for 12.0 GiB on a 7.76 GiB box, the kernel silently grants 5.7 GiB, MemAvailable
+    # falls to ~40 MB and RigForge still exits 0 saying "Deployment Complete"). The RELEASED tier
+    # declares zero headroom and holds no stack pages, so it has nothing to double-count and no
+    # measurement behind any value — it stays uncapped rather than guessing one.
+    [ "$(hugepages_decision_pages)" = "$PITHEAD_HUGEPAGES" ] || {
+        echo 0
+        return 0
+    }
+    # ONE NODE ONLY — the regime 9216 was measured on. RigForge's requirement carries a 1168-page
+    # term PER NUMA NODE, so on a multi-node box this ceiling would sit BELOW a healthy requirement
+    # and rigforge would cap the write and carry on: a silent under-reservation, which is the same
+    # failure direction the version gate refuses. Left uncapped instead, which is exactly today's
+    # behaviour. Deliberately NOT a render-time recomputation of rigforge's formula: that would put
+    # a copy of their sizing inside pithead that must stay correct across their releases, and it
+    # needs THREADS (L3_MB/2, then THREADS_CAP) which pithead does not model at all.
+    local nodes
+    nodes=$(local_miner_numa_nodes)
+    if [ "$nodes" != 1 ]; then
+        warn "This machine reports $nodes NUMA nodes and the HugePages pool ceiling was measured on a single-node box — leaving the pool uncapped rather than capping it below a healthy requirement."
+        echo 0
+        return 0
+    fi
+    # The tree that will actually RUN, not the image's stamp: pithead-sync copies /opt/rigforge to
+    # /data/rigforge every boot, and it is the copy under $dir whose parse_config reads this key.
+    ver=$(tr -d ' \t\r\n' <"$dir/VERSION" 2>/dev/null) || ver=""
+    # Fail CLOSED on anything not a plain dotted number. sort -V happily orders an unparseable
+    # string against a version and would answer "new enough" for a tree that is nothing of the kind.
+    case "$ver" in
+    '' | *[!0-9.]*)
+        warn "Could not read a RigForge version from $dir/VERSION — leaving the HugePages pool uncapped."
+        echo 0
+        return 0
+        ;;
+    esac
+    if [ "$(printf '%s\n%s\n' "$PITHEAD_RIGFORGE_POOL_CEILING_FLOOR" "$ver" | sort -V | head -n 1)" \
+        != "$PITHEAD_RIGFORGE_POOL_CEILING_FLOOR" ]; then
+        warn "RigForge $ver at $dir predates $PITHEAD_RIGFORGE_POOL_CEILING_FLOOR and ignores the HugePages pool ceiling — leaving the pool uncapped rather than writing a cap it would not honour."
+        echo 0
+        return 0
+    fi
+    echo "$PITHEAD_HUGEPAGES_POOL_CEILING_MB"
+}
+
 render_local_miner_config() {
     is_appliance || return 0
     # Not on a rig, ever. This function's "switched off" branch DELETES the miner's config, and
@@ -77,11 +205,14 @@ render_local_miner_config() {
         warn "Local mining is on, but there is no RigForge tree at $dir — this image does not carry the built-in miner."
         return 0
     fi
-    local port secret
+    local port secret ceiling
     port=$(stratum_port_effective)
     secret=$(env_get PROXY_STRATUM_PASSWORD 2>/dev/null || true)
+    ceiling=$(local_miner_pool_ceiling_mb "$dir")
     jq -n --arg url "127.0.0.1:$port" --arg pass "$secret" --argjson reserve "$(($(hugepages_decision_pages) * 2))" \
-        '{pools: [({url: $url} + (if $pass != "" then {pass: $pass} else {} end))], hugepages_reserve_extra_mb: $reserve}' \
+        --argjson ceiling "$ceiling" \
+        '{pools: [({url: $url} + (if $pass != "" then {pass: $pass} else {} end))], hugepages_reserve_extra_mb: $reserve}
+         + (if $ceiling > 0 then {hugepages_pool_ceiling_mb: $ceiling} else {} end)' \
         >"$dir/config.json"
     log "Local miner config rendered to $dir/config.json (pool 127.0.0.1:$port)."
 }

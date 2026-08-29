@@ -244,6 +244,44 @@ the `/run` marker records the chosen page count and both of them honour it — s
 kernel optimization caps its grow at the recorded pages, and the local-miner render
 hands RigForge the recorded reservation, never the baked 6 GiB, as its headroom.
 
+**Fixed — a boot-time race could reserve 11 GiB of HugePages on a 16 GiB machine (#1103).**
+The miner's config declares the stack's reservation as headroom, and RigForge sizes the pool as
+`current + required - available`. A co-resident holding pages at that instant is subtracted from
+available while the same pages already sit inside required, so they are counted twice. Measured on
+the bench: p2pool holds 1296 pages for about six seconds while it allocates its RandomX dataset,
+the sync gate then stops it and it releases them. Whether the box over-reserves depends on whether
+RigForge's setup lands inside that window — two consecutive boots of one image gave 5618 pages and
+4322 pages, each persisting until the next reboot. The render now declares a pool ceiling of
+9216 MB alongside the headroom, which bounds the pool whoever wins the race. Re-ordering the units
+was rejected: it would make the common case correct and leave the failure intact under load.
+
+The ceiling is declared only where it is honoured. RigForge ignores a config key it does not know,
+warning rather than failing, so declaring the ceiling into a tree older than v1.16.0 would leave a
+configuration that reads as bounded and behaves as it did before. The render reads the version of
+the tree it is handing the file to and declares nothing when it cannot confirm the floor.
+
+It is declared only on the full tier, too. The reduced tier still refuses co-location outright, and
+the bench measured why that refusal should stay: lifting it by hand had RigForge ask for 6146 pages
+(12.0 GiB) on a 7.76 GiB box, the kernel grew the pool from 2560 pages to 2916 — 356 new pages of
+the 3586 it was asked to add — available memory fell to about 40 MB,
+and RigForge exited zero reporting a completed deployment. Nothing on the box named the shortfall.
+There is no ceiling value that helps on that tier — anything at or below 5120 MB is at or under the
+pool the boot already sized, so nothing is written at all, and anything above it is drawn from the
+roughly 700 MB the machine has spare.
+
+The ceiling is a single-node value, and the render checks for that too. RigForge sizes the
+fallback reservation as `1168 * nodes + threads + 50 + headroom`, where only the first term scales
+with the machine's NUMA node count. On a two-node box the requirement is 5464 pages — above the
+9216 MB ceiling — so declaring it there would cap a healthy machine short, and RigForge caps the
+write and carries on rather than failing, which would make the shortfall silent. The render reads
+the node count the same way RigForge does, preferring `lscpu`, then the kernel's own node entries,
+then the socket count, and declares nothing when it reads more than one node. Node count is not
+socket count in either direction: the bench guest reports four sockets and one node.
+
+**Still open on #1103:** whether a co-located miner on a reduced-RAM box mines usefully or thrashes
+is unanswered. Answering it needs synced chains rather than another KVM guest, because the sync gate
+holds the stratum the miner dials.
+
 **Fixed — a restored coordinator strands dark instead of provisioning itself (#1239).**
 Live KVM guest evidence: `pithead-firstboot` lands a restored archive (`consume_preseed_restore`
 or the wizard's spool channel) and calls `setup()`, but the archive's `.env` is the SOURCE
