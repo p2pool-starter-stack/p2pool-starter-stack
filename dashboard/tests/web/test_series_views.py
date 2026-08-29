@@ -4,174 +4,68 @@ Moved out of tests/web/test_views.py with the sections themselves (#1105). The t
 verbatim; the only edits are the twelve module-alias reads that follow their target from ``views``
 to ``series_views``.
 
-``_SYNC_DONE``/``_BASE``/``_metrics``/``_state_mgr``/``_data`` below are COPIES. The master lives in
-``tests/web/test_views.py``, which still needs them for the tests that stayed, and sibling copies
-are in ``tests/web/test_xvb_views.py`` and ``tests/web/test_infra_views.py``. There is no import
-route between two test modules here — ``pyproject.toml`` runs pytest with
-``--import-mode=importlib`` and the test tree has no ``__init__.py``, so neither a sibling module
-nor ``conftest`` is importable — and converting these to pytest fixtures would rewrite every call
-site and cost the verbatim move. The same trade is already recorded for this pair at
-``tests/web/test_views.py``'s ``_state_mgr``. These copies mirror the ``Metrics`` dataclass, so any
-drift breaks them loudly rather than silently. Consolidating them into real fixtures is tracked as
-#1459, once #1105 stops requiring byte-identity.
-
-``_hashrate`` is NOT a copy — it moved, because no test that stayed uses it.
+The shared builders — ``_SYNC_DONE``/``_BASE`` and the ``_metrics``, ``_sync``, ``_hashrate``,
+``_state_mgr`` and ``_data`` factories — are pytest fixtures in ``tests/web/conftest.py`` as of
+#1459. Each test that needs one takes it as a parameter; the call itself reads as it always did.
+What is deliberately NOT shared, and why, is written in that file.
 """
 
 import time
-from dataclasses import replace
 from unittest.mock import MagicMock
 
-from mining_dashboard.service.metrics import Metrics, SyncMetric
 from mining_dashboard.web import series_views
 from mining_dashboard.web.charts import _MAX_CHART_POINTS
 from mining_dashboard.web.series_views import (
-    _mode_palette,
     _window_reject_pct,
     build_blocks,
     build_cadence,
     build_disk_growth,
-    build_hashrate,
     build_share_stats,
     build_xvb_history,
 )
 from mining_dashboard.web.views import build_state
 
-# --- Fixtures: COPIES of the builders in test_views.py (see the module docstring) ------
-
-_SYNC_DONE = SyncMetric(
-    percent=100, current=10, target=10, remaining=0, has_target=True, done=True, down=False
-)
-
-_BASE = Metrics(
-    total_h15=10500.0,
-    p2pool_1h=8000.0,
-    p2pool_24h=8100.0,
-    xvb_1h=2100.0,
-    xvb_24h=2300.0,
-    xvb_routed_1h=2000.0,
-    xvb_routed_24h=2050.0,
-    stratum_h15=10300.0,
-    stratum_h1h=10400.0,
-    stratum_h24h=10200.0,
-    mode="P2POOL",
-    xvb_enabled=True,
-    current_tier="Donor (1.00 kH/s+)",
-    target_tier="Donor (1.00 kH/s+)",
-    target_threshold=1000.0,
-    target_sustainable=True,
-    low_hr_warning=False,
-    xvb_fail_count=0,
-    xvb_last_update=0,
-    workers_online=2,
-    workers_total=3,
-    shares_in_window=5,
-    pplns_window=2160,
-    block_time=10,
-    pool_type="Mini",
-    pool_hashrate=120_000_000.0,
-    pool_difficulty=250_000_000.0,
-    network_difficulty=380_000_000_000.0,
-    network_height=3210001,
-    global_syncing=False,
-    monero=_SYNC_DONE,
-    tari=_SYNC_DONE,
-    monero_mode="Unknown",
-    tari_mining=True,
-)
-
-
-def _metrics(**over):
-    return replace(_BASE, **over)
-
-
-# ponytail: this _state_mgr()/_data() pair looks near-duplicated with the ones in test_metrics.py,
-# but the per-module defaults differ on purpose (e.g. tari_sync, the get_tiers/xvb shapes). A shared
-# builder would need enough params that it reads worse than the local copy — left duplicated.
-def _state_mgr(
-    history=None,
-    mode="P2POOL",
-    share_stats=None,
-    blocks=None,
-    disk_growth=None,
-    xvb_history=None,
-):
-    sm = MagicMock()
-    sm.get_history.return_value = history or []
-    sm.get_xvb_stats.return_value = {"current_mode": mode}
-    sm.get_tiers.return_value = {}
-    sm.get_xvb_reward_estimates.return_value = {"estimates": {}, "last_update": 0.0}
-    sm.get_xvb_round_stats.return_value = {"stats": {}, "last_update": 0.0}
-    sm.get_share_stats.return_value = share_stats or []
-    sm.get_raffle_wins.return_value = []
-    sm.get_xvb_standby.return_value = None  # no backup standby held (#249)
-    sm.is_db_healthy.return_value = True
-    # #196 Tier-1 telemetry backbone exposure.
-    sm.get_blocks.return_value = blocks or []
-    sm.get_disk_growth.return_value = disk_growth or []
-    sm.get_xvb_history.return_value = xvb_history or []
-    return sm
-
-
-def _data(**over):
-    data = {
-        "shares": [],
-        "workers": [],
-        "global_sync": False,
-        "total_live_h15": 0,
-        "monero_sync": {"percent": 100, "current": 10, "target": 10},
-        "tari_sync": {"percent": 50, "current": 5, "target": 10},
-    }
-    data.update(over)
-    return data
-
-
-def _hashrate(metrics):
-    """build_hashrate with palette tokens derived as build_state does."""
-    return build_hashrate(metrics, *_mode_palette(metrics.mode))
-
-
 # --- Hashrate / mode / tier formatting ------------------------------------------------
 
 
 class TestHashrate:
-    def test_formats_hashrates(self):
+    def test_formats_hashrates(self, _hashrate, _metrics):
         hr = _hashrate(_metrics(total_h15=10500, p2pool_1h=8000, xvb_1h=2100))
         assert hr["total"] == "10.50 kH/s"
         assert hr["p2p_1h"] == "8.00 kH/s"
         assert hr["xvb_1h"] == "2.10 kH/s"
 
-    def test_routed_distinct_from_credited(self):
+    def test_routed_distinct_from_credited(self, _hashrate, _metrics):
         # Routed (proxy v_xvb) is shown in the header/Simple and alongside credited in the Advanced
         # card so the live credit factor is visible — distinct from credited avg_1h/24h (#156).
         hr = _hashrate(_metrics(xvb_routed_1h=2000, xvb_24h=6500, xvb_1h=6000))
         assert hr["xvb_routed_1h"] == "2.00 kH/s"
         assert hr["xvb_1h"] == "6.00 kH/s"
 
-    def test_p2pool_mode_grays_xvb(self):
+    def test_p2pool_mode_grays_xvb(self, _hashrate, _metrics):
         hr = _hashrate(_metrics(mode="P2POOL"))
         assert hr["mode_variant"] == "ok"
         assert hr["p2p_variant"] == "ok"
         assert hr["xvb_variant"] == "muted"
 
-    def test_xvb_mode_grays_p2pool(self):
+    def test_xvb_mode_grays_p2pool(self, _hashrate, _metrics):
         hr = _hashrate(_metrics(mode="XVB"))
         assert hr["mode_variant"] == "purple"
         assert hr["p2p_variant"] == "muted"
         assert hr["xvb_variant"] == "purple"
 
-    def test_split_mode_both_active(self):
+    def test_split_mode_both_active(self, _hashrate, _metrics):
         hr = _hashrate(_metrics(mode="XVB (Split)"))
         assert hr["mode_variant"] == "accent"
         assert hr["p2p_variant"] == "ok"
         assert hr["xvb_variant"] == "purple"
 
-    def test_low_hr_badge_present_only_when_warned(self):
+    def test_low_hr_badge_present_only_when_warned(self, _hashrate, _metrics):
         assert _hashrate(_metrics(low_hr_warning=False))["low_hr"] is None
         warned = _hashrate(_metrics(low_hr_warning=True))["low_hr"]
         assert warned and "low for tier" in warned["text"] and warned["title"]
 
-    def test_tiers_and_fail_count_passthrough(self):
+    def test_tiers_and_fail_count_passthrough(self, _hashrate, _metrics):
         hr = _hashrate(_metrics(current_tier="Vip (X)", target_tier="Whale (Y)", xvb_fail_count=3))
         assert hr["tier"] == "Vip (X)"
         assert hr["target_tier"] == "Whale (Y)"
@@ -321,7 +215,7 @@ class TestBlocksDiskGrowthXvbHistorySeries:
         mgr.get_payouts.assert_called_once_with("tari")  # disabled chain never queried
         assert series_views.build_payouts(None, "all") == {"monero": [], "tari": []}
 
-    def test_payouts_ride_build_state_end_to_end(self, monkeypatch):
+    def test_payouts_ride_build_state_end_to_end(self, _data, _state_mgr, monkeypatch):
         # The wiring, not just the builder: with confirmation on, a stored payout row surfaces
         # in the top-level payload the client polls (the mine cart train reads state.payouts).
         # The shared _state_mgr() MagicMock auto-mocks get_payouts, so point it at real rows.
@@ -457,7 +351,7 @@ class TestBlocksDiskGrowthXvbHistorySeries:
 
 
 class TestCadence:
-    def test_formats_available_figures(self):
+    def test_formats_available_figures(self, _metrics):
         c = build_cadence(
             _metrics(
                 last_block_ts=time.time() - 90,
@@ -472,7 +366,7 @@ class TestCadence:
         assert c["luck"] == "123%"
         assert c["weight"] == "1,234,567"
 
-    def test_dash_fallbacks_when_unavailable(self):
+    def test_dash_fallbacks_when_unavailable(self, _metrics):
         # No hashrate history / pool difficulty yet (#84 pitfall): everything reads "—", never
         # inf/0s, and available gates the card's luck + time-to-share.
         c = build_cadence(_metrics())  # _BASE leaves the cadence fields at their 0.0 defaults
