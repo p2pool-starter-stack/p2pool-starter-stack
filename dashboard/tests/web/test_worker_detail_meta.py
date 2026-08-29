@@ -214,17 +214,14 @@ class TestConfigOrigin:
             sm.close()
         assert d["config_origin"] == "elsewhere"
 
-    @pytest.mark.parametrize(
-        "filler,expected",
-        [(48, "here"), (49, "here"), (50, "untraced")],
-    )
+    @pytest.mark.parametrize("filler", [48, 49, 50, 120])
     def test_a_change_pushed_out_of_the_history_window_is_not_reported_as_someone_elses(
-        self, monkeypatch, filler, expected
+        self, monkeypatch, filler
     ):
-        """#1369, at the boundary. The provenance match reads a bounded window of this rig's
-        history. Once enough later changes exist, our own `applied` row falls off the end and the
-        id stops being found — and before this fix that printed "Last changed from another
-        dashboard" over a change this dashboard *did* make.
+        """#1369, at the boundary. The provenance verdict used to read a bounded window of this
+        rig's history: once enough later changes existed, our own `applied` row fell off the end
+        and the id stopped being found. The verdict is an exact-id lookup now, so the row is found
+        wherever it sits and every row here reads `here`.
 
         The filler rows are `rejected` on purpose. A rejected change returns before the rig's
         config is touched, so nothing is re-stamped and `last_change_id` stays pinned to the good
@@ -233,8 +230,10 @@ class TestConfigOrigin:
         would mostly exercise the `reverted` path and this test could pass for a reason that has
         nothing to do with windowing.
 
-        49 filler rows leaves the good row as the 50th and last readable one; 50 pushes it out.
-        The cliff is exact, which is what makes the off-by-one worth pinning.
+        49 filler rows leaves the good row as the 50th and last readable one; 50 pushes it out;
+        120 is well past any off-by-one. The two assertions under the verdict are what stop this
+        passing for the wrong reason — the window has to still be BOUNDED and the good row has to
+        have really fallen out of it, or `here` at 50 would only mean the window grew.
         """
         from mining_dashboard.web import views
 
@@ -255,9 +254,40 @@ class TestConfigOrigin:
             d = build_worker_detail("rig1", {"workers": workers}, sm)
         finally:
             sm.close()
-        assert d["config_origin"] == expected
-        # The window really is the mechanism, not an accident of row count.
+        assert d["config_origin"] == "here"
+        # The window really is still bounded, and past 49 fillers the row the verdict just claimed
+        # is NOT among the ones rendered — which is precisely the case that used to be unanswerable.
         assert len(d["history"]) == min(filler + 1, 50)
+        rendered = [row["change_id"] for row in d["history"]]
+        assert (_META["last_change_id"] in rendered) is (filler < 50)
+
+    def test_a_foreign_change_on_a_long_history_rig_is_still_named_as_foreign(self, monkeypatch):
+        """#1369's OTHER half, and the dangerous one — a true alarm the window used to silence.
+
+        The issue text only describes the direction where we under-claim our own change. Past the
+        window the verdict was unanswerable both ways, so this rig — genuinely driven by another
+        host — got the same "we cannot tell" as one whose row had merely aged out. That withdrew a
+        warning the read could in fact support. An exact-id lookup answers it: the id is not in
+        this rig's rows at all, and no amount of later history makes that less true.
+        """
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(
+            views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "1.2.3.4"}]
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        sm = StateManager(db_path=":memory:")
+        try:
+            for i in range(50):
+                sm.add_worker_config_version(
+                    "rig1", f"later{i:04d}", "rejected", {"DONATION": 6}, None, ts=2000.0 + i
+                )
+            workers = [{"name": "rig1", "status": "online", "rigforge": {"config_meta": _META}}]
+            d = build_worker_detail("rig1", {"workers": workers}, sm)
+        finally:
+            sm.close()
+        assert len(d["history"]) == 50  # the window IS full, so the old softening was available...
+        assert d["config_origin"] == "elsewhere"  # ...and is no longer reached
 
     def test_a_rolled_back_change_still_reads_as_reverted_on_a_long_history(self, monkeypatch):
         # The truncation verdict must not swallow the case where we DID find the row. The rig
