@@ -328,6 +328,14 @@ and `--list` prints it).
   answers a dial with rc 0. Measured on one host, three targets: the live node and the
   published-but-dead port were indistinguishable to a dial (both rc 0) and separated by the
   handshake. Real nodes advertise `XPUB` rather than `PUB`; both are accepted.
+  The probe bounds its own connect ([#1500](https://github.com/p2pool-starter-stack/pithead/issues/1500)). `timeout` cannot wrap a shell
+  redirection, so the opening `exec` inherited only the kernel's SYN-retry deadline. A closed port
+  answers with RST in about 2 ms, which is why this stayed hidden; a filtered or black-holed host
+  produced no verdict at all until the kernel gave up, far past the probe's budget. Measured
+  against a black-holed address on a 3-second budget: 15 s and empty output before, 3 s and a
+  named verdict after. A filtered host is reported as `connect-timeout`, kept apart from
+  `connect-refused` on purpose — a refusal is an answer and points at the port, a timeout is the
+  absence of one and points at a firewall, a partition or the wrong address.
 - End-to-end mining. Workers are online (`proxy_workers >= --workers`), stratum has connections,
   and total hashes are accumulating ([#28](https://github.com/p2pool-starter-stack/pithead/issues/28)).
 - Posture propagated. `MONERO_RPC_BIND`, `DASHBOARD_SECURE`, `XVB_ENABLED`, and `TARI_REQUIRED`
@@ -624,6 +632,12 @@ through a bare `it_warn` — by wording, and by shape for the drops that never s
 `selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures, so
 every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
 READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack.
+It also covers the truncated and hostile frames that used to end the parser rather than be named
+by it ([#1500](https://github.com/p2pool-starter-stack/pithead/issues/1500)): every length field is read with `16#`, which is fatal on an
+empty string, so a peer that stalled part-way through a header left an interpreter error on stderr
+and an empty verdict. Those cases assert the empty stderr alongside the reason, because the return
+code was already 1 while the bug was live and a case checking only the code would have passed
+against it.
 
 ---
 
