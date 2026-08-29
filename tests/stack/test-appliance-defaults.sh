@@ -42,8 +42,57 @@ out=$(run_sourced "$PFSB" preflight_remote_nodes "$PFSB/bad.json" 2>/dev/null)
 assert_rc "unreachable remote Tari -> rc 1" "$?" "1"
 assert_contains "failure names host and port" "$out" "127.0.0.1:1"
 assert_contains "failure points at the LAN-access switch" "$out" "grpc_lan_access"
+
+# The ZMQ half. A TCP connect proves reachability and NOTHING else, and on the ZMQ port that gap
+# is load-bearing: docker's userland proxy binds a published host port and accepts the connection
+# itself, so a containerised node whose publisher failed to bind answers the dial rc 0. The
+# verdict is pure over the greeting the peer sent, so every failure class is a fixture here
+# rather than a socket. The first is CAPTURED from a live monerod; the rest are the shapes a
+# live node will not produce.
+PFZ_LIVE=ff00000000000000017f03014e554c4c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+PFZ_HTTP=485454502f312e312034303020426164205265717565737400000000000000000000000000000000000000000000000000000000000000000000000000000000
+PFZ_ZMTP2=ff00000000000000007f01004e554c4c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+run_sourced "$PFSB" zmq_greeting_ok "$PFZ_LIVE"
+assert_rc "a live monerod greeting is accepted" "$?" "0"
+# THE case the dial cannot see: an accept() with no greeting is a published-but-dead port.
+run_sourced "$PFSB" zmq_greeting_ok ""
+assert_rc "an accept() that sends no greeting is refused" "$?" "1"
+run_sourced "$PFSB" zmq_greeting_ok "ff0000"
+assert_rc "a truncated greeting is refused, not read past its end" "$?" "1"
+run_sourced "$PFSB" zmq_greeting_ok "$PFZ_HTTP"
+assert_rc "a listener that is not ZMQ at all is refused" "$?" "1"
+run_sourced "$PFSB" zmq_greeting_ok "$PFZ_ZMTP2"
+assert_rc "a ZMTP 2 peer is refused — the READY exchange needs 3.x" "$?" "1"
+
+# Wiring, both directions, with no socket: stub `timeout` so every dial answers rc 0 and the
+# greeting read returns whatever the case supplies. An empty return is exactly the
+# published-but-dead shape — reachable, and nothing behind it.
+printf '{"monero":{"mode":"remote","remote":{"host":"127.0.0.1","rpc_port":18081,"zmq_port":18083}},"tari":{"mode":"local"}}' >"$PFSB/zmq.json"
+out=$(
+    cd "$PFSB" || exit
+    source "$STACK"
+    set +e
+    timeout() { return 0; }
+    preflight_remote_nodes "$PFSB/zmq.json" 2>/dev/null
+)
+assert_rc "reachable but no ZMTP greeting -> rc 1" "$?" "1"
+assert_contains "the refusal says nothing there speaks ZMQ" "$out" "speaks ZMQ"
+assert_contains "the refusal names the ZMQ port" "$out" "18083"
+# The same run with a live greeting must PASS, or the case above would go green against a
+# preflight that refuses everything.
+out=$(
+    cd "$PFSB" || exit
+    source "$STACK"
+    set +e
+    timeout() {
+        case "$*" in *"od -An"*) printf '%s' "$PFZ_LIVE" ;; esac
+        return 0
+    }
+    preflight_remote_nodes "$PFSB/zmq.json" 2>/dev/null
+)
+assert_rc "reachable AND greeting -> rc 0" "$?" "0"
 rm -rf "$PFSB"
-unset PFSB out
+unset PFSB out PFZ_LIVE PFZ_HTTP PFZ_ZMTP2
 
 echo "== unit: appliance defaults (tor.auto_heal) =="
 # Applied only where ABSENT: an operator who wrote false meant it.
