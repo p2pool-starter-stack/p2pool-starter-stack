@@ -110,7 +110,9 @@ wait is the same either way: it is the lock that decides it, never the line.
 The lock covers the parts of a command that change things, not the whole command. A `backup`
 takes it after its prompts, so a passphrase you have not typed yet holds nothing up, and the
 first-boot wizard holds it only while it deploys. `os-update` takes it just before it writes the
-spare slot, so a confirmation it is still waiting on holds nothing up either. Read-only
+spare slot, so a confirmation it is still waiting on holds nothing up either, and
+`rotate-secrets` takes it after its own confirmation and before it writes the copies of your old
+secrets, so a rotation that ends up waiting has not yet changed a credential. Read-only
 commands — `status`, `doctor` and `logs` among them — never take it and never wait.
 
 The lock covers one stack, not one directory. A bundle install keeps each release in its own

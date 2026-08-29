@@ -262,6 +262,15 @@ rotate_secrets() {
         }
     fi
 
+    # Serialise the mutating half against every other pithead operation (#1482). Taken HERE, after
+    # the confirmation and before the first write: everything above is read-only — the preview is
+    # computed from the parsed config rather than the rendered .env — and the prompt above blocks on
+    # the operator's keystroke, so a window opened any earlier would park every other verb for as
+    # long as nobody answers. Everything below mutates, starting with the safety copies, so a
+    # timeout here has genuinely changed nothing, which is what the timeout message promises. A
+    # timeout exits PITHEAD_EX_LOCK_TIMEOUT, distinct from this verb's own failure exit below.
+    mutation_lock_acquire rotate-secrets
+
     # Keep the OLD values recoverable before anything changes: timestamped owner-only copies of the
     # two files that carry them. Refuse to rotate at all if the safety copies can't be written.
     local stamp
@@ -311,4 +320,5 @@ rotate_secrets() {
         announce_stratum_auth
         warn "The stratum access-password CHANGED — every rig is rejected until its stratum 'pass' is updated to the value above."
     fi
+    mutation_lock_release
 }
