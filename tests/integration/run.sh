@@ -29,6 +29,8 @@ source "$HERE/rigforge-apply-settle.sh"
 source "$HERE/rig-key-ledger.sh" # must precede any module that marks a write (#1379)
 # shellcheck source=tests/integration/rigforge-writable-keys.sh
 source "$HERE/rigforge-writable-keys.sh"
+# shellcheck source=tests/integration/rigforge-upgrade.sh
+source "$HERE/rigforge-upgrade.sh"
 
 # --- Defaults / globals -----------------------------------------------------
 IT_MODE="ssh"
@@ -46,7 +48,6 @@ RUN_AUTH_FAIL_CLOSED=0
 RUN_HARDENING=0
 RUN_RIGFORGE=0
 RUN_RIGFORGE_CONTROL=0
-RUN_RIGFORGE_UPGRADE=0
 RUN_SUBNET=0
 RIG_HOST=""
 RIG_CONTROL_PORT="8082"
@@ -144,19 +145,20 @@ MATRIX:
                          reported config), and pools (#1002b, needs IT_RIG_POOLS_PROBE); reflect a
                          rig-side edit back into the dashboard (#516), and record an auto-rollback
                          (#517). autotune and watchdog are deliberately never driven — see
-                         docs/dev/integration-testing.md. DESTRUCTIVE-then-restored. Needs a real rig
+                         docs/dev/integration-testing.md. Also drives the one-click RigForge upgrade
+                         (#1002a/#1237): when the dashboard offers this rig a newer release, POST it
+                         through /api/control/worker-upgrade and assert a REAL upgrade — the intent
+                         leaves the dashboard for the host runner, reaches an `applied` terminal, and
+                         the rig comes back reporting the new version; the already-up-to-date noop
+                         shortcut is then asserted on top of a precondition this run established.
+                         Not opt-in (it used to be, behind a flag no caller set); when the dashboard
+                         offers no newer release the leg self-skips with a classified reason.
+                         DESTRUCTIVE-then-restored. Needs a real rig
                          with its control API opted in; each leg self-skips loudly without its
                          prerequisites.
   --rig-host <h>         the borrowed rig's LAN host/IP for control dials — needed to inject a
                          workers.list[] descriptor when the box's baseline lacks one (#513/#514/#506).
   --rig-control-port <p> the rig's writable control API port (default: 8082, #185).
-  --rigforge-upgrade     with --rigforge-control, also POST the rig's own ALREADY-INSTALLED version
-                         through /api/control/worker-upgrade and assert it converges on noop
-                         (#1002a) — non-destructive, never rebuilds the rig. Exercises the real
-                         dashboard -> host-runner -> rig /upgrade route end to end, including the
-                         #1001 noop/throttled/failed poll vocabulary on whichever run hits it (the
-                         common case is the dashboard's own already-on-this-version shortcut, which
-                         answers noop without ever dialing the rig). Needs --rigforge-control.
   --subnet               also run the moved-subnet phase (#201/#180), local mode only: bring the
                          stack DOWN then UP on a non-default network.subnet (10.84.0.0/24) — the one
                          axis a hot apply can't move — and assert the moved prefix reached .env, the
@@ -264,10 +266,6 @@ parse_args() {
             ;;
         --rigforge-control)
             RUN_RIGFORGE_CONTROL=1
-            shift
-            ;;
-        --rigforge-upgrade)
-            RUN_RIGFORGE_UPGRADE=1
             shift
             ;;
         --rig-host)
@@ -2247,8 +2245,10 @@ run_rigforge_control() {
     # ---- #517: an auto-rollback (rigforge#236) is recorded end-to-end from the dashboard ----
     run_rigforge_rollback "$rig"
 
-    # ---- #1002a: the already-installed version converges on noop end-to-end (opt-in: --rigforge-upgrade) ----
-    [ "$RUN_RIGFORGE_UPGRADE" = "1" ] && run_rigforge_upgrade "$rig"
+    # ---- #1002a/#1237: the one-click upgrade path, real when the rig is behind latest ----
+    # No longer opt-in. The flag it used to sit behind was set by no caller, so the gate's only
+    # upgrade coverage never ran; the leg now runs every time and says which branch it took.
+    run_rigforge_upgrade "$rig"
 
     [ "$IT_FAIL" -gt "$fails_before" ] && capture_artifacts "rigforge-control" "$OUT_DIR"
 
@@ -2406,57 +2406,6 @@ run_rigforge_rollback() { # <rig-name>
     rolled_back | accepted) it_pass "the dashboard's per-worker history records the change (#517: $histstatus)" ;;
     *) it_fail "the dashboard's per-worker history records the change (#517)" "expected rolled_back|accepted, got [$histstatus]" ;;
     esac
-}
-
-# --- RigForge upgrade leg (--rigforge-upgrade, #1002a) ----------------------
-# POST the rig's OWN already-installed version back through /api/control/worker-upgrade and assert
-# the terminal status is noop — non-destructive (no rebuild, no rig restart) proof of the dashboard
-# -> host-runner -> rig /upgrade route, including the #1001 status vocabulary control_worker_upgrade's
-# poll loop just learned (noop/throttled/failed, rigforge#320). Two honest paths reach that terminal
-# and which one fires depends on the DASHBOARD's own poll cache, not on us:
-#   - cache already agrees the rig is on the requested version (the common steady-state case):
-#     handle_worker_upgrade's client-side shortcut answers noop SYNCHRONOUSLY, never dialing the rig
-#     or spending its 6h anti-beacon window — proves a repeat click on an up-to-date rig costs it
-#     nothing.
-#   - cache is momentarily stale: the request proceeds through control_service.submit_worker_upgrade
-#     -> the host runner's control_worker_upgrade -> a REAL dial to the rig's /upgrade -> its own
-#     /status poll -> the rig's first-class noop terminal (rigforge#320) — the #1001 poll-vocabulary
-#     path itself.
-# Either way the host independently re-derives "latest" from GitHub and refuses ANY mismatch before
-# dialing (ADR 0002 D4: the rig never decides its own target), so proposing "what's already
-# installed" can only ever terminate noop or (on host-side version drift) a safe rejected — never a
-# real upgrade. Called from run_rigforge_control, which has already put the rig in a dialable state
-# (dashboard.control on, host+token pinned); this leg's own prerequisite is just a clean vX.Y.Z
-# version in the live feed to build a valid request from.
-run_rigforge_upgrade() { # <rig-name>
-    local rig="$1" ver posted body id status result_body deadline
-    it_log "   #1002a: --rigforge-upgrade: already-installed version converges on noop"
-    ver="$(printf '%s' "$(api_state)" | jq -r --arg n "$rig" 'first(.workers[]? | select(.name==$n) | .rigforge.version) // empty' 2>/dev/null)"
-    posted="v${ver#v}"
-    if ! printf '%s' "$posted" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-        it_skip_leg "rig upgrade (#1002a)" "rig '$rig' isn't reporting a clean vX.Y.Z version (got [$ver])"
-        return 0
-    fi
-
-    body="$(rx "curl -fsS --max-time 15 -X POST -H 'Content-Type: application/json' -H 'X-Pithead-Control: 1' --data $(quote_arg "$(jq -nc --arg w "$rig" --arg v "$posted" '{worker:$w,version:$v}')") http://127.0.0.1:8000/api/control/worker-upgrade" 2>/dev/null)"
-    status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null)"
-    if [ "$status" = "pending" ]; then
-        id="$(printf '%s' "$body" | jq -r '.id // empty' 2>/dev/null)"
-        if [ -z "$id" ]; then
-            it_fail "worker-upgrade request accepted with a pollable id (#1002a)" "no id in [$body]"
-            return 0
-        fi
-        it_step "cache was stale — upgrade running on the host; polling /api/control/result for a terminal…"
-        deadline=$((SECONDS + 200))
-        while [ "$SECONDS" -lt "$deadline" ]; do
-            sleep 5
-            result_body="$(rx "curl -fsS --max-time 10 $(quote_arg "http://127.0.0.1:8000/api/control/result?id=$id")" 2>/dev/null)"
-            status="$(printf '%s' "$result_body" | jq -r '.status // empty' 2>/dev/null)"
-            case "$status" in "" | pending | running) continue ;; esac
-            break
-        done
-    fi
-    assert_eq "already-installed version converges on noop (#1002a)" "$status" "noop"
 }
 
 # --- Main -------------------------------------------------------------------
