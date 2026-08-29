@@ -3636,6 +3636,12 @@ reset_dashboard() {
         fi
     fi
 
+    # After the confirmation, never before it: the hold must not span a human wait, which is the
+    # placement rule `setup` already follows (#1391). Everything below this line mutates — the
+    # containers are removed and both data directories are deleted — so a lock timeout here has
+    # genuinely changed nothing, which is exactly what the timeout message promises the operator.
+    mutation_lock_acquire reset-dashboard
+
     log "Resetting dashboard and p2pool..."
     # Resolve what to delete from .env (the LIVE deployment's data dirs), NOT a fresh config.json
     # parse — otherwise editing a *.data_dir in config.json before `reset-dashboard` (without an
@@ -3680,6 +3686,7 @@ reset_dashboard() {
         warn "Fix the cause shown above, then re-run '$0 up' to bring them back."
         exit 1
     fi
+    mutation_lock_release
 }
 
 # --- Two-tier reset (config / factory) -----------------------------------------------------------
@@ -3727,13 +3734,22 @@ config_reset() {
         }
     fi
 
+    # After the typed confirmation, so the hold never spans a human wait (#1391), and before the
+    # first mutation below — this verb REMOVES config.json, so a window taken any later would let a
+    # timeout abandon a box whose configuration was already half gone.
+    mutation_lock_acquire config-reset
+
     detect_os 2>/dev/null || true
     docker compose down --remove-orphans 2>/dev/null ||
         warn "compose down failed (engine not running?) — continuing with the config wipe."
     remove_tor_egress_firewall 2>/dev/null || true
     rm -f "$CONFIG_FILE" "$ENV_FILE" Caddyfile
     log "Configuration cleared — the first-boot wizard owns the next boot."
+    # The reboot stays INSIDE the window on purpose. Releasing after the wipe but before the reboot
+    # would leave a gap in which another verb could start against a box that has no config.json yet
+    # still has its old containers' state — the half-reset window this lock exists to prevent.
     reset_reboot_or_hint
+    mutation_lock_release
 }
 
 # factory-reset: the deep wipe. /data cannot be reformatted while it is mounted and holding the
@@ -3764,6 +3780,12 @@ factory_reset() {
         }
     fi
 
+    # Taken after the typed confirmation so the hold never spans a human wait (#1391). The marker
+    # write below is a single line, but it is not the mutation that matters: arming it commits the
+    # machine to a reboot that reformats /data, and an operation already holding the window would
+    # otherwise be rebooted out from under itself mid-write.
+    mutation_lock_acquire factory-reset
+
     # Arm the boot-time wipe. The marker lives on the ESP, not /data, precisely because /data is
     # what gets erased. If the ESP is not writable the wipe cannot be armed, so refuse loudly
     # rather than reboot into a box that quietly did nothing.
@@ -3771,7 +3793,10 @@ factory_reset() {
     : >"$marker" 2>/dev/null ||
         error "Could not arm the reset marker at $marker (ESP not mounted?) — nothing was wiped."
     log "Reset armed. Rebooting to reformat /data and reopen the wizard..."
+    # Held across the reboot for the same reason as config-reset: the gap between arming the wipe
+    # and the reboot is precisely when another verb must not start.
     reset_reboot_or_hint
+    mutation_lock_release
 }
 
 # --- Backup / Restore ---
