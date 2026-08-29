@@ -151,12 +151,13 @@ def test_a_control_change_we_have_no_record_of_is_not_claimed_as_ours():
     # dashboard's history. Another host applied it, or our record of it is gone. Reporting it as
     # "applied from here" would be the exact lie this issue exists to stop.
     #
-    # This is also the case that keeps a FAILED read where it is (#1369). A short window still
-    # settles the miss, and `get_worker_config_history` returns [] on a sqlite3.Error — an empty
-    # list is not a full window, so a DB hiccup keeps exactly this verdict rather than being handed
-    # a stronger claim. That is why the rule is written as ">= limit -> soften" and not as a
-    # separate "we read the whole history" assurance. Caller-side twin:
-    # `test_a_history_read_that_fails_never_manufactures_trust`.
+    # A read that WORKED and came back short. That is what makes the miss conclusive, and it is now
+    # the only way to reach this verdict: since #1409 a failed read returns None rather than [], so
+    # it is answered by `history_unread` above and never arrives here dressed as a short window.
+    # This comment used to say the opposite — that a sqlite3.Error's [] "keeps exactly this verdict
+    # rather than being handed a stronger claim" — which read as a safety property while being the
+    # bug: `elsewhere` renders as "Last changed from another dashboard", so a DB hiccup printed an
+    # accusation. Caller-side twin: `test_a_history_read_that_fails_never_manufactures_trust`.
     assert config_origin(GOOD, change_id_known=False) == "elsewhere"
 
 
@@ -184,6 +185,44 @@ def test_the_new_argument_can_only_ever_soften_the_miss():
                 )
                 == expected
             )
+
+
+def test_a_read_we_never_got_to_make_is_not_reported_as_another_dashboard():
+    # #1409. `elsewhere` renders as "Last changed from another dashboard" — an accusation. Reaching
+    # it because our OWN database would not answer sources that accusation from our fault, not from
+    # anything the rig did. The verdict has to say which of the two it is.
+    assert config_origin(GOOD, change_id_known=False, history_unread=True) == "unread"
+
+
+def test_a_read_that_did_not_happen_settles_nothing_further_down_the_branch():
+    # Why `history_unread` is checked FIRST and not folded in beside the miss: when the read failed
+    # there is no history, so `change_id_known` and `change_status` are not weak evidence, they are
+    # NO evidence — they are what the caller passes when it found nothing because it looked nowhere.
+    # Any verdict computed from them would be manufactured. Moving the check below either of the
+    # branches below reds this.
+    for status in (None, "applied", "rolled_back", "accepted"):
+        assert (
+            config_origin(GOOD, change_id_known=True, change_status=status, history_unread=True)
+            == "unread"
+        )
+
+
+def test_unread_is_a_control_channel_verdict_only():
+    # It answers "did the change come from this dashboard", a question only `control` raises. A rig
+    # edit is still a rig edit whether or not our history read worked, and saying "cannot tell" over
+    # one would lose a verdict we can support.
+    for source, expected in (("local", "rig"), ("restore", "restored")):
+        meta = {**GOOD, "source": source}
+        assert config_origin(meta, change_id_known=False, history_unread=True) == expected
+
+
+def test_an_empty_history_is_not_an_unread_one():
+    # The two-states-one-output trap, at the layer that decides. A rig with genuinely no recorded
+    # changes and a rig whose history we could not read both leave the caller holding no rows; only
+    # the None-vs-[] distinction separates them. Paired with the storage-level test that None and []
+    # really are different return values (`TestWorkerConfigHistoryReadFailure`) and with the
+    # caller-level twin in test_worker_detail_meta.py.
+    assert config_origin(GOOD, change_id_known=False, history_unread=False) == "elsewhere"
 
 
 def test_a_change_made_on_the_rig_says_so():

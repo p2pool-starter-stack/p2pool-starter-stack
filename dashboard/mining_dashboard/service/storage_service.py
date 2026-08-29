@@ -879,14 +879,14 @@ class StateManager:
         except (sqlite3.Error, TypeError, ValueError) as e:
             self._db_error("Worker Config Write Error", e)
 
-    def get_worker_config_history(self, worker: str, limit: int = 50) -> list[dict[str, Any]]:
-        """The change history for ``worker``, newest first, with ``changes`` parsed back to a dict.
-        ``type`` is ``"apply"`` or ``"upgrade"`` (#1014); a row from before that column existed
-        reads back ``"apply"`` too (the migration backfills it, same as a fresh insert's default)."""
+    def get_worker_config_history(self, worker: str, limit: int = 50) -> list[dict] | None:
+        """The change history for ``worker``, newest first, ``changes`` parsed back to a dict.
+        ``type`` is ``"apply"``/``"upgrade"`` (#1014); a pre-column row reads back ``"apply"``.
+        None means the read FAILED (no connection, or ``sqlite3.Error``); ``[]`` = no history."""
         try:
             with self._db_lock:
                 if not self._conn:
-                    return []
+                    return None
                 cursor = self._conn.cursor()
                 cursor.execute(
                     "SELECT change_id, ts, status, changes, reason, type FROM worker_config "
@@ -905,7 +905,7 @@ class StateManager:
                 return out
         except sqlite3.Error as e:
             self.logger.error(f"Worker Config Read Error: {e}")
-            return []
+            return None
 
     def reconcile_worker_config_status(
         self, change_id: str, status: str, reason: str | None = None
@@ -1002,7 +1002,7 @@ class StateManager:
         Upgrade rows (#1014) are excluded — their ``changes`` is a ``{"version": ...}`` marker, not
         writable-key config, and must never leak into the editor prefill."""
         merged: dict[str, Any] = {}
-        for row in reversed(self.get_worker_config_history(worker, limit=200)):
+        for row in reversed(self.get_worker_config_history(worker, limit=200) or []):
             if (
                 row.get("status") == "applied"
                 and row.get("type", "apply") == "apply"
@@ -1344,7 +1344,7 @@ class StateManager:
         at pre-history config."""
         versions = [
             row
-            for row in reversed(self.get_worker_config_history(worker, limit=200))
+            for row in reversed(self.get_worker_config_history(worker, limit=200) or [])
             if row.get("status") == "applied"
         ]
         if not versions:

@@ -105,7 +105,9 @@ def parse_config_meta(meta):
     return out if any(out.values()) else None
 
 
-def config_origin(meta, change_id_known, change_status=None, history_truncated=False):
+def config_origin(
+    meta, change_id_known, change_status=None, history_truncated=False, history_unread=False
+):
     """Where the rig's current config came from, as far as we can honestly tell.
 
     ``change_id_known`` is whether this dashboard has a ``worker_config`` row for the rig's
@@ -136,9 +138,18 @@ def config_origin(meta, change_id_known, change_status=None, history_truncated=F
                       ``history_truncated`` is what separates the two, and it is deliberately the
                       only thing this argument may do: when it is False every verdict is exactly
                       what it was before, so a caller that cannot tell loses nothing. That matters
-                      most on the error path — ``get_worker_config_history`` returns ``[]`` on a
-                      ``sqlite3.Error``, and an empty list is NOT a full window, so a DB hiccup
-                      keeps today's ``elsewhere`` instead of being upgraded into a confident one.
+                      most on the error path, which since #1409 is ``history_unread``'s to answer:
+                      a failed read returns None, not ``[]``, so it never reaches this comparison
+                      at all rather than arriving as a window that merely looks short.
+    - ``unread``    — applied over a control channel, and we could not read our own history at all
+                      (#1409). ``get_worker_config_history`` returns None when the read failed, and
+                      that is a different fact from an empty history: a miss we never got to look
+                      for cannot support ``elsewhere``, which renders as "Last changed from another
+                      dashboard" — an accusation sourced from our own broken DB rather than from
+                      anything the rig did. Distinct from ``untraced`` too: that one is a read that
+                      WORKED and came back full, so it is about the rig having changed often. This
+                      one is about us. Checked FIRST inside this branch, because a read that did not
+                      happen settles nothing further down it.
     - ``rig``       — applied on the rig itself.
     - ``restored``  — restored from a saved config by the operator-run ``restore`` command.
                       Deliberately not folded into ``rig``: a restore is not someone editing the rig.
@@ -154,6 +165,8 @@ def config_origin(meta, change_id_known, change_status=None, history_truncated=F
         return None
     source = meta.get("source")
     if source == "control":
+        if history_unread:
+            return "unread"
         if not change_id_known:
             return "untraced" if history_truncated else "elsewhere"
         if change_status in HELD_STATUSES:

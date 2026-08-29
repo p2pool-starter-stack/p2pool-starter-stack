@@ -70,7 +70,7 @@ def build_worker_hashrate_history(state_mgr, worker, range_arg, window=None):
             "reason": row.get("reason"),
         }
         for row in _filter_events(
-            state_mgr.get_worker_config_history(worker, limit=200), range_arg, window
+            state_mgr.get_worker_config_history(worker, limit=200) or [], range_arg, window
         )
     ]
     return {"hashrate": hashrate, "markers": markers}
@@ -92,6 +92,10 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     worker = next((w for w in workers if w.get("name") == name), None)
     descriptor = next((e for e in config.DASHBOARD_WORKERS if e["name"] == name), None)
     history = state_mgr.get_worker_config_history(name, limit=_HISTORY_LIMIT)
+    # None means the read FAILED; [] means the rig genuinely has no recorded changes (#1409). The
+    # two are the same object downstream, so the distinction has to be captured HERE or it is gone.
+    history_unread = history is None
+    history = history or []
     for row in history:
         ts = row.get("ts")
         row["applied_at"] = format_time_abs(ts) if ts else ""
@@ -113,7 +117,8 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     # a rig. Here the same two properties invert into the one answer this feature must never give
     # wrongly: a change id spooled for a DIFFERENT rig, or a transient DB error, would print "Last
     # changed from this dashboard" over a change this dashboard never made. Scanning the rig's own
-    # rows is worker-scoped by construction and fails closed, because the read returns [] on error.
+    # rows is worker-scoped by construction and fails closed, because a failed read is now a
+    # ``None`` the verdict answers separately (#1409) rather than a ``[]`` it cannot tell from a miss.
     #
     # It also makes the verdict checkable: "here" now means precisely "the id is one of the rows
     # rendered directly below this line, and that row records the change as having held", so an
@@ -124,8 +129,8 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     # row past the end rather than an id nobody here spooled — and "elsewhere" reads as "Last
     # changed from another dashboard", an accusation the read cannot support (#1369). Passing the
     # fullness of the window lets that case say "we do not know" instead. Only that case changes:
-    # a short read is still conclusive, which is what keeps the ``sqlite3.Error`` path (a ``[]``
-    # return, and 0 is not full) answering exactly as it does today rather than more confidently.
+    # a short read is still conclusive. The ``sqlite3.Error`` path no longer arrives here at all:
+    # it returns ``None`` and is answered by ``unread`` before fullness is consulted (#1409).
     #
     # The matched ROW, not merely whether one exists: RigForge's rollback re-apply re-stamps the id
     # it just reverted, so a rolled-back change still matches by id. The row's status is the only
@@ -158,6 +163,7 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
             matched is not None,
             (matched or {}).get("status"),
             history_truncated=len(history) >= _HISTORY_LIMIT,
+            history_unread=history_unread,
         ),
         "last_applied": state_mgr.get_last_applied_worker_config(name),
         "history": history,
