@@ -56,7 +56,7 @@ tests/integration/e2e.sh	691
 tests/integration/fakes/test_contract.py	451
 tests/integration/lib.sh	692
 tests/integration/run.sh	2551
-tests/integration/selftest-e2e-phases.sh	500
+tests/integration/selftest-e2e-phases.sh	495
 tests/integration/selftest.sh	686
 tests/os/failure-evidence.sh	567
 tests/os/run.sh	3437

@@ -290,6 +290,11 @@ echo "== a root-owned rig config is READ, not mistaken for an empty one (#1466) 
 # The stub dispatches on the command the shipped code actually builds, and TRACES every read, so
 # "the fallback fired" and "the fallback fired in the right order, and only when it should" are
 # separate observations rather than one inference off the final token.
+#
+# The subshell's STDERR joins that trace, which is what makes the unswallowing observable: warn() and
+# ok() are stubbed onto stdout here, so the only thing that can reach stderr is what rig_supply let
+# through from the read itself. Asserting `2>/dev/null` is absent from the source would instead pass
+# on a fix that merely moved the redirection somewhere else.
 supply_of() { # <unpriv-out> <unpriv-rc> <sudo-out> <sudo-rc> -> report lines, final token, read trace
     local f
     f="$(mktemp)"
@@ -306,6 +311,8 @@ supply_of() { # <unpriv-out> <unpriv-rc> <sudo-out> <sudo-rc> -> report lines, f
                 return "$S_RC"
                 ;;
             *)
+                # What a denied jq really writes, on the channel it really writes it on.
+                [ "$U_RC" = 0 ] || printf 'jq: error: %s: Permission denied\n' "$RIGFORGE_CONFIG" >&2
                 printf '%s' "$U_OUT"
                 return "$U_RC"
                 ;;
@@ -314,7 +321,7 @@ supply_of() { # <unpriv-out> <unpriv-rc> <sudo-out> <sudo-rc> -> report lines, f
         on_bench() { cat >/dev/null; }
         rig_supply
         printf 'TOKEN[%s]\nRC[%s]\n' "$IT_RIG_TOKEN" "$?"
-    ) </dev/null
+    ) </dev/null 2>>"$f"
     cat "$f"
     rm -f "$f"
 }
@@ -354,29 +361,17 @@ assert_eq "an unreadable config still leaves the phase requested — rc 0 (#1378
 assert_eq "and the under-supply still names the leg that cannot run at all (#516)" \
     "$(contains "$S_BOTH" 'feed leg cannot run')" "yes"
 
-# The swallowing itself, driven rather than read. Asserting `2>/dev/null` is absent from the source
-# would pass on a fix that moved the redirection elsewhere; this asserts the error ARRIVES.
-err_of() { # -> only what rig_supply let through on stderr, with its own warnings silenced
-    (
-        MINER_HOST=rig1 RIG_HOST="" IT_RIG_TOKEN="" RIGFORGE_CONFIG=/opt/rigforge/config.json
-        BENCH_HOST=bench
-        warn() { :; }
-        ok() { :; }
-        on_miner() {
-            case "$1" in
-            "sudo -n"*) return 1 ;;
-            *)
-                printf 'jq: error: /opt/rigforge/config.json: Permission denied\n' >&2
-                return 5
-                ;;
-            esac
-        }
-        on_bench() { cat >/dev/null; }
-        rig_supply
-    ) </dev/null 2>&1 >/dev/null
-}
 assert_eq "the denied read's OWN error reaches the operator, unswallowed (#1466)" \
-    "$(contains "$(err_of)" 'Permission denied')" "yes"
+    "$(contains "$S_BOTH" 'jq: error: /opt/rigforge/config.json: Permission denied')" "yes"
+# The same error must survive the path where the FALLBACK rescues the run: an operator who gets a
+# token still wants to know the unprivileged read is now failing, because that is the rig telling
+# them it has been written to.
+assert_eq "and it survives even when sudo goes on to recover the token" \
+    "$(contains "$S_DENIED" 'Permission denied')" "yes"
+# Positive control for the two lines above: a read that never failed writes nothing on that channel,
+# so they are reading rig_supply's behaviour and not a string the stub emits unconditionally.
+assert_eq "a read that did NOT fail produces no such error" \
+    "$(contains "$S_EMPTY" 'Permission denied')" "no"
 
 echo "== the proof dial actually proves something (#1378) =="
 # rig_supply's whole value over a bare default is that it DIALS before claiming the phase is
