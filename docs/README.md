@@ -39,6 +39,7 @@ Docs for working on Pithead itself live in [`dev/`](dev/). Operators don't need 
 | [Release / Validation Server](dev/release-server.md) | Why end-to-end validation needs a dedicated server (and what GitHub Actions does free on every PR), how to provision and harden it, and the safe self-hosted-runner setup. |
 | [Test Server Architecture](dev/test-server-architecture.md) | How the reference test/build box is structured and how to recreate it. |
 | [Dual-distribution plan](dev/dual-distribution-plan.md) | The ratified #77/#78 architecture decision record: how one release ships as the Compose stack, the flashable appliance image, and a git clone — and the rejected alternatives. |
+| [Config layer language](dev/config-layer-language.md) | The #1480 architecture decision record: the config parse/validate/render layer stays bash, validation gains a `jq` schema gate, and the `jq` guarantee each install path must keep. |
 
 Published research lives in [`research/`](research/): the
 [XvB delivery study](research/xvb-delivery-study/PAPER.md) is the measured evidence behind the
