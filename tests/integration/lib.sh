@@ -126,7 +126,7 @@ render_scenario_config() {
 # the final override string and returns 0; on a missing prerequisite sets SKIP_REASON and
 # returns 1 — no silent drops, and never a prune flip on the canonical synced DB (which would
 # invalidate it). Reads the globals BASELINE_PRUNE / PRUNED_DATA_DIR / FULL_DATA_DIR /
-# REMOTE_MONERO_HOST / REMOTE_TARI_HOST / IT_MONERO_VIEW_KEY / IT_TARI_VIEW_KEY /
+# REMOTE_MONERO_HOST (+_RPC_PORT/_ZMQ_PORT) / REMOTE_TARI_HOST / IT_MONERO_VIEW_KEY / IT_TARI_VIEW_KEY /
 # IT_TARI_SPEND_PUBLIC_KEY (all optional). Pure given those globals, so the self-test exercises it.
 RESOLVED=""
 SKIP_REASON=""
@@ -169,17 +169,17 @@ resolve_overrides() {
         out="$out monero.data_dir=$FULL_DATA_DIR"
     fi
 
-    # Remote mode needs an external endpoint to point at.
+    # Remote mode needs an external endpoint; the host must be BARE, never host:port (#1491).
     if [ "$mode" = "remote" ]; then
         [ -n "${REMOTE_MONERO_HOST:-}" ] || {
             SKIP_REASON="needs --remote-monero-host"
             return 1
         }
         out="$out monero.remote.host=$REMOTE_MONERO_HOST"
+        out="$out${REMOTE_MONERO_RPC_PORT:+ monero.remote.rpc_port=$REMOTE_MONERO_RPC_PORT}${REMOTE_MONERO_ZMQ_PORT:+ monero.remote.zmq_port=$REMOTE_MONERO_ZMQ_PORT}"
     fi
 
-    # tari.mode remote (#103/#942) needs its own external endpoint — same shape as monero's above,
-    # a separate global since the two chains can point at different remote hosts.
+    # tari.mode remote (#103/#942) needs its own endpoint — same shape, its own global.
     if [ "$tari_mode" = "remote" ]; then
         [ -n "${REMOTE_TARI_HOST:-}" ] || {
             SKIP_REASON="needs --remote-tari-host"
