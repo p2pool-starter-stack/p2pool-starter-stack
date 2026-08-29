@@ -709,6 +709,7 @@ LKWDIR="$LKW"
 LKWFRESH="$LKW/fresh"
 LKWAPPLY="$LKW/applying"
 LKWBAL="$LKW/balance"
+LKWSETUP="$LKW/setupprompt"
 mkdir -p "$LKWFRESH"
 
 lock_wiring_probe() { # <lock file> <fn> [args...] -> "<timedout|ran>+<mutated|untouched>"
@@ -811,6 +812,55 @@ assert_eq "restore gives its window back when it finishes" \
     "$(lock_wiring_balance stack_restore -y "$LKW/wiring-archive.tar.gz")" "depth=0 state=free"
 assert_eq "apply takes its window once and gives it back, however it reached the recreate" \
     "$(lock_wiring_balance apply -y)" "depth=0 state=free"
+# restart is the sixth verb with a window and the only one the block above did not name. Nothing
+# else in this file reaches its release either: the four restart cases at the top of the file
+# assert what it restarted, not what it did with the lock, so deleting stack_restart's
+# `mutation_lock_release` left every case in this file green.
+assert_eq "restart gives its window back when it finishes" \
+    "$(lock_wiring_balance stack_restart)" "depth=0 state=free"
+
+# SETUP'S RELEASE — its own probe, because a balance case cannot reach it.
+#
+# setup's release is not at the end of the verb. It sits BEFORE the interactive "start now?",
+# and setup's own comment says why: everything below it is a message or a human wait, and the
+# firstboot wizard runs `(setup)` in a subshell, so a hold spanning the prompt would park the
+# window on an absent operator while pithead-boot's `up` timed out against it. The property is
+# therefore an ORDERING — released BEFORE the wait — which an end-state balance cannot see.
+#
+# Nor can a balance case be driven here at all: setup refuses a non-interactive re-run against a
+# provisioned dir before it ever reaches its window (which is why the pair case above needs the
+# fresh dir), and against a fresh one it would run the entire wizard. So the probe stubs the
+# provisioning body — every step between the acquire and the release — and leaves the LOCK
+# WIRING real, which is the only thing under test. prompt_start_stack becomes the probe itself,
+# reporting whether the window was free at the instant setup reached the human wait.
+#
+# REACHING the probe is the anti-vacuity control: if the stubs ever stop letting setup through,
+# nothing prints and the assertion fails on an empty string instead of passing on a run that
+# never got there. The end-state half is read too, so a release that moved rather than vanished
+# still shows up.
+lock_wiring_setup_prompt() { # -> "at-prompt=<free|held> depth=<n> state=<free|held>"
+    rm -rf "$LKWSETUP"
+    mkdir -p "$LKWSETUP"
+    rm -f "$LKWFREE"
+    (cd "$LKWSETUP" && PITHEAD_LOCK_FILE="$LKWFREE" PITHEAD_APPLIANCE=0 DOCKER_LOG=/dev/null \
+        PATH="$LKW/bin:$PATH" env -u PITHEAD_LOCK_HELD \
+        bash -c 'source "$1"; set +e
+            for f in check_prerequisites ensure_config_exists ensure_onion_password \
+                parse_and_validate_config preflight_resources check_stratum_exposure \
+                load_preserved_state resolve_dashboard_host prepare_directories render_env \
+                provision_tor inject_service_configs optimize_kernel generate_caddyfile \
+                provision_control_runner render_local_miner_config update_current_symlink \
+                provision_local_miner; do eval "$f() { :; }"; done
+            prompt_start_stack() {
+                st=free; flock -n "$PITHEAD_LOCK_FILE" true 2>/dev/null || st=held
+                printf "at-prompt=%s " "$st" >&3
+            }
+            setup >/dev/null 2>&1
+            st=free; flock -n "$PITHEAD_LOCK_FILE" true 2>/dev/null || st=held
+            printf "depth=%s state=%s" "$_PITHEAD_LOCK_DEPTH" "$st" >&3' _ "$STACK" 3>&1) 2>/dev/null
+}
+assert_eq "setup hands its window back BEFORE the interactive start prompt" \
+    "$(lock_wiring_setup_prompt)" "at-prompt=free depth=0 state=free"
 
 # THE RUNNING-STACK BACKUP BRANCH — unreachable by every case above, and that is the point.
 #
