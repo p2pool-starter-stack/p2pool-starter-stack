@@ -59,8 +59,9 @@ tests/integration/run.sh	2551
 tests/integration/selftest.sh	686
 tests/os/failure-evidence.sh	567
 tests/os/run.sh	3437
-tests/stack/run.sh	2289
+tests/stack/run.sh	1897
 tests/stack/test-appliance-boot.sh	641
+tests/stack/test-appliance-identity-boot.sh	465
 tests/stack/test-appliance-identity.sh	483
 tests/stack/test-appliance-media.sh	409
 tests/stack/test-appliance-os-update.sh	457
