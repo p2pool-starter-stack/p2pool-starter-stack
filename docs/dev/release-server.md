@@ -338,21 +338,11 @@ tests/integration/run.sh --host you@server --dir pithead --readiness
 > [`compact-chain.sh`](../../tests/integration/compact-chain.sh)). It's slow (it copies every block
 > over hours), though it reads through a snapshot so monerod keeps mining.
 >
-> **The tool is copy-then-swap, so it does not leave the swap to you.** After building
-> `<data-dir>/lmdb-pruned` it renames `<data-dir>/lmdb` to `<data-dir>/lmdb-old` and moves the
-> pruned DB into place. Pointed at a live node's data dir it therefore renames the live chain out
-> from under a running monerod — nothing fails at the time, because the process keeps its open
-> descriptors, and the next restart silently comes up pruned. To run it against a live chain,
-> bind-mount the source so the kernel refuses the rename with `EBUSY`:
->
-> ```bash
-> mkdir -p <build-dir>/lmdb
-> mount --bind <live-data-dir>/lmdb <build-dir>/lmdb
-> tests/integration/compact-chain.sh <build-dir>   # result at <build-dir>/lmdb-pruned
-> ```
->
-> Prove the guard before relying on it: `mv <build-dir>/lmdb <build-dir>/x` must answer `Device or
-> resource busy`.
+> **The tool is copy-then-swap, so it does not leave the swap to you.** It renames
+> `<data-dir>/lmdb` aside and moves the pruned DB into place — pointed at a live node's data dir
+> that renames the live chain out from under a running monerod, silently until the next restart.
+> To run it against a live chain, bind-mount the source so the kernel refuses the rename; the
+> recipe and its guard are in `compact-chain.sh`'s header.
 >
 > The generic `mdb_copy -c` does not work: Monero ships a
 > patched LMDB and stock mdb_copy rejects the format (`MDB_VERSION_MISMATCH`). Often it's simplest

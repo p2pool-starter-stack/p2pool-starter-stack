@@ -9,11 +9,9 @@
 #   3. start monerod           -> mining resumes immediately after the copy
 #   4. prune the COPY          -> shrinks ~250G -> ~95G, full chain untouched
 #
-# Step 4 is safe here because it runs against the COPY, never the canonical chain. Note that
-# `monero-blockchain-prune` is copy-then-swap, not an in-place rewrite (#1489): it builds
-# $DST_DIR/lmdb-pruned and then renames it over $DST_DIR/lmdb. That is why the size is read
-# back from $DST_DIR/lmdb below. Never point that tool at a live node's data dir — see the
-# bind-mount guard in compact-chain.sh.
+# Step 4 targets the COPY, never the canonical chain. `monero-blockchain-prune` is
+# copy-then-swap (#1489) — it renames its result over $DST_DIR/lmdb, which is why the size is
+# read back from there. Never point it at a live data dir; see compact-chain.sh's bind-mount guard.
 #
 # Self-contained + idempotent-ish: logs with timestamps, writes a status sentinel,
 # and always restarts monerod even if the copy fails. Designed to be run under nohup.
