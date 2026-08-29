@@ -96,7 +96,7 @@ coe_state() {
     if grep -q 'basic_auth' "$f" 2>/dev/null; then printf 'with-auth'; else printf 'no-auth'; fi
 }
 
-# --- the shipped artifact -------------------------------------------------------------------
+echo "== black-box: the shipped pithead renders without the optional dashboard auth key (#1246) =="
 coe_out="$(coe_render "$STACK" "$coe_partial")"
 coe_rc=$?
 assert_rc "#1246: render survives a .env with no DASHBOARD_AUTH_HASH_B64" "$coe_rc" 0
@@ -107,7 +107,7 @@ assert_eq "#1246: it renders a real Caddyfile and degrades to no auth block" "$(
 coe_render "$STACK" "$coe_full" >/dev/null 2>&1
 assert_eq "#1246 control: the auth block IS rendered when the key is present" "$(coe_state)" "with-auth"
 
-# --- the mutant: #1246's own mutation, the default respelled back off -------------------------
+echo "== black-box: the same render with the default respelled off aborts instead (#1246) =="
 coe_mutant="$COE/pithead-mutant"
 sed 's|\${DASHBOARD_AUTH_HASH_B64:-}|$DASHBOARD_AUTH_HASH_B64|' "$STACK" >"$coe_mutant"
 chmod +x "$coe_mutant"
