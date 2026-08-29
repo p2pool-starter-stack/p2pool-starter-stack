@@ -121,7 +121,7 @@ _POOL_CREDENTIAL_KEYS = ("pass", "tls-fingerprint")
 _MAX_CONFIG_DEPTH = 6
 
 
-def _strip_credentials(value, depth=0):
+def strip_credentials(value, depth=0):
     """Drop the credential keys from ``value`` at ANY depth and in ANY container shape.
 
     Shape-agnostic deliberately. Stripping only ``pools`` when it arrived as a list of dicts was a
@@ -134,12 +134,12 @@ def _strip_credentials(value, depth=0):
         return None
     if isinstance(value, dict):
         return {
-            k: _strip_credentials(v, depth + 1)
+            k: strip_credentials(v, depth + 1)
             for k, v in value.items()
             if k not in _POOL_CREDENTIAL_KEYS
         }
     if isinstance(value, list):
-        return [_strip_credentials(v, depth + 1) for v in value]
+        return [strip_credentials(v, depth + 1) for v in value]
     return value
 
 
@@ -155,7 +155,7 @@ def _rig_writable_config(cfg):
     if not isinstance(cfg, dict):
         return None
     out = {k: v for k, v in cfg.items() if k in WORKER_WRITABLE_KEYS}
-    return _strip_credentials(out) or None
+    return strip_credentials(out) or None
 
 
 # Terminal control outcomes the rig may mirror: applied/rejected/rolled_back/failed from a

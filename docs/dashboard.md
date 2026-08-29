@@ -461,12 +461,31 @@ than a guess. The words come from a fixed set the dashboard controls, never from
 cannot write its own provenance in text you would read as ours. The line carries the rig's own
 timestamp beside it; hover it for the revision of the config the rig is running.
 
-Read it as evidence, not as proof, and know the one case it gets wrong. The line reports the last
+Read it as evidence, not as proof, and know the case it gets wrong. The line reports the last
 change RigForge **recorded**. A config file edited underneath RigForge — by hand, with nothing
 running to record it — is not a recorded change, so the line keeps naming whatever came before it.
 On a rig where the dashboard applied the previous change, that reads as "Last changed from this
-dashboard" while the rig runs something else. Treat the line as an alarm that fires, not as an
-all-clear: it can tell you a change happened elsewhere, but its silence is not proof that none did.
+dashboard" while the rig runs something else.
+
+**A second check answers that one directly.** Beside the provenance line, the dashboard compares
+what it last applied to this rig against the values the rig reports it is running, key by key, and
+names each key that disagrees — "we applied `max_temp_c` 75, the rig is running 80". It needs
+nothing recorded on the rig, so it sees the hand-edit the provenance line cannot.
+
+Three things bound what the comparison claims, and each bound is deliberate:
+
+- **It judges only keys this dashboard has set.** What it compares against is a record of the
+  changes we pushed, not a copy of the rig's config, so a hand-edit to a key we have never applied
+  has nothing to disagree with and stays invisible.
+- **It never compares pool passwords.** RigForge strips the pool password and TLS fingerprint before
+  serving its config, so the dashboard strips them from its own side too. A changed pool password
+  would otherwise read as drift on every rig, forever. Nothing on this side can see one either way.
+- **It says nothing while a change is in flight.** A change that has been sent and not yet settled
+  is not in the applied record, though the rig may already be running it, so the comparison is held
+  back until the outcome lands rather than reporting a key we ourselves just set.
+
+Where it is silent, the older reading still holds: treat the provenance line as an alarm that fires,
+not as an all-clear. Its silence is not proof that nothing changed.
 
 Everything behind it is the rig's own account, so a rig that has been taken over can also say
 whatever it likes, including replaying a change id you really did send it. Within what the rig does
