@@ -60,6 +60,25 @@ test("elsewhere is flagged and never claimed as ours", () => {
   assert.match(note.title, /no record of/);
 });
 
+test("a history we could not read points at us, never at another dashboard", () => {
+  // #1409. The server sends `unread` when its OWN change-history read failed, so it never got to
+  // look for the rig's change id. Before this it fell through to `elsewhere`, whose line reads
+  // "Last changed from another dashboard" — an accusation whose real source was our broken DB.
+  const out = renderToString(ConfigProvenance({ origin: "unread", meta: META }));
+  const note = configOriginNote("unread", META);
+  assert.doesNotMatch(out, /another dashboard/i);
+  assert.doesNotMatch(out, /Last changed from this dashboard/);
+  // Muted, not warn: it claims nothing, and a warning colour over "we could not tell" is the same
+  // overclaim in a different medium. This adds a verdict STATE, deliberately not a new COLOUR.
+  assert.match(out, /text-muted/);
+  assert.doesNotMatch(out, /status-warn/);
+  // The text is what has to carry the distinction, since the colour deliberately does not: this
+  // must not be confusable with `untraced`, the OTHER muted "we cannot tell" — that one is about
+  // the rig having changed too often to see back that far, this one is about us.
+  assert.notEqual(note.label, configOriginNote("untraced", META).label);
+  assert.match(note.label, /this dashboard could not read/i);
+});
+
 test("rig edits are flagged — noticing one is the whole point of the feature", () => {
   const out = renderToString(ConfigProvenance({ origin: "rig", meta: { ...META, source: "local" } }));
   assert.match(out, /Last changed on the rig itself/);

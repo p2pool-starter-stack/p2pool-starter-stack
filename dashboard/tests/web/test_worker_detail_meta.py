@@ -133,6 +133,11 @@ class TestConfigOrigin:
         assert d["config_origin"] == "elsewhere"
 
     def test_control_change_with_no_history_at_all_is_elsewhere(self, monkeypatch):
+        # Also the REVERSE-direction guard for #1409, which is why it must not be folded into any
+        # of the tests above it: a healthy DB holding no rows is a real answer, so this rig keeps
+        # `elsewhere` and must never drift to `unread`. Make the storage layer return None for a
+        # genuinely empty result and this reds — without it, `unread` could absorb the empty case
+        # and the verdict would stop distinguishing anything.
         d = _detail(monkeypatch, {"config_meta": _META})
         assert d["config_origin"] == "elsewhere"
 
@@ -284,6 +289,11 @@ class TestConfigOrigin:
         # A DB the dashboard cannot read must not print "you did this". The #530 audit path fails
         # OPEN on a read error (a false "known" there only declines to accuse a rig); the same
         # direction here would hand a hostile rig the one verdict this feature exists to protect.
+        #
+        # #1409 corrected the OTHER direction of this same test. It used to assert `elsewhere`,
+        # which is not neutral — it renders as "Last changed from another dashboard". Failing away
+        # from `here` was right; landing on an accusation sourced from our own broken database was
+        # not. `unread` fails closed without inventing a culprit.
         from mining_dashboard.web import views
 
         monkeypatch.setattr(
@@ -306,7 +316,51 @@ class TestConfigOrigin:
         finally:
             sm._conn = None  # already closed above; keep sm.close() from raising on it
             sm.close()
-        assert d["config_origin"] == "elsewhere"
+        assert d["config_origin"] == "unread"
+        # The mutation target, named: this reds if the storage layer ever returns [] on error.
+        assert d["config_origin"] != "elsewhere"
+
+    def test_a_history_read_with_no_connection_at_all_is_the_same_verdict(self, monkeypatch):
+        # The second failure path, and the one nobody sees: `if not self._conn` raises nothing and
+        # logs nothing. The test above keeps `_conn` SET to reach the `except sqlite3.Error` arm,
+        # so it never covers this one — and a fix to only the loud path leaves this one accusing.
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(
+            views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "1.2.3.4"}]
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        sm = StateManager(db_path=":memory:")
+        try:
+            sm.add_worker_config_version(
+                "rig1", _META["last_change_id"], "applied", {"DONATION": 5}, None
+            )
+            sm.close()  # drops the connection; _conn is None from here on
+            workers = [{"name": "rig1", "status": "online", "rigforge": {"config_meta": _META}}]
+            d = build_worker_detail("rig1", {"workers": workers}, sm)
+        finally:
+            sm.close()
+        assert d["config_origin"] == "unread"
+
+    def test_a_failed_read_still_hands_the_client_a_list_to_render(self, monkeypatch):
+        # None is the storage layer's signal, not a payload value. `history` is iterated by the
+        # client, so leaking the None past this boundary would trade a wrong verdict for a broken
+        # page — the fix must not be visible anywhere except the verdict.
+        from mining_dashboard.web import views
+
+        monkeypatch.setattr(
+            views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "1.2.3.4"}]
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        sm = StateManager(db_path=":memory:")
+        try:
+            sm.close()
+            workers = [{"name": "rig1", "status": "online", "rigforge": {"config_meta": _META}}]
+            d = build_worker_detail("rig1", {"workers": workers}, sm)
+        finally:
+            sm.close()
+        assert d["history"] == []
+        assert d["hashrate_history"]["markers"] == []
 
     def test_a_hand_edit_underneath_rigforge_is_not_detected_known_gap(self, monkeypatch):
         """CHARACTERIZATION, not an endorsement — this asserts a KNOWN-WRONG answer (#1367).

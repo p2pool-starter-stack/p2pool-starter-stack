@@ -444,6 +444,12 @@ rows — the table directly below — so the verdict is one you can check by eye
   says only that the record cannot tell you which, and it can still resolve on a later reading.
 - **Last changed from another dashboard** — applied over a control channel, but with an id this
   dashboard has never issued. Another host drove this rig, or its record here is gone.
+- **Last changed over a control channel** — applied over a control channel with an id that was not
+  found, on a rig with more recorded changes than the line reads back. The id may sit just past the
+  end of what was read, so the dashboard cannot honestly say the change was not its own.
+- **Cannot tell — this dashboard could not read its own history** — the dashboard's own change
+  history would not open. It is the one line here that is about this dashboard rather than the rig:
+  nothing was compared, so nothing is claimed either way. It says nothing about what the rig did.
 - **Last changed on the rig itself** — applied on the rig, not over a control channel at all.
 - **Last restored from a saved config** — someone ran RigForge's restore command on the rig. This
   covers only that command; the rig's own rollback after a failed change reads as the rolled-back
@@ -467,8 +473,13 @@ all-clear: it can tell you a change happened elsewhere, but its silence is not p
 Everything behind it is the rig's own account, so a rig that has been taken over can also say
 whatever it likes, including replaying a change id you really did send it. Within what the rig does
 report honestly, the dashboard's own half errs one way only: a change id belonging to a different
-rig, or a history it cannot read at that moment, both land on "another dashboard" rather than on a
-false reassurance.
+rig lands on "another dashboard" rather than on a false reassurance.
+
+A history the dashboard cannot read at that moment used to land there too, and that was wrong in a
+way worth naming. "Another dashboard" is not a neutral fallback — it is an accusation, and reaching
+it because our own database would not open sources that accusation from a fault on this side rather
+than from anything the rig did. That case now gets its own line, above: the dashboard says it could
+not tell, and says why.
 
 How it stays safe:
 

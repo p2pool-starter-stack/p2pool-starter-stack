@@ -188,6 +188,20 @@ const CONFIG_ORIGIN_TEXT = {
     detail:
       "too many changes since to tell whether it was this dashboard — the id is older than the history read",
   },
+  // `unread` is the one verdict that is about US, not the rig (#1409). The server sends it when
+  // its own history read failed outright — no DB connection, or a `sqlite3.Error` — so it never got
+  // to look for the id. Before this it fell through to `elsewhere` and printed "Last changed from
+  // another dashboard" over a change that may well have been ours: an accusation sourced from our
+  // own broken database. `text-muted` for the same reason `untraced` is muted — the muted verdicts
+  // are the ones that claim nothing, and a warning colour over "we could not tell" is the same
+  // overclaim in a different medium. This adds a verdict STATE, deliberately not a new COLOUR: the
+  // text carries the distinction, the colour carries the class.
+  unread: {
+    cls: "text-muted",
+    label: "Cannot tell — this dashboard could not read its own history",
+    detail:
+      "the change-history read failed here, so nothing was compared — this says nothing about the rig",
+  },
   rig: { cls: "status-warn", label: "Last changed on the rig itself" },
   restored: {
     cls: "status-warn",
