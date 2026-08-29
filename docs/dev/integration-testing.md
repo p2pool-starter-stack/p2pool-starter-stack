@@ -138,7 +138,6 @@ Useful flags (full list in `run.sh --help`):
 | `--auth-fail-closed` | Also empty `PROXY_AUTH_TOKEN` in `.env` and assert `pithead up` refuses to start (the live counterpart to the tier-1 compose-config check, [#153](https://github.com/p2pool-starter-stack/pithead/issues/153)/[#203](https://github.com/p2pool-starter-stack/pithead/issues/203)), then restore the exact token and recover. Destructive-then-restored; ssh or local mode. |
 | `--rigforge-control` | Also drive the RigForge WRITE paths against a real rig with `dashboard.control` on and the rig pinned in `workers.list[]` (#506; a baseline that still carries the deprecated `dashboard.workers[]` fallback is left as-is, so that shape stays exercised too): the enriched read survives a populated masked-token descriptor ([#514](https://github.com/p2pool-starter-stack/pithead/issues/514)), the rig is editable and a reversible Worker Inspect edit lands on it on four of the six writable keys — `max_temp_c` ([#508](https://github.com/p2pool-starter-stack/pithead/issues/508)/[#513](https://github.com/p2pool-starter-stack/pithead/issues/513)), `DONATION` and `watchdog_interval_min` ([#1236](https://github.com/p2pool-starter-stack/pithead/issues/1236)), and `pools` (needs `IT_RIG_POOLS_PROBE`); `autotune` and `watchdog` are refused on purpose — a rig-side edit reflects back in the feed + masked prefill ([#516](https://github.com/p2pool-starter-stack/pithead/issues/516)), and an auto-rollback is recorded end-to-end ([#517](https://github.com/p2pool-starter-stack/pithead/issues/517)). Destructive-then-restored; local mode only; each leg self-skips without its prerequisites (see below). |
 | `--rig-host <h>` / `--rig-control-port <p>` | The borrowed rig's LAN host and writable control API port (default `8082`), used to inject a `workers.list[]` descriptor when the box's baseline lacks one ([#185](https://github.com/p2pool-starter-stack/pithead/issues/185)/#506). Pair with `IT_RIG_TOKEN` (env; never a flag). |
-| `--rigforge-upgrade` | With `--rigforge-control`, also POST the rig's own already-installed version through `/api/control/worker-upgrade` and assert it converges on `noop` — non-destructive, never rebuilds the rig. Proves the dashboard → host-runner → rig `/upgrade` route end to end, including the noop/throttled/failed poll vocabulary `control_worker_upgrade` learned when it started matching the rig's own terminal states. |
 | `--subnet` | Also bring the stack down then up on a non-default `network.subnet` (`10.84.0.0/24`) and assert the moved prefix reached `.env`, the docker bridge, Tor's render-at-start IP, monerod's proxy IP, the dashboard SSRF CIDR, and the [#344](https://github.com/p2pool-starter-stack/pithead/issues/344) onion vhost, then run the standard battery ([#201](https://github.com/p2pool-starter-stack/pithead/issues/201)/[#180](https://github.com/p2pool-starter-stack/pithead/issues/180)). Destructive-then-restored; local mode only. |
 | `--safety-backup` | Take a `pithead backup` before the destructive scenarios and auto-roll-back (down → restore → up) if anything fails; the archive is removed on success. Recommended for the destructive matrix on a precious box; also exercises backup/restore end-to-end. |
 | `--keep` | Don't restore the original config (leave the box on the last scenario). |
@@ -465,29 +464,51 @@ an unreachable rig is named rather than left to surface later as a leg that quie
 either with `RIG_HOST` or `IT_RIG_TOKEN` in the environment; `RIG_CONTROL_PORT` (default `8082`) is
 passed through to `run.sh` so the two can never dial different ports.
 
-### RigForge upgrade (`--rigforge-upgrade`)
+### RigForge upgrade (part of `--rigforge-control`)
 
-With `--rigforge-control`, also POSTs the rig's own already-installed version back through
-`/api/control/worker-upgrade` and asserts the terminal status is `noop` — non-destructive, no
-rebuild, no rig restart. Proves the dashboard → host-runner → rig `/upgrade` route end to end,
-including the `control_worker_upgrade` poll loop's full terminal vocabulary
-(`applied`/`noop`/`throttled`/`rolled_back`/`failed`) matching the rig's own terminal states.
+Drives the one-click RigForge upgrade the Worker Inspect button submits, and which branch it takes
+is decided by the dashboard's own `rigforge_update` verdict for that rig — the same `{available,
+latest, url}` the button renders, so the leg selects the way a click would.
 
-Two honest paths reach the `noop` terminal, and which one fires on a given run depends on the
-dashboard's own poll cache, not on the harness:
+**When the dashboard offers the rig a newer release**, the leg POSTs that release to
+`/api/control/worker-upgrade` and asserts a real upgrade, in four steps that are four separate
+claims rather than one restated:
 
-- The cache already agrees the rig is on the requested version (the common steady-state case):
-  `handle_worker_upgrade`'s client-side shortcut answers `noop` synchronously, without ever
-  dialing the rig or spending its 6h anti-beacon window.
-- The cache is momentarily stale: the request proceeds through the host runner's
-  `control_worker_upgrade`, dials the rig's `/upgrade` for real, and polls its `/status` for the
-  rig's own first-class `noop` terminal (rigforge#320).
+1. The answer is a `202` carrying a pollable `id`. Because the rig is behind the proposed version,
+   `handle_worker_upgrade`'s already-on-this-version shortcut cannot fire, so a pending answer is
+   itself the evidence that the intent left the dashboard process for the host runner.
+2. The polled result reaches an `applied` terminal. A rig-side `throttled` (its own 6h anti-beacon
+   window) is a classified skip rather than a failure — it is rig state, and no input to the
+   harness changes it. An `accepted` is the host's 90s poll cap expiring with the upgrade still
+   running, so the leg settles it against the rig's own report instead of reading the cap as red.
+3. The rig comes back reporting the new version, read from its summary poll — what the rig now
+   *is*, not what the host said it did.
+4. Only then, on a precondition this run established rather than assumed, the repeat-click `noop`
+   is asserted: a synchronous `noop` carrying **no** `id`, which is what says the dashboard's
+   shortcut answered it without dialing the rig and spending its throttle.
 
-Either way the host independently re-derives "latest" from the RigForge release API and refuses
-any mismatch before dialing (the rig never decides its own target), so proposing "what's already
-installed" can only ever terminate `noop` or — on host-side version drift — a safe `rejected`,
-never a real upgrade. Needs `--rigforge-control`'s already-enabled control channel and pinned rig;
-its own extra prerequisite is a clean `vX.Y.Z` version in the rig's live feed.
+**Otherwise the leg skips, loudly and classified.** `compute_update` returns `None` for "already on
+latest", "ahead of latest" and "no release cached over Tor" alike, and nothing else in `/api/state`
+tells those apart — `rigforge_release` is consumed by `build_workers` and never re-exposed. The
+skip reason names both branches rather than picking one.
+
+#### Why this replaced the old leg, and what it cannot cover
+
+The previous leg POSTed the rig's **own** reported version and asserted `noop`. It could not fail.
+`/api/state` serves `app["latest_data"]` with the rig's version copied through verbatim, and
+`handle_worker_upgrade` reads `running` from that same dict — the poll loop mutates it in place and
+never rebinds it — then short-circuits when the two match. The harness set the proposed version
+*from* the reported one, so the comparison was true by construction and the request returned `noop`
+without reaching the host runner or the rig. Its documentation here claimed a stale-cache path that
+also dialed the rig for real; that path was unreachable by the leg's own construction. Combined
+with an opt-in flag no caller set, the gate's only upgrade coverage was a check that never ran and
+could not have gone red if it had.
+
+The leg still cannot exercise the rig's **rebuild** path, and that is a limit rather than a gap to
+close here: `XMRIG_VERSION` and `XMRIG_COMMIT` are identical at every published RigForge tag, so
+`rigforge.sh upgrade` takes its early return on any published release pair and the one-click path
+checks out the new tree without recompiling, regenerating config or reinstalling units
+(rigforge#413). No choice of tags would cover it.
 
 ### Moved subnet (`--subnet`)
 
