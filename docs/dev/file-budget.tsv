@@ -47,7 +47,7 @@ dashboard/tests/web/test_views.py	861
 dashboard/tests/web/test_wizard.py	974
 dashboard/tests/web/test_xvb_views.py	1342
 .github/workflows/ci.yml	513
-lib/pithead/99-remainder.sh	11470
+lib/pithead/99-remainder.sh	11556
 os/rootfs/Dockerfile	406
 scripts/build-pithead.sh	437
 scripts/release.sh	851
@@ -76,6 +76,7 @@ tests/stack/test-control-upgrade.sh	795
 tests/stack/test-dashboard-onion.sh	422
 tests/stack/test-dashboard.sh	592
 tests/stack/test-doctor.sh	507
+tests/stack/test-lifecycle.sh	1032
 tests/stack/test-monero-tari.sh	582
 tests/stack/test-release.sh	504
 tests/stack/test-release-signing.sh	454

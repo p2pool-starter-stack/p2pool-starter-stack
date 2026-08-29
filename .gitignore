@@ -11,6 +11,10 @@ config.json.bak-control
 Caddyfile
 # One-time first-run epilogue marker (#384), dropped beside .env at runtime.
 .pithead-first-run-done
+# Mutual-exclusion lock for pithead's mutating windows (#1342), dropped beside .env at runtime.
+# It holds only the current holder's pid/verb/timestamp, and the lock itself lives on the open
+# descriptor rather than on the file's existence — so a leftover file is inert, never a stale lock.
+.pithead.lock
 # pithead backup archives bundle .env, config.json, the Caddyfile, and the Tor onion private keys
 # into one tarball; secret scanners can't see inside a gzipped tar, so keep the whole dir out (#369).
 /backups/

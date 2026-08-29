@@ -110,6 +110,7 @@ compose_up_checked() {
 }
 
 stack_up() {
+    mutation_lock_acquire up
     log "Starting stack..."
     warn_missing_data_dirs
     migrate_compose_project
@@ -152,6 +153,7 @@ stack_up() {
     print_clearnet_banner
     announce_dashboard_url
     print_first_run_epilogue
+    mutation_lock_release
 }
 
 # One-time onboarding after the stack first comes up (#384): explain that mining doesn't start until
@@ -168,13 +170,23 @@ print_first_run_epilogue() {
 }
 
 stack_down() {
+    mutation_lock_acquire down
     log "Stopping stack..."
     remove_tor_egress_firewall
     docker compose down
     log "Stack stopped."
+    mutation_lock_release
 }
 
 stack_restart() { # [tor|monerod]
+    # Reject a bad argument BEFORE taking the lock (#1342). Validating inside the window makes a
+    # typo wait out someone else's backup — up to PITHEAD_LOCK_TIMEOUT — only to be told it was a
+    # typo all along. Nothing here mutates, so there is nothing to serialise yet.
+    case "${1:-}" in
+    "" | tor | monerod) ;;
+    *) error "restart takes no argument, 'tor' (fresh Tor guards when clearnet egress is stuck), or 'monerod' (re-dial peers after a Tor restart left the node out of sync). Got: '$1'." ;;
+    esac
+    mutation_lock_acquire restart
     case "${1:-}" in
     "")
         log "Restarting stack..."
@@ -205,6 +217,9 @@ stack_restart() { # [tor|monerod]
         docker compose restart monerod
         log "monerod restarted. It should report synchronized again within a few minutes — verify: './pithead doctor' (Monero sync check)."
         ;;
-    *) error "restart takes no argument, 'tor' (fresh Tor guards when clearnet egress is stuck), or 'monerod' (re-dial peers after a Tor restart left the node out of sync). Got: '$1'." ;;
+    # Unreachable: the validation above admits only the three cases. Kept so that adding a value
+    # there and forgetting to handle it here fails loudly instead of restarting nothing.
+    *) error "Internal error: restart accepted '$1' but does not handle it." ;;
     esac
+    mutation_lock_release
 }

@@ -308,6 +308,13 @@ the fault is not in the system copy — something on the data partition is wrong
 machine stays powered on with its reason in the logs rather than looping. In that state
 the dashboard is down; see [If something goes wrong](#if-something-goes-wrong).
 
+One case does not count as a failed start at all: the stack was already being changed by
+something else — the first-run install finishing, or a command you started — and this boot
+waited for it and ran out of time. Going back to the previous version would meet the same
+wait, so the machine does not spend its one restart on it. It stays powered on, says in the
+logs that it was waiting rather than failing, and keeps the return to the previous version
+available. Start it again once the other operation has finished.
+
 Updates are applied from the dashboard: an **OS updates** control in the header checks
 for a new release, downloads its signed image to the data partition (over Tor, resumable
 — mining keeps running), verifies the file on the machine before anything is written to

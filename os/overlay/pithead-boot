@@ -67,6 +67,30 @@ fail_boot() { # <what went wrong>
     exit 1
 }
 
+# CONTENTION IS NOT A BAD SLOT, and on this leg the difference is the box's only recovery (#1342).
+#
+# pithead serialises its mutating windows behind a lock, and there is no systemd ordering between
+# pithead-firstboot and this unit — so `./pithead up` below can collide with the wizard's `setup`,
+# whose window covers prerequisites, onion generation and the symlink update. If that wait times
+# out, `up` fails. Routed through fail_boot that reads as "this slot cannot start the stack": the
+# first reading REBOOTS to fall back to the other slot, and the second declares the fault is not
+# the slot. Both are wrong here. The other slot would meet the same contention, so the fallback
+# buys nothing — and it is spent, and the box then misdiagnoses itself out loud.
+#
+# So a lock timeout gets its own exit: the slot is left uncommitted (the fallback stays armed and
+# UNSPENT), the boot-failure counter is not touched, and nothing reboots.
+PITHEAD_EX_LOCK_TIMEOUT=75
+fail_boot_contended() { # <what could not be started>
+    echo "pithead-boot: $1 — another pithead operation still held the stack when this boot timed out waiting for it. That is contention, NOT a bad slot: the A/B fallback stays armed and is not spent, this boot is not counted against the failure budget, and the machine stays up. Re-run 'systemctl start pithead-boot' once the other operation has finished (journalctl -u pithead-boot)." >&2
+    exit 1
+}
+# The one place that decides which of the two a failed `up` was. Kept as a function rather than
+# repeated at both call sites below, so the hold-chain and the ordinary boot cannot drift apart.
+boot_up_failed() { # <exit status of ./pithead up>
+    [ "$1" = "$PITHEAD_EX_LOCK_TIMEOUT" ] && fail_boot_contended "the stack could not be brought up"
+    fail_boot "the stack could not be brought up"
+}
+
 # The dashboard's own site address, read from the .env this boot has just rendered (#1140).
 #
 # This probe used to dial https://localhost/, and said in a comment that localhost is a listed site
@@ -240,9 +264,9 @@ if [ -f .os-migration-pending ] &&
 fi
 
 if [ "$hold_chain" = 1 ]; then
-    PITHEAD_HOLD_CHAIN=1 ./pithead up || fail_boot "the stack could not be brought up"
+    PITHEAD_HOLD_CHAIN=1 ./pithead up || boot_up_failed $?
 else
-    ./pithead up || fail_boot "the stack could not be brought up"
+    ./pithead up || boot_up_failed $?
 fi
 
 IFS='|' read -r gate_scheme gate_host gate_port <<<"$(gate_url)"
