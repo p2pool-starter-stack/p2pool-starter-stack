@@ -439,8 +439,27 @@ rc=$?
 assert_rc "a window that completed is available to the next verb" "$rc" "0"
 assert_eq "release clears the record, so nothing can name a holder that has gone" "$(cat "$LKFILE")" ""
 
-# A holder that is not pithead (an operator's own flock, a future caller) writes no record. The
-# waiter must say so rather than print a stale name it happens to find.
+# Arm the STALE-RECORD fixture the three cases below need, and note why they need it: with the
+# lock file empty, `verb=backup` exists nowhere on disk and "never reported under the previous
+# holder's name" is true of an empty string — an assertion that cannot fail for any change to
+# pithead. So leave the record a real holder leaves when it is killed inside its window: the
+# kernel drops the flock with the descriptor, and nothing clears the line. That is what an
+# operator's Ctrl-C, and `error()` inside a window, both leave behind.
+#
+# The pair that discriminates is this stanza against the LIVE-holder case above: there the same
+# record must be named in full (`verb=backup`), here the same bytes must not be, because the pid
+# they name has gone. Suppressing every name would fail the first; echoing the file back would
+# fail the second.
+lock_hold_bg
+lock_await_record || bad "the killed holder for the stale-record cases records itself" "no record"
+kill "$LKHOLDER" 2>/dev/null
+wait "$LKHOLDER" 2>/dev/null
+assert_contains "a holder killed inside its window leaves its record on disk" "$(cat "$LKFILE")" "verb=backup"
+assert_eq "while the kernel has already given the window itself back" "$(lock_state)" "free"
+
+# A holder that is not pithead (an operator's own flock, a future caller) writes no record, and
+# the record it finds on disk is the dead one armed above. The waiter must say so rather than
+# print a stale name it happens to find.
 # `flock -n FILE sleep 60 &` would NOT do: flock forks, so killing $! orphans a sleep that still
 # holds the inherited descriptor for the full 60s and blocks every case after this one. Open the
 # descriptor here and `exec` the sleep onto it instead, so the holder is one killable process.

@@ -185,6 +185,42 @@ mutation_lock_path() {
     fi
 }
 
+# Describe the holder of a window we could not take — and never name one we cannot show is still
+# there.
+#
+# The record is written by whoever takes the lock and cleared by its release, but only an ORDERLY
+# release clears it. A verb that is Ctrl-C'd, or that hits `error()` inside its window, leaves its
+# line on disk: the kernel drops the flock with the descriptor, so the lock goes free while the
+# record does not. A later waiter reading that line would be told to wait for a pid that exited —
+# the exact misdiagnosis this message exists to prevent. The gap is narrow but ordinary: the next
+# acquire truncates the record only AFTER it has taken the lock, so a third invocation that loses
+# `flock -n` in between reads the dead line, and a holder that is not pithead at all (an
+# operator's own `flock .pithead.lock`) never writes one and so never clears the dead line either.
+#
+# So the record is trusted only while the pid it names is alive. `/proc` is asked first because it
+# answers regardless of who owns the process: `kill -0` returns non-zero on EPERM, and a root
+# `pithead` holding the window against an unprivileged waiter is an ordinary case here, not an
+# exotic one. `kill -0` is the fallback where /proc is not mounted. Anything that does not parse
+# as our own `pid=<n>` record is reported as unrecorded rather than echoed back, because a line we
+# cannot check is a line we cannot stand behind.
+#
+# What this does NOT cover, stated rather than implied: pid REUSE. A recycled pid reads as live
+# and we would name the wrong holder — the same wrong name the code has without this check, in a
+# far rarer case, and it costs a misleading message rather than a wrong action. The wait itself is
+# correct either way, because it is the flock that decides it, never the record.
+mutation_lock_holder() { # <lock file> — a holder description safe to show an operator
+    local line pid
+    line=$(head -n 1 "$1" 2>/dev/null | tr -d '[:cntrl:]' | head -c 120)
+    pid="${line#pid=}"
+    pid="${pid%% *}"
+    if [ -n "$line" ] && [[ "$pid" =~ ^[0-9]+$ ]] &&
+        { [ -d "/proc/$pid" ] || kill -0 "$pid" 2>/dev/null; }; then
+        printf '%s' "$line"
+        return 0
+    fi
+    printf '%s' "holder unrecorded"
+}
+
 mutation_lock_acquire() { # <verb label>
     local label="${1:-pithead}"
 
@@ -230,8 +266,7 @@ mutation_lock_acquire() { # <verb label>
     fi
     if ! flock -n 9; then
         local holder
-        holder=$(head -n 1 "$_PITHEAD_LOCK_PATH" 2>/dev/null | tr -d '[:cntrl:]' | head -c 120)
-        [ -n "$holder" ] || holder="holder unrecorded"
+        holder="$(mutation_lock_holder "$_PITHEAD_LOCK_PATH")"
         warn "Another pithead operation is in progress ($holder) — waiting up to ${PITHEAD_LOCK_TIMEOUT}s for it to finish."
         if ! flock -w "$PITHEAD_LOCK_TIMEOUT" 9; then
             exec 9>&-
