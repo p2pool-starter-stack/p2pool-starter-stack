@@ -81,6 +81,16 @@ zmq_ready_socket_type() {
         echo "malformed-ready first frame is not a COMMAND (flags $(zmq_hex_byte "$h" 0))"
         return 1
     fi
+    # Every length field below is read with `16#`, and `16#` on an EMPTY string is a fatal bash
+    # arithmetic error, not a verdict — so a peer that stalls part-way through a header kills the
+    # parser instead of being named (#1500). Bound each slice before reading it. A short header is
+    # 2 bytes (flags, size); the long form is 9 (flags, then an 8-byte size).
+    local hdr_bytes=2
+    if ((flags & 0x02)); then hdr_bytes=9; fi
+    if [ "${#h}" -lt $((hdr_bytes * 2)) ]; then
+        echo "malformed-ready frame header is $((${#h} / 2)) bytes, want $hdr_bytes"
+        return 1
+    fi
     if ((flags & 0x02)); then
         size=$((16#${h:2:16}))
         i=9
@@ -88,11 +98,15 @@ zmq_ready_socket_type() {
         size=$((16#$(zmq_hex_byte "$h" 1)))
         i=2
     fi
-    local body="${h:$((i * 2)):$((size * 2))}"
-    if [ "${#body}" -lt $((size * 2)) ]; then
-        echo "malformed-ready frame claims $size bytes, got $((${#body} / 2))"
+    # A long frame can declare a size that overflows the shell's own arithmetic and comes back
+    # NEGATIVE, which then makes the substring below fatal too. Compare the declared size against
+    # what actually arrived — that is the one bound an overflowed value cannot slip past.
+    local avail=$(((${#h} - i * 2) / 2))
+    if [ "$size" -lt 1 ] || [ "$size" -gt "$avail" ]; then
+        echo "malformed-ready frame claims $size bytes, got $avail"
         return 1
     fi
+    local body="${h:$((i * 2)):$((size * 2))}"
     local nlen name
     nlen=$((16#$(zmq_hex_byte "$body" 0)))
     name=$(zmq_hex_ascii "${body:2:$((nlen * 2))}")
@@ -106,6 +120,13 @@ zmq_ready_socket_type() {
         p=$((p + 1))
         key=$(zmq_hex_ascii "${body:$((p * 2)):$((klen * 2))}")
         p=$((p + klen))
+        # `p` can cross `size` INSIDE an iteration — the loop test above only bounds it on entry —
+        # so a property whose 4-byte value length lands on the frame-body boundary leaves this
+        # slice empty. That is the `16#` death above, reached from a well-formed READY prefix.
+        if [ $(((p + 4) * 2)) -gt "${#body}" ]; then
+            echo "malformed-ready property [$key] value length runs past the frame body"
+            return 1
+        fi
         vlen=$((16#${body:$((p * 2)):8}))
         p=$((p + 4))
         val=$(zmq_hex_ascii "${body:$((p * 2)):$((vlen * 2))}")
@@ -126,16 +147,40 @@ zmq_ready_socket_type() {
 # a dependency this harness may assume on an appliance. Reads the greeting, then the peer's
 # command frame in two steps (header, then exactly the declared body) so a silent PUB socket
 # does not cost a full timeout on the happy path.
+# The connect is bounded SEPARATELY, and it has to be: `timeout` cannot wrap a redirection, so
+# the `exec` below inherits only the kernel's SYN-retry deadline (commonly 20s-130s+). A closed
+# port answers with RST in ~2ms, which is why the original never showed this — but a FILTERED or
+# black-holed host, the realistic remote-mode failure, blocks far past the probe's budget with no
+# attribution at all (#1500). A `timeout`-wrapped throwaway connect in a child shell is the one
+# shape that bounds it without re-quoting the whole snippet: the child cannot hand its fd back, so
+# the cost is a second connect on the reachable path, ~2ms against anything that answers.
 zmq_probe_snippet() { # <host> <port> <timeout_s>
     cat <<EOF
+timeout $3 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null
+case \$? in
+0) ;;
+124) echo "CONNECT-TIMEOUT"; exit 0 ;;
+*) echo "CONNECT-FAIL"; exit 0 ;;
+esac
 exec 3<>/dev/tcp/$1/$2 2>/dev/null || { echo "CONNECT-FAIL"; exit 0; }
 printf '$ZMQ_GREETING_BYTES' >&3
-echo "GREETING \$(timeout $3 head -c 64 <&3 | od -An -v -tx1 | tr -d ' \n')"
+g=\$(timeout $3 head -c 64 <&3 | od -An -v -tx1 | tr -d ' \n')
+echo "GREETING \$g"
+# A peer that sent NO greeting cannot send a READY, and zmq_pub_verdict discards the READY
+# result whenever the greeting verdict fails — so both reads below are pure cost against it.
+# Skipping them cannot change a verdict, and it takes this probe's FOUNDING case, the
+# published-but-dead port, from three budgets to one. Measured: 9015ms -> 3006ms at budget 3.
+if [ -z "\$g" ]; then echo "READY "; exec 3<&-; exit 0; fi
 printf '$ZMQ_READY_BYTES' >&3
 hdr=\$(timeout $3 head -c 2 <&3 | od -An -v -tx1 | tr -d ' \n')
+body=
 if [ \${#hdr} -eq 4 ] && [ \$((16#\${hdr:0:2} & 2)) -eq 0 ]; then
   body=\$(timeout $3 head -c \$((16#\${hdr:2:2})) <&3 | od -An -v -tx1 | tr -d ' \n')
-else
+elif [ -n "\$hdr" ]; then
+  # Only worth a second window if the peer sent SOMETHING. With an empty header a 512-byte
+  # read can only return empty too (head -c 2 already drained what was there), so the
+  # unconditional else burned a whole budget to re-derive the empty string it already had.
+  # No backticks in this heredoc: it is unquoted, so they would run at generation time.
   body=\$(timeout $3 head -c 512 <&3 | od -An -v -tx1 | tr -d ' \n')
 fi
 echo "READY \$hdr\$body"
@@ -150,6 +195,14 @@ zmq_pub_verdict() {
     local out="$1" host="$2" port="$3" greeting ready v
     case "$out" in *CONNECT-FAIL*)
         echo "connect-refused no TCP connection to $host:$port"
+        return 1
+        ;;
+    esac
+    # Distinct from connect-refused ON PURPOSE. A refusal is an answer — the host is up and the
+    # port is closed. A timeout is the absence of one, and it points at a firewall, a partition or
+    # a wrong address rather than at the node.
+    case "$out" in *CONNECT-TIMEOUT*)
+        echo "connect-timeout no answer from $host:$port within the probe budget — filtered, black-holed or the wrong address, not a refusal"
         return 1
         ;;
     esac

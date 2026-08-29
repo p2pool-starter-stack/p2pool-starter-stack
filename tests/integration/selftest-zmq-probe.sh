@@ -138,6 +138,75 @@ assert_contains "published-but-dead port is named no-greeting" "$v" "no-greeting
 # The verdict must name the endpoint it judged — a bare reason in a matrix log is unattributable.
 assert_contains "the verdict names host:port" "$v" "28099"
 
+echo "== a truncated or hostile frame is NAMED, not fatal (#1500) =="
+
+# The defect this section guards is a parser that DIES on a short read: every length field is read
+# with `16#`, and `16#` on an EMPTY string is a bash arithmetic error, so the function exits with
+# an interpreter message on stderr and an empty verdict instead of a reason. It fails noisy rather
+# than false-green, but an instrument that cannot say WHY is barely an instrument.
+#
+# Each case therefore asserts three things TOGETHER, and the stderr half is the load-bearing one:
+# rc=1 alone was already true of the broken parser, so a case that checked only rc would have
+# passed against the bug it exists to catch.
+assert_clean_verdict() { # <label> <hex> <expected reason>
+    local out err rc
+    err=$(zmq_ready_socket_type "$2" 2>&1 >/dev/null)
+    out=$(zmq_ready_socket_type "$2" 2>/dev/null)
+    rc=$?
+    assert_rc "$1 is refused" "$rc" "1"
+    assert_contains "$1 is named" "$out" "$3"
+    assert_eq "$1 costs no interpreter error" "$err" ""
+}
+
+# Found by fuzzing the parser over even-length hex, which is the only shape od can produce.
+# A COMMAND frame that stops after its flags byte: the short-form size slice is empty.
+assert_clean_verdict "a 1-byte short header" "2d" "malformed-ready"
+# The same, long form (flags bit 0x02 set): the 8-byte size slice is empty.
+assert_clean_verdict "a 1-byte long header" "2f" "malformed-ready"
+# A long frame declaring 0xc40aba3454cc6862 bytes. That overflows the shell's own arithmetic and
+# comes back NEGATIVE, which makes the body substring fatal in its own right — so the bound has to
+# compare the declared size against what ARRIVED, not against a doubled length.
+assert_clean_verdict "a long frame whose size overflows" "47c40aba3454cc6862" "malformed-ready"
+# A COMMAND frame declaring a zero-length body: nothing left to read the command name from.
+assert_clean_verdict "a frame declaring an empty body" "0400" "malformed-ready"
+# THE ONE #1500 NAMES, and the only one reachable from a WELL-FORMED READY prefix: 18 bytes of
+# "READY" + the "Socket-Type" key and nothing after it. `p` crosses `size` inside the iteration,
+# so the loop test above cannot bound the 4-byte value-length read that follows.
+assert_clean_verdict "a property length on the frame boundary" \
+    "04120552454144590b536f636b65742d54797065" "malformed-ready"
+
+# The guards must not have been bought by rejecting good frames: re-assert the live capture here,
+# so a bound that is one byte too tight reds in this section rather than passing quietly above.
+assert_eq "the live monerod frame still parses after the guards" \
+    "$(zmq_ready_socket_type "$LIVE_READY")" "ok XPUB"
+assert_eq "the long-framed READY still parses after the guards" \
+    "$(zmq_ready_socket_type "$READY_LONG")" "ok XPUB"
+
+echo "== the connect is bounded, and named apart from a refusal (#1500) =="
+
+# A refusal is an ANSWER — host up, port closed. A timeout is the absence of one, and it points at
+# a firewall, a partition or a wrong address rather than at the node. Collapsing them would send a
+# remote-mode operator to debug the wrong box.
+v=$(zmq_pub_verdict "CONNECT-TIMEOUT" 10.0.0.5 18083)
+rc=$?
+assert_rc "a filtered host is refused" "$rc" "1"
+assert_contains "a filtered host is named connect-timeout" "$v" "connect-timeout"
+assert_ne "a filtered host is NOT reported as a refusal" "${v%% *}" "connect-refused"
+
+# Behavioural, not a text match on the snippet: run the real snippet against a closed loopback
+# port. A bound that always waits the full budget would satisfy a text check and red here, and the
+# elapsed half is what proves the added pre-connect did not become the new cost. The TIMEOUT class
+# itself needs a black-holed address and so is proven live on the bench, not in this file.
+start=$SECONDS
+snippet_out=$(bash -c "$(zmq_probe_snippet 127.0.0.1 1 9)" 2>/dev/null)
+elapsed=$((SECONDS - start))
+assert_contains "a closed port still reports CONNECT-FAIL" "$snippet_out" "CONNECT-FAIL"
+if [ "$elapsed" -lt 3 ]; then
+    it_pass "a closed port returns in ${elapsed}s, well inside the 9s budget"
+else
+    it_fail "a closed port returns well inside the budget" "took ${elapsed}s of 9s"
+fi
+
 echo ""
 echo "selftest-zmq-probe: $IT_PASS passed, $IT_FAIL failed"
 [ "$IT_FAIL" -eq 0 ] || exit 1
