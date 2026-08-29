@@ -38,15 +38,7 @@ ZMQ_READY_BYTES='\x04\x19\x05READY\x0bSocket-Type\x00\x00\x00\x03SUB'
 zmq_hex_byte() { printf '%s' "${1:$(($2 * 2)):2}"; }
 
 # Decode a hex string to ASCII, dropping NUL padding. Pure.
-zmq_hex_ascii() {
-    local h="$1" out="" i pair
-    for ((i = 0; i < ${#h}; i += 2)); do
-        pair="${h:i:2}"
-        [ "$pair" = "00" ] && continue
-        out+=$(printf '\\x%s' "$pair")
-    done
-    printf '%b' "$out"
-}
+zmq_hex_ascii() { printf '%b' "$(printf '%s' "$1" | sed 's/../\\x&/g')" | tr -d '\0'; }
 
 # zmq_greeting_verdict <hex> -> prints "ok <major>.<minor> <mechanism>" or "<reason> <detail>".
 # Returns 0 only for a well-formed ZMTP >=3 greeting. The `no-greeting` class is the one that
@@ -79,7 +71,7 @@ zmq_greeting_verdict() {
 # "<reason> <detail>". Walks the READY metadata rather than substring-matching it, so a
 # Socket-Type appearing inside another property's value cannot be mistaken for the real one.
 zmq_ready_socket_type() {
-    local h="${1,,}" flags size i=0 want
+    local h="${1,,}" flags size i=0
     if [ -z "$h" ]; then
         echo "no-ready peer completed the greeting then sent no READY command"
         return 1
@@ -123,9 +115,8 @@ zmq_ready_socket_type() {
             echo "ok ${val^^}"
             return 0
         fi
-        want="$key"
     done
-    echo "no-socket-type READY carried no Socket-Type property (last seen [$want])"
+    echo "no-socket-type READY carried no Socket-Type property"
     return 1
 }
 
