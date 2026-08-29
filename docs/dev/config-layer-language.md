@@ -13,8 +13,9 @@ and boot plumbing — where a port buys more lines and new quoting failure modes
 The #1105 split isolated the one layer where a port plausibly pays:
 `lib/pithead/28-parse-and-validate-config.sh` (485 lines) and `lib/pithead/33-render-env.sh`
 (494 lines), the modules that turn `config.json` into a validated `.env`. The project's
-config-handling defects cluster here, not in orchestration: #1059 (wizard vs valid config),
-#695/#696 (spurious save/preview changes), the masking fixes, #1342's mutation windows.
+config-handling defects cluster here, not in orchestration: #1059 (wizard vs valid
+config), #695/#696 (spurious save/preview changes), the masking fixes, #1342's mutation
+windows.
 
 Three options were on the table: a module-by-module Python port behind the same CLI surface, a
 `jq`/schema middle path, or staying bash unchanged.
