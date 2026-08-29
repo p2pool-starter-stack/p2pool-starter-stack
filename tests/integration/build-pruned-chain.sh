@@ -7,7 +7,13 @@
 #   1. stop monerod            -> makes the live LMDB consistent for copying
 #   2. copy full data.mdb      -> onto the CoW (btrfs) volume   [downtime window]
 #   3. start monerod           -> mining resumes immediately after the copy
-#   4. prune the COPY          -> shrinks ~250G -> ~95G, full chain untouched
+#   4. prune the COPY          -> full chain untouched; see the SIZE note below
+#
+# SIZE — DO NOT EXPECT A LARGE SHRINK (#1446). This header used to state step 4's outcome as
+# "shrinks ~250G -> ~95G". Both halves are retired: they were an expectation, never a measurement.
+# This bench's source chain is ALREADY pruned (`prune-blockchain=1`, `pruning_seed = 384` on both
+# sides), so step 4 repacks rather than prunes. The result measured ~258 GiB and is dense — a
+# freelist of 10 pages out of 67,605,667. Read the freelist before predicting any size change.
 #
 # Step 4 targets the COPY, never the canonical chain. `monero-blockchain-prune` is
 # copy-then-swap (#1489) — it renames its result over $DST_DIR/lmdb, which is why the size is

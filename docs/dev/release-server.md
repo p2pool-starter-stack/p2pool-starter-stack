@@ -9,8 +9,10 @@ GitHub Actions runs on every PR, and how to harden the server. Operational compa
 
 GitHub-hosted runners can't do the real-chain tier. On a public repo the hosted Ubuntu runners
 are free (4 vCPU / 16 GiB RAM), but they are ephemeral: a fresh VM per job, ~14 GiB of free
-disk, and a 6-hour job ceiling. A Monero chain is ~95 GiB pruned / ~270 GiB full and takes days
-to sync; Tari adds ~50 GiB. There is nowhere to keep that synced state between runs, and no time
+disk, and a 6-hour job ceiling. A pruned Monero chain measures ~258 GiB on our own bench
+([#1446](https://github.com/p2pool-starter-stack/pithead/issues/1446)) and an unpruned one is
+larger still [TODO: verify upstream — no full-chain measurement exists on this bench]; either
+takes days to sync, and Tari adds ~50 GiB. There is nowhere to keep that synced state between runs, and no time
 to sync it inside a job. So the real-daemon, real merge-mining tier (tier 4) is not possible on
 hosted runners. That's the reason a dedicated, already-synced server exists
 ([#54](https://github.com/p2pool-starter-stack/pithead/issues/54)).
@@ -332,8 +334,11 @@ tests/integration/run.sh --host you@server --dir pithead --readiness
 ```
 
 > NOTE: a pruned chain's file stays large. An in-place prune does not shrink the LMDB file: it
-> stays at the full-chain high-water mark (~250 GiB) with the freed space sitting as internal
-> free pages (Monero reuses them as the chain grows). To reclaim it you must rewrite the DB with
+> stays at the full-chain high-water mark, with the freed space sitting as internal free pages
+> (Monero reuses them as the chain grows). **How much is actually reclaimable is a measurement,
+> not an assumption** — `mdb_stat -ef` on an idle copy reports the freelist, and on this bench it
+> is 10 pages out of 67,605,667, so there is nothing to reclaim (#1446). To reclaim it where there
+> is, you must rewrite the DB with
 > `monero-blockchain-prune` (see
 > [`compact-chain.sh`](../../tests/integration/compact-chain.sh)). It's slow (it copies every block
 > over hours), though it reads through a snapshot so monerod keeps mining.
@@ -344,9 +349,11 @@ tests/integration/run.sh --host you@server --dir pithead --readiness
 > To run it against a live chain, bind-mount the source so the kernel refuses the rename; the
 > recipe and its guard are in `compact-chain.sh`'s header.
 >
-> The generic `mdb_copy -c` does not work: Monero ships a
-> patched LMDB and stock mdb_copy rejects the format (`MDB_VERSION_MISMATCH`). Often it's simplest
-> to leave the free pages.
+> `MDB_VERSION_MISMATCH` from a stock LMDB tool is the **lock-file** format, not a patched on-disk
+> format: it appears while monerod holds the environment, and the same tool opens an idle copy of
+> the same chain. Measured here on monerod 0.18.5.1, where both DBs read magic `0xbeefc0de`,
+> version 1 (#1446) — one bench, one build, so treat the reading as ours rather than universal.
+> It is not corruption — do not stop monerod over it. Often the best move is to leave the free pages alone.
 
 ## Bench allocation and the rig lock
 

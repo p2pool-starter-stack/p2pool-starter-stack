@@ -39,15 +39,19 @@ Sizing (a pruned-Monero test bench fits in ~1 TB):
 
 | Component | Size |
 |---|---|
-| Pruned Monero (compacted) | ~95 GB |
-| Tari (archival/full) | ~132 GB |
-| Docker images + cache | ~20 GB |
-| OS + working headroom | ~30 GB |
-| **Total** | **~280 GB** |
-| *+ optional full Monero node* | *+250 GB* |
-| *+ a few full chain copies* | *95–250 GB each* |
+| Pruned Monero | ~258 GiB |
+| Tari (archival/full) | ~132 GiB |
+| Docker images + cache | ~20 GiB |
+| OS + working headroom | ~30 GiB |
+| **Total** | **~440 GiB** |
+| *+ optional full Monero node* | *[TODO: verify upstream — no full-chain measurement on this bench]* |
+| *+ each extra pruned chain copy* | *~258 GiB* |
 
-A 1 TB NVMe holds the pruned bench with ~650 GB to spare, room for a full node and copies too.
+A 1 TB NVMe (~931 GiB usable) holds the pruned bench with ~490 GiB to spare.
+
+The Monero row is measured on this bench, not a compaction target — the table previously carried
+"~95 GB (compacted)", which under-budgeted the disk by ~160 GiB. Read the freelist note below
+before planning around a smaller number.
 
 > NOTE: verify the disk is actually fast. "SSD" in the model name is not enough; check the bus.
 > A drive sold as an "SSD" can enumerate on SATA rather than NVMe, on a link that negotiates down
@@ -64,12 +68,22 @@ A 1 TB NVMe holds the pruned bench with ~650 GB to spare, room for a full node a
 >
 > The fix is to put the chains on a fast NVMe SSD. Add an m.2 PCIe NVMe and migrate the chains
 > onto it; mount the data dir by UUID via fstab (ext4, `noatime`, `nofail`) and keep the OS on a
-> separate disk. monerod then opens the ~266 GB pruned LMDB in seconds and the full integration
-> matrix runs green. Compaction to ~95 GB uses
+> separate disk. monerod then opens the pruned LMDB in seconds and the full integration matrix
+> runs green.
+>
+> **Do not budget for compaction to reclaim that size.** The chain is correctly pruned, and it is
+> also dense: `mdb_stat -ef` on an idle copy reports a freelist of 10 pages out of 67,605,667, and
+> `pages_used * 4096` equals the file size exactly. An in-place prune *can* leave reclaimable free
+> pages (LMDB never shrinks its file), and
 > [`compact-chain.sh`](../../tests/integration/compact-chain.sh)
-> (`monero-blockchain-prune --copy-pruned-database`) — the chain is correctly pruned; the extra
-> size is reclaimable free-page bloat, not a full chain. Stock `mdb_copy -c` does not work: Monero
-> ships a patched LMDB and stock `mdb_copy` rejects the format (`MDB_VERSION_MISMATCH`). CoW
+> (`monero-blockchain-prune --copy-pruned-database`) rewrites the DB when it does — but measure the
+> freelist first; this paragraph used to promise compaction down to ~95 GB, which was never
+> measured (#1446).
+>
+> `MDB_VERSION_MISMATCH` from a stock LMDB tool is the **lock-file** format, not a patched on-disk
+> format: it appears while monerod holds the environment, and the same tool opens an idle copy of
+> the same chain. Measured here on monerod 0.18.5.1, where both DBs read magic `0xbeefc0de`,
+> version 1 (#1446) — one bench, one build. Do not stop monerod over it. CoW
 > snapshots need btrfs/zfs on the NVMe (if it's ext4); see below.
 
 A second m.2 NVMe (PCIe) with btrfs/zfs additionally enables copy-on-write snapshots: instant,
@@ -113,7 +127,8 @@ jq '.monero.data_dir="/srv/<you>/pithead/data/monero"
    network or a fast external drive:
 
 ```bash
-# from the new box, pulling from the old one (chains are ~230 GB; hours over GbE, faster over USB3/10G):
+# from the new box, pulling from the old one (chains measure ~390 GiB: ~258 Monero + ~132 Tari;
+# hours over GbE, faster over USB3/10G):
 rsync -aP --info=progress2 olduser@oldbox:/srv/code/pithead-data/ /srv/<you>/pithead/data/
 ```
 

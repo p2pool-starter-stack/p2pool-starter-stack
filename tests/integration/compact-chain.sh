@@ -3,9 +3,15 @@
 # compact-chain.sh — build a compact pruned Monero chain from an existing chain.
 #
 # An in-place prune leaves the LMDB file at its full-chain high-water mark (LMDB never shrinks
-# its file), so a pruned chain can sit at ~270 GiB on disk while holding only ~95 GiB of live
-# data. `monero-blockchain-prune` rewrites the chain into a fresh DB at <data-dir>/lmdb-pruned,
-# which comes out at its true compact size.
+# its file), so a pruned chain can sit on disk at a size its live data no longer justifies.
+# `monero-blockchain-prune` rewrites the chain into a fresh DB at <data-dir>/lmdb-pruned, which
+# comes out at its true compact size.
+#
+# DO NOT DIAGNOSE BLOAT FROM THE FILE SIZE ALONE — MEASURE THE FREELIST (#1446).
+#   This bench's 258 GiB pruned chain has a freelist of 10 pages out of 67,605,667 and
+#   `pages_used * 4096` == the file size: it is dense, already pruned, and this tool would spend
+#   ~2.5 hours reclaiming nothing. Read `mdb_stat -ef` on an IDLE copy first. (An earlier header
+#   here promised "~95 GiB of live data" — a retired expectation, never a measurement.)
 #
 # THE TOOL IS COPY-THEN-SWAP — IT DOES NOT ONLY READ THE SOURCE (#1489).
 #   After building <data-dir>/lmdb-pruned it renames <data-dir>/lmdb to <data-dir>/lmdb-old and
@@ -30,9 +36,17 @@
 #   guard before you rely on it — `mv <build-dir>/lmdb <build-dir>/x` must answer "Device or
 #   resource busy".
 #
+#   The read is still a real LMDB reader on the live DB: a long read transaction pins freed pages,
+#   so the LIVE data.mdb can GROW while the copy runs. Watch `df` for the whole run.
+#
 # Speed: it copies every block one-by-one, so it is SLOW (many HOURS for a mainnet chain). It is
-# NOT a page-level copy. The generic `mdb_copy -c` does NOT work on a Monero chain: Monero ships
-# a patched LMDB and stock mdb_copy rejects the on-disk format (MDB_VERSION_MISMATCH).
+# NOT a page-level copy.
+#
+# MDB_VERSION_MISMATCH IS THE LOCK-FILE FORMAT, NOT A PATCHED ON-DISK FORMAT (#1446).
+#   The error appears while monerod HOLDS the environment; a stock LMDB tool opens an IDLE copy
+#   of the same chain (both DBs are magic 0xbeefc0de, version 1). Not corruption — do not stop
+#   monerod over it. An earlier header blamed "a patched LMDB"; that was wrong. Note mdb_stat
+#   REWRITES lock.mdb, so control on data.mdb specifically.
 #
 # This script ONLY runs the tool; it does not stop or start containers. It logs before/after
 # sizes and writes a status sentinel.
