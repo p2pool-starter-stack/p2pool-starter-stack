@@ -105,9 +105,7 @@ def parse_config_meta(meta):
     return out if any(out.values()) else None
 
 
-def config_origin(
-    meta, change_id_known, change_status=None, history_truncated=False, history_unread=False
-):
+def config_origin(meta, change_id_known, change_status=None, history_unread=False):
     """Where the rig's current config came from, as far as we can honestly tell.
 
     ``change_id_known`` is whether this dashboard has a ``worker_config`` row for the rig's
@@ -131,25 +129,19 @@ def config_origin(
                       into either would state something we cannot support.
     - ``elsewhere`` — applied over a control channel, with an id we have never seen. Another host,
                       or our record of it is gone. Either way it is not something to present as ours.
-    - ``untraced``  — applied over a control channel, with an id we did not find, *and* the history
-                      we searched was full to its limit (#1369). The id may sit one row past the
-                      window, so "we have never seen it" is a claim the read cannot support and
-                      ``elsewhere`` would print an accusation over a change that may well be ours.
-                      ``history_truncated`` is what separates the two, and it is deliberately the
-                      only thing this argument may do: when it is False every verdict is exactly
-                      what it was before, so a caller that cannot tell loses nothing. That matters
-                      most on the error path, which since #1409 is ``history_unread``'s to answer:
-                      a failed read returns None, not ``[]``, so it never reaches this comparison
-                      at all rather than arriving as a window that merely looks short.
     - ``unread``    — applied over a control channel, and we could not read our own history at all
                       (#1409). ``get_worker_config_history`` returns None when the read failed, and
                       that is a different fact from an empty history: a miss we never got to look
                       for cannot support ``elsewhere``, which renders as "Last changed from another
                       dashboard" — an accusation sourced from our own broken DB rather than from
-                      anything the rig did. Distinct from ``untraced`` too: that one is a read that
-                      WORKED and came back full, so it is about the rig having changed often. This
-                      one is about us. Checked FIRST inside this branch, because a read that did not
-                      happen settles nothing further down it.
+                      anything the rig did. Checked FIRST inside this branch, because a read that
+                      did not happen settles nothing further down it.
+
+                      A miss that is NOT this is conclusive: since #1369 the caller asks for the
+                      id directly rather than looking for it in the window it renders, so there is
+                      no longer a "we could not see that far back" between ``here`` and
+                      ``elsewhere``. The ``untraced`` verdict that held that middle ground was
+                      removed with the window scan that produced it.
     - ``rig``       — applied on the rig itself.
     - ``restored``  — restored from a saved config by the operator-run ``restore`` command.
                       Deliberately not folded into ``rig``: a restore is not someone editing the rig.
@@ -168,7 +160,7 @@ def config_origin(
         if history_unread:
             return "unread"
         if not change_id_known:
-            return "untraced" if history_truncated else "elsewhere"
+            return "elsewhere"
         if change_status in HELD_STATUSES:
             return "here"
         if change_status in REVERTED_STATUSES:

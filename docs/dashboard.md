@@ -445,9 +445,6 @@ with more changes than that table shows:
   says only that the record cannot tell you which, and it can still resolve on a later reading.
 - **Last changed from another dashboard** — applied over a control channel, but with an id this
   dashboard has never issued. Another host drove this rig, or its record here is gone.
-- **Last changed over a control channel** — applied over a control channel with an id that was not
-  found, on a rig with more recorded changes than the line reads back. The id may sit just past the
-  end of what was read, so the dashboard cannot honestly say the change was not its own.
 - **Cannot tell — this dashboard could not read its own history** — the dashboard's own change
   history would not open. It is the one line here that is about this dashboard rather than the rig:
   nothing was compared, so nothing is claimed either way. It says nothing about what the rig did.

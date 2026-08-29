@@ -11,6 +11,7 @@ reaches us wearing the same ``source`` and the same change id as the one that he
 import pytest
 
 from mining_dashboard.client.rig_config_meta import (
+    CONFIG_SOURCES,
     HELD_STATUSES,
     REVERTED_STATUSES,
     config_origin,
@@ -161,30 +162,43 @@ def test_a_control_change_we_have_no_record_of_is_not_claimed_as_ours():
     assert config_origin(GOOD, change_id_known=False) == "elsewhere"
 
 
-def test_a_miss_in_a_window_that_was_full_does_not_get_to_call_it_another_dashboard():
-    # #1369: "we did not find it" only means "it is not there" if we could see the whole history.
-    # A full window means the id may sit one row past the end, so `elsewhere` — which renders as
-    # "Last changed from another dashboard" — is an accusation the read cannot support.
-    assert config_origin(GOOD, change_id_known=False, history_truncated=True) == "untraced"
+def test_a_miss_is_conclusive_again_now_that_the_lookup_is_by_id():
+    # #1369 removed the middle ground. While the caller searched the 50-row window it renders, a
+    # miss could mean "the id sits one row past the end", and `untraced` existed to say so rather
+    # than print `elsewhere`'s "Last changed from another dashboard" over a change that may well
+    # have been ours. The caller now asks for the id directly, so a miss means the row is not
+    # there — and this asserts the verdict does not hedge a read that has nothing left to hedge.
+    assert config_origin(GOOD, change_id_known=False) == "elsewhere"
 
 
-def test_the_new_argument_can_only_ever_soften_the_miss():
-    # The whole safety property of this fix in one assertion: `history_truncated` may change the
-    # verdict for a MISS and nothing else. Every case where we found the id keeps the answer it
-    # had, so a caller that starts passing the flag cannot silently move a verdict it was right
-    # about. Mutating the flag's use into any of these branches reds this test.
-    for status, expected in (
-        ("applied", "here"),
-        ("rolled_back", "reverted"),
-        ("accepted", "unconfirmed"),
-    ):
-        for truncated in (False, True):
-            assert (
-                config_origin(
-                    GOOD, change_id_known=True, change_status=status, history_truncated=truncated
-                )
-                == expected
-            )
+def test_no_input_reaches_the_removed_untraced_verdict():
+    # The removal asserted rather than described. A verdict with no producer is not gone, it is
+    # unreachable — and unreachable is what nobody notices going stale. This sweeps every
+    # combination of the surviving arguments; the second assertion is its control, because a sweep
+    # that produced nothing would satisfy the first one for exactly the wrong reason.
+    seen = {
+        config_origin(
+            {**GOOD, "source": source},
+            change_id_known=known,
+            change_status=status,
+            history_unread=unread,
+        )
+        for source in (*CONFIG_SOURCES, "something-we-never-defined")
+        for known in (True, False)
+        for status in (None, "", "applied", "rolled_back", "failed", "accepted", "pending")
+        for unread in (True, False)
+    }
+    assert "untraced" not in seen
+    assert seen == {
+        "here",
+        "reverted",
+        "unconfirmed",
+        "elsewhere",
+        "unread",
+        "rig",
+        "restored",
+        "unrecorded",
+    }
 
 
 def test_a_read_we_never_got_to_make_is_not_reported_as_another_dashboard():
