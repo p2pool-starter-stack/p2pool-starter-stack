@@ -57,6 +57,8 @@ KEEP_STATE=0
 EXPECTED_WORKERS=2
 SKIP_MINING_ASSERTS=0
 REMOTE_MONERO_HOST=""
+REMOTE_MONERO_RPC_PORT=""
+REMOTE_MONERO_ZMQ_PORT=""
 REMOTE_TARI_HOST=""
 PRUNED_DATA_DIR=""
 FULL_DATA_DIR=""
@@ -95,8 +97,10 @@ MATRIX:
   --no-mining-asserts    SKIP the two mining assertions (workers online, stratum hashes) with a
                          logged notice — for a box with no miner connected (e2e --no-miner, #905).
                          Every other assertion stays binding.
-  --remote-monero-host <h>  external node endpoint for the remote-mode scenario
-                            (e.g. the box's own synced node on its LAN IP)
+  --remote-monero-host <h>  external node for the remote-mode scenario — a BARE host or IP, never
+                            host:port (pithead appends the port itself, #1491)
+  --remote-monero-rpc-port <p>  that node's RPC port, when it is not the default 18081
+  --remote-monero-zmq-port <p>  that node's ZMQ port, when it is not the default 18083
   --remote-tari-host <h>  external Tari node endpoint for the tari.mode=remote scenario (#103;
                          e.g. an already-synced Tari node on the LAN)
   --pruned-data-dir <d>  synced PRUNED monero data dir (enables the pruned case when the
@@ -229,7 +233,31 @@ parse_args() {
             shift
             ;;
         --remote-monero-host)
+            case "${2:-}" in
+            *:*)
+                it_err "--remote-monero-host takes a BARE host or IP, not host:port — pithead renders the port separately (--remote-monero-rpc-port). Got \"$2\"."
+                exit 2
+                ;;
+            esac
             REMOTE_MONERO_HOST="$2"
+            shift 2
+            ;;
+        --remote-monero-rpc-port | --remote-monero-zmq-port)
+            case "${2:-}" in
+            "" | *[!0-9]*)
+                it_err "$1 takes a TCP port 1-65535. Got \"${2:-}\"."
+                exit 2
+                ;;
+            esac
+            if [ "$2" -lt 1 ] || [ "$2" -gt 65535 ]; then
+                it_err "$1 takes a TCP port 1-65535. Got \"$2\"."
+                exit 2
+            fi
+            if [ "$1" = "--remote-monero-rpc-port" ]; then
+                REMOTE_MONERO_RPC_PORT="$2"
+            else
+                REMOTE_MONERO_ZMQ_PORT="$2"
+            fi
             shift 2
             ;;
         --remote-tari-host)
