@@ -317,6 +317,17 @@ and `--list` prints it).
 - `pithead status` exit code: `0` for a healthy config.
 - Dashboard reads live state. `/api/state` is reachable; Monero is synced (`done`); pruned/full
   display matches `monero.prune` ([#32](https://github.com/p2pool-starter-stack/pithead/issues/32)); the sidechain `pool.type` matches `p2pool.pool`.
+- The Monero node publishes block notifications. A ZMTP handshake against the node's ZMQ port
+  succeeds and the peer advertises a publisher socket type ([#1497](https://github.com/p2pool-starter-stack/pithead/issues/1497)). This is a separate
+  assertion from "Monero is synced" because the sync check cannot fail for a node that can never
+  publish: an `--offline` monerod reports `status: OK` with `target_height: 0`, which satisfies
+  both halves of the caught-up predicate. Nothing downstream covered the gap either — p2pool's
+  healthcheck is a TCP connect to its own stratum port — so a ZMQ-dead node brought the stack up
+  green and starved p2pool with nothing able to notice. A bare TCP dial does not close it: a
+  docker-published port with nothing behind it accepts the connection in `docker-proxy` itself and
+  answers a dial with rc 0. Measured on one host, three targets: the live node and the
+  published-but-dead port were indistinguishable to a dial (both rc 0) and separated by the
+  handshake. Real nodes advertise `XPUB` rather than `PUB`; both are accepted.
 - End-to-end mining. Workers are online (`proxy_workers >= --workers`), stratum has connections,
   and total hashes are accumulating ([#28](https://github.com/p2pool-starter-stack/pithead/issues/28)).
 - Posture propagated. `MONERO_RPC_BIND`, `DASHBOARD_SECURE`, `XVB_ENABLED`, and `TARI_REQUIRED`
@@ -610,6 +621,9 @@ Several self-tests sit beside it as standalone files, picked up by the same glob
 `selftest-skip-accounting.sh` is the one that keeps the skip accounting honest: besides checking
 the counters and the real `summary()`, it censuses every harness file and fails if a skip leaves
 through a bare `it_warn` — by wording, and by shape for the drops that never say "skipping".
+`selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures, so
+every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
+READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack.
 
 ---
 
