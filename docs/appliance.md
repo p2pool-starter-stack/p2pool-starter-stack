@@ -323,7 +323,10 @@ reboot is a separately confirmed step, the only one that pauses mining — typic
 five minutes — and after it the machine runs its normal health checks before keeping the
 new version. A banner reports the outcome, including an automatic return to the previous
 version if the new one failed. The machine refuses images that are unsigned, built for
-different hardware, or older than what it runs; there is no override. See
+different hardware, or older than what it runs; there is no override. If another operation is changing the stack when you start an
+install, the install is not started at all: nothing is written to the idle copy and the
+dashboard says so rather than reporting a failed install. Start it again once that
+operation has finished. See
 [Dashboard › Updating the appliance OS](dashboard.md#updating-the-appliance-os) for the
 step-by-step. The one-click tarball upgrade other installs offer refuses on the
 appliance on purpose — it would apply the wrong kind of update.
