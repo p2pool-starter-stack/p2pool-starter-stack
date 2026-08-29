@@ -15,12 +15,12 @@
 # control channel (#33)" setup, and define $REQS/$RESULTS the same way (not lib.sh globals; only
 # these two are read below).
 #
-# $WALLET, set explicitly: lib.sh's control_config() closure reads it (lib.sh:207) without ever
-# setting it — in run.sh it was already set globally by build_val_sandbox()'s far-earlier
-# config-validation section. Same trap as module 7's onion-report fix: $VALID_PRIMARY is what
-# WALLET equals there, and it's always bound. Since FIXED in lib.sh (#1305): both sandbox builders
-# default WALLET now, so a future control-sandbox domain file no longer has to set it. The line
-# below is kept because it is correct and harmless, not because anything still requires it.
+# $WALLET, set explicitly: lib.sh's control_config() closure reads it without ever setting it — it used
+# to arrive already set globally, from the config-validation section's far-earlier build_val_sandbox()
+# call back when that section was inline in run.sh. Same trap as module 7's onion-report fix:
+# $VALID_PRIMARY is what WALLET equals there, and it's always bound. Since FIXED in lib.sh (#1305): both
+# sandbox builders default WALLET now, so a future control-sandbox domain file no longer has to set it.
+# The line below is kept because it is correct and harmless, not because anything still requires it.
 build_control_sandbox
 # shellcheck disable=SC2034  # read by lib.sh's control_config() closure, unseen here
 WALLET="$VALID_PRIMARY"

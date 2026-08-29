@@ -16,14 +16,14 @@
 # Sourced by tests/stack/run.sh.
 #
 # Re-derivations (the sandbox-builder WALLET/$V trap — see #1305, still open on this lane):
-# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; run.sh's "config validation" black-box
-#   calls it once, far earlier than the two sections below that read them — that section stays in
-#   run.sh (a generic multi-field validator, not tor-specific). build_val_sandbox() is idempotent
-#   (a fixed $SANDBOX/val path, mkdir -p, template copies), so calling it again here is a safe
-#   no-op re-affirm as currently sourced, and correct on its own if a future reorder ever moves
-#   this file's source line earlier than that section.
-# - $DOCKER_LOG: the "apply preserves secrets + propagates" black-box sets it ($V/docker.log) and
-#   stays in run.sh (a generic multi-key regression, not tor-specific).
+# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; the "config validation" black-box calls
+#   it once, ahead of the two sections below that read them — that section lives in test-config.sh,
+#   sourced ahead of this file (a generic multi-field validator, not tor-specific).
+#   build_val_sandbox() is idempotent (a fixed $SANDBOX/val path, mkdir -p, template copies), so
+#   calling it again here is a safe no-op re-affirm as currently sourced, and correct on its own if
+#   a future reorder ever moves this file's source line earlier than that section.
+# - $DOCKER_LOG: the "apply preserves secrets + propagates" black-box sets it ($V/docker.log); it lives
+#   in test-secrets.sh, sourced ahead of this file (a generic multi-key regression, not tor-specific).
 # No section here reads $C — the control-channel sandbox is untouched by this cut.
 build_val_sandbox
 DOCKER_LOG="$V/docker.log"

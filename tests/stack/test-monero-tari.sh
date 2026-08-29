@@ -14,18 +14,18 @@
 # Sourced by tests/stack/run.sh.
 #
 # Re-derivations (the sandbox-builder WALLET/$V trap — see #1305, still open on this lane):
-# - $CB: the "config_bool" unit test builds it ($SANDBOX/cb) immediately before this file's old
-#   position in run.sh, but that section is a generic jq-coercion helper test (also exercises
-#   xvb.tor), not monero-specific, so it stays in run.sh. Re-derived here rather than reaching back
-#   for the ambient one.
-# - $V / $WALLET: both are set by lib.sh's build_val_sandbox(), which run.sh's "config validation"
-#   black-box calls once, far earlier than every section below that reads them — that section stays
-#   in run.sh too (a generic multi-field validator, not monero-specific). build_val_sandbox() is
-#   idempotent (a fixed $SANDBOX/val path, mkdir -p, template copies) so calling it again here is a
-#   safe no-op re-affirm as currently sourced, and makes this file correct on its own if a future
-#   reorder ever moves its source line earlier than that section.
-# - $DOCKER_LOG: the "apply preserves secrets + propagates" black-box sets it ($V/docker.log) and
-#   stays in run.sh (another generic multi-key regression, not monero-specific).
+# - $CB: the "config_bool" unit test builds it ($SANDBOX/cb), but that section is a
+#   generic jq-coercion helper test (also exercises xvb.tor), not monero-specific, so
+#   it stays where it is: tests/stack/test-unit-helpers.sh, whose stanza run.sh sources
+#   before this file. Re-derived here rather than reaching back for the ambient one.
+# - $V / $WALLET: both are set by lib.sh's build_val_sandbox(), which the "config validation"
+#   black-box calls once, ahead of every section below that reads them — that section lives in
+#   test-config.sh, sourced ahead of this file (a generic multi-field validator, not monero-specific).
+#   build_val_sandbox() is idempotent (a fixed $SANDBOX/val path, mkdir -p, template copies) so
+#   calling it again here is a safe no-op re-affirm as currently sourced, and makes this file correct
+#   on its own if a future reorder ever moves its source line earlier than that section.
+# - $DOCKER_LOG: the "apply preserves secrets + propagates" black-box sets it ($V/docker.log); it lives
+#   in test-secrets.sh, sourced ahead of this file (generic multi-key regression, not monero-specific).
 CB="$SANDBOX/cb"
 mkdir -p "$CB"
 build_val_sandbox

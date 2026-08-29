@@ -19,10 +19,10 @@
 # Sourced by tests/stack/run.sh.
 #
 # Re-derivations:
-# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; run.sh's "config validation" black-box
-#   calls it once, far earlier than the dashboard-auth-lifecycle black-box below (docker-compose.yml
-#   copy, .env/config.json writes via `seed_env`, $V/bin stubs) — that section stays in run.sh (a
-#   generic multi-field validator, not a dashboard concern), so this file needs its own copy.
+# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; the "config validation" black-box calls
+#   it once, but that section lives in test-config.sh, sourced AFTER this file — so nothing has
+#   built $V by the time the dashboard-auth-lifecycle black-box below runs (docker-compose.yml
+#   copy, .env/config.json writes via `seed_env`, $V/bin stubs), so this file needs its own copy.
 #   build_val_sandbox() is idempotent (a fixed $SANDBOX/val path, mkdir -p, template copies), so
 #   calling it again here is a safe no-op re-affirm, the same re-derivation test-lifecycle.sh uses.
 # - Everything else below sources the real $STACK fresh per subshell against a throwaway dir under

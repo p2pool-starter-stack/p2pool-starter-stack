@@ -210,10 +210,10 @@ EOF
 # The control-channel sandbox: builds $C, defines CTRL_LOG, seed_control_env, control_config.
 build_control_sandbox() {
     # control_config() below reads $WALLET, but $WALLET was only ever assigned by
-    # build_val_sandbox(). In run.sh the two calls sit hundreds of lines apart in ONE process and
-    # val happens to run first, so control has always worked by accident of ordering. (No exact
-    # distance here on purpose — every #1105 module moves it, and a number nobody re-measures is
-    # how a comment starts lying.) A domain file
+    # build_val_sandbox(). The two calls have always landed in ONE process with val running first,
+    # so control worked by accident of ordering — first inside run.sh, and now across the domain
+    # files run.sh sources. (No file or distance named on purpose: #1105 keeps moving both, and a
+    # location nobody re-measures is how a comment starts lying.) A domain file
     # that calls this builder without val — or any section that crosses a process boundary into a
     # bash-invoked file — would abort on an unbound variable under `set -u`. Defaulting it here
     # makes this builder self-contained and retires the whole class (#1305); it fails loud rather

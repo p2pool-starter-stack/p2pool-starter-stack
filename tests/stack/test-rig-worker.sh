@@ -35,13 +35,13 @@
 #   evidence, argued in test-control-core.sh and in the consumer domains own headers.
 #
 # Re-derivations:
-# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; run.sh's "config validation" black-box
-#   calls it once, far earlier than the stratum/xmrig/miner-announce sections below that read
-#   them — that section stays in run.sh (a generic multi-field validator, not rig-specific).
-#   build_val_sandbox() is idempotent (a fixed $SANDBOX/val path, mkdir -p, template copies), so
-#   calling it again here is a safe no-op re-affirm as currently sourced.
-# - $DOCKER_LOG: the "apply preserves secrets + propagates" black-box sets it ($V/docker.log) and
-#   stays in run.sh (a generic multi-key regression, not rig-specific).
+# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; the "config validation" black-box calls
+#   it once, ahead of the stratum/xmrig/miner-announce sections below that read them — that
+#   section lives in test-config.sh, sourced ahead of this file (a generic multi-field validator,
+#   not rig-specific). build_val_sandbox() is idempotent (a fixed $SANDBOX/val path, mkdir -p,
+#   template copies), so calling it again here is a safe no-op re-affirm as currently sourced.
+# - $DOCKER_LOG: the "apply preserves secrets + propagates" black-box sets it ($V/docker.log); it lives
+#   in test-secrets.sh, sourced ahead of this file (a generic multi-key regression, not rig-specific).
 # - The worker-config/worker-upgrade verbs below need no control-sandbox re-derivation at all:
 #   each case builds its own throwaway dir under $SANDBOX and points PITHEAD_CONFIG_FILE at it,
 #   never touching $C — proven by exactly this after-proof once the token-mask pair above was

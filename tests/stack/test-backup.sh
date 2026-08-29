@@ -26,14 +26,14 @@
 # and nothing between those two original positions reads anything this file's fixtures produce.
 #
 # Re-derivations (the sandbox-builder WALLET trap — see #1305, still open on this lane):
-# - $WALLET: set by lib.sh's build_val_sandbox() (as the checksum-valid $VALID_PRIMARY constant),
-#   which run.sh's "config validation" black-box calls once, far earlier than every section below
-#   that reads it as a config.json field value. That section stays in run.sh (a generic multi-field
-#   validator, not a backup concern), and this file never needs $V itself (each fixture above builds
-#   its own sandbox instead of reusing the shared one) — so re-deriving the bare string is enough;
-#   calling the heavier build_val_sandbox() would build a $V this file never touches.
-# - $VALID_TARI is a plain lib.sh top-level constant (not build_val_sandbox()-scoped), so it needs no
-#   re-derivation here or anywhere else.
+# - $WALLET: set by lib.sh's build_val_sandbox() (as the checksum-valid $VALID_PRIMARY constant), which
+#   the "config validation" black-box calls once, ahead of every section below that reads it as a
+#   config.json field value. That section lives in test-config.sh, sourced ahead of this file (a
+#   generic multi-field validator, not a backup concern), and this file never needs $V itself (each
+#   fixture above builds its own sandbox instead of reusing the shared one) — so re-deriving the bare
+#   string is enough; calling the heavier build_val_sandbox() would build a $V this file never touches.
+# - $VALID_TARI is a plain lib.sh top-level constant (not
+#   build_val_sandbox()-scoped), so it needs no re-derivation here or anywhere else.
 WALLET="$VALID_PRIMARY" # checksum-valid mainnet primary (the XMRig donation address) — see #1305
 
 echo "== unit: stack_backup — one bounded retry on a tar race (#970) =="
