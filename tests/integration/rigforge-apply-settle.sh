@@ -10,7 +10,7 @@
 #   (a) refreshes the enriched feed's live watchdog value (served at /api/state, read by
 #       _pred_feed_maxt in run.sh), and
 #   (b) reconciles a still-"accepted" #185 worker-config history row to its real terminal status
-#       (storage_service.py:reconcile_worker_config_status, #579/#604) — step 3a in that poll,
+#       (worker_config_store.py:reconcile_worker_config_status, #579/#604) — step 3a in that poll,
 #       strictly BEFORE the enriched-feed merge at step 3b.
 # So observing the feed converge to the requested max_temp_c is proof the requested key (the only
 # key in a max_temp_c change) is what changed, and the #185 history row for that change_id is
