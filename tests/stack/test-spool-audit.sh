@@ -47,10 +47,12 @@
 #   dependency, same class as any other. They are deliberately NOT seeded here: each is a plain
 #   derivation from $C, so a seed would duplicate that file's definitions and could drift from them,
 #   and it would buy nothing, because $C itself keeps this file non-standalone either way.
-# - $UUID5 IS INHERITED FROM A SECTION THAT STAYS IN run.sh — the approval-gate section assigns
-#   it, and this domain reuses that id to post an intent. It is not assigned anywhere in the moved
-#   text. This is the ambient ordering dependency in its plainest form: nothing about the moved
-#   text reveals it, and only the whole-file read-versus-assign audit surfaces it.
+# - $UUID5 IS INHERITED FROM ANOTHER DOMAIN — the approval-gate section assigns it, and this
+#   domain reuses that id to post an intent. It is not assigned anywhere in the moved text.
+#   (That section lived in run.sh until #1105 R13 reunited it into test-control-add-only-ssrf.sh,
+#   whose stanza run.sh still sources ahead of this one.) This is the ambient ordering dependency
+#   in its plainest form: nothing about the moved text reveals it, and only the whole-file
+#   read-versus-assign audit surfaces it.
 # - $UUID4, $out, $audit_lines and $audit_size are assigned HERE, in the moved text.
 # - This domain reads NO $WALLET at all, unlike the two sibling domains split out beside it.
 #   That is recorded because it was CHECKED rather than assumed: an absence deserves the same
