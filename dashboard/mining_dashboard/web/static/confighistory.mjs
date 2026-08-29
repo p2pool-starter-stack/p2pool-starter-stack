@@ -6,7 +6,7 @@
 // it", which is one subject. workerview.mjs imports these; nothing here imports back.
 
 import { html } from "./preact.mjs";
-import { configOriginNote } from "./workerlogic.mjs";
+import { configDriftNote, configOriginNote } from "./workerlogic.mjs";
 
 // A terminal status → a display variant + label. rolled_back and rejected/failed read as bad;
 // applied is good; accepted/pending are in-flight.
@@ -50,12 +50,22 @@ export function HistoryRow({ row }) {
 // THIS dashboard did; this line is the rig's own account, which is the only thing that can reveal
 // a change the table cannot contain. Renders nothing at all when the rig cannot answer — a rig
 // with no RigForge, or one older than the block, must not be made to look suspicious.
-export function ConfigProvenance({ origin, meta }) {
+export function ConfigProvenance({ origin, meta, drift }) {
   const note = configOriginNote(origin, meta);
-  if (!note) return null;
+  // #1367: the drift note QUALIFIES the origin line — it is the only thing on the page that can
+  // contradict a calm "Last changed from this dashboard" over a config nothing recorded. So it is
+  // rendered independently rather than nested: a rig serving a config but no ``config_meta`` has no
+  // origin line at all, and can still be running something other than what we applied.
+  const driftNote = configDriftNote(drift);
+  if (!note && !driftNote) return null;
   return html`
-    <p class=${"text-small " + note.cls} title=${note.title}>
+    ${
+      note
+        ? html`<p class=${"text-small " + note.cls} title=${note.title}>
         ${note.label}
         ${meta?.changed_at ? html` · <span class="text-muted text-xs">${meta.changed_at}</span>` : null}
-    </p>`;
+    </p>`
+        : null
+    }
+    ${driftNote ? html`<p class=${"text-small " + driftNote.cls} title=${driftNote.title}>${driftNote.label}</p>` : null}`;
 }

@@ -11,6 +11,7 @@ import {
   buildChartMarkers,
   buildFields,
   buildTableChanges,
+  configDriftNote,
   fieldNote,
   jsonSyntaxError,
   markerLabel,
@@ -249,4 +250,41 @@ test('fieldNote: an unknown source says the value could not be read (#1235)', ()
 
 test('fieldNote: any unrecognised source falls back to could-not-read, never null (#1235)', () => {
     assert.equal(fieldNote('bogus'), 'could not read from the rig');
+});
+
+// #1367 — the value-drift note beside the provenance line.
+test("configDriftNote says nothing when it could not check or found nothing", () => {
+  // null (not checked) and [] (checked, agrees) both render silence, for different reasons: an
+  // all-clear here would be a reassurance bounded by three narrowings a badge cannot show.
+  assert.equal(configDriftNote(null), null);
+  assert.equal(configDriftNote([]), null);
+  assert.equal(configDriftNote(undefined), null);
+  assert.equal(configDriftNote("nonsense"), null);
+});
+
+test("configDriftNote names the key on a single disagreement", () => {
+  const note = configDriftNote([{ key: "max_temp_c", applied: 75, rig: 80 }]);
+  assert.match(note.label, /max_temp_c/);
+  assert.match(note.title, /we applied 75, the rig has 80/);
+});
+
+test("configDriftNote counts rather than lists when several keys disagree", () => {
+  const note = configDriftNote([
+    { key: "DONATION", applied: 1, rig: 2 },
+    { key: "max_temp_c", applied: 75, rig: 80 },
+  ]);
+  assert.match(note.label, /2 keys/);
+  assert.match(note.title, /DONATION: we applied 1, the rig has 2/);
+});
+
+test("configDriftNote renders an absent rig value as 'not set', never as empty", () => {
+  // A rig with no thermal cutoff serves null. An unlabelled blank reads as "0" and invites the
+  // operator to overwrite a good value — the same trap fieldNote exists to close.
+  const note = configDriftNote([{ key: "max_temp_c", applied: 75, rig: null }]);
+  assert.match(note.title, /the rig has not set/);
+});
+
+test("configDriftNote renders an object value readably", () => {
+  const note = configDriftNote([{ key: "pools", applied: [{ url: "a" }], rig: [{ url: "b" }] }]);
+  assert.match(note.title, /\{"url":"a"\}/);
 });

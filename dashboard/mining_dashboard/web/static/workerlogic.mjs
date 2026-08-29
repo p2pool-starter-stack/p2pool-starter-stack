@@ -222,3 +222,33 @@ export function configOriginNote(origin, meta) {
   if (text.detail) parts.push(text.detail);
   return { cls: text.cls, label: text.label, title: parts.join(" · ") };
 }
+
+// #1367: the per-key disagreement between what this dashboard applied and what the rig reports it
+// is running — the case configOriginNote structurally cannot see, because a config edited underneath
+// RigForge records nothing for the provenance line to read.
+//
+// Renders ONLY a disagreement. `null` (could not check) and `[]` (checked, agrees) both say nothing,
+// deliberately and for different reasons: `null` is the same "say nothing" posture the rest of this
+// block takes, and `[]` is withheld because an all-clear here would be a reassurance bounded by
+// three narrowings the operator cannot see from a badge — it judges only keys we have set, never
+// pool passwords, and never mid-flight. This feature exists to stop a false reassurance; printing a
+// qualified one in the same place would be the same defect wearing the opposite label.
+export function configDriftNote(drift) {
+  if (!Array.isArray(drift) || drift.length === 0) return null;
+  const show = (v) =>
+    v === null || v === undefined
+      ? "not set"
+      : typeof v === "object"
+        ? JSON.stringify(v)
+        : String(v);
+  return {
+    cls: "text-warn",
+    label:
+      drift.length === 1
+        ? `The rig is not running what we applied: ${drift[0].key}`
+        : `The rig is not running what we applied: ${drift.length} keys`,
+    title: drift
+      .map((d) => `${d.key}: we applied ${show(d.applied)}, the rig has ${show(d.rig)}`)
+      .join(" · "),
+  };
+}

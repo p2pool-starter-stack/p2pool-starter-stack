@@ -14,13 +14,19 @@ fact only this side holds — whether the rig's ``last_change_id`` matches a cha
 spooled *for this rig*. The rig mints those ids in its control server and hands them back in the
 202, so an id in this rig's own history is an id we asked for.
 
-The comparison is evidence, not proof, and one case escapes it entirely. RigForge serves ``revision``
+The comparison is evidence, not proof, and one case escapes it. RigForge serves ``revision``
 recomputed live but takes the other three from a marker file it writes only when a change is
 *recorded* (``_stamp_config_meta``), and the marker's own stored revision is overwritten by the live
 one before it goes on the wire. So a config hand-edited underneath RigForge moves the revision while
-the provenance stays stale, and this reports the change before it — reading as "here" over a config
-we did not set. Catching that needs the last revision we OBSERVED per rig, which is persistence this
-does not add; see the follow-up issue.
+the provenance stays stale, and ``config_origin`` reports the change before it — reading as "here"
+over a config we did not set.
+
+**``config_drift`` (#1367) answers that one directly, and without the persistence this module was
+once expected to need.** Both halves of a value comparison are already in this payload —
+``last_applied`` from our own history, ``rig_config`` from the rig's feed (#1235) — so asking "is
+the rig running what we applied?" needs no revision hash reproduced byte for byte, no new column and
+no RigForge change. It answers on keys we have set; a hand-edit to a key we never applied still
+moves only the revision, and still needs the observed-revision persistence to catch.
 
 A rig that is lying can also replay an id we really did send it. Within what a rig reports honestly,
 the dashboard's own half errs one way only: every input it cannot vouch for lands on "not ours".
@@ -31,6 +37,7 @@ the same answer persistent and specific — it survives a restart, and it surviv
 """
 
 from mining_dashboard.client.rig_config_meta import config_origin
+from mining_dashboard.client.xmrig_client import strip_credentials
 from mining_dashboard.config import config
 from mining_dashboard.helper.utils import format_hashrate, format_time_abs
 from mining_dashboard.service.control_service import WORKER_WRITABLE_KEYS
@@ -46,6 +53,104 @@ from mining_dashboard.web.views import (
 # it meant anything (#1369). A bare call would leave the second use comparing against a number
 # written down somewhere else, which is how the two drift apart.
 _HISTORY_LIMIT = 50
+
+
+# RigForge fixes the JSON type of every writable scalar as it builds the config it serves
+# (``_writable_config_canonical``): ``--argjson`` for ``DONATION`` and ``watchdog_interval_min``,
+# ``--arg`` for ``autotune`` and ``watchdog``, and ``max_temp_c`` through ``tonumber`` unless it is
+# unset, which serves a literal ``null``. Our own side has no such discipline: nothing between the
+# editor and the DB coerces anything — ``validate_worker_changes`` checks key names only — and four
+# reachable editor paths store a string where the rig serves a number (#1367). Comparing the two
+# raw would report drift on a rig running exactly what we applied, which is the same false alarm
+# this feature exists to avoid, arriving through a different door.
+_CANONICAL_NUMBER = frozenset({"DONATION", "watchdog_interval_min", "max_temp_c"})
+_CANONICAL_STRING = frozenset({"autotune", "watchdog"})
+
+# Statuses that mean a change is still in flight. Deliberately the complement of a terminal outcome
+# rather than a list of terminal ones: a status we do not recognise is not evidence that a change
+# settled, and reading it as settled is what would compare against a config mid-write.
+_UNSETTLED_STATUSES = ("accepted", "running")
+
+
+def _comparable(key, value):
+    """A comparison key for ``value`` in the JSON type RigForge would have served it as.
+
+    Returns a ``(tag, value)`` PAIR rather than a bare coerced value, because Python's own equality
+    would otherwise launder a difference back in: ``1 == 1.0`` and ``True == 1.0`` are both true,
+    but only the first is a match the rig would agree with. ``bool`` is an ``int`` in Python and is
+    not a value RigForge ever serves for these keys, so returning it uncoerced is not enough — it
+    still compares equal to the number. The tag is what actually keeps the two apart.
+
+    A value that refuses to coerce keeps the ``raw`` tag rather than being dropped. It is a real
+    disagreement — the editor lets a non-numeric string through deliberately, for the rig to reject
+    — and the rig is then running something else, so it must stay comparable and compare unequal.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return ("raw", value)
+    if key in _CANONICAL_NUMBER:
+        try:
+            return ("num", float(value))
+        except (TypeError, ValueError):
+            return ("raw", value)
+    if key in _CANONICAL_STRING:
+        return ("str", str(value))
+    return ("raw", value)
+
+
+def config_drift(last_applied, rig_config, unsettled=False):
+    """Keys where the rig's current writable config disagrees with what this dashboard last applied.
+
+    The question #1367 asks — *is the rig running what we last applied?* — answered by comparing the
+    two values already in this payload, with no revision hash to reproduce byte for byte, no new
+    column and no RigForge change. #1345's provenance line reports the last change the rig
+    **recorded**; a config edited underneath RigForge records nothing, so the line keeps reading
+    "Last changed from this dashboard" over a config we did not set. This is the check that catches
+    that, and it works on rigs already deployed.
+
+    Returns a list of ``{key, applied, rig}`` — empty meaning checked and in agreement — or ``None``
+    when the comparison could not honestly be made. The UI must keep those apart: ``[]`` is a
+    finding, ``None`` is silence.
+
+    Three things bound what it can claim, each a deliberate narrowing rather than an oversight:
+
+    - **Only keys we have applied.** ``last_applied`` is a merge of DIFFS, not a config, so it holds
+      exactly the keys this dashboard has ever set. A hand-edit to a writable key we never touched
+      moves the rig's revision and is invisible here — that is option A's coverage, not this one's.
+    - **Never the pool credentials.** ``strip_credentials`` runs over our side for the same reason
+      the rig's side already runs through it: RigForge deletes ``pass`` and ``tls-fingerprint``
+      before serving, so a password we once applied would be permanent, uncloseable drift. Stripping
+      both sides costs the ability to notice a changed pool password, which nothing on this side can
+      see anyway.
+    - **Never mid-flight.** A submitted change sits at ``accepted`` until the reconciler settles it,
+      and is not in ``last_applied`` while the rig may already be running it — so comparing inside
+      that window reports drift on a key we ourselves just set. Judged on the NEWEST apply row
+      rather than on whether any unsettled row exists anywhere: an old ``accepted`` row that never
+      settled is a stuck record, not a change in flight, and letting one suppress this check forever
+      would trade a false alarm for permanent silence.
+    """
+    if unsettled or not isinstance(rig_config, dict) or not isinstance(last_applied, dict):
+        return None
+    drift = []
+    for key, applied in sorted(strip_credentials(last_applied).items()):
+        # ABSENT and ``None`` are different answers and must not be folded together. A rig with no
+        # thermal cutoff serves ``max_temp_c: null`` — a real value, and real drift if we set one —
+        # whereas a key missing outright is a rig too old to report it or a read we only got part
+        # of, which cannot support an accusation either way.
+        if key not in rig_config:
+            continue
+        rig = rig_config[key]
+        if _comparable(key, applied) != _comparable(key, rig):
+            drift.append({"key": key, "applied": applied, "rig": rig})
+    return drift
+
+
+def _has_unsettled_apply(history):
+    """Whether this rig's most recent config apply is still in flight — see ``config_drift``."""
+    for row in history or []:
+        if row.get("type", "apply") != "apply":
+            continue
+        return row.get("status") in _UNSETTLED_STATUSES
+    return False
 
 
 def build_worker_hashrate_history(state_mgr, worker, range_arg, window=None):
@@ -134,6 +239,8 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     # thing separating a change that held from one the rig threw away (``REVERTED_STATUSES``).
     last_change_id = (rig_meta or {}).get("last_change_id")
     matched = state_mgr.get_worker_config_change(name, last_change_id)
+    last_applied = state_mgr.get_last_applied_worker_config(name)
+    rig_config = (worker.get("rigforge") or {}).get("config") if worker else None
     return {
         "name": name,
         "found": worker is not None,
@@ -148,7 +255,7 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
         "rigforge_update": rigforge_update_for(worker, (data or {}).get("rigforge_release")),
         "writable_keys": sorted(WORKER_WRITABLE_KEYS),
         # Rig's own current writable-key values (#1235); None means "could not read", not empty.
-        "rig_config": (worker.get("rigforge") or {}).get("config") if worker else None,
+        "rig_config": rig_config,
         # The rig's own record of its last config change, and our verdict on it (#1345). Both None
         # for a rig that cannot answer — the client renders that as silence, not as "unknown".
         "rig_config_meta": rig_meta,
@@ -161,7 +268,13 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
             (matched or {}).get("status"),
             history_unread=matched is None or history_unread,
         ),
-        "last_applied": state_mgr.get_last_applied_worker_config(name),
+        "last_applied": last_applied,
+        # Per-key disagreement between what we applied and what the rig is running (#1367) — the
+        # case ``config_origin`` structurally cannot see, because nothing recorded the change.
+        # ``[]`` means checked and in agreement; ``None`` means we could not honestly check.
+        "config_drift": config_drift(
+            last_applied, rig_config, unsettled=_has_unsettled_apply(history)
+        ),
         "history": history,
         "hashrate_by_config": hashrate_by_config,
         "hashrate_history": build_worker_hashrate_history(state_mgr, name, range_arg, window),
