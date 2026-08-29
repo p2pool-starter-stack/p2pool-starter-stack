@@ -48,7 +48,7 @@ dashboard/tests/web/test_views.py	861
 dashboard/tests/web/test_wizard.py	974
 dashboard/tests/web/test_xvb_views.py	1342
 .github/workflows/ci.yml	513
-lib/pithead/99-remainder.sh	11870
+lib/pithead/99-remainder.sh	11470
 os/rootfs/Dockerfile	406
 scripts/build-pithead.sh	437
 scripts/release.sh	851
@@ -62,8 +62,9 @@ tests/integration/selftest-e2e-phases.sh	507
 tests/integration/selftest.sh	686
 tests/os/failure-evidence.sh	567
 tests/os/run.sh	3437
-tests/stack/run.sh	2289
+tests/stack/run.sh	1897
 tests/stack/test-appliance-boot.sh	641
+tests/stack/test-appliance-identity-boot.sh	465
 tests/stack/test-appliance-identity.sh	483
 tests/stack/test-appliance-media.sh	409
 tests/stack/test-appliance-os-update.sh	457
