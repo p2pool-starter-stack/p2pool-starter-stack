@@ -8130,7 +8130,7 @@ generate_caddyfile() {
     # hash is decoded from its base64 .env form back to the raw bcrypt string Caddy expects; it
     # protects every route, so the dashboard prompts for login before anything is served.
     local auth=""
-    if [ -n "$DASHBOARD_AUTH_HASH_B64" ]; then
+    if [ -n "${DASHBOARD_AUTH_HASH_B64:-}" ]; then
         local hash
         hash=$(printf '%s' "$DASHBOARD_AUTH_HASH_B64" | openssl base64 -d -A)
         auth=$(printf '    basic_auth {\n        %s %s\n    }' "$DASHBOARD_AUTH_USER" "$hash")
