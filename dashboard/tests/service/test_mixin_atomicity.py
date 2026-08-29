@@ -87,19 +87,85 @@ def _guarded_calls(method: ast.AST, targets: set[str]) -> list[str]:
     return sorted(hits)
 
 
-def _retained_state(subject: str) -> set[str]:
-    """Every attribute ``StateManager`` assigns to itself, minus the shared DB handle."""
-    return {
-        target.attr
-        for node in ast.walk(ast.parse(subject))
-        if isinstance(node, ast.ClassDef) and node.name == "StateManager"
-        for assign in ast.walk(node)
-        if isinstance(assign, ast.Assign)
-        for target in assign.targets
-        if isinstance(target, ast.Attribute)
+def _self_attr_names(target: ast.AST) -> set[str]:
+    """The ``self.<name>`` attributes one assignment target binds.
+
+    Recursive because a target can nest: ``self.a, (self.b, self.c) = ...`` is a ``Tuple`` holding
+    a ``Tuple``, and ``self.a, *self.rest = ...`` puts one of them behind a ``Starred``. Anything
+    that is not an attribute on ``self`` — a bare local, an attribute on some other object —
+    contributes nothing, which is what keeps the walk narrow rather than merely wide.
+    """
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return {name for element in target.elts for name in _self_attr_names(element)}
+    if isinstance(target, ast.Starred):
+        return _self_attr_names(target.value)
+    if (
+        isinstance(target, ast.Attribute)
         and isinstance(target.value, ast.Name)
         and target.value.id == "self"
-    } - _SHARED_HANDLE
+    ):
+        return {target.attr}
+    return set()
+
+
+def _retained_state(subject: str) -> set[str]:
+    """Every attribute ``StateManager`` assigns to itself, minus the shared DB handle.
+
+    Four binding shapes, not one (#1535). The first version read only ``ast.Assign`` targets that
+    were themselves ``ast.Attribute``, which is blind to tuple/list unpacking, to ``ast.AnnAssign``,
+    and to ``setattr(self, "x", v)`` — none of them contrived: the tuple shape is in production use
+    two modules over in ``data_service.py``.
+
+    **A shape this misses cannot be reported, and the silence is indistinguishable from a clean
+    result.** Q2 below asks whether a moved method touches state that stayed behind, and it answers
+    by name: a name the needle set never contains produces no finding no matter how badly a method
+    reaches for it. So the failure mode of a narrow walk here is a false PASS, which is the one this
+    file exists to prevent — hence the controls below covering every shape, and a near-miss sibling
+    proving the widened walk did not simply become "any attribute anywhere".
+    """
+    state: set[str] = set()
+    for node in ast.walk(ast.parse(subject)):
+        if not (isinstance(node, ast.ClassDef) and node.name == "StateManager"):
+            continue
+        for statement in ast.walk(node):
+            if isinstance(statement, ast.Assign):
+                for target in statement.targets:
+                    state |= _self_attr_names(target)
+            elif isinstance(statement, ast.AnnAssign):
+                state |= _self_attr_names(statement.target)
+            elif _is_self_setattr(statement):
+                state.add(statement.args[1].value)
+    return state - _SHARED_HANDLE
+
+
+def _self_setattr_calls(subject: str) -> list[ast.Call]:
+    """Every ``setattr(self, ...)`` inside ``StateManager``, resolvable name or not."""
+    return [
+        statement
+        for node in ast.walk(ast.parse(subject))
+        if isinstance(node, ast.ClassDef) and node.name == "StateManager"
+        for statement in ast.walk(node)
+        if isinstance(statement, ast.Call)
+        and isinstance(statement.func, ast.Name)
+        and statement.func.id == "setattr"
+        and statement.args
+        and isinstance(statement.args[0], ast.Name)
+        and statement.args[0].id == "self"
+    ]
+
+
+def _is_self_setattr(node: ast.AST) -> bool:
+    """``setattr(self, "literal", value)`` — a static walk can only resolve a literal name."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "setattr"
+        and len(node.args) == 3
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "self"
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    )
 
 
 def _state_reads(method: ast.AST, retained_state: set[str]) -> list[str]:
@@ -151,6 +217,21 @@ class TestTheSplitHoldsItsAtomicityProperty:
         _, moved, state = split
         reaching = {n: s for n, fn in moved.items() if (s := _state_reads(fn, state))}
         assert reaching == {}
+
+    def test_no_state_is_bound_through_a_name_the_walk_cannot_resolve(self):
+        """The one shape a static walk cannot follow, checked rather than assumed (#1535).
+
+        ``setattr(self, name, value)`` with a COMPUTED name puts a retained attribute outside the
+        needle set, and Q2 then goes quiet about it — the same false pass the widened walk above
+        exists to close, arriving by the one door the widening cannot shut. Nothing in the subject
+        does this today. This asserts that, so the limit is a measured fact with a test naming it
+        rather than a gap someone meets by surprise."""
+        unresolvable = [
+            ast.unparse(call)
+            for call in _self_setattr_calls(_SUBJECT.read_text())
+            if not _is_self_setattr(call)
+        ]
+        assert unresolvable == []
 
 
 class TestTheCheckerCanSeeWhatItIsBeingAskedAbout:
@@ -210,3 +291,97 @@ class SeededMixin:
         _, _, state = split
         seeded = _methods("class M:\n    def f(self):\n        return self.state['x']\n")["f"]
         assert _state_reads(seeded, state) == ["state"]
+
+
+class TestTheStateWalkSeesEveryShapeStateCanBeBoundIn:
+    """#1535. ``_retained_state`` decides what Q2 is ABLE to report, so a shape it cannot see is a
+    violation that passes silently — and a walk that reports nothing looks exactly like a split
+    that touches nothing. These seed each shape rather than describing it, and the near-miss case
+    is what separates a walk that is complete from one that is merely wide."""
+
+    # Every shape a `self.` attribute can be bound in. The class must literally be named
+    # `StateManager`: `_retained_state` filters on that name, so a control in a differently-named
+    # class comes back empty and reads as a broken walk rather than a broken fixture.
+    _EVERY_SHAPE = """
+class StateManager:
+    def __init__(self):
+        self.plain = 1
+        self.tuple_a, self.tuple_b = 1, 2
+        [self.list_a, self.list_b] = [1, 2]
+        self.nested_a, (self.nested_b, self.nested_c) = 1, (2, 3)
+        self.starred_head, *self.starred_rest = [1, 2, 3]
+        self.annotated: int = 0
+        setattr(self, "by_setattr", 1)
+"""
+
+    # The same shapes aimed one step off target, so widening cannot quietly become "any attribute".
+    _NEAR_MISSES = """
+class StateManager:
+    def __init__(self, other):
+        other.on_another_object = 1
+        local_only, self.mixed_with_a_local = 1, 2
+        setattr(other, "on_another_object_too", 1)
+
+
+class NotTheStateManager:
+    def __init__(self):
+        self.in_a_different_class = 1
+"""
+
+    def test_every_binding_shape_reaches_the_needle_set(self):
+        """POSITIVE CONTROL, one seeded name per shape. Before #1535 this returned only ``plain``:
+        tuple and list targets, the annotated assignment and the ``setattr`` were all invisible,
+        and the three the issue named are in ordinary use in this codebase."""
+        assert _retained_state(self._EVERY_SHAPE) == {
+            "plain",
+            "tuple_a",
+            "tuple_b",
+            "list_a",
+            "list_b",
+            "nested_a",
+            "nested_b",
+            "nested_c",
+            "starred_head",
+            "starred_rest",
+            "annotated",
+            "by_setattr",
+        }
+
+    def test_the_widened_walk_stays_narrow(self):
+        """NEGATIVE CONTROL. Every name here is a near miss — another object's attribute, a bare
+        local sharing a tuple target with a real one, a ``setattr`` on something else, an identical
+        assignment in a class this walk is not asked about. Only the one genuine ``self.`` target
+        inside ``StateManager`` survives. Without this, widening the walk could have admitted
+        everything and the positive control above would still pass."""
+        assert _retained_state(self._NEAR_MISSES) == {"mixed_with_a_local"}
+
+    def test_the_shared_db_handle_is_still_subtracted_through_the_new_shapes(self):
+        """The handle the mixins legitimately share must not read as retained state — through a
+        tuple target as much as through a plain one, which is where widening could have leaked it
+        back in."""
+        seeded = (
+            "class StateManager:\n"
+            "    def __init__(self):\n"
+            "        self._conn, self.kept = None, 1\n"
+        )
+        assert _retained_state(seeded) == {"kept"}
+
+    def test_the_unresolvable_setattr_probe_can_see_one(self):
+        """POSITIVE CONTROL for the subject assertion above, whose product is an ABSENCE — an
+        empty result there means nothing until the probe is shown able to return a non-empty one.
+
+        It also pins the limit honestly: the computed name is NOT in the needle set, and no static
+        walk can put it there. That is why the subject test asserts none exists rather than
+        pretending to cover it."""
+        seeded = (
+            "class StateManager:\n"
+            "    def __init__(self, name):\n"
+            '        setattr(self, "literal", 1)\n'
+            "        setattr(self, name, 2)\n"
+        )
+        calls = _self_setattr_calls(seeded)
+        assert len(calls) == 2
+        assert [ast.unparse(c) for c in calls if not _is_self_setattr(c)] == [
+            "setattr(self, name, 2)"
+        ]
+        assert _retained_state(seeded) == {"literal"}
