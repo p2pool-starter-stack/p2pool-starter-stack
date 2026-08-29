@@ -39,15 +39,24 @@ A workable layout (adjust to taste):
 
 ## The chains
 
-- **Monero is pruned** (`MONERO_PRUNE=1`) and compacted to its true size (~95 GiB). If it ever
-  reads back up near ~250 GiB, that is LMDB free-page bloat from an in-place prune, not a full
-  chain — compact it (below). The generic `mdb_copy` cannot read Monero's patched LMDB
-  (`MDB_VERSION_MISMATCH`); only `monero-blockchain-prune` works.
+- **Monero is pruned** (`MONERO_PRUNE=1`) and sits at ~258 GiB, which is its true compact size
+  here — measured, not estimated ([#1446](https://github.com/p2pool-starter-stack/pithead/issues/1446)).
+  An earlier version of this line put it at "~95 GiB" and told you to treat anything reading near
+  ~250 GiB as free-page bloat and compact it. That figure was a retired expectation, and the rule
+  built on it sends you into a multi-hour rebuild that reclaims nothing. **Size alone does not
+  diagnose bloat — read the freelist.** `mdb_stat -ef` on an idle copy reports 10 free pages out
+  of 67,605,667 here, and `pages_used * 4096` equals the file size exactly, so the file is dense.
+  Compact only when the freelist is genuinely large.
+- **`MDB_VERSION_MISMATCH` from a system LMDB tool is the lock-file format, not a patched data
+  format, and not corruption.** It appears while monerod holds the environment; the same tool
+  opens an idle copy of the same chain (both DBs are magic `0xbeefc0de`, version 1). Do not stop
+  monerod over it. `monero-blockchain-prune` remains the tool that compacts a Monero chain.
 - **Tari is archival/full** (~132 GiB, no pruning configured). That size is genuine data, not
   bloat, so there is nothing to compact. Shrinking it would mean pruning Tari (a config change plus
   re-sync), which is a product decision, not housekeeping.
 
-**Compacting the Monero chain** (reclaim bloat; takes hours, no downtime for the copy).
+**Compacting the Monero chain** — only when the freelist shows pages to reclaim (takes hours, no
+downtime for the copy).
 
 `monero-blockchain-prune` is copy-then-swap: once it has built `lmdb-pruned` it renames `lmdb` to
 `lmdb-old` and moves the pruned DB into place itself (#1489). Pointed straight at a live data dir

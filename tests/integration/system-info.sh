@@ -56,8 +56,9 @@ h "Chains"
     echo "Tari   : ${tdir:-?}"
     echo "         size $(du -sh "$tdir" 2>/dev/null | cut -f1)  |  archival/full (no pruning configured)"
 } | fence
-printf '\n_A pruned Monero chain that reads ~250 GiB on disk is LMDB free-page bloat, not a full chain;\n'
-printf 'see the build-server README for the compaction procedure._\n'
+printf '\n_A large pruned Monero chain is not automatically free-page bloat: this bench measured a\n'
+printf 'freelist of 10 pages out of 67,605,667, so its file is dense. Read the freelist with\n'
+printf '`mdb_stat -ef` on an idle copy before compacting; see the build-server README._\n'
 
 h "Docker & containers"
 docker --version 2>/dev/null | fence
