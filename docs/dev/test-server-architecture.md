@@ -82,7 +82,8 @@ before planning around a smaller number.
 >
 > `MDB_VERSION_MISMATCH` from a stock LMDB tool is the **lock-file** format, not a patched on-disk
 > format: it appears while monerod holds the environment, and the same tool opens an idle copy of
-> the same chain (both DBs are magic `0xbeefc0de`, version 1). Do not stop monerod over it. CoW
+> the same chain. Measured here on monerod 0.18.5.1, where both DBs read magic `0xbeefc0de`,
+> version 1 (#1446) — one bench, one build. Do not stop monerod over it. CoW
 > snapshots need btrfs/zfs on the NVMe (if it's ext4); see below.
 
 A second m.2 NVMe (PCIe) with btrfs/zfs additionally enables copy-on-write snapshots: instant,
@@ -126,7 +127,8 @@ jq '.monero.data_dir="/srv/<you>/pithead/data/monero"
    network or a fast external drive:
 
 ```bash
-# from the new box, pulling from the old one (chains are ~230 GB; hours over GbE, faster over USB3/10G):
+# from the new box, pulling from the old one (chains measure ~390 GiB: ~258 Monero + ~132 Tari;
+# hours over GbE, faster over USB3/10G):
 rsync -aP --info=progress2 olduser@oldbox:/srv/code/pithead-data/ /srv/<you>/pithead/data/
 ```
 

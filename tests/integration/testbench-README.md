@@ -47,8 +47,8 @@ A workable layout (adjust to taste):
   "~95 GiB" and told you to compact anything reading ~250 GiB; that figure was never measured.
 - **`MDB_VERSION_MISMATCH` from a system LMDB tool is the lock-file format, not a patched data
   format, and not corruption.** It appears while monerod holds the environment; the same tool
-  opens an idle copy of the same chain (both DBs are magic `0xbeefc0de`, version 1). Do not stop
-  monerod over it. `monero-blockchain-prune` remains the tool that compacts a Monero chain.
+  opens an idle copy of the same chain. Measured here on monerod 0.18.5.1, where both DBs read
+  magic `0xbeefc0de`, version 1 (#1446) — one bench, one build. Do not stop monerod over it. `monero-blockchain-prune` remains the tool that compacts a Monero chain.
 - **Tari is archival/full** (~132 GiB, no pruning configured). That size is genuine data, not
   bloat, so there is nothing to compact. Shrinking it would mean pruning Tari (a config change plus
   re-sync), which is a product decision, not housekeeping.

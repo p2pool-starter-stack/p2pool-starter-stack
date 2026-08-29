@@ -351,8 +351,9 @@ tests/integration/run.sh --host you@server --dir pithead --readiness
 >
 > `MDB_VERSION_MISMATCH` from a stock LMDB tool is the **lock-file** format, not a patched on-disk
 > format: it appears while monerod holds the environment, and the same tool opens an idle copy of
-> the same chain (both DBs are magic `0xbeefc0de`, version 1). It is not corruption — do not stop
-> monerod over it. Often the best move is to leave the free pages alone.
+> the same chain. Measured here on monerod 0.18.5.1, where both DBs read magic `0xbeefc0de`,
+> version 1 (#1446) — one bench, one build, so treat the reading as ours rather than universal.
+> It is not corruption — do not stop monerod over it. Often the best move is to leave the free pages alone.
 
 ## Bench allocation and the rig lock
 
