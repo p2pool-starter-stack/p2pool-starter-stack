@@ -66,15 +66,24 @@ rig_supply() {
     RIG_HOST="${RIG_HOST:-$MINER_HOST}"
     if [ -z "$IT_RIG_TOKEN" ]; then
         read_cmd="jq -r '.ACCESS_TOKEN // empty' $(quote_arg "$RIGFORGE_CONFIG")"
-        # No `2>/dev/null` here, deliberately: the read's own error is the diagnostic (#1466), and
-        # hiding it is what let a denied read pass for an empty file. Nothing in either substitution
-        # may print to stdout — stdout IS the token.
+        # No `2>/dev/null` here, deliberately: the read's own error IS the diagnostic (#1466), and
+        # hiding it is what let a denied read pass for a file with no token in it. Nothing in either
+        # substitution may print to stdout — stdout IS the token.
         IT_RIG_TOKEN="$(on_miner "$read_cmd")" || unpriv_rc=$?
-        # Escalate only when the unprivileged read FAILED. A rig that is simply tokenless answers
-        # with an empty string and rc 0, and re-asking under sudo would add a "a password is
-        # required" error to a case that has nothing wrong with its permissions.
-        if [ -z "$IT_RIG_TOKEN" ] && [ "$unpriv_rc" != 0 ]; then
-            IT_RIG_TOKEN="$(on_miner "sudo -n $read_cmd")" || sudo_rc=$?
+        # Escalate only when that read FAILED. A rig that is simply tokenless answers with an empty
+        # string and rc 0, and re-asking under sudo would add a "a password is required" error to a
+        # case that has nothing wrong with its permissions.
+        #
+        # The `|| IT_RIG_TOKEN=""` the line above used to carry survives HERE and only here. A failed
+        # read yields no token whatever it managed to print first — ssh can drop after the rig has
+        # written part of its answer, and half a token is worse than none: it dials, 401s, and the
+        # operator is told the phase was supplied. On the first read that guard would be dead, because
+        # this assignment overwrites a partial answer anyway; on the LAST read nothing does.
+        if [ "$unpriv_rc" != 0 ]; then
+            IT_RIG_TOKEN="$(on_miner "sudo -n $read_cmd")" || {
+                sudo_rc=$?
+                IT_RIG_TOKEN=""
+            }
         fi
     fi
     if [ -z "$RIG_HOST" ]; then

@@ -347,6 +347,18 @@ assert_eq "and it is reported as a file with no token in it" \
 assert_eq "and never as a read that failed" \
     "$(contains "$S_EMPTY" 'could NOT READ')" "no"
 
+# BOTH reads fail, and the LAST one drops after printing part of its answer — ssh cut mid-transfer.
+# Half a token is worse than none: it dials, 401s, and the operator is told the phase was supplied.
+# The `|| IT_RIG_TOKEN=""` the old single read carried has to survive on the last read in the chain,
+# and this is the only case that can see it: on any earlier read the next assignment overwrites a
+# partial answer anyway. Written against that case deliberately — the obvious version of this test,
+# a partial FIRST read rescued by a working sudo, passes whether the guard is there or not.
+S_PARTIAL="$(supply_of "half-a-tok" 255 "half-a-sudo-tok" 1)"
+assert_eq "the last read's partial output is discarded, not used as the token (#1466)" \
+    "$(contains "$S_PARTIAL" 'half-a-sudo-tok')" "no"
+assert_eq "and a run that read only fragments is reported UNDER-SUPPLIED, never as supplied" \
+    "$(contains "$S_PARTIAL" 'could NOT READ')" "yes"
+
 # Denied both ways — no passwordless sudo either. The phase is still under-supplied, but the
 # operator must be told WHICH under-supply it is, because the two have different fixes.
 S_BOTH="$(supply_of "" 5 "" 1)"
