@@ -8,12 +8,10 @@
 # comes out at its true compact size.
 #
 # DO NOT DIAGNOSE BLOAT FROM THE FILE SIZE ALONE — MEASURE THE FREELIST (#1446).
-#   This header used to put the bench's live data at "~95 GiB" inside a "~270 GiB" file. That was
-#   a retired expectation stated as a measurement, and it is wrong here: the bench's 258 GiB
-#   pruned chain carries a freelist of 10 pages out of 67,605,667, and `pages_used * 4096` equals
-#   the file size exactly. The file is dense, the chain is already pruned (`pruning_seed = 384`,
-#   `prune-blockchain=1`), and running this tool on it spends ~2.5 hours to reclaim nothing.
-#   Read the freelist with `mdb_stat -ef` on an IDLE copy before deciding a chain is bloated.
+#   This bench's 258 GiB pruned chain has a freelist of 10 pages out of 67,605,667 and
+#   `pages_used * 4096` == the file size: it is dense, already pruned, and this tool would spend
+#   ~2.5 hours reclaiming nothing. Read `mdb_stat -ef` on an IDLE copy first. (An earlier header
+#   here promised "~95 GiB of live data" — a retired expectation, never a measurement.)
 #
 # THE TOOL IS COPY-THEN-SWAP — IT DOES NOT ONLY READ THE SOURCE (#1489).
 #   After building <data-dir>/lmdb-pruned it renames <data-dir>/lmdb to <data-dir>/lmdb-old and
@@ -45,10 +43,10 @@
 # NOT a page-level copy.
 #
 # MDB_VERSION_MISMATCH IS THE LOCK-FILE FORMAT, NOT A PATCHED ON-DISK FORMAT (#1446).
-#   This header used to explain the error as "Monero ships a patched LMDB". Measured: the error
-#   appears while monerod holds the environment, and a stock LMDB tool opens an IDLE copy of the
-#   same chain (both DBs are magic 0xbeefc0de, version 1). It is not corruption; do not stop
-#   monerod over it. Note that mdb_stat REWRITES lock.mdb, so control on data.mdb specifically.
+#   The error appears while monerod HOLDS the environment; a stock LMDB tool opens an IDLE copy
+#   of the same chain (both DBs are magic 0xbeefc0de, version 1). Not corruption — do not stop
+#   monerod over it. An earlier header blamed "a patched LMDB"; that was wrong. Note mdb_stat
+#   REWRITES lock.mdb, so control on data.mdb specifically.
 #
 # This script ONLY runs the tool; it does not stop or start containers. It logs before/after
 # sizes and writes a status sentinel.

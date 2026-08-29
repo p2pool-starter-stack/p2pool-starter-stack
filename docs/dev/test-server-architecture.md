@@ -49,9 +49,9 @@ Sizing (a pruned-Monero test bench fits in ~1 TB):
 
 A 1 TB NVMe (~931 GiB usable) holds the pruned bench with ~490 GiB to spare.
 
-The Monero row is the size measured on this bench, not a compaction target. The table used to
-carry "~95 GB (compacted)" and a ~280 GB total; that under-budgeted the disk by ~160 GiB. See the
-freelist note below before planning around a smaller number.
+The Monero row is measured on this bench, not a compaction target — the table previously carried
+"~95 GB (compacted)", which under-budgeted the disk by ~160 GiB. Read the freelist note below
+before planning around a smaller number.
 
 > NOTE: verify the disk is actually fast. "SSD" in the model name is not enough; check the bus.
 > A drive sold as an "SSD" can enumerate on SATA rather than NVMe, on a link that negotiates down
@@ -77,8 +77,8 @@ freelist note below before planning around a smaller number.
 > pages (LMDB never shrinks its file), and
 > [`compact-chain.sh`](../../tests/integration/compact-chain.sh)
 > (`monero-blockchain-prune --copy-pruned-database`) rewrites the DB when it does — but measure the
-> freelist first. This paragraph used to promise compaction down to ~95 GB, which was a retired
-> expectation rather than a measurement (#1446).
+> freelist first; this paragraph used to promise compaction down to ~95 GB, which was never
+> measured (#1446).
 >
 > `MDB_VERSION_MISMATCH` from a stock LMDB tool is the **lock-file** format, not a patched on-disk
 > format: it appears while monerod holds the environment, and the same tool opens an idle copy of
