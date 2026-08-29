@@ -310,6 +310,10 @@ and `--list` prints it).
 - Expected containers up, unexpected absent. Every service for that config is running and
   healthy; in `remote` mode there is no `monerod` (and, independently, no `tari` when
   `tari.mode=remote`); `wallet-rpc`/`tari-wallet` appear only when their view key is set.
+  Presence is decided by `service_present`, which matches a compose service name as a whole
+  line and never as a substring ([#1478](https://github.com/p2pool-starter-stack/pithead/issues/1478)).
+  That distinction is load-bearing: `tari` is a prefix of `tari-wallet`, so a substring match
+  would report a stopped `tari` as running whenever the payout-confirm container is up.
 - `pithead status` exit code: `0` for a healthy config.
 - Dashboard reads live state. `/api/state` is reachable; Monero is synced (`done`); pruned/full
   display matches `monero.prune` ([#32](https://github.com/p2pool-starter-stack/pithead/issues/32)); the sidechain `pool.type` matches `p2pool.pool`.

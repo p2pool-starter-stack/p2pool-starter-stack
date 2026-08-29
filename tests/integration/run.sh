@@ -537,23 +537,23 @@ assert_running_state() {
     expected="$(expected_services "$config")"
     while IFS= read -r svc; do
         [ -z "$svc" ] && continue
-        case "$running" in
-        *"$svc"*) it_pass "container up: $svc" ;;
-        *) it_fail "container up: $svc" "not in running services" ;;
-        esac
+        if service_present "$svc" "$running"; then
+            it_pass "container up: $svc"
+        else
+            it_fail "container up: $svc" "not in running services"
+        fi
     done <<<"$expected"
     if [ "$mode" = "remote" ]; then
-        case "$running" in
-        *monerod*) it_fail "monerod absent in remote mode" "monerod is running" ;;
-        *) it_pass "monerod absent in remote mode" ;;
-        esac
+        if service_present monerod "$running"; then
+            it_fail "monerod absent in remote mode" "monerod is running"
+        else
+            it_pass "monerod absent in remote mode"
+        fi
     fi
     # tari.mode is an independent axis from monero.mode (#103/#942): the bundled tari container
-    # must be absent whenever it's remote, same as monerod above. Exact-line match, not a
-    # substring case — "tari" is a prefix of "tari-wallet" (the payout-confirm container, #462),
-    # so a loose `*tari*` pattern would false-positive on a box also running that.
+    # must be absent whenever it's remote, same as monerod above.
     if [ "$tmode" = "remote" ]; then
-        if printf '%s\n' "$running" | grep -qx tari; then
+        if service_present tari "$running"; then
             it_fail "tari absent in remote mode (#103/#942)" "tari is running"
         else
             it_pass "tari absent in remote mode (#103/#942)"
