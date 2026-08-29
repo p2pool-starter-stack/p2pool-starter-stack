@@ -217,6 +217,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-reset.sh" && domain_ran tes
 # shellcheck source=tests/stack/test-appliance-reset-lock.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-reset-lock.sh" && domain_ran test-appliance-reset-lock.sh "$_d0" "$?" || domain_ran test-appliance-reset-lock.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-appliance-caddyfile-optional-env.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-caddyfile-optional-env.sh" && domain_ran test-appliance-caddyfile-optional-env.sh "$_d0" "$?" || domain_ran test-appliance-caddyfile-optional-env.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-appliance-identity-boot.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-identity-boot.sh" && domain_ran test-appliance-identity-boot.sh "$_d0" "$?" || domain_ran test-appliance-identity-boot.sh "$_d0" "$?"
 
