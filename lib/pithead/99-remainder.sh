@@ -4919,6 +4919,19 @@ control_os_install() { # <claimed-file> <id> <actor> <control-dir>
     done
     # Same wait shape as the download's: `if ! wait` would eat the subshell's exit code.
     wait "$pid" && rc=0 || rc=$?
+    # Contention, not a failed install: os_update timed out waiting for another pithead operation
+    # and exited before it reached rauc, so no slot was written. Falling through to the generic
+    # branch below would report a FAILED install whose message asserts the running system is
+    # untouched — true, and misleading, because nothing was attempted at all. Same shape and the
+    # same reasoning as the firstboot wizard's contention branch (wizard_setup_failed). "rejected"
+    # rather than "failed" matches this runner's own vocabulary for a request that never ran.
+    if [ "$rc" -eq "$PITHEAD_EX_LOCK_TIMEOUT" ]; then
+        warn "OS install could not start: another pithead operation still held the machine."
+        control_os_refuse "$cdir" "$id" "$actor" "os-install" rejected "another pithead operation was already running, so the install was not started — nothing was changed. Try again once it has finished."
+        rm -f "$logf"
+        os_state_write "$cdir" '{"step":"idle"}'
+        return 0
+    fi
     if [ "$rc" -ne 0 ]; then
         # The raw install log is a host detail (staging paths, slot devices) and stays host-side:
         # the full tail goes to the journal, and the container-visible result carries only the

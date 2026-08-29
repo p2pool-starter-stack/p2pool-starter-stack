@@ -218,6 +218,14 @@ os_update() {
             fi
         fi
     fi
+    # Serialise the mutating half against every other pithead operation (#1482). Taken HERE and
+    # deliberately not at the top of the function: everything above is read-only checking, and the
+    # variant confirmation just above blocks on the operator's keystroke — holding the lock across
+    # that would park every other verb for as long as nobody answers. That is the same reason
+    # firstboot_wizard is not wrapped (#1391), applied one caller over. A timeout exits
+    # PITHEAD_EX_LOCK_TIMEOUT, which the CLI reports itself and the dashboard's os-install runner
+    # routes to a "rejected" rather than a failed install.
+    mutation_lock_acquire os-update
     log "Installing OS update bundle: $bundle (running: $running, bundle: $target)"
     # Tee'd like the wizard's fatal path (#1028's idiom): a bare `rauc install` let RAUC's own
     # diagnosis (a signature mismatch, an incompatible bundle) vanish, leaving only the ERR
@@ -257,4 +265,5 @@ os_update() {
     else
         rm -f "$marker"
     fi
+    mutation_lock_release
 }
