@@ -276,6 +276,108 @@ assert_eq "a rig that answers IS reported as supplied" \
     "$(contains "$R_OK" 'OK write phase supplied:')" "yes"
 assert_eq "a rig that answers produces NO warning" "$(contains "$R_OK" 'WARN')" "no"
 
+echo "== a root-owned rig config is READ, not mistaken for an empty one (#1466) =="
+# The defect: RigForge's control service runs as root and rewrites /opt/rigforge/config.json when a
+# control-apply lands, so the file is root-owned from a rig's FIRST successful write onwards. The
+# unprivileged read then failed, `2>/dev/null` swallowed the error, the token came back empty, and
+# run.sh dropped the whole rigforge-control phase while the gate still printed `✓ E2E PASSED`. The
+# run that works is the one that breaks the next run — #1178's shape in a different file.
+#
+# Both halves are asserted because either alone is a fix that reads as complete and is not: a sudo
+# fallback with the error still swallowed leaves every OTHER read failure indistinguishable from an
+# empty file, and honest reporting with no fallback leaves the gate under-supplied.
+#
+# The stub dispatches on the command the shipped code actually builds, and TRACES every read, so
+# "the fallback fired" and "the fallback fired in the right order, and only when it should" are
+# separate observations rather than one inference off the final token.
+supply_of() { # <unpriv-out> <unpriv-rc> <sudo-out> <sudo-rc> -> report lines, final token, read trace
+    local f
+    f="$(mktemp)"
+    (
+        MINER_HOST=rig1 RIG_HOST="" IT_RIG_TOKEN="" RIGFORGE_CONFIG=/opt/rigforge/config.json
+        BENCH_HOST=bench U_OUT="$1" U_RC="$2" S_OUT="$3" S_RC="$4" TRACE="$f"
+        warn() { printf 'WARN %s\n' "$*"; }
+        ok() { printf 'OK %s\n' "$*"; }
+        on_miner() {
+            printf 'READ[%s]\n' "$1" >>"$TRACE"
+            case "$1" in
+            "sudo -n"*)
+                printf '%s' "$S_OUT"
+                return "$S_RC"
+                ;;
+            *)
+                printf '%s' "$U_OUT"
+                return "$U_RC"
+                ;;
+            esac
+        }
+        on_bench() { cat >/dev/null; }
+        rig_supply
+        printf 'TOKEN[%s]\nRC[%s]\n' "$IT_RIG_TOKEN" "$?"
+    ) </dev/null
+    cat "$f"
+    rm -f "$f"
+}
+
+# Denied unprivileged read, sudo -n succeeds — the real post-control-apply rig.
+S_DENIED="$(supply_of "" 5 "recovered-tok3n" 0)"
+assert_eq "a root-owned config is recovered through the sudo -n fallback (#1466)" \
+    "$(contains "$S_DENIED" 'TOKEN[recovered-tok3n]')" "yes"
+assert_eq "a recovered token means the phase is SUPPLIED, not under-supplied" \
+    "$(contains "$S_DENIED" 'UNDER-SUPPLIED')" "no"
+assert_eq "the unprivileged read is still tried FIRST — sudo is the fallback, not the route" \
+    "$(printf '%s\n' "$S_DENIED" | grep -c 'READ\[jq ')" "1"
+assert_eq "and the fallback does reach the same file under sudo" \
+    "$(contains "$S_DENIED" "READ[sudo -n jq -r '.ACCESS_TOKEN // empty' /opt/rigforge/config.json]")" "yes"
+
+# Readable config that genuinely holds no token: rc 0, empty output. Escalating here would answer a
+# permissions question nobody asked and print a sudo error into a case with nothing wrong with it.
+S_EMPTY="$(supply_of "" 0 "must-not-be-read" 0)"
+assert_eq "a READABLE config with no token does not escalate to sudo (#1466)" \
+    "$(contains "$S_EMPTY" 'READ[sudo -n')" "no"
+assert_eq "and it is reported as a file with no token in it" \
+    "$(contains "$S_EMPTY" 'no token in')" "yes"
+assert_eq "and never as a read that failed" \
+    "$(contains "$S_EMPTY" 'could NOT READ')" "no"
+
+# Denied both ways — no passwordless sudo either. The phase is still under-supplied, but the
+# operator must be told WHICH under-supply it is, because the two have different fixes.
+S_BOTH="$(supply_of "" 5 "" 1)"
+assert_eq "a read that failed both ways is reported as a failed READ (#1466)" \
+    "$(contains "$S_BOTH" 'could NOT READ')" "yes"
+assert_eq "a failed read is NEVER reported as the file having no token" \
+    "$(contains "$S_BOTH" 'no token in')" "no"
+assert_eq "the report carries both rcs, so the operator can tell which half refused" \
+    "$(contains "$S_BOTH" 'read rc=5, sudo -n rc=1')" "yes"
+assert_eq "an unreadable config still leaves the phase requested — rc 0 (#1378)" \
+    "$(contains "$S_BOTH" 'RC[0]')" "yes"
+assert_eq "and the under-supply still names the leg that cannot run at all (#516)" \
+    "$(contains "$S_BOTH" 'feed leg cannot run')" "yes"
+
+# The swallowing itself, driven rather than read. Asserting `2>/dev/null` is absent from the source
+# would pass on a fix that moved the redirection elsewhere; this asserts the error ARRIVES.
+err_of() { # -> only what rig_supply let through on stderr, with its own warnings silenced
+    (
+        MINER_HOST=rig1 RIG_HOST="" IT_RIG_TOKEN="" RIGFORGE_CONFIG=/opt/rigforge/config.json
+        BENCH_HOST=bench
+        warn() { :; }
+        ok() { :; }
+        on_miner() {
+            case "$1" in
+            "sudo -n"*) return 1 ;;
+            *)
+                printf 'jq: error: /opt/rigforge/config.json: Permission denied\n' >&2
+                return 5
+                ;;
+            esac
+        }
+        on_bench() { cat >/dev/null; }
+        rig_supply
+    ) </dev/null 2>&1 >/dev/null
+}
+assert_eq "the denied read's OWN error reaches the operator, unswallowed (#1466)" \
+    "$(contains "$(err_of)" 'Permission denied')" "yes"
+
 echo "== the proof dial actually proves something (#1378) =="
 # rig_supply's whole value over a bare default is that it DIALS before claiming the phase is
 # supplied. A dial carrying no credential would 401 against a real rig and "prove" only that
