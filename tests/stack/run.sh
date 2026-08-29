@@ -223,6 +223,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-caddyfile-optional-env.sh" 
 # shellcheck source=tests/stack/test-appliance-rotate-secrets-lock.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-rotate-secrets-lock.sh" && domain_ran test-appliance-rotate-secrets-lock.sh "$_d0" "$?" || domain_ran test-appliance-rotate-secrets-lock.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-appliance-firstboot-install-lock.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-firstboot-install-lock.sh" && domain_ran test-appliance-firstboot-install-lock.sh "$_d0" "$?" || domain_ran test-appliance-firstboot-install-lock.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-appliance-identity-boot.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-identity-boot.sh" && domain_ran test-appliance-identity-boot.sh "$_d0" "$?" || domain_ran test-appliance-identity-boot.sh "$_d0" "$?"
 

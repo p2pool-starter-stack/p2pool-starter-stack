@@ -2542,6 +2542,36 @@ stage_wizard_spool() { # <spool-dir> -> fingerprint on stdout
     wizard_mint_cert "$spool" 2>/dev/null || true
 }
 
+# The lock and the marker that OPEN every install path: taken before the first write, which is `installing` itself, so
+# the lock timeout's promise that nothing was changed is literally true. No caller holds it across a human wait — the
+# two card paths sit past their handoff-ack, and the bare keep-reinstall has no card and never waits (#1482).
+wizard_install_begin() { # <spool-dir>
+    mutation_lock_acquire firstboot-install
+    touch "$1/installing"
+    chown 1000:1000 "$1/installing" 2>/dev/null || true
+}
+
+# The switch-off every install path ends on, and where the window closes — held across the poweroff for the reason
+# factory-reset holds across its reboot: the gap before the machine goes dark is precisely when another verb must not
+# start. No confirmation step, deliberately — an operator who removes the stick BEFORE pressing anything takes the
+# running filesystem with it, and a machine already dark by the time anyone reaches it removes that mistake entirely.
+wizard_install_finish() { # <engine> <headline> <closing line>
+    _console "" "$2" "When the machine is dark, remove the USB stick and switch it back on." "$3"
+    sleep 8 # long enough for the page's poll to show the switch-off steps
+    "$1" rm -f pithead-wizard >/dev/null 2>&1 || true
+    _console "" "Shutting down. Remove the USB stick, then switch the machine on."
+    sleep 3
+    systemctl poweroff
+    mutation_lock_release
+}
+
+wizard_install_failed_page() { # <spool-dir> <what failed> — the page gets the disk list and the reason back; the window closes here
+    publish_disk_inventory "$1"
+    warn "$2 failed — the page shows the reason."
+    mutation_lock_release
+    sleep 2
+}
+
 firstboot_wizard() {
     local arg
     for arg in "$@"; do
@@ -2743,25 +2773,15 @@ firstboot_wizard() {
             if [ "$installer" -eq 1 ] && [ -f "$spool/install-request" ] &&
                 [ "$(cut -f2 "$spool/install-request" 2>/dev/null)" = "keep" ] &&
                 [ ! -f "$spool/config.json" ] && [ ! -f "$spool/restore-archive" ]; then
-                touch "$spool/installing"
-                chown 1000:1000 "$spool/installing" 2>/dev/null || true
+                wizard_install_begin "$spool"
                 local irc=0
                 consume_install_request "$spool" || irc=$?
                 if [ "$irc" -ne 0 ]; then
                     rm -f "$spool/installing"
-                    publish_disk_inventory "$spool"
-                    warn "Reinstall failed — the page shows the reason."
-                    sleep 2
+                    wizard_install_failed_page "$spool" "Reinstall"
                     continue
                 fi
-                _console "" "Reinstall complete — switching off now." \
-                    "When the machine is dark, remove the USB stick and switch it back on." \
-                    "Everything it knew — settings, wallets, login, chains — is still there."
-                sleep 8
-                "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
-                _console "" "Shutting down. Remove the USB stick, then switch the machine on."
-                sleep 3
-                systemctl poweroff
+                wizard_install_finish "$engine" "Reinstall complete — switching off now." "Everything it knew — settings, wallets, login, chains — is still there."
                 return
             fi
             # The rig role's submission travels on its own channel — no pithead config exists
@@ -2799,8 +2819,7 @@ firstboot_wizard() {
                         chown 1000:1000 "$spool/error.txt" 2>/dev/null || true
                         continue
                     fi
-                    touch "$spool/installing"
-                    chown 1000:1000 "$spool/installing" 2>/dev/null || true
+                    wizard_install_begin "$spool"
                     # Stage the accepted settings onto the running ESP: the installer carries
                     # them to the target's ESP, and the first boot from disk lands them on its
                     # /data (the top of this function). The stick keeps NEITHER copy — rig.json
@@ -2811,6 +2830,7 @@ firstboot_wizard() {
                         rm -f "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack" "$spool/install-request" "$PWD/rig.json"
                         printf 'Could not stage the rig settings for the installed system — nothing was installed.' >"$spool/error.txt"
                         chown 1000:1000 "$spool/error.txt" 2>/dev/null || true
+                        mutation_lock_release
                         continue
                     fi
                     local irc=0
@@ -2818,19 +2838,10 @@ firstboot_wizard() {
                     rm -f "$PWD/rig.json" /boot/efi/pithead-rig.json
                     if [ "$irc" -ne 0 ]; then
                         rm -f "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack"
-                        publish_disk_inventory "$spool"
-                        warn "Install failed — the page shows the reason."
-                        sleep 2
+                        wizard_install_failed_page "$spool" "Install"
                         continue
                     fi
-                    _console "" "Installation complete — switching off now." \
-                        "When the machine is dark, remove the USB stick and switch it back on." \
-                        "It will come up as the rig you just confirmed."
-                    sleep 8
-                    "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
-                    _console "" "Shutting down. Remove the USB stick, then switch the machine on."
-                    sleep 3
-                    systemctl poweroff
+                    wizard_install_finish "$engine" "Installation complete — switching off now." "It will come up as the rig you just confirmed."
                     return
                 fi
                 # Run from this medium — or an installed machine choosing the rig role: the
@@ -2931,8 +2942,7 @@ firstboot_wizard() {
                         rm -f "$PWD/config.json"
                         continue
                     fi
-                    touch "$spool/installing"
-                    chown 1000:1000 "$spool/installing" 2>/dev/null || true
+                    wizard_install_begin "$spool"
                     # Stage the ACCEPTED config (password already baked) onto the running ESP —
                     # the installer carries pre-seed files to the target's ESP, and the first
                     # boot from disk provisions itself headlessly from it. The credentials the
@@ -2965,6 +2975,7 @@ firstboot_wizard() {
                         chown 1000:1000 "$spool/error.txt" 2>/dev/null || true
                         rm -f "$PWD/config.json" /boot/efi/pithead-restore.enc /boot/efi/pithead-restore-pass
                         rm -rf "$carry"
+                        mutation_lock_release
                         continue
                     fi
                     local irc=0
@@ -2988,21 +2999,10 @@ firstboot_wizard() {
                     if [ "$irc" -ne 0 ]; then
                         rm -f /boot/efi/pithead-config.json "$spool/installing" "$spool/handoff.json" "$spool/handoff-ack"
                         jq -c . "$spool/last-attempt.json" >/dev/null 2>&1 || true
-                        publish_disk_inventory "$spool"
-                        warn "Install failed — the page shows the reason."
-                        sleep 2
+                        wizard_install_failed_page "$spool" "Install"
                         continue
                     fi
-                    _console "" "Installation complete — switching off now." "When the machine is dark, remove the USB stick and switch it back on." "It will provision itself with the configuration you just confirmed."
-                    # No confirmation step. An operator who removes the stick BEFORE pressing
-                    # anything takes the running filesystem with it — powering off unprompted
-                    # removes the ordering mistake entirely: by the time anyone reaches the
-                    # machine it is already dark and the stick is safe to pull.
-                    sleep 8 # long enough for the page's poll to show the switch-off steps
-                    "$engine" rm -f pithead-wizard >/dev/null 2>&1 || true
-                    _console "" "Shutting down. Remove the USB stick, then switch the machine on."
-                    sleep 3
-                    systemctl poweroff
+                    wizard_install_finish "$engine" "Installation complete — switching off now." "It will provision itself with the configuration you just confirmed."
                     return
                 fi
                 # Installed machine, config accepted: record what it IS. The installer path
