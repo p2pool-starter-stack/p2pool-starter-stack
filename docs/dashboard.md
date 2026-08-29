@@ -426,27 +426,25 @@ must enable and how the target is derived.
 Above the history, a line says **where the rig's current config came from** — the rig's own
 account, not ours. The history table below it can only list what this dashboard did; this line is
 the one place a change it never saw can show up. RigForge stamps each config change it records with
-what applied it and a change id, and the dashboard looks for that id among this rig's own history
-rows — the table directly below — so the verdict is one you can check by eye:
+what applied it and a change id, and the dashboard looks that id up among the changes it recorded
+for this rig. The lookup is by id, not a search of the table below, so it still answers on a rig
+with more changes than that table shows:
 
-- **Last changed from this dashboard** — the id matches a change in the history below, and that
+- **Last changed from this dashboard** — the id matches a change recorded for this rig, and that
   change is recorded as having been applied. Only that outcome earns this line: every other one,
   including an outcome that was never recorded at all, gets one of the lines below instead.
-- **Last change from this dashboard was rolled back** — the id matches a change the history below
+- **Last change from this dashboard was rolled back** — the id matches a change this dashboard
   records as rolled back or failed. When a control change does not come back live, RigForge
   restores the previous config and stamps that restore with the *same* change id it just reverted,
   so the rig goes on naming a change it is no longer running. The rig is on whatever config came
   before it.
-- **Last change from this dashboard is unconfirmed** — the id matches a change in the history
-  below, and no outcome was ever recorded for it. The dashboard waits on the rig for the result of
+- **Last change from this dashboard is unconfirmed** — the id matches a change recorded for this
+  rig, and no outcome was ever recorded for it. The dashboard waits on the rig for the result of
   a change it sends; when the rig has not said what it did within that wait, the change is recorded
   as acknowledged but unsettled. It may be running, or the rig may have rolled it back. This line
   says only that the record cannot tell you which, and it can still resolve on a later reading.
 - **Last changed from another dashboard** — applied over a control channel, but with an id this
   dashboard has never issued. Another host drove this rig, or its record here is gone.
-- **Last changed over a control channel** — applied over a control channel with an id that was not
-  found, on a rig with more recorded changes than the line reads back. The id may sit just past the
-  end of what was read, so the dashboard cannot honestly say the change was not its own.
 - **Cannot tell — this dashboard could not read its own history** — the dashboard's own change
   history would not open. It is the one line here that is about this dashboard rather than the rig:
   nothing was compared, so nothing is claimed either way. It says nothing about what the rig did.

@@ -33,6 +33,24 @@ from typing import Any
 # `storage_service` so that import surface is unchanged by the split (#1369).
 _RECONCILE_TERMINAL = ("applied", "rejected", "rolled_back", "failed", "noop", "throttled")
 
+# One column list for every read of this table that returns a ROW, so a windowed read and an
+# exact-id read cannot drift into returning differently-shaped rows for the same change
+# (#1369). `worker_config_change_known` deliberately does not use it — see its docstring.
+_SELECT_CHANGE = "SELECT change_id, ts, status, changes, reason, type FROM worker_config"
+
+
+def _shaped(row: sqlite3.Row) -> dict:
+    """One ``worker_config`` row as the rest of the app reads it: ``changes`` parsed back to a
+    dict (unparseable JSON reads as ``{}`` rather than raising), and a row written before the
+    ``type`` column existed (#1014) reading back as ``"apply"``."""
+    d = dict(row)
+    try:
+        d["changes"] = json.loads(d["changes"]) if d["changes"] else {}
+    except (TypeError, ValueError):
+        d["changes"] = {}
+    d["type"] = d.get("type") or "apply"
+    return d
+
 
 class WorkerConfigStoreMixin:
     """The `worker_config` accessors of `StateManager`. Never instantiated on its own."""
@@ -82,20 +100,10 @@ class WorkerConfigStoreMixin:
                     return None
                 cursor = self._conn.cursor()
                 cursor.execute(
-                    "SELECT change_id, ts, status, changes, reason, type FROM worker_config "
-                    "WHERE worker = ? ORDER BY ts DESC, id DESC LIMIT ?",
+                    f"{_SELECT_CHANGE} WHERE worker = ? ORDER BY ts DESC, id DESC LIMIT ?",
                     (worker, limit),
                 )
-                out = []
-                for row in cursor.fetchall():
-                    d = dict(row)
-                    try:
-                        d["changes"] = json.loads(d["changes"]) if d["changes"] else {}
-                    except (TypeError, ValueError):
-                        d["changes"] = {}
-                    d["type"] = d.get("type") or "apply"
-                    out.append(d)
-                return out
+                return [_shaped(row) for row in cursor.fetchall()]
         except sqlite3.Error as e:
             self.logger.error(f"Worker Config Read Error: {e}")
             return None
@@ -129,11 +137,64 @@ class WorkerConfigStoreMixin:
         except sqlite3.Error as e:
             self._db_error("Worker Config Reconcile Error", e)
 
+    def get_worker_config_change(self, worker: str, change_id: str) -> dict | None:
+        """This rig's own row for ``change_id``, looked up by id rather than searched for in a
+        window (#1369).
+
+        The provenance verdict needs to know whether a change id the rig names is one we spooled
+        for THIS rig, and what became of it. Scanning the bounded history the page renders could
+        only answer that for a rig whose change was still inside the window; past it the feature
+        stopped working in both directions at once — it could neither claim a change that was ours
+        nor name one that was not. A lookup by id has no such horizon: `EXPLAIN QUERY PLAN`
+        reports `SEARCH worker_config USING INDEX idx_worker_config (worker=?)`, so it seeks
+        this rig's rows and walks only those, in the order that index already supplies.
+
+        Three-valued on the #1409 contract, and it fails CLOSED: ``None`` means the read FAILED
+        (no connection, or ``sqlite3.Error``), ``{}`` means there is genuinely no such row for
+        this worker, and a dict is the row. Worker-scoped on purpose — ``worker_config_change_known``
+        below asks the deliberately unscoped question for #530, and answering this one with it
+        would let a change spooled for a DIFFERENT rig read as this rig's own.
+
+        Ordering matches ``get_worker_config_history``, so this returns the same row the window
+        scan it replaces would have matched.
+        """
+        if not change_id:
+            return {}
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return None
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    f"{_SELECT_CHANGE} WHERE worker = ? AND change_id = ? "
+                    "ORDER BY ts DESC, id DESC LIMIT 1",
+                    (worker, change_id),
+                )
+                row = cursor.fetchone()
+                return _shaped(row) if row is not None else {}
+        except sqlite3.Error as e:
+            self.logger.error(f"Worker Config Change Read Error: {e}")
+            return None
+
     def worker_config_change_known(self, change_id: str) -> bool:
         """Whether ``change_id`` was ever spooled by THIS dashboard (#530): a row exists in
         ``worker_config`` — the table only ``add_worker_config_version`` writes to, one row per
         change the dashboard itself sent. A rig reporting a terminal outcome for a change_id NOT
-        found here is reporting something it applied on its own — an out-of-band rig edit."""
+        found here is reporting something it applied on its own — an out-of-band rig edit.
+
+        Unscoped, and it fails OPEN, both deliberately and both the opposite of
+        ``get_worker_config_change`` above — this method must return ``False`` on a closed handle
+        and ``True`` on a ``sqlite3.Error``, where the provenance path needs the same answer for
+        both, so no one three-valued helper can serve them.
+
+        It keeps its own query too, and that is the point rather than an oversight: this asks only
+        whether a row EXISTS. It never reads ``ts``, so it needs no ``ORDER BY``, and it never
+        reads the row, so it needs neither the column list nor ``_shaped``. Answering it through
+        the provenance query cost a temp B-tree sort per call for nothing — measured with
+        `EXPLAIN QUERY PLAN`, and `_reconcile_worker_config` calls this once per reporting rig per
+        poll. What the two genuinely must share is the ROW SHAPE, and only the reads that return a
+        row have that in common; ``_SELECT_CHANGE`` is where they share it.
+        """
         if not change_id:
             return False
         try:

@@ -108,38 +108,32 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     # Already filtered to RigForge's own vocabulary by the client layer, so this is a read, not a
     # second parse — re-validating here would be a second place to get the allowlist wrong.
     rig_meta = (worker.get("rigforge") or {}).get("config_meta") if worker else None
-    # Matched against THIS rig's own history rows, which is both the correct scope and the cheapest
-    # one: ``history`` is already in hand, so this costs no extra query.
+    # Looked up by id against THIS rig's own ``worker_config`` rows, unbounded — NOT searched for
+    # among the ``history`` rows already in hand (#1369). Those are the 50 the page renders, and a
+    # rig with more changes than that pushed its own row off the end: past the window the verdict
+    # stopped working in BOTH directions at once, unable to claim a change that was ours and
+    # unable to name one that was not. The window is a rendering limit; it was never a fact about
+    # what this dashboard spooled, and letting it bound the verdict made it one. The extra query
+    # is an index seek on `worker` — `EXPLAIN QUERY PLAN` reports `SEARCH worker_config USING
+    # INDEX idx_worker_config (worker=?)` — walking that rig's own rows in the order the index
+    # already supplies, so it costs no sort. On a MISS it walks all of them, and the miss is the
+    # foreign-change case this line exists to catch: bounded by one rig's history rather than by
+    # nothing. Reusing a list already in hand was the only thing the old shape actually bought.
     #
     # Deliberately NOT ``worker_config_change_known``, which the #530 rig-edit audit uses. That
     # lookup is unscoped — it asks whether ANY rig's change carried this id — and it fails OPEN
     # (True) on a DB error, both correct for #530, where a false "known" merely declines to accuse
     # a rig. Here the same two properties invert into the one answer this feature must never give
     # wrongly: a change id spooled for a DIFFERENT rig, or a transient DB error, would print "Last
-    # changed from this dashboard" over a change this dashboard never made. Scanning the rig's own
-    # rows is worker-scoped by construction and fails closed, because a failed read is now a
-    # ``None`` the verdict answers separately (#1409) rather than a ``[]`` it cannot tell from a miss.
-    #
-    # It also makes the verdict checkable: "here" now means precisely "the id is one of the rows
-    # rendered directly below this line, and that row records the change as having held", so an
-    # operator can confirm it by eye rather than trust it.
-    #
-    # But a bounded window can only settle a MISS when it saw the whole history. Reading exactly
-    # ``_HISTORY_LIMIT`` rows means there may be more we did not read, so a miss could be an id one
-    # row past the end rather than an id nobody here spooled — and "elsewhere" reads as "Last
-    # changed from another dashboard", an accusation the read cannot support (#1369). Passing the
-    # fullness of the window lets that case say "we do not know" instead. Only that case changes:
-    # a short read is still conclusive. The ``sqlite3.Error`` path no longer arrives here at all:
-    # it returns ``None`` and is answered by ``unread`` before fullness is consulted (#1409).
+    # changed from this dashboard" over a change this dashboard never made.
+    # ``get_worker_config_change`` is worker-scoped by construction and fails closed, returning a
+    # ``None`` the verdict answers separately (#1409) rather than a ``{}`` it cannot tell from a miss.
     #
     # The matched ROW, not merely whether one exists: RigForge's rollback re-apply re-stamps the id
     # it just reverted, so a rolled-back change still matches by id. The row's status is the only
     # thing separating a change that held from one the rig threw away (``REVERTED_STATUSES``).
     last_change_id = (rig_meta or {}).get("last_change_id")
-    matched = next(
-        (row for row in history if last_change_id and row.get("change_id") == last_change_id),
-        None,
-    )
+    matched = state_mgr.get_worker_config_change(name, last_change_id)
     return {
         "name": name,
         "found": worker is not None,
@@ -158,12 +152,14 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
         # The rig's own record of its last config change, and our verdict on it (#1345). Both None
         # for a rig that cannot answer — the client renders that as silence, not as "unknown".
         "rig_config_meta": rig_meta,
+        # ``matched``: a row = found, ``{}`` = no such row, ``None`` = the lookup itself failed.
+        # Either failed read still fails closed — the rendered list going unread does not make the
+        # verdict trustworthy, and both come off the same handle, so they fail together in practice.
         "config_origin": config_origin(
             rig_meta,
-            matched is not None,
+            bool(matched),
             (matched or {}).get("status"),
-            history_truncated=len(history) >= _HISTORY_LIMIT,
-            history_unread=history_unread,
+            history_unread=matched is None or history_unread,
         ),
         "last_applied": state_mgr.get_last_applied_worker_config(name),
         "history": history,

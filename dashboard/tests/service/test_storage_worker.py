@@ -336,6 +336,79 @@ class TestWorkerConfigChangeKnown:
         assert state_manager.worker_config_change_known("cid-1") is True
 
 
+class TestGetWorkerConfigChange:
+    """#1369: the provenance lookup — this rig's own row for one change id, found by id rather
+    than searched for in the 50-row window the page renders.
+
+    The contract is deliberately the OPPOSITE of ``worker_config_change_known`` above in both
+    respects a lookup can differ: it is worker-SCOPED, and it fails CLOSED. Those two properties
+    are why the two methods share a query and nothing else — the tests below pin each one to a
+    failure a single three-valued helper could not serve both ways.
+    """
+
+    def test_a_spooled_change_comes_back_as_its_row(self, state_manager):
+        state_manager.add_worker_config_version("rig1", "cid-1", "applied", {"DONATION": 5}, None)
+        row = state_manager.get_worker_config_change("rig1", "cid-1")
+        assert row["status"] == "applied"
+        assert row["changes"] == {"DONATION": 5}
+        assert row["type"] == "apply"  # the shape a history row has, not a second shape
+
+    def test_a_row_far_past_the_rendered_window_is_still_found(self, state_manager):
+        # The whole point of the method: 200 later changes cannot hide the one being asked about.
+        state_manager.add_worker_config_version(
+            "rig1", "cid-1", "applied", {"DONATION": 5}, None, ts=1000.0
+        )
+        for i in range(200):
+            state_manager.add_worker_config_version(
+                "rig1", f"later{i:04d}", "rejected", {}, None, ts=2000.0 + i
+            )
+        assert state_manager.get_worker_config_change("rig1", "cid-1")["status"] == "applied"
+        # ...and the windowed read really does NOT hold it, or the line above proves nothing.
+        history = state_manager.get_worker_config_history("rig1", limit=50)
+        assert "cid-1" not in [row["change_id"] for row in history]
+
+    def test_another_rigs_change_is_not_this_rigs(self, state_manager):
+        # Scoping, which #530's unscoped lookup deliberately does not do. Claiming this row for
+        # rig1 would print "Last changed from this dashboard" over a change rig1 never got.
+        state_manager.add_worker_config_version("rig2", "cid-1", "applied", {}, None)
+        assert state_manager.get_worker_config_change("rig1", "cid-1") == {}
+        assert state_manager.worker_config_change_known("cid-1") is True  # the contrast, asserted
+
+    def test_the_newest_row_wins_when_an_id_was_written_twice(self, state_manager):
+        # RigForge re-stamps the id it reverted, so the same id can carry two rows. The verdict
+        # must read the latest outcome — the same row the newest-first window scan would match.
+        state_manager.add_worker_config_version("rig1", "cid-1", "applied", {}, None, ts=1000.0)
+        state_manager.add_worker_config_version("rig1", "cid-1", "rolled_back", {}, None, ts=2000.0)
+        assert state_manager.get_worker_config_change("rig1", "cid-1")["status"] == "rolled_back"
+
+    def test_no_such_row_is_an_empty_dict_not_none(self, state_manager):
+        # `{}` and None are different facts (#1409): a healthy DB holding no such row is a real
+        # answer, and folding it into the failure value would make every miss read as "we could
+        # not tell" — which is the accusation-withdrawal this issue is about, applied to the case
+        # that does not need it.
+        assert state_manager.get_worker_config_change("rig1", "no-such-id") == {}
+
+    def test_an_empty_change_id_is_a_miss_not_a_failure(self, state_manager):
+        assert state_manager.get_worker_config_change("rig1", "") == {}
+        assert state_manager.get_worker_config_change("rig1", None) == {}
+
+    def test_after_close_is_none(self, state_manager):
+        # Fails CLOSED, and this is the exact point #530 goes the other way: there a closed handle
+        # is False (not known / quiet), here it must be None (we do not know) so the verdict can
+        # say so instead of naming another dashboard.
+        state_manager.add_worker_config_version("rig1", "cid-1", "applied", {}, None)
+        state_manager.close()
+        assert state_manager.get_worker_config_change("rig1", "cid-1") is None
+
+    def test_lookup_error_is_none_not_a_miss(self, state_manager):
+        # The loud failure path, and #530's other inversion: it returns True here, we return None.
+        # Returning `{}` would source an accusation from our own broken database.
+        with state_manager._db_lock:
+            state_manager._conn.execute("DROP TABLE worker_config")
+        assert state_manager.get_worker_config_change("rig1", "cid-1") is None
+        assert state_manager.worker_config_change_known("cid-1") is True  # the contrast, asserted
+
+
 class TestWorkerConfigType:
     """worker_config.type (#1014) distinguishes a config apply from a one-click rig upgrade so
     the change history can show it and hashrate_by_config can attribute a build change correctly."""

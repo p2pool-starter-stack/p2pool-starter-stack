@@ -176,26 +176,21 @@ const CONFIG_ORIGIN_TEXT = {
     label: "Last changed from another dashboard",
     detail: "applied over a control channel, with a change id this dashboard has no record of",
   },
-  // `untraced` is `elsewhere` with the accusation taken back out. The server reaches it when the id
-  // was not found AND the history it searched was full, so the id may simply sit past the end of
-  // the window. `text-muted` rather than `status-warn` on purpose: the two muted verdicts are the
-  // ones that claim nothing, and a warning colour over "we could not tell" is the same overclaim in
-  // a different medium. The cost is stated where it belongs — a genuinely foreign change on a
-  // long-history rig lands here too, so a true alarm is traded for a statement that is always true.
-  untraced: {
-    cls: "text-muted",
-    label: "Last changed over a control channel",
-    detail:
-      "too many changes since to tell whether it was this dashboard — the id is older than the history read",
-  },
+  // There was a third muted verdict here, `untraced`: `elsewhere` with the accusation taken back
+  // out, sent when the id was not found AND the history the server searched was full, so the id
+  // might merely have sat past the end of the window. It was a trade — a genuinely foreign change
+  // on a long-history rig landed there too, so a true alarm was swapped for a statement that was
+  // always true. #1369 made the server look the id up directly instead of searching the window it
+  // renders, which removes the doubt rather than wording it, so the verdict has no producer and
+  // is gone from both sides.
+  //
   // `unread` is the one verdict that is about US, not the rig (#1409). The server sends it when
   // its own history read failed outright — no DB connection, or a `sqlite3.Error` — so it never got
   // to look for the id. Before this it fell through to `elsewhere` and printed "Last changed from
   // another dashboard" over a change that may well have been ours: an accusation sourced from our
-  // own broken database. `text-muted` for the same reason `untraced` is muted — the muted verdicts
-  // are the ones that claim nothing, and a warning colour over "we could not tell" is the same
-  // overclaim in a different medium. This adds a verdict STATE, deliberately not a new COLOUR: the
-  // text carries the distinction, the colour carries the class.
+  // own broken database. `text-muted` because it claims nothing, and a warning colour over "we
+  // could not tell" is the same overclaim in a different medium. This adds a verdict STATE,
+  // deliberately not a new COLOUR: the text carries the distinction, the colour carries the class.
   unread: {
     cls: "text-muted",
     label: "Cannot tell — this dashboard could not read its own history",

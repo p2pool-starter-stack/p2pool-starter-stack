@@ -72,11 +72,10 @@ test("a history we could not read points at us, never at another dashboard", () 
   // overclaim in a different medium. This adds a verdict STATE, deliberately not a new COLOUR.
   assert.match(out, /text-muted/);
   assert.doesNotMatch(out, /status-warn/);
-  // The text is what has to carry the distinction, since the colour deliberately does not: this
-  // must not be confusable with `untraced`, the OTHER muted "we cannot tell" — that one is about
-  // the rig having changed too often to see back that far, this one is about us.
-  assert.notEqual(note.label, configOriginNote("untraced", META).label);
+  // The text is what has to carry the distinction, since the colour deliberately does not: the
+  // muted verdict has to say the failure was OURS, not report something about the rig.
   assert.match(note.label, /this dashboard could not read/i);
+  assert.doesNotMatch(note.label, /control channel/i);
 });
 
 test("rig edits are flagged — noticing one is the whole point of the feature", () => {
@@ -123,19 +122,13 @@ test("an unconfirmed change of ours neither claims it held nor accuses the rig",
   assert.match(note.title, /has not reported an outcome/i);
 });
 
-test("untraced withdraws the accusation elsewhere makes, without making the opposite one", () => {
-  const out = renderToString(ConfigProvenance({ origin: "untraced", meta: META }));
-  const note = configOriginNote("untraced", META);
-  // The server reaches this when the id was not found in a history window that was FULL, so the
-  // one thing it must not do is repeat `elsewhere`'s claim that another dashboard did it.
-  assert.doesNotMatch(out, /from another dashboard/);
-  assert.notEqual(note.label, configOriginNote("elsewhere", META).label);
-  // Nor may it swing the other way and claim the change as ours.
-  assert.doesNotMatch(out, /Last changed from this dashboard/);
-  // Muted, not warned: the two verdicts that claim nothing are the two that are not coloured as a
-  // problem, and a warning over "we could not tell" is the same overclaim in a different medium.
-  assert.doesNotMatch(out, /status-warn/);
-  assert.match(note.title, /older than the history read/i);
+test("the retired untraced verdict is gone from this side too, not merely unsent", () => {
+  // #1369 removed it server-side: it hedged a miss found by searching the 50-row window the page
+  // renders, and the server now looks the id up directly, so a miss is conclusive again. A label
+  // left behind here would be a verdict nothing can produce — which is what goes stale unnoticed,
+  // and what would quietly re-render if a later change started sending the token again.
+  assert.equal(configOriginNote("untraced", META), null);
+  assert.doesNotMatch(renderToString(ConfigProvenance({ origin: "untraced", meta: META })), /control channel/i);
 });
 
 test("an unknown verdict token renders nothing rather than a blank warning", () => {
@@ -143,7 +136,7 @@ test("an unknown verdict token renders nothing rather than a blank warning", () 
   // added without its label here would vanish silently instead of failing loudly. This pins that
   // behaviour so the silence stays a deliberate choice for absent verdicts only.
   assert.equal(configOriginNote("a-token-no-client-knows", META), null);
-  assert.notEqual(configOriginNote("untraced", META), null);
+  assert.notEqual(configOriginNote("unread", META), null);
 });
 
 test("unrecorded claims no change happened and no change did not", () => {
