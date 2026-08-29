@@ -4,23 +4,16 @@ Moved out of tests/web/test_views.py with the cluster itself (#1105). The test b
 verbatim; the only edits are module-alias reads that follow their targets from ``views`` to
 ``xvb_views``.
 
-``_SYNC_DONE``/``_BASE``/``_metrics``/``_sync``/``_hashrate``/``_state_mgr``/``_data`` below are
-COPIES. The master lives in ``tests/web/test_views.py``, which still needs them for the tests that
-stayed; sibling copies will appear in the later #1105 cut modules. There is no import route between
-two test modules here — ``pyproject.toml`` runs pytest with ``--import-mode=importlib`` and the test
-tree has no ``__init__.py``, so neither a sibling module nor ``conftest`` is importable — and
-converting these to pytest fixtures would rewrite every call site and cost the verbatim move. The
-same trade is already recorded for this pair at ``tests/web/test_views.py``'s ``_state_mgr``. These
-copies mirror the ``Metrics`` dataclass, so any drift breaks them loudly rather than silently.
-Consolidating them into real fixtures is tracked as #1459, once #1105 stops requiring
-byte-identity.
+The shared builders — ``_SYNC_DONE``/``_BASE`` and the ``_metrics``, ``_sync``, ``_hashrate``,
+``_state_mgr`` and ``_data`` factories — are pytest fixtures in ``tests/web/conftest.py`` as of
+#1459. Each test that needs one takes it as a parameter; the call itself reads as it always did.
+What is deliberately NOT shared, and why, is written in that file.
 """
 
 import json
 import subprocess
 import sys
 import time
-from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -30,8 +23,6 @@ import mining_dashboard.service.metrics as service_metrics
 import mining_dashboard.web.views as views
 import mining_dashboard.web.xvb_views as xvb_views
 from mining_dashboard.config.config import XVB_STATS_STALE_AFTER_S
-from mining_dashboard.service.metrics import Metrics, SyncMetric
-from mining_dashboard.web.series_views import _mode_palette, build_hashrate
 from mining_dashboard.web.xvb_views import (
     build_badges,
     build_earnings,
@@ -43,100 +34,6 @@ from mining_dashboard.web.xvb_views import (
     xvb_realization,
     xvb_tempered_day,
 )
-
-# --- Fixtures: COPIES of the builders in test_views.py (see the module docstring) ------
-
-_SYNC_DONE = SyncMetric(
-    percent=100, current=10, target=10, remaining=0, has_target=True, done=True, down=False
-)
-
-_BASE = Metrics(
-    total_h15=10500.0,
-    p2pool_1h=8000.0,
-    p2pool_24h=8100.0,
-    xvb_1h=2100.0,
-    xvb_24h=2300.0,
-    xvb_routed_1h=2000.0,
-    xvb_routed_24h=2050.0,
-    stratum_h15=10300.0,
-    stratum_h1h=10400.0,
-    stratum_h24h=10200.0,
-    mode="P2POOL",
-    xvb_enabled=True,
-    current_tier="Donor (1.00 kH/s+)",
-    target_tier="Donor (1.00 kH/s+)",
-    target_threshold=1000.0,
-    target_sustainable=True,
-    low_hr_warning=False,
-    xvb_fail_count=0,
-    xvb_last_update=0,
-    workers_online=2,
-    workers_total=3,
-    shares_in_window=5,
-    pplns_window=2160,
-    block_time=10,
-    pool_type="Mini",
-    pool_hashrate=120_000_000.0,
-    pool_difficulty=250_000_000.0,
-    network_difficulty=380_000_000_000.0,
-    network_height=3210001,
-    global_syncing=False,
-    monero=_SYNC_DONE,
-    tari=_SYNC_DONE,
-    monero_mode="Unknown",
-    tari_mining=True,
-)
-
-
-def _metrics(**over):
-    return replace(_BASE, **over)
-
-
-def _sync(**over):
-    return replace(_SYNC_DONE, **over)
-
-
-def _hashrate(metrics):
-    """build_hashrate with palette tokens derived as build_state does."""
-    return build_hashrate(metrics, *_mode_palette(metrics.mode))
-
-
-def _state_mgr(
-    history=None,
-    mode="P2POOL",
-    share_stats=None,
-    blocks=None,
-    disk_growth=None,
-    xvb_history=None,
-):
-    sm = MagicMock()
-    sm.get_history.return_value = history or []
-    sm.get_xvb_stats.return_value = {"current_mode": mode}
-    sm.get_tiers.return_value = {}
-    sm.get_xvb_reward_estimates.return_value = {"estimates": {}, "last_update": 0.0}
-    sm.get_xvb_round_stats.return_value = {"stats": {}, "last_update": 0.0}
-    sm.get_share_stats.return_value = share_stats or []
-    sm.get_raffle_wins.return_value = []
-    sm.get_xvb_standby.return_value = None  # no backup standby held (#249)
-    sm.is_db_healthy.return_value = True
-    # #196 Tier-1 telemetry backbone exposure.
-    sm.get_blocks.return_value = blocks or []
-    sm.get_disk_growth.return_value = disk_growth or []
-    sm.get_xvb_history.return_value = xvb_history or []
-    return sm
-
-
-def _data(**over):
-    data = {
-        "shares": [],
-        "workers": [],
-        "global_sync": False,
-        "total_live_h15": 0,
-        "monero_sync": {"percent": 100, "current": 10, "target": 10},
-        "tari_sync": {"percent": 50, "current": 5, "target": 10},
-    }
-    data.update(over)
-    return data
 
 
 def _xvb_archive():
@@ -168,26 +65,26 @@ class TestBadges:
     def _texts(self, badges):
         return [b["text"] for b in badges]
 
-    def test_syncing_shows_syncing_only(self):
+    def test_syncing_shows_syncing_only(self, _metrics):
         out = build_badges({}, _metrics(global_syncing=True), "ok")
         assert "Syncing..." in self._texts(out)
         assert not any("P2POOL" in t for t in self._texts(out))
 
-    def test_operational_shows_mode_and_pool(self):
+    def test_operational_shows_mode_and_pool(self, _metrics):
         out = build_badges({}, _metrics(mode="P2POOL", pool_type="Mini"), "ok")
         assert "P2POOL" in self._texts(out)
         assert "P2Pool Mini" in self._texts(out)
 
-    def test_low_hr_badge(self):
+    def test_low_hr_badge(self, _metrics):
         out = build_badges({}, _metrics(low_hr_warning=True), "ok")
         assert any(b["variant"] == "warn" and "low for tier" in b["text"] for b in out)
 
-    def test_no_share_badge_when_donating_without_a_share(self):
+    def test_no_share_badge_when_donating_without_a_share(self, _metrics):
         # XvB enabled + no PPLNS share => wins are skipped + a fail, regardless of tier (#158).
         out = build_badges({}, _metrics(xvb_enabled=True, shares_in_window=0), "ok")
         assert any("No PPLNS share" in b["text"] for b in out)
 
-    def test_no_share_badge_absent_when_has_share_or_xvb_off(self):
+    def test_no_share_badge_absent_when_has_share_or_xvb_off(self, _metrics):
         # Has a share => no badge; XvB off => raffle moot, no badge.
         assert not any(
             "No PPLNS share" in t
@@ -202,17 +99,17 @@ class TestBadges:
             )
         )
 
-    def test_xvb_registered_badge(self):
+    def test_xvb_registered_badge(self, _metrics):
         # registered_at set + clean state => a muted "✓" confirmation badge (#263).
         out = build_badges({}, _metrics(xvb_enabled=True, xvb_registered_at=1.0), "ok")
         assert any(b["text"] == "XvB raffle ✓" and b["variant"] == "outline" for b in out)
 
-    def test_xvb_invalid_wallet_badge(self):
+    def test_xvb_invalid_wallet_badge(self, _metrics):
         # Endpoint rejected the wallet => loud "bad" badge so the user fixes MONERO_WALLET_ADDRESS.
         out = build_badges({}, _metrics(xvb_enabled=True, xvb_registration_state="invalid"), "ok")
         assert any(b["variant"] == "bad" and "wallet rejected" in b["text"] for b in out)
 
-    def test_xvb_failing_badge_takes_priority_over_checkmark(self):
+    def test_xvb_failing_badge_takes_priority_over_checkmark(self, _metrics):
         # A real problem must not be masked by a stale registered_at.
         out = build_badges(
             {},
@@ -222,31 +119,31 @@ class TestBadges:
         assert any(b["variant"] == "bad" and "failing" in b["text"] for b in out)
         assert not any("✓" in b["text"] for b in out)
 
-    def test_no_xvb_registration_badge_when_disabled(self):
+    def test_no_xvb_registration_badge_when_disabled(self, _metrics):
         out = build_badges({}, _metrics(xvb_enabled=False, xvb_registered_at=1.0), "ok")
         assert not any("XvB raffle" in b["text"] for b in out)
 
-    def test_node_down_and_rejected(self):
+    def test_node_down_and_rejected(self, _metrics, _sync):
         m = _metrics(monero=_sync(down=True), tari=_sync(down=True))
         out = build_badges({"workers_rejected": True}, m, "ok")
         t = self._texts(out)
         assert "monerod DOWN" in t and "Tari DOWN" in t and "Workers rejected" in t
 
-    def test_miner_held(self):
+    def test_miner_held(self, _metrics):
         out = build_badges({"miner_held": True}, _metrics(global_syncing=True), "ok")
         assert "Miner held (sync)" in self._texts(out)
 
-    def test_fail_closed_held(self):
+    def test_fail_closed_held(self, _metrics):
         # #490: distinct badge from the sync-gate hold above — fires post-sync, only with
         # dashboard.fail_closed on.
         out = build_badges({"fail_closed_held": True}, _metrics(), "ok")
         assert any(b["variant"] == "bad" and "Miner held (fail-closed)" in b["text"] for b in out)
 
-    def test_no_fail_closed_badge_by_default(self):
+    def test_no_fail_closed_badge_by_default(self, _metrics):
         out = build_badges({}, _metrics(), "ok")
         assert not any("fail-closed" in b["text"] for b in out)
 
-    def test_passive_tari_with_and_without_percent(self):
+    def test_passive_tari_with_and_without_percent(self, _metrics, _sync):
         with_pct = build_badges(
             {"tari_syncing_passive": True}, _metrics(tari=_sync(percent=42)), "ok"
         )
@@ -254,48 +151,48 @@ class TestBadges:
         no_pct = build_badges({"tari_syncing_passive": True}, _metrics(tari=_sync(percent=0)), "ok")
         assert "Tari syncing" in self._texts(no_pct)
 
-    def test_monero_pruned_badge(self):
+    def test_monero_pruned_badge(self, _metrics):
         out = build_badges({}, _metrics(monero_mode="Pruned"), "ok")
         assert any(b["text"] == "XMR Pruned" and b["variant"] == "outline" for b in out)
 
-    def test_monero_full_badge(self):
+    def test_monero_full_badge(self, _metrics):
         out = build_badges({}, _metrics(monero_mode="Full"), "ok")
         assert any(b["text"] == "XMR Full" and b["variant"] == "outline" for b in out)
 
-    def test_no_prune_badge_when_unknown(self):
+    def test_no_prune_badge_when_unknown(self, _metrics):
         out = build_badges({}, _metrics(monero_mode="Unknown"), "ok")
         assert not any("XMR" in b["text"] for b in out)
 
-    def test_disk_badge_critical(self):
+    def test_disk_badge_critical(self, _metrics):
         out = build_badges({"system": {"disk": {"percent": 96}}}, _metrics(), "ok")
         assert any(b["variant"] == "bad" and "Disk 96% full" in b["text"] for b in out)
 
-    def test_disk_badge_warn(self):
+    def test_disk_badge_warn(self, _metrics):
         out = build_badges({"system": {"disk": {"percent": 88}}}, _metrics(), "ok")
         assert any(b["variant"] == "warn" and "Disk 88% full" in b["text"] for b in out)
 
-    def test_no_disk_badge_when_ample(self):
+    def test_no_disk_badge_when_ample(self, _metrics):
         out = build_badges({"system": {"disk": {"percent": 50}}}, _metrics(), "ok")
         assert not any("Disk" in b["text"] for b in out)
 
-    def test_no_disk_badge_when_missing(self):
+    def test_no_disk_badge_when_missing(self, _metrics):
         # No system/disk data (e.g. an early poll) must not emit a spurious or crashing badge.
         out = build_badges({}, _metrics(), "ok")
         assert not any("Disk" in b["text"] for b in out)
 
     # --- Host-perf badges (#104): AVX2 / HugePages / low RAM, from live metrics -------------
-    def test_hugepages_disabled_badge(self):
+    def test_hugepages_disabled_badge(self, _metrics):
         out = build_badges(
             {"system": {"hugepages": ["Disabled", "status-bad", "0/0"]}}, _metrics(), "ok"
         )
         assert any(b["variant"] == "warn" and "HugePages off" in b["text"] for b in out)
 
-    def test_no_hugepages_badge_when_reserved(self):
+    def test_no_hugepages_badge_when_reserved(self, _metrics):
         for status in ("Allocated", "Enabled", "Unknown"):  # only "Disabled" is a problem
             out = build_badges({"system": {"hugepages": [status, "", "1/2"]}}, _metrics(), "ok")
             assert not any("HugePages" in b["text"] for b in out), status
 
-    def test_low_ram_badge_tracks_what_runs_locally(self, monkeypatch):
+    def test_low_ram_badge_tracks_what_runs_locally(self, _metrics, monkeypatch):
         # The floor is MODE-AWARE: 8 GB is too little for a full-local stack, fine for a
         # coordinator whose nodes are remote — remote nodes take their appetite with them.
         import mining_dashboard.web.xvb_views as xvb_mod
@@ -310,7 +207,7 @@ class TestBadges:
         out = build_badges({"system": {"memory": {"total_gb": 8}}}, _metrics(), "ok")
         assert not any("Low RAM" in b["text"] for b in out)
 
-    def test_low_ram_badge_counts_the_built_in_miner(self, monkeypatch):
+    def test_low_ram_badge_counts_the_built_in_miner(self, _metrics, monkeypatch):
         # The Both role's risk case: both nodes local fits a 16 GB box (floor 14) — until the
         # built-in miner's own dataset joins them, when the same box honestly warns (floor 17).
         import mining_dashboard.config.config as cfg_mod
@@ -325,7 +222,7 @@ class TestBadges:
         out = build_badges(state, _metrics(), "ok")
         assert any(b["variant"] == "warn" and "Low RAM (16 GB)" in b["text"] for b in out)
 
-    def test_no_low_ram_badge_at_or_above_threshold_or_unknown(self):
+    def test_no_low_ram_badge_at_or_above_threshold_or_unknown(self, _metrics):
         # 15.6 is what a NOMINAL 16 GB machine actually reports (reserved memory, GiB-vs-GB) —
         # the documented minimum spec must never wear a permanent warning. Bench-reported.
         for total in (15.6, 16, 14):
@@ -339,7 +236,7 @@ class TestBadges:
             for b in build_badges({"system": {"memory": {"total_gb": 0}}}, _metrics(), "ok")
         )
 
-    def test_memory_pressure_badge_keys_on_LIVE_availability_not_capacity(self):
+    def test_memory_pressure_badge_keys_on_LIVE_availability_not_capacity(self, _metrics):
         # A spec box quietly idling wears nothing; a box down to its last GB warns — whatever
         # its size. Capacity says what it could do; pressure says what is happening.
         out = build_badges(
@@ -354,11 +251,11 @@ class TestBadges:
         out = build_badges({"system": {"memory": {"total_gb": 15.6}}}, _metrics(), "ok")
         assert not any("Memory pressure" in b["text"] for b in out)
 
-    def test_avx2_missing_badge(self):
+    def test_avx2_missing_badge(self, _metrics):
         out = build_badges({"system": {"avx2": False}}, _metrics(), "ok")
         assert any(b["variant"] == "warn" and "No AVX2" in b["text"] for b in out)
 
-    def test_no_avx2_badge_when_present_or_unknown(self):
+    def test_no_avx2_badge_when_present_or_unknown(self, _metrics):
         assert not any(
             "AVX2" in b["text"] for b in build_badges({"system": {"avx2": True}}, _metrics(), "ok")
         )
@@ -398,7 +295,7 @@ class TestWalletChangedBadge:
     def test_unreadable_ts_is_no_change(self):
         assert recent_wallet_change(self._kv_mgr(payout_wallet_changed_ts="junk")) is None
 
-    def test_badge_rendered_and_truncated(self):
+    def test_badge_rendered_and_truncated(self, _metrics):
         wc = {"old8": "4Aaaaaaa", "new8": self._NEW[:8], "ts": 1000.0}
         out = build_badges({}, _metrics(), "ok", wallet_change=wc)
         badge = next(b for b in out if "Payout wallet changed" in b["text"])
@@ -406,16 +303,16 @@ class TestWalletChangedBadge:
         assert "4Aaaaaaa…" in badge["title"] and f"{self._NEW[:8]}…" in badge["title"]
         assert self._NEW not in badge["title"]  # never the full address
 
-    def test_shown_even_while_syncing(self):
+    def test_shown_even_while_syncing(self, _metrics):
         wc = {"old8": "4Aaaaaaa", "new8": self._NEW[:8], "ts": 1000.0}
         out = build_badges({}, _metrics(global_syncing=True), "ok", wallet_change=wc)
         assert any("Payout wallet changed" in b["text"] for b in out)
 
-    def test_no_badge_without_recent_change(self):
+    def test_no_badge_without_recent_change(self, _metrics):
         out = build_badges({}, _metrics(), "ok", wallet_change=None)
         assert not any("Payout wallet" in b["text"] for b in out)
 
-    def test_build_state_surfaces_the_badge_from_kv(self):
+    def test_build_state_surfaces_the_badge_from_kv(self, _data, _state_mgr):
         sm = _state_mgr()
         sm.get_kv.side_effect = {
             "payout_wallet_changed_ts": str(time.time() - 60),
@@ -444,7 +341,7 @@ def _summary_earnings(**over):
 class TestEarningsVsActual:
     NOW = 1_760_000_000
 
-    def test_combined_expected_folds_xvb_and_uses_the_window_average(self):
+    def test_combined_expected_folds_xvb_and_uses_the_window_average(self, _metrics):
         # ONE combined row (#817): expected = P2Pool linear (coeff_day × 30d-average × 30 — the
         # WINDOW's average, not the current 1h figure) + XvB's published per-day estimate × 30,
         # because the confirmed actual inevitably contains XvB win payouts. pct compares the
@@ -463,7 +360,7 @@ class TestEarningsVsActual:
         assert s["xmr"]["pct"] == round(0.28 / expected * 100)
         assert s["xmr"]["partial"] is False
 
-    def test_combined_row_without_a_fresh_xvb_estimate_stays_p2pool_only(self):
+    def test_combined_row_without_a_fresh_xvb_estimate_stays_p2pool_only(self, _metrics):
         # XvB on but no fresh published figure (#712) -> nothing is fabricated: expected stays
         # P2Pool-only and includes_xvb False (the client label drops "+ XvB"; the tooltip owns
         # the fact that win payouts still land in the actual). XvB disabled behaves the same.
@@ -482,7 +379,7 @@ class TestEarningsVsActual:
         )
         assert s["xmr"]["includes_xvb"] is False  # disabled XvB never folds its estimate in
 
-    def test_negative_published_estimate_never_folds(self):
+    def test_negative_published_estimate_never_folds(self, _metrics):
         # xvb_day is upstream-published — a hostile/corrupt negative must not drag the combined
         # expectation toward (or past) zero while available stays True: it folds as 0, the label
         # stays P2Pool-only, and pct keeps a positive denominator.
@@ -498,7 +395,7 @@ class TestEarningsVsActual:
         assert s["xmr"]["expected_30d"] == pytest.approx(1e-8 * 8000.0 * 30)
         assert s["xmr"]["pct"] is not None and s["xmr"]["pct"] > 0
 
-    def test_pct_withheld_when_the_expectation_is_dust(self):
+    def test_pct_withheld_when_the_expectation_is_dust(self, _metrics):
         # A box idle for most of the window that still confirmed normal payouts: the ratio
         # against a near-zero expectation is a five-digit figure that reads as a bug (#992).
         # Past 999% the pct is withheld — the client tooltip explains — never capped to a
@@ -518,7 +415,7 @@ class TestEarningsVsActual:
         s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), e, [], now=self.NOW)
         assert s["xmr"]["pct"] == 999
 
-    def test_xmr_row_degrades_honestly(self):
+    def test_xmr_row_degrades_honestly(self, _metrics):
         # Estimate unavailable (no network figures) -> not available, and no pct even with
         # confirmed payouts on; confirmation off -> actual/pct None, never a zero that would
         # read as "earned nothing".
@@ -530,7 +427,7 @@ class TestEarningsVsActual:
         assert s["xmr"]["enabled"] is False
         assert s["xmr"]["actual_30d"] is None and s["xmr"]["pct"] is None
 
-    def test_xmr_partial_flag_rides_the_confirmed_window(self):
+    def test_xmr_partial_flag_rides_the_confirmed_window(self, _metrics):
         e = _summary_earnings(
             coeff_day=1e-8,
             confirmed={"enabled": True, "xmr_30d": 0.1, "partial": {"30d": True}},
@@ -538,7 +435,7 @@ class TestEarningsVsActual:
         s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), e, [], now=self.NOW)
         assert s["xmr"]["partial"] is True
 
-    def test_tari_compares_block_counts_over_30d(self):
+    def test_tari_compares_block_counts_over_30d(self, _metrics):
         # Expected blocks = 30d-average hashrate × 30 days ÷ aux difficulty; actual = the
         # confirmed payout count (solo merge-mining: a payout IS a found block), XTM alongside.
         e = _summary_earnings(
@@ -557,7 +454,7 @@ class TestEarningsVsActual:
         assert s["tari"]["xtm_30d"] == 12_345.0
         assert s["tari"]["partial"] is True
 
-    def test_tari_gates_on_mining_and_difficulty(self):
+    def test_tari_gates_on_mining_and_difficulty(self, _metrics):
         # A dead merge-mine channel (tari_mining False) or missing difficulty -> unavailable,
         # mirroring the calculator's gate, so no phantom expectation is shown.
         e = _summary_earnings()
@@ -574,7 +471,7 @@ class TestEarningsVsActual:
         )
         assert s["tari"]["blocks_30d"] is None and s["tari"]["xtm_30d"] is None
 
-    def test_xvb_counts_wins_in_the_trailing_30d_only(self):
+    def test_xvb_counts_wins_in_the_trailing_30d_only(self, _metrics):
         wins = [
             {"ts": self.NOW - 40 * 86_400},  # outside the window
             {"ts": self.NOW - 10 * 86_400},
@@ -593,7 +490,7 @@ class TestEarningsVsActual:
         )
         assert s["xvb"]["enabled"] is False and s["xvb"]["wins_30d"] == 0
 
-    def test_rides_build_state_end_to_end(self, monkeypatch):
+    def test_rides_build_state_end_to_end(self, _data, _state_mgr, monkeypatch):
         # The summary must reach the top-level payload the client polls, built from the SAME
         # earnings dict the Earnings card receives — one build, so the two cannot disagree.
         monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", False)
@@ -681,17 +578,17 @@ _REALIZATION_NOW = 1_760_000_000
 
 
 class TestXvbForecastTierKey:
-    def test_held_tier_wins_over_target(self):
+    def test_held_tier_wins_over_target(self, _metrics):
         m = _metrics(xvb_1h=100_000.0, xvb_24h=100_000.0, target_threshold=10_000.0)
         assert xvb_views.xvb_forecast_tier_key(m, _WINS_TIERS) == "donor_whale"
 
-    def test_falls_back_to_the_target_tier_while_none_is_held(self):
+    def test_falls_back_to_the_target_tier_while_none_is_held(self, _metrics):
         # A fleet still ramping (or weighing whether to enable donation at all) has zero credited
         # average — the forecast speaks to the TARGET tier instead of dashing out (#866).
         m = _metrics(xvb_1h=0.0, xvb_24h=0.0, target_threshold=1_000.0)
         assert xvb_views.xvb_forecast_tier_key(m, _WINS_TIERS) == "donor"
 
-    def test_none_when_neither_held_nor_targeted(self):
+    def test_none_when_neither_held_nor_targeted(self, _metrics):
         m = _metrics(xvb_1h=0.0, xvb_24h=0.0, target_threshold=0.0)
         assert xvb_views.xvb_forecast_tier_key(m, _WINS_TIERS) is None
         # A target threshold matching no tier (drifted config) stays None, never a KeyError.
@@ -779,7 +676,9 @@ class TestXvbTemperedDay:
         assert xvb_tempered_day(None, (0.19, 15)) is None
         assert xvb_tempered_day(0.0, (0.19, 15)) == 0.0
 
-    def test_build_state_ships_tempered_while_the_summary_keeps_face_value(self, monkeypatch):
+    def test_build_state_ships_tempered_while_the_summary_keeps_face_value(
+        self, _data, _state_mgr, monkeypatch
+    ):
         # The wiring the issue is about: est.xvbDay (earnings.xvb_day) leaves build_state
         # tempered, while the expected-vs-actual summary still works from the face value (it
         # applies the measured factor itself — feeding it the tempered figure would double-count).
@@ -793,7 +692,9 @@ class TestXvbTemperedDay:
         # Measured tempering applied exactly ONCE on the summary side (0.016 × 30 × 0.25).
         assert st["earnings_summary"]["xmr"]["expected_30d"] == pytest.approx(0.016 * 30 * 0.25)
 
-    def test_build_state_unmeasured_box_ships_the_prior_midpoint(self, monkeypatch):
+    def test_build_state_unmeasured_box_ships_the_prior_midpoint(
+        self, _data, _state_mgr, monkeypatch
+    ):
         # No measured wins: the calculator figure drops to the prior midpoint; the summary keeps
         # the face value (its tooltip labels it an upper bound) — asymmetric by design.
         monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", False)
@@ -817,7 +718,7 @@ class TestEarningsVsActualTempering:
             confirmed={"enabled": True, "xmr_30d": 0.28, "partial": {"30d": False}},
         )
 
-    def test_measured_realization_tempers_the_xvb_leg(self):
+    def test_measured_realization_tempers_the_xvb_leg(self, _metrics):
         # The published leg (0.016 × 30 = 0.48) scales to the measured fraction; the factor and
         # its sample ride along for the tooltip. The P2Pool leg is untouched.
         s = build_earnings_vs_actual(
@@ -828,13 +729,13 @@ class TestEarningsVsActualTempering:
         assert s["xmr"]["xvb_wins_measured"] == 15
         assert s["xmr"]["includes_xvb"] is True
 
-    def test_without_a_measured_factor_the_published_figure_stands(self):
+    def test_without_a_measured_factor_the_published_figure_stands(self, _metrics):
         s = build_earnings_vs_actual(_metrics(p2pool_30d=8000.0), self._e(), [], now=self.NOW)
         assert s["xmr"]["expected_30d"] == pytest.approx(1e-8 * 8000.0 * 30 + 0.016 * 30)
         assert s["xmr"]["xvb_realization_pct"] is None
         assert s["xmr"]["xvb_wins_measured"] is None
 
-    def test_realization_without_an_xvb_leg_is_ignored(self):
+    def test_realization_without_an_xvb_leg_is_ignored(self, _metrics):
         # XvB off (or no fresh estimate): there is no leg to temper — the factor must not leak
         # into the payload as if one existed.
         s = build_earnings_vs_actual(
@@ -846,7 +747,7 @@ class TestEarningsVsActualTempering:
         )
         assert s["xmr"]["xvb_realization_pct"] is None
 
-    def test_expected_wins_fill_the_xvb_row(self):
+    def test_expected_wins_fill_the_xvb_row(self, _metrics):
         s = build_earnings_vs_actual(
             _metrics(p2pool_30d=8000.0), self._e(), [], now=self.NOW, expected_wins_day=0.84
         )
@@ -861,7 +762,7 @@ class TestEarningsVsActualTempering:
 class TestEarnings:
     _NET = {"network": {"reward": 600_000_000_000}}  # 0.6 XMR block reward (atomic units)
 
-    def test_publishes_rate_and_inputs(self):
+    def test_publishes_rate_and_inputs(self, _metrics):
         # The server sends the daily XMR-per-H/s *rate* + the raw inputs the client scales/inverts
         # (the P2Pool hashrate, P2Pool share difficulty) — not pre-formatted earnings.
         e = build_earnings(
@@ -880,7 +781,7 @@ class TestEarnings:
         # Rate matches reward_xmr / difficulty * 86400.
         assert e["coeff_day"] == pytest.approx(0.6 / 400_000_000_000 * 86_400)
 
-    def test_default_hashrate_is_the_displayed_p2pool_1h(self):
+    def test_default_hashrate_is_the_displayed_p2pool_1h(self, _hashrate, _metrics):
         # Consistency: the calculator's default must be the *same* P2Pool 1h average shown in the
         # header / Overview (metrics.p2pool_1h) — not the total, and not a bespoke total-minus-routed
         # figure. That recorded average already excludes the XvB-donated slice, so the value here
@@ -892,30 +793,30 @@ class TestEarnings:
             e["p2pool_hr_str"] == _hashrate(m)["p2p_1h"]
         )  # identical display string to the header
 
-    def test_no_p2pool_hashrate_when_average_is_zero(self):
+    def test_no_p2pool_hashrate_when_average_is_zero(self, _metrics):
         # E.g. fresh start (no history) or full-XvB: p2pool_1h is 0 -> client shows 0 / "—" (honest).
         e = build_earnings(self._NET, _metrics(p2pool_1h=0))
         assert e["p2pool_hr"] == 0.0
 
-    def test_unavailable_when_network_reward_missing(self):
+    def test_unavailable_when_network_reward_missing(self, _metrics):
         # No reward collected yet -> rate is unavailable; the card degrades to "—" (no crash).
         e = build_earnings({}, _metrics(network_difficulty=400_000_000_000))
         assert e["available"] is False
         assert e["coeff_day"] == 0.0
         assert e["block_reward"] == "0.0000 XMR"
 
-    def test_unavailable_when_difficulty_missing(self):
+    def test_unavailable_when_difficulty_missing(self, _metrics):
         e = build_earnings(self._NET, _metrics(network_difficulty=0))
         assert e["available"] is False
         assert e["coeff_day"] == 0.0
 
-    def test_p2pool_hr_passthrough_is_raw(self):
+    def test_p2pool_hr_passthrough_is_raw(self, _metrics):
         # The what-if default must be the exact P2Pool H/s (not the rounded display string), so
         # the client's default estimate isn't skewed by display rounding.
         e = build_earnings(self._NET, _metrics(p2pool_1h=10543.7))
         assert e["p2pool_hr"] == 10543.7
 
-    def test_tari_rate_published_when_merge_mining(self):
+    def test_tari_rate_published_when_merge_mining(self, _metrics):
         # #117: with live Tari figures + merge-mining active, the payload carries the XTM rate
         # (reward_xtm / difficulty * 86400) for the client to scale — same shape as coeff_day.
         e = build_earnings(
@@ -929,7 +830,7 @@ class TestEarnings:
         assert e["tari_difficulty"] == pytest.approx(420_000_000_000)
         assert e["tari_reward"] == pytest.approx(13_000.0)
 
-    def test_tari_unavailable_without_figures_or_mining(self):
+    def test_tari_unavailable_without_figures_or_mining(self, _metrics):
         # No difficulty collected (inactive/syncing) → unavailable; and a positive rate with
         # merge-mining OFF must also read unavailable (a dead channel earns no phantom XTM).
         e = build_earnings(self._NET, _metrics(tari_mining=True, tari_reward=13_000.0))
@@ -941,13 +842,13 @@ class TestEarnings:
         )
         assert e["tari_available"] is False
 
-    def test_tari_unavailability_leaves_xmr_estimate_intact(self):
+    def test_tari_unavailability_leaves_xmr_estimate_intact(self, _metrics):
         # Tari degrading to "—" must not drag the XMR side down: available stays True.
         e = build_earnings(self._NET, _metrics(tari_mining=False))
         assert e["available"] is True
         assert e["coeff_day"] > 0
 
-    def test_confirmed_disabled_by_default(self):
+    def test_confirmed_disabled_by_default(self, _metrics):
         # No payouts passed (feature off) → the confirmed block reports disabled; UI shows only estimate.
         e = build_earnings(self._NET, _metrics())
         assert e["confirmed"] == {"enabled": False}
@@ -956,7 +857,7 @@ class TestEarnings:
     # tests/service/test_earnings.py::TestConfirmedPayoutsSummary — this class only asserts
     # build_earnings passes payouts through (enabled/empty/disabled).
 
-    def test_confirmed_enabled_but_empty(self):
+    def test_confirmed_enabled_but_empty(self, _metrics):
         # Feature on, nothing confirmed yet → enabled with zeroed totals (shows 0.000000, not "—").
         # No history on record, so every running window is flagged partial (#787).
         e = build_earnings(self._NET, _metrics(), payouts=[])
@@ -974,12 +875,12 @@ class TestEarnings:
             "partial": {"yesterday": True, "7d": True, "30d": True},
         }
 
-    def test_tari_confirmed_disabled_by_default(self):
+    def test_tari_confirmed_disabled_by_default(self, _metrics):
         # No tari_payouts passed (Tari feature off) → tari_confirmed reports disabled.
         e = build_earnings(self._NET, _metrics())
         assert e["tari_confirmed"] == {"enabled": False}
 
-    def test_tari_confirmed_enabled_but_empty(self):
+    def test_tari_confirmed_enabled_but_empty(self, _metrics):
         e = build_earnings(self._NET, _metrics(), tari_payouts=[])
         assert e["tari_confirmed"] == {
             "enabled": True,
@@ -1037,7 +938,7 @@ class TestXvbCalc:
         }
         return sm
 
-    def test_disabled_still_publishes_the_decision_table(self):
+    def test_disabled_still_publishes_the_decision_table(self, _metrics):
         # #938: XvB off no longer collapses the payload to the bare flag — the table is the
         # enable/don't-enable decision aid, so the tiers, draw odds, and prior band publish
         # either way (from local config + the cached feeds; the flag stops the fetches, so a
@@ -1059,13 +960,13 @@ class TestXvbCalc:
         assert out["current_tier"] == "Disabled"
         assert out["realization_pct"] is None
 
-    def test_tier_table_sorted_ascending_and_zero_thresholds_dropped(self):
+    def test_tier_table_sorted_ascending_and_zero_thresholds_dropped(self, _metrics):
         out = build_xvb_calc(_metrics(), self._sm())
         assert [t["threshold"] for t in out["tiers"]] == [1_000, 10_000, 100_000, 1_000_000]
         # Names come from get_tier_info, threshold already embedded — same string as everywhere.
         assert out["tiers"][1]["name"] == "Vip (10.00 kH/s+)"
 
-    def test_mirrors_metrics_and_config(self):
+    def test_mirrors_metrics_and_config(self, _metrics):
         # Current/target state is passed straight through from Metrics — no tier math re-derived
         # here — and max_fraction is the configured sustainability headroom rule.
         m = _metrics(
@@ -1084,14 +985,14 @@ class TestXvbCalc:
         # The labelling the issue demands: tier = raffle status, never a payout.
         assert "not an XMR payout" in out["note"]
 
-    def test_sidechain_mode_note_only_off_main(self):
+    def test_sidechain_mode_note_only_off_main(self, _metrics):
         # #33 context: off the Main sidechain, a pool switch resets PPLNS shares (and with them
         # XvB win collectability) — display-only text, absent on Main.
         assert build_xvb_calc(_metrics(pool_type="Main"), self._sm())["mode_note"] is None
         note = build_xvb_calc(_metrics(pool_type="Mini"), self._sm())["mode_note"]
         assert "PPLNS" in note
 
-    def test_fresh_estimates_expose_per_tier_expected_reward(self):
+    def test_fresh_estimates_expose_per_tier_expected_reward(self, _metrics):
         # #118: each tier carries XvB's own published XMR/year figure, mapped by the tier key
         # (== round-type), and the estimates_available flag is set on a fresh fetch.
         out = build_xvb_calc(_metrics(), self._sm())
@@ -1103,7 +1004,7 @@ class TestXvbCalc:
         assert by_threshold[100_000] == 6.17  # donor_whale
         assert by_threshold[1_000_000] == 56.9  # donor_mega
 
-    def test_enabled_stale_estimates_do_not_use_the_fallback(self):
+    def test_enabled_stale_estimates_do_not_use_the_fallback(self, _metrics):
         # #1214 regression: an ENABLED box whose fetch is merely failing right now (a transient
         # bot-challenge, a network blip — the sync loop writes only on success) must NOT get the
         # vendored fallback. That box isn't "off"; claiming "published, not live because XvB is
@@ -1118,7 +1019,7 @@ class TestXvbCalc:
         assert all(t["expected_reward_year"] is None for t in out["tiers"])
         assert all(t["assumed_reward_year_range"] is None for t in out["tiers"])
 
-    def test_disabled_stale_falls_back_to_the_published_table(self):
+    def test_disabled_stale_falls_back_to_the_published_table(self, _metrics):
         # A DISABLED box whose cache aged out while off — "just-disabled" in the issue's terms —
         # gets the vendored fallback: no per-tier number implied FRESH (estimates_available stays
         # False), but expected_reward_year fills in from XvB's own last-published table (never a
@@ -1133,7 +1034,7 @@ class TestXvbCalc:
         assert by_threshold[1_000] == xvb_views.XVB_PUBLISHED_REWARD_FALLBACK["donor"]
         assert by_threshold[100_000] == xvb_views.XVB_PUBLISHED_REWARD_FALLBACK["donor_whale"]
 
-    def test_disabled_never_fetched_falls_back_to_the_published_table(self):
+    def test_disabled_never_fetched_falls_back_to_the_published_table(self, _metrics):
         # #1214's actual bug report: a box that has NEVER enabled XvB has no cache at all (never
         # fetched, not merely stale). Same fallback, same labelling.
         sm = self._sm(estimates={}, last_update=0.0)
@@ -1167,7 +1068,7 @@ class TestXvbCalc:
         assert set(parsed) == set(DONOR_ROUND_TYPES)  # the archive still names all four tiers
         assert xvb_views.XVB_PUBLISHED_REWARD_FALLBACK == parsed
 
-    def test_round_stats_expose_per_tier_draw_odds(self):
+    def test_round_stats_expose_per_tier_draw_odds(self, _metrics):
         # #872: the winners file's players column makes the draw knowable — each tier carries its
         # OWN round type's frequency ÷ qualifiers (the earnings card's forecast, by contrast,
         # sums the lower tiers a qualifier also plays in).
@@ -1178,13 +1079,13 @@ class TestXvbCalc:
         # The single-qualifier artifact is self-evident: one Mega player, one win per draw.
         assert by_threshold[1_000_000]["players_avg"] == 1.0
 
-    def test_stale_or_missing_round_stats_null_the_odds(self):
+    def test_stale_or_missing_round_stats_null_the_odds(self, _metrics):
         stale = self._sm(round_ts=time.time() - XVB_STATS_STALE_AFTER_S - 1)
         assert all(t["win_odds_day"] is None for t in build_xvb_calc(_metrics(), stale)["tiers"])
         empty = self._sm(round_stats={"types": {}, "span_days": 0.0}, round_ts=0.0)
         assert all(t["win_odds_day"] is None for t in build_xvb_calc(_metrics(), empty)["tiers"])
 
-    def test_realization_scales_published_rewards_into_realized(self):
+    def test_realization_scales_published_rewards_into_realized(self, _metrics):
         # #872: with a measured factor, every tier carries published × factor — the figure whose
         # net can honestly be acted on — plus the factor and its sample size for the label.
         out = build_xvb_calc(_metrics(), self._sm(), realization=(0.19, 15))
@@ -1193,7 +1094,7 @@ class TestXvbCalc:
         assert out["realization_pct"] == 19
         assert out["realization_wins"] == 15
 
-    def test_unmeasured_boxes_get_the_prior_band_measured_boxes_do_not(self):
+    def test_unmeasured_boxes_get_the_prior_band_measured_boxes_do_not(self, _metrics):
         # #872: no local measurement -> published × the measured prior band, so "should I enable
         # this" is answerable everywhere. A measured factor supersedes it (never both).
         out = build_xvb_calc(_metrics(), self._sm())
@@ -1216,7 +1117,7 @@ class TestXvbCalc:
         face = xvb_views.XVB_PUBLISHED_REWARD_FALLBACK["donor_whale"]
         assert whale["assumed_reward_year_range"] == pytest.approx([face * lo, face * hi])
 
-    def test_no_realization_leaves_realized_none(self):
+    def test_no_realization_leaves_realized_none(self, _metrics):
         # Unmeasured (too few wins / payout confirmation off): realized stays None so the client
         # falls back to face value AND says so — never a fabricated factor.
         out = build_xvb_calc(_metrics(), self._sm())
@@ -1227,7 +1128,7 @@ class TestXvbCalc:
         out = build_xvb_calc(_metrics(), sm, realization=(0.5, 9))
         assert all(t["realized_reward_year"] is None for t in out["tiers"])
 
-    def test_empty_estimates_available_false_no_crash(self):
+    def test_empty_estimates_available_false_no_crash(self, _metrics):
         # Never fetched / unparseable cache on an ENABLED box (e.g. mid cold-start right after
         # enabling, or persistently-failing fetches — never "off"): available False, not "stale"
         # (last_update 0), and #1214's fallback must NOT fire here — same gate as the stale case,
@@ -1240,7 +1141,7 @@ class TestXvbCalc:
         assert out["estimates_source"] == "none"
         assert all(t["expected_reward_year"] is None for t in out["tiers"])
 
-    def test_fallback_never_backs_realized_reward_year(self):
+    def test_fallback_never_backs_realized_reward_year(self, _metrics):
         # #1214: THIS wallet's own measured delivery factor must never be applied to a dated,
         # generic fallback figure — that would overstate precision the wallet has no basis for.
         # realized_reward_year keeps requiring a LIVE, fresh estimate even when realization is
@@ -1251,7 +1152,7 @@ class TestXvbCalc:
         # expected_reward_year still gets the fallback — only realized_reward_year is withheld.
         assert any(t["expected_reward_year"] is not None for t in out["tiers"])
 
-    def test_fallback_skips_tiers_the_published_table_does_not_name(self):
+    def test_fallback_skips_tiers_the_published_table_does_not_name(self, _metrics):
         # A custom TIER_CONFIG round-type the archived table never named degrades to None, same
         # as before this fix — the fallback is a fixed vendored table, never invented per key.
         sm = self._sm(estimates={}, last_update=0.0)
@@ -1261,14 +1162,14 @@ class TestXvbCalc:
         assert by_threshold[1_000] == xvb_views.XVB_PUBLISHED_REWARD_FALLBACK["donor"]
         assert by_threshold[5_000] is None
 
-    def test_live_estimates_report_source_live_no_fallback_date(self):
+    def test_live_estimates_report_source_live_no_fallback_date(self, _metrics):
         # A fresh live fetch must be labelled "live", never "published" — the two must never be
         # ambiguous to the client, which uses this to decide the disabled-note wording.
         out = build_xvb_calc(_metrics(), self._sm())
         assert out["estimates_source"] == "live"
         assert out["estimates_published_date"] is None
 
-    def test_never_fetched_and_fallback_missing_reports_source_none(self):
+    def test_never_fetched_and_fallback_missing_reports_source_none(self, _metrics):
         # A DISABLED box whose future TIER_CONFIG names nothing the fallback recognises must
         # still report "none" rather than falsely claiming "published" — isolates the "fallback
         # dict has no matching key" case from the enabled/disabled gate (test above).
@@ -1278,7 +1179,7 @@ class TestXvbCalc:
         assert out["estimates_source"] == "none"
         assert out["estimates_published_date"] is None
 
-    def test_disabled_path_never_touches_the_network_layer(self):
+    def test_disabled_path_never_touches_the_network_layer(self, _metrics):
         # #163's no-egress-when-disabled contract, at this tier: filling the decision table's
         # reward columns from #1214's vendored fallback must never make an outbound HTTP call —
         # build_xvb_calc only reads state_mgr (local) and the static XVB_PUBLISHED_REWARD_FALLBACK
@@ -1306,37 +1207,37 @@ class TestXvbCalc:
 
     # --- current-tier reward folded into net profit (#712) ---------------------------
 
-    def test_reward_day_is_current_tier_estimate_over_365(self):
+    def test_reward_day_is_current_tier_estimate_over_365(self, _metrics):
         # Base metrics credit min(xvb_1h=2100, xvb_24h=2300)=2100 → the donor tier (>=1000, <10k);
         # its published 0.06 XMR/year becomes 0.06/365 XMR/day. The estimate feeds est.xvbDay.
         out = xvb_current_tier_reward_day(_metrics(), self._sm())
         assert out == pytest.approx(0.06 / 365)
 
-    def test_reward_day_uses_lower_of_1h_24h_not_the_higher(self):
+    def test_reward_day_uses_lower_of_1h_24h_not_the_higher(self, _metrics):
         # The current tier is the LOWER of the two credited averages (not target): a 1h dip to the
         # donor tier holds there even while 24h still clears whale — the honest "what you hold now".
         out = xvb_current_tier_reward_day(_metrics(xvb_1h=2100, xvb_24h=200_000), self._sm())
         assert out == pytest.approx(0.06 / 365)  # donor, not whale (6.17)
 
-    def test_reward_day_maps_higher_tier_to_its_own_estimate(self):
+    def test_reward_day_maps_higher_tier_to_its_own_estimate(self, _metrics):
         # min(150k, 200k)=150k clears donor_whale (100k) → its 6.17/year, proving the tier→key→
         # estimate mapping picks the right round-type, not always the lowest.
         out = xvb_current_tier_reward_day(_metrics(xvb_1h=150_000, xvb_24h=200_000), self._sm())
         assert out == pytest.approx(6.17 / 365)
 
-    def test_reward_day_none_when_xvb_disabled(self):
+    def test_reward_day_none_when_xvb_disabled(self, _metrics):
         assert xvb_current_tier_reward_day(_metrics(xvb_enabled=False), self._sm()) is None
 
-    def test_reward_day_none_below_lowest_donor_tier(self):
+    def test_reward_day_none_below_lowest_donor_tier(self, _metrics):
         # min(500, 800)=500 < the 1000 donor threshold → "None" tier, nothing published to credit.
         assert xvb_current_tier_reward_day(_metrics(xvb_1h=500, xvb_24h=800), self._sm()) is None
 
-    def test_reward_day_none_when_estimate_stale(self):
+    def test_reward_day_none_when_estimate_stale(self, _metrics):
         # Same staleness gate as the XvB card (#311): never surface a frozen number implied fresh.
         sm = self._sm(last_update=time.time() - XVB_STATS_STALE_AFTER_S - 1)
         assert xvb_current_tier_reward_day(_metrics(), sm) is None
 
-    def test_reward_day_none_when_estimate_absent(self):
+    def test_reward_day_none_when_estimate_absent(self, _metrics):
         # Held a tier, but XvB never published a figure for it → None, never a fabricated 0.
         sm = self._sm(estimates={"donor_vip": 0.81}, last_update=time.time())
         assert xvb_current_tier_reward_day(_metrics(), sm) is None

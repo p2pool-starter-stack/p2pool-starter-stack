@@ -4,22 +4,15 @@ Moved out of tests/web/test_views.py with the sections themselves (#1105). The t
 verbatim; the only edits are the three module-alias reads in ``TestBuildEnergy`` that follow their
 target from ``views`` to ``infra_views``.
 
-``_SYNC_DONE``/``_BASE``/``_metrics``/``_sync``/``_state_mgr``/``_data`` below are COPIES. The
-master lives in ``tests/web/test_views.py``, which still needs them for the tests that stayed, and a
-sibling copy is in ``tests/web/test_xvb_views.py``. There is no import route between two test
-modules here — ``pyproject.toml`` runs pytest with ``--import-mode=importlib`` and the test tree has
-no ``__init__.py``, so neither a sibling module nor ``conftest`` is importable — and converting
-these to pytest fixtures would rewrite every call site and cost the verbatim move. The same trade is
-already recorded for this pair at ``tests/web/test_views.py``'s ``_state_mgr``. These copies mirror
-the ``Metrics`` dataclass, so any drift breaks them loudly rather than silently. Consolidating them
-into real fixtures is tracked as #1459, once #1105 stops requiring byte-identity.
+The shared builders — ``_SYNC_DONE``/``_BASE`` and the ``_metrics``, ``_sync``, ``_hashrate``,
+``_state_mgr`` and ``_data`` factories — are pytest fixtures in ``tests/web/conftest.py`` as of
+#1459. Each test that needs one takes it as a parameter; the call itself reads as it always did.
+What is deliberately NOT shared, and why, is written in that file.
 """
 
 import time
-from dataclasses import replace
-from unittest.mock import MagicMock
 
-from mining_dashboard.service.metrics import Metrics, SyncMetric, _sync_metric
+from mining_dashboard.service.metrics import _sync_metric
 from mining_dashboard.web.infra_views import (
     _reject_flag,
     _rigforge_display,
@@ -34,101 +27,11 @@ from mining_dashboard.web.infra_views import (
 from mining_dashboard.web.views import build_state
 from mining_dashboard.web.worker_detail import build_worker_detail
 
-# --- Fixtures: COPIES of the builders in test_views.py (see the module docstring) ------
-
-_SYNC_DONE = SyncMetric(
-    percent=100, current=10, target=10, remaining=0, has_target=True, done=True, down=False
-)
-
-_BASE = Metrics(
-    total_h15=10500.0,
-    p2pool_1h=8000.0,
-    p2pool_24h=8100.0,
-    xvb_1h=2100.0,
-    xvb_24h=2300.0,
-    xvb_routed_1h=2000.0,
-    xvb_routed_24h=2050.0,
-    stratum_h15=10300.0,
-    stratum_h1h=10400.0,
-    stratum_h24h=10200.0,
-    mode="P2POOL",
-    xvb_enabled=True,
-    current_tier="Donor (1.00 kH/s+)",
-    target_tier="Donor (1.00 kH/s+)",
-    target_threshold=1000.0,
-    target_sustainable=True,
-    low_hr_warning=False,
-    xvb_fail_count=0,
-    xvb_last_update=0,
-    workers_online=2,
-    workers_total=3,
-    shares_in_window=5,
-    pplns_window=2160,
-    block_time=10,
-    pool_type="Mini",
-    pool_hashrate=120_000_000.0,
-    pool_difficulty=250_000_000.0,
-    network_difficulty=380_000_000_000.0,
-    network_height=3210001,
-    global_syncing=False,
-    monero=_SYNC_DONE,
-    tari=_SYNC_DONE,
-    monero_mode="Unknown",
-    tari_mining=True,
-)
-
-
-def _metrics(**over):
-    return replace(_BASE, **over)
-
-
-def _sync(**over):
-    return replace(_SYNC_DONE, **over)
-
-
-def _state_mgr(
-    history=None,
-    mode="P2POOL",
-    share_stats=None,
-    blocks=None,
-    disk_growth=None,
-    xvb_history=None,
-):
-    sm = MagicMock()
-    sm.get_history.return_value = history or []
-    sm.get_xvb_stats.return_value = {"current_mode": mode}
-    sm.get_tiers.return_value = {}
-    sm.get_xvb_reward_estimates.return_value = {"estimates": {}, "last_update": 0.0}
-    sm.get_xvb_round_stats.return_value = {"stats": {}, "last_update": 0.0}
-    sm.get_share_stats.return_value = share_stats or []
-    sm.get_raffle_wins.return_value = []
-    sm.get_xvb_standby.return_value = None  # no backup standby held (#249)
-    sm.is_db_healthy.return_value = True
-    # #196 Tier-1 telemetry backbone exposure.
-    sm.get_blocks.return_value = blocks or []
-    sm.get_disk_growth.return_value = disk_growth or []
-    sm.get_xvb_history.return_value = xvb_history or []
-    return sm
-
-
-def _data(**over):
-    data = {
-        "shares": [],
-        "workers": [],
-        "global_sync": False,
-        "total_live_h15": 0,
-        "monero_sync": {"percent": 100, "current": 10, "target": 10},
-        "tari_sync": {"percent": 50, "current": 5, "target": 10},
-    }
-    data.update(over)
-    return data
-
-
 # --- Sync display state mapping -------------------------------------------------------
 
 
 class TestSync:
-    def test_loading_done_syncing_states(self):
+    def test_loading_done_syncing_states(self, _metrics, _sync):
         m = _metrics(
             monero=_sync(has_target=False, done=False),
             tari=_sync(
@@ -140,11 +43,11 @@ class TestSync:
         assert sync["tari"]["state"] == "syncing"
         assert sync["tari"]["remaining"] == 60
 
-    def test_done_state(self):
+    def test_done_state(self, _metrics):
         sync = build_sync(_metrics(), "1.0 GB")
         assert sync["monero"]["state"] == "done"
 
-    def test_synced_node_with_no_target_shows_done(self):
+    def test_synced_node_with_no_target_shows_done(self, _metrics):
         # Regression for the bug found in the #180 live validation: a fully-synced monerod reports
         # target_height: 0 (so has_target is False) and is_syncing: False. Through the real
         # _sync_metric + build_sync it must read "done" — previously it stuck at "loading" forever,
@@ -153,7 +56,7 @@ class TestSync:
         m = _metrics(monero=_sync_metric({"is_syncing": False, "reachable": True}))
         assert build_sync(m, "1.0 GB")["monero"]["state"] == "done"
 
-    def test_no_target_but_not_caught_up_is_not_done(self):
+    def test_no_target_but_not_caught_up_is_not_done(self, _metrics):
         # The same no-target shape, but NOT caught up, must not read "done".
         m_loading = _metrics(monero=_sync_metric({}))  # no status yet
         m_syncing = _metrics(
@@ -164,7 +67,7 @@ class TestSync:
         assert build_sync(m_loading, "1.0 GB")["monero"]["state"] == "loading"
         assert build_sync(m_syncing, "1.0 GB")["monero"]["state"] == "syncing"
 
-    def test_monero_mode_and_db_passthrough(self):
+    def test_monero_mode_and_db_passthrough(self, _metrics):
         sync = build_sync(_metrics(monero_mode="Pruned"), "85.0 GB")
         assert sync["monero"]["mode"] == "Pruned"
         assert sync["monero"]["db_size"] == "85.0 GB"
@@ -407,7 +310,7 @@ class TestRigforgeUpdate:
         rows = build_workers([{**self._W, "rigforge": {"version": "1.11.1"}}])
         assert rows[0]["rigforge_update"] is None
 
-    def test_build_state_feeds_the_cached_release_through(self):
+    def test_build_state_feeds_the_cached_release_through(self, _data, _state_mgr):
         data = _data(
             workers=[{**self._W, "rigforge": {"version": "1.11.1"}}],
             rigforge_release=self._REL,

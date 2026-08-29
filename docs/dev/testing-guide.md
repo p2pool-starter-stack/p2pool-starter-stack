@@ -49,7 +49,10 @@ make test-integration ARGS="--host user@box --dir pithead --check"   # tier-4 li
 
 Add a `test_*` to the matching file under `dashboard/tests/`. Name it for the behavior, add
 a one-line docstring stating the intent, mock at the client boundary (the conftest gives you an
-in-memory `state_manager`). Run `make test-dashboard`; coverage must stay ≥ 80%.
+in-memory `state_manager`). Run `make test-dashboard`; coverage must stay ≥ 80%. Under `dashboard/tests/web/`,
+`conftest.py` supplies the view-layer builders — `_metrics`, `_sync`, `_hashrate`, `_state_mgr`
+and `_data` — as factory fixtures. Take the one you need as a parameter instead of writing
+another copy; what is deliberately not shared, and why, is recorded in that file.
 
 ```python
 def test_pruned_node_is_labelled_pruned(...):
