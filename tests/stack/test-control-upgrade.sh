@@ -9,11 +9,11 @@
 #
 # Re-derivation: two spots below need the shared control sandbox $C, "control_config main,
 # applied" (source-checkout upgrade refusal; the bundle-signature section's channel-disabled
-# tail) — but $C is built by build_control_sandbox() in a control-core section that stays in
-# run.sh, with everything between there and here (control-run-pending, worker config, etc.) also
-# staying. Re-derive a fresh, equivalent $C instead of reaching back for the ambient one,
-# mirroring run.sh's own "dashboard control channel (#33)" setup, and defining $REQS/$RESULTS
-# the same way (not lib.sh globals; only these two are read below).
+# tail) — but $C is built by build_control_sandbox() in tests/stack/test-control-core.sh, which
+# run.sh sources AFTER this file, so there is no ambient sandbox to reach back for at this point
+# in the run. Re-derive a fresh, equivalent $C, mirroring the control-core domain's own "dashboard
+# control channel (#33)" setup, and define $REQS/$RESULTS the same way (not lib.sh globals; only
+# these two are read below).
 #
 # $WALLET, set explicitly: lib.sh's control_config() closure reads it (lib.sh:207) without ever
 # setting it — in run.sh it was already set globally by build_val_sandbox()'s far-earlier

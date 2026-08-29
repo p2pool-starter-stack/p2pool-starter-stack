@@ -15,8 +15,9 @@
 # self-arm like its neighbours" is the obvious review note and it is wrong for this domain:
 #
 # - This domain is a pure CONSUMER of the control sandbox. It never calls build_control_sandbox();
-#   run.sh calls that builder once, in a control-core section that stays behind, and $C, $CTRL_LOG,
+#   test-control-core.sh calls it once, in the control-core domain sourced ahead, and $C, $CTRL_LOG,
 #   $SANDBOX and $WALLET reach here from it or from lib.sh.
+#   (That section lived in run.sh until #1105 R12 moved it into its own domain file.)
 # - This domain is position-locked by what it READS, not by anything a second builder call would
 #   overwrite. Calling build_control_sandbox() here would be harmless, and that is why it buys
 #   nothing: $C is the fixed path "$SANDBOX/control", its mkdir -p only creates, its copies are
@@ -30,14 +31,18 @@
 #   token-mask cluster moved with a re-derived $C, its applies wrote EXTRA result files into the
 #   shared results dir, and a still-in-run.sh assertion counting that dir went red. That is
 #   pollution of a counted directory — a different mechanism from anything being reset.
+#   RETRACTED (#1105 R12): that firing's stated MECHANISM does not reproduce at the tip — the
+#   apply path writes nothing into results/ unless is_appliance(), which no sandbox run
+#   satisfies. The RED was real; WHY is not established, and the full re-derivation is in
+#   test-rig-worker.sh's header. This domain's position-lock rests on what it READS, not on it.
 #
 # Re-derivations, audited over this WHOLE file, this header included. The audit script is
 # lane-local and is NOT in this repo, so nothing below rests on it: each claim is written to be
 # re-derived here with git and grep alone, and should be treated as a claim to check.
 # - $REQS, $RESULTS and $STAGED are NOT the builder's. They are assigned by the control-run-pending
-#   section, which stays in run.sh and runs before this stanza — an ordering dependency, same class
+#   section, in test-control-core.sh, sourced before this stanza — an ordering dependency, same class
 #   as any other. They are deliberately NOT seeded here: each is a plain derivation from $C, so a
-#   seed would duplicate run.sh's definitions and could drift from them, and it would buy nothing,
+#   seed would duplicate that file's definitions and could drift from them, and it would buy nothing,
 #   because $C itself keeps this file non-standalone either way.
 # - $WALLET is NOT a top-level constant. lib.sh assigns it only INSIDE the two sandbox builders, as
 #   WALLET="${WALLET:-$VALID_PRIMARY}", and run.sh never assigns it at all — so it reaches this
