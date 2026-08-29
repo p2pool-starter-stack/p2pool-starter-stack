@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
-# Self-test for the harness's ABORT TRAPS (#1401): every `trap` in tests/integration/ that exists to
-# unwind on an abort must name `EXIT` and nothing else. Standalone (not sourced by selftest.sh) so it
-# never touches that file's budget ceiling — the #1258/#1301 "moved into its own file" precedent. Run
-# directly, or via `make test-integration-selftest`. No server needed.
+# Self-test for the harness's ABORT TRAPS (#1401): checks exactly two named sites — e2e.sh's
+# `restore_all` trap and tor-client/probe.sh's `kill`-tor trap — and asserts each names `EXIT` and
+# nothing else. This is NOT a directory-wide sweep: it is two hardcoded (file, handler) pairs, not a
+# walk over tests/integration/, so a third file adding the same `EXIT INT TERM` idiom would pass this
+# file unnoticed (#1515, filed to widen this to a real walk). Standalone (not sourced by selftest.sh)
+# so it never touches that file's budget ceiling — the #1258/#1301 "moved into its own file"
+# precedent. Run directly, or via `make test-integration-selftest`. No server needed.
 #
 # WHAT THIS EXISTS TO STOP, and why a comment alone would not have. `trap handler EXIT INT TERM` is
 # the common idiom and it READS as more careful than bare `EXIT`, so it gets re-added by anyone who
