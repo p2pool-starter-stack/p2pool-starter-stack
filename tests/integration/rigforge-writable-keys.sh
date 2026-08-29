@@ -176,15 +176,14 @@ run_rigforge_pools() { # <rig>
         return 0
     fi
     orig_pools="$(_worker_detail "$rig" | jq -c '.last_applied.pools // empty' 2>/dev/null)"
-    # #1546: test the CREDENTIAL, never emptiness as a proxy for it. A pools value being ON RECORD
-    # does not mean it can be written back: an array that is present but whose entries carry no
-    # usable `pass` restores the rig to a credential-less config and strands a borrowed miner —
-    # exactly the outcome the self-derived-pools refusal exists to prevent. Measured against this
-    # function before the guard existed: `[{"url":"real:1"}]` and `[{"url":"real:1","pass":""}]`
-    # both passed the old emptiness check and were POSTed; only an ABSENT key ever skipped.
-    # So the credential is tested FIRST and emptiness only picks the message. Refusing is the
-    # honest answer for the same reason #1236 refuses .rig_config.pools: the harness cannot tell
-    # "this rig has no pass" from "it was stripped", and must not guess on a real miner.
+    # #1546: test the CREDENTIAL, never emptiness as a proxy for it. Being ON RECORD does not mean a
+    # value can be written back — a pools array whose entries carry no usable `pass` restores the rig
+    # to a credential-less config, which is the outcome the self-derived-pools refusal exists to
+    # prevent. So the credential is tested FIRST and emptiness only picks the message. Refusing is
+    # the honest answer for the same reason #1236 refuses `.rig_config.pools`: the harness cannot
+    # tell "this rig has no pass" from "it was stripped", and must not guess against a real miner.
+    # The shapes that reach each branch are enumerated as executable cases in the self-test, which
+    # is where they cannot drift out of step with the code.
     if ! printf '%s' "$orig_pools" |
         jq -e 'type == "array" and length > 0 and all(.[]; (.pass? // "") != "")' >/dev/null 2>&1; then
         if [ -z "$orig_pools" ]; then
