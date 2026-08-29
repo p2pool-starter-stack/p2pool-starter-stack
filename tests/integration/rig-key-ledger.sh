@@ -41,10 +41,12 @@
 # ever changes, this copy reds rather than drifting quietly.
 #
 # WHY `EXIT` ALONE AND NOT `EXIT INT TERM`. Measured on this box rather than assumed: a bare EXIT
-# trap DOES run when the shell dies of SIGINT or SIGTERM, and `trap … EXIT INT TERM` runs the
-# handler TWICE for one signal — once for the signal, once for the exit that follows. `EXIT` covers
-# Ctrl-C, a `kill`, and a cancelled CI job with exactly one firing. The unwind is written to be
-# idempotent anyway, because a trap that assumes it runs once is a trap nobody can safely change.
+# trap DOES run when the shell dies of SIGINT or SIGTERM, so naming the signals adds no coverage.
+# What it adds is worse than the second firing it is usually described as — a bash INT/TERM handler
+# that RETURNS does not die, so the script RESUMES at the next command, runs on to the end and exits
+# 0 (#1401; proof in selftest-abort-traps.sh). `EXIT` covers Ctrl-C, a `kill`, and a cancelled CI job
+# with exactly one firing. The unwind is written to be idempotent anyway, because a trap that assumes
+# it runs once is a trap nobody can safely change.
 #
 # ROUTES. Two, because the write surface is not all one path: `dash` is the dashboard's
 # /api/control/worker-apply (the #513, #1236 and #1002b legs) and `rig` is a direct dial at the

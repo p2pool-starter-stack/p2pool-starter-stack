@@ -191,7 +191,7 @@ CONTROL_VERDICT_BEFORE=""
 # so the EXIT trap always has a target even if it fires before preflight refines it.
 RESTORE_DIR="$CANONICAL_DIR"
 
-# --- Restore (runs on EXIT, even on failure / Ctrl-C) -----------------------
+# --- Restore: fires ONCE on EXIT, Ctrl-C included. Never add INT/TERM (#1401) ----
 restore_all() {
     local rc=$?
     [ "$RESTORED" = "1" ] && return
@@ -300,7 +300,7 @@ restore_all() {
     fi
     if [ "$rc" -eq 0 ]; then ok "restore complete."; else warn "restore complete (the run itself failed — see above)."; fi
 }
-trap restore_all EXIT INT TERM
+trap restore_all EXIT
 
 # --- Small waiters / helpers ------------------------------------------------
 wait_bench_healthy() { # <timeout_s>

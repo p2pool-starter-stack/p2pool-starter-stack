@@ -85,8 +85,9 @@ assert_eq "the outstanding key is restored to its original, via the dash route (
 
 echo "== Ctrl-C — the failure mode the issue leads with =="
 # Measured, not assumed: a bare EXIT trap DOES run when bash dies of SIGINT, and `EXIT INT TERM`
-# would run the handler TWICE for one signal. This asserts both halves at once — the restore
-# happened, and it happened exactly once.
+# would both fire the handler twice AND let the run resume past the signal (#1401; the matrix is in
+# selftest-abort-traps.sh). This asserts both halves at once — the restore happened, and it happened
+# exactly once.
 scenario 'rig_key_mark dash rig1 max_temp_c 100' 'kill -INT $$' 'sleep 30' >/dev/null
 assert_eq "SIGINT mid-change restores the key (#1379)" \
     "$(restores)" 'dash|{"max_temp_c":100}'
