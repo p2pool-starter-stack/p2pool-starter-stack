@@ -207,12 +207,19 @@ run_gate() {
 # exemption into a hard freeze, because no value of the row passed — run_gate refused the growth
 # and check_monotonic refused the raise.
 #
-# What keeps it honest is what is NOT changed here: run_gate's `lines > ceiling` rule is
-# untouched, so a PR that grows the artifact must still record the new count, and the row stays a
-# per-PR measurement rather than a ceiling nobody reads. Every Phase 2 slice cut LOWERS it —
-# the progress signal the row exists for — and it retires itself when the remainder drops to the
-# target. Keep this list to rows with that property; a row naming a real source file does not
-# have it.
+# What kept it honest is what was NOT changed for it: run_gate's `lines > ceiling` rule is
+# untouched, so a PR that grows the artifact must still record the new count, and the row stayed a
+# per-PR measurement rather than a ceiling nobody reads. Every Phase 2 slice cut LOWERED it — the
+# progress signal the row existed for. Keep this list to rows with that property; a row naming a
+# real source file does not have it.
+#
+# THE ROW HAS RETIRED, and not by reaching the target: Phase 2 split the remainder out completely
+# (#1105 P13), so lib/pithead/99-remainder.sh was deleted at 949 lines and no row in
+# docs/dev/file-budget.tsv names that path. The arm below therefore matches nothing. Before
+# removing it: lint-file-budget-selftest.sh exercises monotonic_exempt() against a synthetic repo
+# of its own, and as that self-test records, the plausible mistake here is not deleting this arm
+# but widening it to lib/pithead/*. The reasoning above is what governs whether a future row
+# earns the same treatment.
 monotonic_exempt() {
     case "$1" in
     lib/pithead/99-remainder.sh) return 0 ;;
