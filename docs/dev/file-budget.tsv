@@ -39,7 +39,6 @@ dashboard/tests/service/test_data_helpers.py	622
 dashboard/tests/service/test_data_service.py	2542
 dashboard/tests/service/test_egress.py	480
 dashboard/tests/service/test_metrics.py	463
-dashboard/tests/service/test_storage_service.py	1646
 dashboard/tests/service/test_telegram_commands.py	1240
 dashboard/tests/web/test_infra_views.py	865
 dashboard/tests/web/test_series_views.py	484
