@@ -513,6 +513,12 @@ How it stays safe:
   editor renders it as a blank password field, never as JSON you could copy or mangle; leave it
   blank to keep it, type a value to replace it. the config tab's Advanced pane carries the sentinel
   through untouched unless you edit that key yourself.
+- **The pool password is not kept.** `pools` is editable and a pool entry carries the stratum
+  password, so the change record could hold one in plain text. It doesn't: the password and the TLS
+  fingerprint are stripped out of the record before it is written, and stripped again out of every
+  read of it — so a history written by an older build stops handing them back the moment you
+  upgrade, without anything having to rewrite the database. The password still reaches the rig; it
+  travels with the change itself. What the dashboard declines to do is keep its own copy.
 
 RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
 recorded with its keys, outcome, and time. Because the rig's enriched feed doesn't expose the writable
