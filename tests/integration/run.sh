@@ -628,16 +628,18 @@ assert_running_state() {
 
     # 4. Monero caught up — per monerod's own get_info, not the dashboard UI field.
     if monero_caught_up; then it_pass "monerod reports synced (RPC)"; else it_fail "monerod reports synced (RPC)" "get_info not synchronized"; fi
-    # 4b. The node actually PUBLISHES block notifications (#1497). The check above is satisfied by
-    #     a node that can never publish one — an --offline monerod reports status OK with
-    #     target_height 0, so both disjuncts of monero_caught_up pass. Nothing downstream covers
-    #     the gap either: p2pool's healthcheck is a TCP connect to its OWN stratum port, so a
-    #     stack whose node is ZMQ-dead comes up green and starves p2pool silently. Neither does
-    #     the installer preflight, whose reachability dial is a bare TCP connect and therefore
-    #     passes on a docker-published port with nothing behind it (measured). This is a
-    #     protocol-level ZMTP handshake, which an accept() cannot satisfy.
-    #     Tier A only — asserting an OBSERVED notification needs a MOVING tip, and a height
-    #     comparison cannot discriminate against a STATIC node (#1497).
+    # 4b. The node's ZMQ endpoint is a live ZMTP PUBLISHER (#1497) — strictly less than "publishes
+    #     block notifications", and this row is named for what it proves, not for what the issue
+    #     wants. Step 4 is satisfied by a node that can never publish one: an --offline monerod
+    #     reports status OK with target_height 0, so both disjuncts of monero_caught_up pass.
+    #     Nothing downstream covers the gap either — p2pool's healthcheck is a TCP connect to its
+    #     OWN stratum port — and neither does the installer preflight, whose dial is a bare TCP
+    #     connect and so passes against a docker-published port with nothing behind it. A
+    #     protocol-level ZMTP handshake, which an accept() cannot satisfy, closes THAT case, and
+    #     only that case. MEASURED, four targets on one host: a permanently-silent XPUB and a live
+    #     monerod on a MOVING tip are INDISTINGUISHABLE here — both "ok ... XPUB". So the observed
+    #     notification is tier B, it is genuinely missing, and it is declared below as a COUNTED
+    #     SKIP rather than left in a comment: a skip announces itself, a false green does not.
     local zmq_host zmq_port zv
     if [ "$mode" = "remote" ]; then
         zmq_host="$REMOTE_MONERO_HOST"
@@ -646,7 +648,8 @@ assert_running_state() {
         zmq_host="127.0.0.1"
         zmq_port="18083"
     fi
-    if zv=$(zmq_pub_probe "$zmq_host" "$zmq_port" 8); then it_pass "monero ZMQ publishes block notifications (#1497)"; else it_fail "monero ZMQ publishes block notifications (#1497)" "$zv"; fi
+    if zv=$(zmq_pub_probe "$zmq_host" "$zmq_port" 8); then it_pass "monero ZMQ endpoint is a live ZMTP publisher (#1497)"; else it_fail "monero ZMQ endpoint is a live ZMTP publisher (#1497)" "$zv"; fi
+    it_skip_leg "monero ZMQ observed block notification" "tier B (#1497): needs a MOVING chain tip — the handshake above cannot separate a live publisher from a permanently silent one" missing
     # The dashboard's sync panel must also read "done" for a synced node — not stay stuck at
     # "loading". A synced monerod reports target_height 0, so the panel has to trust the caught-up
     # flag, not percent-vs-target; getting that wrong left a synced node "loading" forever (the real

@@ -317,17 +317,24 @@ and `--list` prints it).
 - `pithead status` exit code: `0` for a healthy config.
 - Dashboard reads live state. `/api/state` is reachable; Monero is synced (`done`); pruned/full
   display matches `monero.prune` ([#32](https://github.com/p2pool-starter-stack/pithead/issues/32)); the sidechain `pool.type` matches `p2pool.pool`.
-- The Monero node publishes block notifications. A ZMTP handshake against the node's ZMQ port
-  succeeds and the peer advertises a publisher socket type ([#1497](https://github.com/p2pool-starter-stack/pithead/issues/1497)). This is a separate
+- The Monero node's ZMQ endpoint is a live ZMTP publisher. A ZMTP handshake against the node's ZMQ
+  port succeeds and the peer advertises a publisher socket type ([#1497](https://github.com/p2pool-starter-stack/pithead/issues/1497)). The row is
+  named for what the handshake proves, which is narrower than "publishes block notifications": a
+  node whose publisher is bound but permanently silent answers it exactly as a live one does. That
+  remaining gap is not left implicit — every run counts it as a missing leg, `monero ZMQ observed
+  block notification`, because a skip announces itself and a false green does not. Closing it needs
+  a moving chain tip, which a static or `--offline` node cannot supply. This is a separate
   assertion from "Monero is synced" because the sync check cannot fail for a node that can never
   publish: an `--offline` monerod reports `status: OK` with `target_height: 0`, which satisfies
   both halves of the caught-up predicate. Nothing downstream covered the gap either — p2pool's
   healthcheck is a TCP connect to its own stratum port — so a ZMQ-dead node brought the stack up
   green and starved p2pool with nothing able to notice. A bare TCP dial does not close it: a
   docker-published port with nothing behind it accepts the connection in `docker-proxy` itself and
-  answers a dial with rc 0. Measured on one host, three targets: the live node and the
+  answers a dial with rc 0. Measured on one host, four targets: the live node and the
   published-but-dead port were indistinguishable to a dial (both rc 0) and separated by the
-  handshake. Real nodes advertise `XPUB` rather than `PUB`; both are accepted.
+  handshake; the live node and a permanently silent publisher were indistinguishable to the
+  handshake as well, both answering `ok … XPUB`, which is what the declared skip above records.
+  Real nodes advertise `XPUB` rather than `PUB`; both are accepted.
   The probe bounds its own connect ([#1500](https://github.com/p2pool-starter-stack/pithead/issues/1500)). `timeout` cannot wrap a shell
   redirection, so the opening `exec` inherited only the kernel's SYN-retry deadline. A closed port
   answers with RST in about 2 ms, which is why this stayed hidden; a filtered or black-holed host
