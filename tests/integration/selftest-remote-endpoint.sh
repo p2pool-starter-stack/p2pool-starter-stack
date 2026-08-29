@@ -70,6 +70,16 @@ out=$(bash "$HERE/run.sh" --remote-monero-rpc-port 99999 --local 2>&1)
 assert_rc "port 99999 is refused" "$?" "2"
 assert_contains "out-of-range port names the range" "$out" "1-65535"
 
+# A non-numeric port needs its own case: without the *[!0-9]* guard the range check below it
+# runs "[ abc -lt 1 ]", which errors rather than returning false, so the value is ACCEPTED.
+out=$(bash "$HERE/run.sh" --remote-monero-rpc-port abc --local 2>&1)
+assert_rc "non-numeric port is refused" "$?" "2"
+assert_contains "non-numeric port names the range" "$out" "1-65535"
+
+out=$(bash "$HERE/run.sh" --remote-monero-zmq-port 1x --local 2>&1)
+assert_rc "part-numeric zmq port is refused" "$?" "2"
+assert_contains "part-numeric port names the range" "$out" "1-65535"
+
 echo ""
 echo "selftest-remote-endpoint: $IT_PASS passed, $IT_FAIL failed"
 [ "$IT_FAIL" -eq 0 ] || exit 1
