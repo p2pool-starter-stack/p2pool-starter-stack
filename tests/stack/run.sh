@@ -121,35 +121,8 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-cli.sh" && domain_ran test-cli.sh "$_
 # shellcheck source=tests/stack/test-config.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-config.sh" && domain_ran test-config.sh "$_d0" "$?" || domain_ran test-config.sh "$_d0" "$?"
 
-echo "== unit: render-quadlet parity vs os/quadlet fixtures (#77 phase 1) =="
-# The renderer must reproduce the spike-proven unit set byte-for-byte from the fixture env — the
-# os/quadlet files ran live in the #78 spike, so any drift here needs a bench re-proof, not just
-# an updated fixture.
-QOUT="$SANDBOX/quadlet-out"
-run_sourced "$SANDBOX" render_quadlet_units "$ROOT/os/quadlet/fixture.env" "$QOUT" >/dev/null
-for f in mining.network proxy.network tor.container p2pool.container xmrig-proxy.container \
-    caddy.container docker-proxy.container docker-control.container dashboard.container; do
-    assert_eq "quadlet parity: $f" "$(diff -u "$ROOT/os/quadlet/$f" "$QOUT/$f" 2>&1 | head -c 300)" ""
-done
-assert_eq "remote render emits no node units" "$(find "$QOUT" -name 'monerod.container' -o -name 'tari.container' | wc -l | tr -d ' ')" "0"
-# The local-node variant (bench-proven 2026-07-24): profiles on, 11 files, node units included.
-QLOCAL="$SANDBOX/quadlet-local-out"
-run_sourced "$SANDBOX" render_quadlet_units "$ROOT/os/quadlet/local/fixture.env" "$QLOCAL" >/dev/null
-for f in mining.network proxy.network tor.container monerod.container tari.container \
-    p2pool.container xmrig-proxy.container caddy.container docker-proxy.container \
-    docker-control.container dashboard.container; do
-    assert_eq "quadlet local parity: $f" "$(diff -u "$ROOT/os/quadlet/local/$f" "$QLOCAL/$f" 2>&1 | head -c 300)" ""
-done
-# The payout-confirm variant (bench-proven 2026-07-24): both wallet profiles, 13 files, the
-# dashboard gains the payout env keys only in this set (the others stay byte-identical).
-QPAY="$SANDBOX/quadlet-payout-out"
-run_sourced "$SANDBOX" render_quadlet_units "$ROOT/os/quadlet/payout/fixture.env" "$QPAY" >/dev/null
-for f in mining.network proxy.network tor.container monerod.container tari.container \
-    wallet-rpc.container tari-wallet.container p2pool.container xmrig-proxy.container \
-    caddy.container docker-proxy.container docker-control.container dashboard.container; do
-    assert_eq "quadlet payout parity: $f" "$(diff -u "$ROOT/os/quadlet/payout/$f" "$QPAY/$f" 2>&1 | head -c 300)" ""
-done
-assert_eq "local render emits no wallet units" "$(find "$QLOCAL" -name 'wallet-rpc.container' -o -name 'tari-wallet.container' | wc -l | tr -d ' ')" "0"
+# shellcheck source=tests/stack/test-render-quadlet.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-render-quadlet.sh" && domain_ran test-render-quadlet.sh "$_d0" "$?" || domain_ran test-render-quadlet.sh "$_d0" "$?"
 
 # ---------------------------------------------------------------------------
 # shellcheck source=tests/stack/test-doctor-appliance.sh disable=SC2015
@@ -786,188 +759,14 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-control-backup.sh" && domain_ran test
 # shellcheck source=tests/stack/test-wizard-setup.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-wizard-setup.sh" && domain_ran test-wizard-setup.sh "$_d0" "$?" || domain_ran test-wizard-setup.sh "$_d0" "$?"
 
-echo "== unit: provision_control_runner only removes units this checkout owns (#33) =="
-# The pithead-control.{path,service} names are box-global, but a release bench holds several
-# checkouts at once (live stack + e2e harness + bundle-smoke tmp dirs). A checkout with control
-# disabled used to remove whatever units were installed — including the LIVE stack's runner,
-# stranding its dashboard control requests (config editor stuck at "Previewing…"). The removal
-# branch keys on the service unit's ExecStart: foreign owner → leave alone; own units → remove;
-# a dangling path unit with no service file → still reaped.
-PCR="$SANDBOX/pcr"
-mkdir -p "$PCR/units" "$PCR/bin"
-# uname stub: the OS gate reads `uname -s` at source time; report Linux so the branch runs on dev
-# Macs too. systemctl stub satisfies the command -v gate.
-printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$PCR/bin/uname"
-printf '#!/usr/bin/env bash\nexit 0\n' >"$PCR/bin/systemctl"
-chmod +x "$PCR/bin/uname" "$PCR/bin/systemctl"
-
-pcr_run() { # <owner-dir|-> <run-dir> — seed units owned by owner-dir ('-' = no service file), run the removal branch from run-dir, echo sudo calls
-    rm -f "$PCR/units/pithead-control.service" "$PCR/units/pithead-control.path"
-    [ "$1" != "-" ] && printf '[Service]\nExecStart=%s/pithead control-run-pending\n' "$1" >"$PCR/units/pithead-control.service"
-    printf '[Path]\nPathExistsGlob=/x/requests/*.json\n' >"$PCR/units/pithead-control.path"
-    (
-        cd "$2" || exit
-        PATH="$PCR/bin:$PATH"
-        # shellcheck disable=SC1090
-        source "$STACK"
-        set +e
-        log() { :; }
-        sudo() { echo "sudo:$*"; } # record instead of executing; the disable call's output is redirected in-function
-        PITHEAD_UNIT_DIR="$PCR/units" DASHBOARD_CONTROL_ENABLED=false provision_control_runner
-    )
-}
-
-assert_eq "foreign owner -> units left alone (no sudo rm)" "$(pcr_run /srv/code/other-checkout "$PCR")" ""
-assert_contains "own units -> removed" "$(pcr_run "$PCR" "$PCR")" \
-    "sudo:rm -f $PCR/units/pithead-control.path $PCR/units/pithead-control.service"
-assert_contains "dangling path unit (no service file) -> still reaped" "$(pcr_run - "$PCR")" "sudo:rm -f"
-# Versioned install dirs carry dots (pithead-v1.9.3). Ownership must compare the ExecStart path
-# as an exact string, never a regex: with the dots read as "any char", a sibling whose path
-# differs only at those positions would falsely match as our own — and get removed.
-mkdir -p "$PCR/v1.9.3" "$PCR/v1x9y3"
-assert_eq "foreign owner differing only at regex-dot positions -> left alone" \
-    "$(pcr_run "$PCR/v1x9y3" "$PCR/v1.9.3")" ""
-# One checkout, two spellings: production units carry the versioned dir in ExecStart, and an
-# operator's disable apply runs through the `current` symlink. Ownership compares physical
-# paths, so the unit is recognized as our own and removed — a literal $PWD compare would call
-# it foreign and the disable would never converge.
-mkdir -p "$PCR/versions/pithead-v1.9.3"
-ln -s "$PCR/versions/pithead-v1.9.3" "$PCR/current"
-assert_contains "own unit under its versioned spelling, run via the current symlink -> removed" \
-    "$(pcr_run "$PCR/versions/pithead-v1.9.3" "$PCR/current")" "sudo:rm -f"
-unset PCR pcr_run
-
-echo "== unit: provision_control_runner refuses to overwrite a foreign install's units (#1190) =="
-# The removal branch above got its ownership check when a disable-apply deleted the live stack's
-# units; the INSTALL branch had none — any sibling checkout's apply/up with control enabled
-# overwrote the box-global units and silently repointed dashboard control at itself (the
-# production-stranding mechanism, this time via install instead of a failed upgrade). The guard:
-# foreign owner that still exists on disk → refuse and name it; owner directory gone → adopt
-# (that is how a new version takes over from a removed one); own unit → converge; unparseable
-# ExecStart → leave alone, fail safe; PITHEAD_STEAL_CONTROL_UNITS=1 → deliberate takeover.
-#
-# Mutation proof (each ran red against its assertion with the guard intact elsewhere):
-#   - drop the `[ -d "$install_owner" ]` conjunct  -> "owner directory gone -> adopted" goes red
-#   - flip the `!=` ownership compare to `=`       -> "foreign existing owner -> refused" goes red
-#   - drop the PITHEAD_STEAL_CONTROL_UNITS conjunct -> "steal escape -> overwritten" goes red
-#   - drop the `steal` argument conjunct           -> "upgrade repoint (steal arg)" goes red
-PCI="$SANDBOX/pci"
-mkdir -p "$PCI/units" "$PCI/bin" "$PCI/mine" "$PCI/other"
-printf '#!/usr/bin/env bash\n[ "$1" = "-s" ] && { echo Linux; exit 0; }\nexec uname "$@"\n' >"$PCI/bin/uname"
-printf '#!/usr/bin/env bash\nexit 0\n' >"$PCI/bin/systemctl"
-chmod +x "$PCI/bin/uname" "$PCI/bin/systemctl"
-
-pci_run() { # <owner-dir|-|garbage> <run-dir> [steal-env] [fn-arg] — seed a service unit, run the INSTALL branch, echo warns + recorded sudo calls
-    rm -f "$PCI/units/pithead-control.service" "$PCI/units/pithead-control.path" "$PCI/calls"
-    case "$1" in
-    -) ;; # no pre-existing units
-    garbage) printf '[Service]\nExecStart=/usr/bin/env not-ours\n' >"$PCI/units/pithead-control.service" ;;
-    *) printf '[Service]\nExecStart=%s/pithead control-run-pending\n' "$1" >"$PCI/units/pithead-control.service" ;;
-    esac
-    (
-        cd "$2" || exit
-        PATH="$PCI/bin:$PATH"
-        # shellcheck disable=SC1090
-        source "$STACK"
-        set +e
-        log() { :; }
-        # Record instead of executing — into a side file, because the install branch redirects
-        # `sudo tee`'s stdout to /dev/null, so an echoing stub would be invisible there.
-        sudo() { echo "sudo:$*" >>"$PCI/calls"; }
-        PITHEAD_UNIT_DIR="$PCI/units" DASHBOARD_CONTROL_ENABLED=true \
-            CONTROL_DIR="$2/data/control" PITHEAD_STEAL_CONTROL_UNITS="${3:-0}" \
-            provision_control_runner ${4:+"$4"} 2>&1
-        cat "$PCI/calls" 2>/dev/null
-    )
-}
-
-out="$(pci_run "$PCI/other" "$PCI/mine")"
-assert_contains "install: foreign existing owner -> refused, names the owner" "$out" "belong to the install at $PCI/other"
-assert_not_contains "install: foreign existing owner -> unit not overwritten" "$out" "sudo:tee"
-assert_contains "install: foreign existing owner + steal escape -> overwritten" \
-    "$(pci_run "$PCI/other" "$PCI/mine" 1)" "sudo:tee $PCI/units/pithead-control.service"
-# The upgrade callsite's spelling: after a successful upgrade the OLD versioned dir still exists
-# (it is the rollback), so the converge MUST take the units over — via the `steal` argument, not
-# the operator env var. Without it every one-click upgrade would refuse and strand the channel.
-assert_contains "install: foreign existing owner + upgrade repoint (steal arg) -> overwritten" \
-    "$(pci_run "$PCI/other" "$PCI/mine" 0 steal)" "sudo:tee $PCI/units/pithead-control.service"
-assert_contains "install: foreign owner whose directory is gone -> adopted" \
-    "$(pci_run "$PCI/long-gone" "$PCI/mine")" "sudo:tee $PCI/units/pithead-control.service"
-out="$(pci_run garbage "$PCI/mine")"
-assert_contains "install: unparseable ExecStart -> left alone, says so" "$out" "not one this tool wrote"
-assert_not_contains "install: unparseable ExecStart -> unit not overwritten" "$out" "sudo:tee"
-assert_contains "install: own drifted unit -> converged (rewritten in place)" \
-    "$(pci_run "$PCI/mine" "$PCI/mine")" "sudo:tee $PCI/units/pithead-control.service"
-assert_contains "install: no units at all -> fresh install unaffected by the guard" \
-    "$(pci_run - "$PCI/mine")" "sudo:tee $PCI/units/pithead-control.service"
-unset PCI pci_run out
+# shellcheck source=tests/stack/test-control-provisioning.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-control-provisioning.sh" && domain_ran test-control-provisioning.sh "$_d0" "$?" || domain_ran test-control-provisioning.sh "$_d0" "$?"
 
 # shellcheck source=tests/stack/test-appliance-identity.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-identity.sh" && domain_ran test-appliance-identity.sh "$_d0" "$?" || domain_ran test-appliance-identity.sh "$_d0" "$?"
 
-echo "== unit: preflight_remote_nodes dials before provisioning commits =="
-PFSB=$(mktemp -d)
-printf '{"monero":{"mode":"local"},"tari":{"mode":"local"}}' >"$PFSB/local.json"
-run_sourced "$PFSB" preflight_remote_nodes "$PFSB/local.json" >/dev/null 2>&1
-assert_rc "all-local config -> nothing to dial, rc 0" "$?" "0"
-# 127.0.0.1:1 — reliably closed; the dial must fail fast and NAME the endpoint.
-printf '{"monero":{"mode":"local"},"tari":{"mode":"remote","remote":{"host":"127.0.0.1","grpc_port":1}}}' >"$PFSB/bad.json"
-out=$(run_sourced "$PFSB" preflight_remote_nodes "$PFSB/bad.json" 2>/dev/null)
-assert_rc "unreachable remote Tari -> rc 1" "$?" "1"
-assert_contains "failure names host and port" "$out" "127.0.0.1:1"
-assert_contains "failure points at the LAN-access switch" "$out" "grpc_lan_access"
-rm -rf "$PFSB"
-unset PFSB out
-
-echo "== unit: appliance defaults (tor.auto_heal) =="
-# Applied only where ABSENT: an operator who wrote false meant it.
-ADSB=$(mktemp -d)
-printf '{"monero":{"wallet_address":"x"}}' >"$ADSB/config.json"
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
-assert_eq "absent auto_heal -> enabled" "$(jq -r '.tor.auto_heal' "$ADSB/config.json")" "true"
-printf '{"tor":{"auto_heal":false}}' >"$ADSB/config.json"
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
-assert_eq "explicit false is respected" "$(jq -r '.tor.auto_heal' "$ADSB/config.json")" "false"
-printf '{"tor":{"data_dir":"/x"}}' >"$ADSB/config.json"
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
-assert_eq "other tor keys survive" "$(jq -r '.tor.data_dir' "$ADSB/config.json")" "/x"
-
-# dashboard.control.enabled had NO coverage, which is how #1066 shipped. The appliance turns the
-# control channel on because it has no other way in — but only behind a login, because an
-# unauthenticated config editor can change the payout wallet and run `apply`, which is exactly
-# what parse_and_validate_config refuses. The wizard's strip_defaults drops any answer equal to
-# the reference default, and the reference has control.enabled false, so the key is absent from
-# EVERY submission: injecting unconditionally built the forbidden pair on the "No login" answer
-# and dead-ended first boot after the operator was told provisioning had started.
-printf '{"dashboard":{"auth":{"password":"a-real-password"}}}' >"$ADSB/config.json"
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
-assert_eq "a password present -> the control channel is turned on" "$(jq -r '.dashboard.control.enabled' "$ADSB/config.json")" "true"
-printf '{"dashboard":{"auth":{"password":""}}}' >"$ADSB/config.json"
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
-assert_eq "no password -> the control channel is NOT turned on (#1066)" "$(jq -r '.dashboard.control.enabled // "absent"' "$ADSB/config.json")" "absent"
-printf '{"dashboard":{"control":{"enabled":false},"auth":{"password":"a-real-password"}}}' >"$ADSB/config.json"
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
-assert_eq "an explicit control.enabled false is respected" "$(jq -r '.dashboard.control.enabled' "$ADSB/config.json")" "false"
-# The whole first-boot sequence for the documented "No login" answer, in the order the appliance
-# runs it. The invariant is the one the validator enforces: this machine must never hand itself a
-# config carrying an enabled control channel and no password.
-mkdir -p "$ADSB/spool"
-printf 'none' >"$ADSB/spool/auth-mode"
-printf '{"monero":{"wallet_address":"x"},"dashboard":{"auth":{"username":"admin"}}}' >"$ADSB/config.json"
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" ensure_appliance_dashboard_password "$ADSB/spool" >/dev/null 2>&1
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
-assert_eq "\"No login\" leaves the password empty, as asked" "$(jq -r '.dashboard.auth.password // ""' "$ADSB/config.json")" ""
-assert_eq "\"No login\" never produces the pair the validator refuses (#1066)" \
-    "$(jq -r 'if (.dashboard.control.enabled == true) and ((.dashboard.auth.password // "") == "") then "forbidden-pair" else "ok" end' "$ADSB/config.json")" "ok"
-# ...and the same sequence WITH a login still ends up configurable, which is the whole reason the
-# appliance turns the channel on: no shell, no ssh, no other way to change a payout address.
-rm -f "$ADSB/spool/auth-mode"
-printf '{"monero":{"wallet_address":"x"},"dashboard":{"auth":{"username":"admin"}}}' >"$ADSB/config.json"
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" ensure_appliance_dashboard_password "$ADSB/spool" >/dev/null 2>&1
-PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
-assert_eq "a generated login leaves the machine configurable" "$(jq -r '.dashboard.control.enabled' "$ADSB/config.json")" "true"
-rm -rf "$ADSB"
-unset ADSB
+# shellcheck source=tests/stack/test-appliance-defaults.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-defaults.sh" && domain_ran test-appliance-defaults.sh "$_d0" "$?" || domain_ran test-appliance-defaults.sh "$_d0" "$?"
 
 # shellcheck source=tests/stack/test-appliance-install.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-install.sh" && domain_ran test-appliance-install.sh "$_d0" "$?" || domain_ran test-appliance-install.sh "$_d0" "$?"
@@ -996,29 +795,8 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-identity-boot.sh" && domain
 # shellcheck source=tests/stack/test-appliance-media.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-media.sh" && domain_ran test-appliance-media.sh "$_d0" "$?" || domain_ran test-appliance-media.sh "$_d0" "$?"
 
-echo "== unit: os/rauc/loop-wait.sh — the partition wait demands block devices and polls its budget =="
-# The negative half of the contract — all a non-root tier can prove: absent nodes and
-# regular-file impostors both exhaust the poll and return 1. sleep/udevadm are function-stubbed
-# so the 25-poll budget runs instantly. The positive half (real nodes appearing) runs for real
-# on every image build — mkimage.sh and verify-image.sh both call this.
-LW="$SANDBOX/loop-wait"
-mkdir -p "$LW"
-lw_run() { # $1 device path
-    (
-        # shellcheck disable=SC1091  # path is dynamic by design
-        source "$ROOT/os/rauc/loop-wait.sh"
-        udevadm() { :; }
-        sleep() { echo x >>"$LW/sleeps"; }
-        wait_loop_partitions "$1"
-    )
-}
-: >"$LW/sleeps"
-lw_run "$LW/loop0"
-assert_rc "nodes that never appear -> rc 1" "$?" "1"
-assert_eq "the wait polls its full 25-try budget, not a single-shot check" "$(wc -l <"$LW/sleeps" | tr -d ' ')" "25"
-touch "$LW/loop0p1" "$LW/loop0p2"
-lw_run "$LW/loop0"
-assert_rc "regular files at p1/p2 do not satisfy the wait — block devices required" "$?" "1"
+# shellcheck source=tests/stack/test-rauc-loop-wait.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-rauc-loop-wait.sh" && domain_ran test-rauc-loop-wait.sh "$_d0" "$?" || domain_ran test-rauc-loop-wait.sh "$_d0" "$?"
 
 # ---------------------------------------------------------------------------
 # shellcheck source=tests/stack/test-lifecycle.sh disable=SC2015
