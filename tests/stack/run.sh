@@ -18,49 +18,12 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-harness-tooling.sh" && domain_ran tes
 # shellcheck source=tests/stack/test-doctor.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-doctor.sh" && domain_ran test-doctor.sh "$_d0" "$?" || domain_ran test-doctor.sh "$_d0" "$?"
 
-echo "== unit: docker_boot_enabled (#137) =="
-# A systemctl stub on PATH; FAKE_BOOT picks which unit reports "enabled". Docker counts as
-# boot-enabled if EITHER docker.service or docker.socket is enabled.
-BOOT="$SANDBOX/boot"
-mkdir -p "$BOOT/bin"
-cat >"$BOOT/bin/systemctl" <<'EOF'
-#!/usr/bin/env bash
-case "$1 $2" in
-  "is-enabled docker.service") [ "${FAKE_BOOT:-}" = "service" ] && exit 0 || exit 1 ;;
-  "is-enabled docker.socket")  [ "${FAKE_BOOT:-}" = "socket"  ] && exit 0 || exit 1 ;;
-  *) exit 1 ;;
-esac
-EOF
-chmod +x "$BOOT/bin/systemctl"
-PATH="$BOOT/bin:$PATH" FAKE_BOOT=service run_sourced "$SANDBOX" docker_boot_enabled
-assert_rc "docker.service enabled -> 0" "$?" "0"
-PATH="$BOOT/bin:$PATH" FAKE_BOOT=socket run_sourced "$SANDBOX" docker_boot_enabled
-assert_rc "docker.socket enabled -> 0" "$?" "0"
-PATH="$BOOT/bin:$PATH" FAKE_BOOT=none run_sourced "$SANDBOX" docker_boot_enabled
-assert_rc "neither enabled -> 1" "$?" "1"
-
 # ---------------------------------------------------------------------------
 # shellcheck source=tests/stack/test-control-upgrade.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-control-upgrade.sh" && domain_ran test-control-upgrade.sh "$_d0" "$?" || domain_ran test-control-upgrade.sh "$_d0" "$?"
 
 # shellcheck source=tests/stack/test-release-signing.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-release-signing.sh" && domain_ran test-release-signing.sh "$_d0" "$?" || domain_ran test-release-signing.sh "$_d0" "$?"
-
-echo "== unit: config_bool honours an explicit false (jq // false-coercion guard, #294) =="
-# Regression for #294: `.x // true` returns true even when x is explicitly false (jq treats false as
-# empty), which silently broke the #270 firewall opt-out (config false → .env stayed true) and
-# xvb.tor=false. config_bool null-checks instead. CONFIG_FILE is the relative "config.json", so a
-# fixture in the cwd is what the sourced helper reads.
-CB="$SANDBOX/cb"
-mkdir -p "$CB"
-printf '{"network":{"tor_egress_firewall":false},"xvb":{"tor":false}}' >"$CB/config.json"
-assert_eq "explicit false honoured (firewall)" "$(run_sourced "$CB" config_bool '.network.tor_egress_firewall' true)" "false"
-assert_eq "explicit false honoured (xvb.tor)" "$(run_sourced "$CB" config_bool '.xvb.tor' true)" "false"
-printf '{"network":{"tor_egress_firewall":true}}' >"$CB/config.json"
-assert_eq "explicit true honoured" "$(run_sourced "$CB" config_bool '.network.tor_egress_firewall' true)" "true"
-printf '{}' >"$CB/config.json"
-assert_eq "absent -> default true" "$(run_sourced "$CB" config_bool '.network.tor_egress_firewall' true)" "true"
-assert_eq "absent -> default false" "$(run_sourced "$CB" config_bool '.xvb.tor' false)" "false"
 
 # ---------------------------------------------------------------------------
 # shellcheck source=tests/stack/test-dashboard.sh disable=SC2015
@@ -72,47 +35,8 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-dashboard-onion.sh" && domain_ran tes
 # shellcheck source=tests/stack/test-release.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-release.sh" && domain_ran test-release.sh "$_d0" "$?" || domain_ran test-release.sh "$_d0" "$?"
 
-# The XvB tier thresholds are hard-coded in config.py (TIER_DEFAULTS) and stated explicitly in
-# docs/architecture.md. Drift guard: each config value must match the doc's human form, so the
-# user-facing table can't silently fall out of sync if TIER_DEFAULTS ever changes.
-tier_cfg="$ROOT/dashboard/mining_dashboard/config/config.py"
-tier_doc="$ROOT/docs/architecture.md"
-for tier in "donor:1_000:1 kH/s" "vip:10_000:10 kH/s" "whale:100_000:100 kH/s" "mega:1_000_000:1 MH/s"; do
-    t_name="${tier%%:*}"
-    t_rest="${tier#*:}"
-    t_val="${t_rest%%:*}"
-    t_human="${t_rest#*:}"
-    if grep -qE ": ${t_val}[ ,]" "$tier_cfg" && grep -qF "$t_human" "$tier_doc"; then
-        ok "XvB $t_name tier: config.py $t_val matches docs '$t_human'"
-    else
-        bad "XvB $t_name tier docs match TIER_DEFAULTS" "config $t_val / doc '$t_human' out of sync"
-    fi
-done
-
-echo "== unit: env helpers =="
-printf 'A=1\nB=two\nPROXY_AUTH_TOKEN=keep=me\n' >"$SANDBOX/old.env"
-printf 'A=1\nB=three\nC=4\nPROXY_AUTH_TOKEN=keep=me\n' >"$SANDBOX/new.env"
-assert_eq "env_get_file reads value" "$(run_sourced "$SANDBOX" env_get_file "$SANDBOX/old.env" B)" "two"
-assert_eq "env_get_file value with =" "$(run_sourced "$SANDBOX" env_get_file "$SANDBOX/old.env" PROXY_AUTH_TOKEN)" "keep=me"
-changed="$(run_sourced "$SANDBOX" env_changed_keys "$SANDBOX/old.env" "$SANDBOX/new.env" | sort | tr '\n' ' ')"
-assert_eq "env_changed_keys finds B and C" "$changed" "B C "
-
-echo "== unit: export_build_provenance (Issue #58) =="
-# Exports the stack version (from the top-level VERSION file, whitespace-trimmed) plus git
-# branch/commit for the dashboard build args — deliberately NOT written into .env, since the
-# volatile commit would otherwise churn `apply`. The sandbox isn't a git repo, so branch/commit
-# come back empty here; the release/dev split is unit-tested in dashboard/tests/test_version.py.
-PROV="$SANDBOX/prov"
-mkdir -p "$PROV"
-printf '  9.9.9 \n' >"$PROV/VERSION"
-# shellcheck disable=SC1090  # STACK path is dynamic by design
-ver="$(cd "$PROV" && source "$STACK" && set +e && export_build_provenance && printf '%s' "$PITHEAD_VERSION")"
-assert_eq "export_build_provenance reads VERSION (trimmed)" "$ver" "9.9.9"
-NOVER="$SANDBOX/nover"
-mkdir -p "$NOVER"
-# shellcheck disable=SC1090  # STACK path is dynamic by design
-ver="$(cd "$NOVER" && source "$STACK" && set +e && export_build_provenance && printf '%s' "$PITHEAD_VERSION")"
-assert_eq "export_build_provenance empty when no VERSION" "$ver" ""
+# shellcheck source=tests/stack/test-unit-helpers.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-unit-helpers.sh" && domain_ran test-unit-helpers.sh "$_d0" "$?" || domain_ran test-unit-helpers.sh "$_d0" "$?"
 
 # ---------------------------------------------------------------------------
 # shellcheck source=tests/stack/test-cli.sh disable=SC2015
