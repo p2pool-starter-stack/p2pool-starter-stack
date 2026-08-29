@@ -4,7 +4,10 @@ FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec4
 
 # Install Tor plus the tools the bootstrap healthcheck needs: netcat (talk to the
 # control port) and xxd (hex-encode the auth cookie). --no-cache keeps the image small.
-RUN apk add --no-cache tor netcat-openbsd xxd
+# --upgrade names the base's own openssl libs so they follow the distro's security repo: the
+# digest-pinned base can lag a published fix until upstream rebuilds the image, and that lag
+# closed the CVE gate base-wide on 2026-08-28 (CVE-2026-14456, #1438).
+RUN apk add --no-cache --upgrade libcrypto3 libssl3 tor netcat-openbsd xxd
 
 # Copy the Tor config TEMPLATE + the entrypoint that renders it: the bridge subnet prefix is
 # substituted at container start (#180). The rendered torrc lands in /tmp (the unprivileged 'tor'

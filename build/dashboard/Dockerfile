@@ -15,10 +15,16 @@ ENV UV_PYTHON_DOWNLOADS=never \
     UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:$PATH"
 
-# System dependencies.
+# System dependencies. The openssl trio is already in the base image — naming it here pulls the
+# distro's current security build past the digest-pinned base, which can lag a published fix until
+# upstream rebuilds the image; that lag closed the CVE gate base-wide on 2026-08-28
+# (CVE-2026-14456, #1438). apt-get upgrade is the blanket alternative and hadolint bans it (DL3005).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     iproute2 \
+    libssl3t64 \
+    openssl \
+    openssl-provider-legacy \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
