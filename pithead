@@ -2357,16 +2357,56 @@ prefill_from_previous_install() { # <spool-dir>
 # session read exactly that as a crash. TCP connect only (bash /dev/tcp): proves reachability,
 # not protocol health, which the stack's own healthchecks own. rc 0 = all reachable or none
 # remote; rc 1 = a named failure on stdout.
+# A TCP connect proves reachability and NOTHING ELSE, and on the ZMQ port that gap is
+# load-bearing rather than pedantic: docker's userland proxy binds a published host port and
+# accepts the connection ITSELF, so a containerised node whose publisher failed to bind answers
+# the dial rc 0 — and a remote node is a natural thing to run in a container. Measured: a dial
+# cannot separate that from a live node. One ZMTP greeting can, because an accept() cannot
+# produce one; a real publisher sends 64 bytes beginning ff … 7f as soon as it accepts.
+# Refusing here rather than warning is deliberate. A named setup error is recoverable in a
+# minute; the failure it replaces is p2pool starving for block notifications while every check
+# in the stack reports green, which nothing downstream can see.
+# The connect is bounded by wrapping the whole exchange in `timeout` — `timeout` cannot wrap a
+# bare redirection, so an unwrapped `exec` would inherit only the kernel's SYN-retry deadline
+# against a host that stops answering between the dial above and this call.
+# The release-gate harness carries the FULL probe (greeting, READY exchange, advertised socket
+# type). This is deliberately the greeting half alone, because the shipped CLI cannot depend on
+# the test harness and the greeting is the half that separates a publisher from an accept(). The
+# duplication is forced by that boundary, not chosen: if ZMTP's greeting shape ever moves, both
+# copies move together.
+# PURE, over the hex the peer sent, so every failure class is reachable from a fixture with no
+# socket: empty (the published-but-dead port), truncated, not-ZMTP, and ZMTP 2.
+# Length first — every slice below is read with `16#`, and `16#` on an empty string is a fatal
+# arithmetic error rather than a false verdict.
+zmq_greeting_ok() { # <hex>; rc 0 only for a well-formed ZMTP >=3 greeting
+    local g="${1,,}"
+    [ "${#g}" -ge 24 ] && [ "${g:0:2}" = "ff" ] && [ "${g:18:2}" = "7f" ] && [ "$((16#${g:20:2}))" -ge 3 ]
+}
+
+zmq_endpoint_greets() { # <host> <port>; rc 0 only for a ZMTP >=3 peer
+    local g
+    g=$(timeout 5 bash -c '
+        exec 3<>/dev/tcp/"$0"/"$1" 2>/dev/null || exit 1
+        { printf "\xff\x00\x00\x00\x00\x00\x00\x00\x00\x7f\x03\x01NULL"; head -c 48 /dev/zero; } >&3
+        head -c 64 <&3 | od -An -v -tx1 | tr -d " \n"' "$1" "$2" 2>/dev/null) || g=""
+    zmq_greeting_ok "$g"
+}
+
 preflight_remote_nodes() { # <config-file>
-    local cfg="$1" host port
+    local cfg="$1" host port zmq
     if [ "$(jq -r '.monero.mode // "local"' "$cfg")" = "remote" ]; then
         host=$(jq -r '.monero.remote.host // ""' "$cfg")
-        for port in $(jq -r '.monero.remote.rpc_port // 18081' "$cfg") $(jq -r '.monero.remote.zmq_port // 18083' "$cfg"); do
+        zmq=$(jq -r '.monero.remote.zmq_port // 18083' "$cfg")
+        for port in $(jq -r '.monero.remote.rpc_port // 18081' "$cfg") "$zmq"; do
             if ! timeout 5 bash -c "</dev/tcp/$host/$port" 2>/dev/null; then
                 printf 'cannot reach the remote Monero node at %s:%s — check the host, the port, and that the node allows LAN access (monero.rpc_lan_access / zmq_lan_access on a Pithead host)' "$host" "$port"
                 return 1
             fi
         done
+        if ! zmq_endpoint_greets "$host" "$zmq"; then
+            printf 'the remote Monero node at %s answers on ZMQ port %s but nothing there speaks ZMQ — a published container port with no publisher behind it answers a reachability check exactly like a live node does. Check that monerod is running with ZMQ enabled, and that zmq_lan_access is on if it is a Pithead host' "$host" "$zmq"
+            return 1
+        fi
     fi
     if [ "$(jq -r '.tari.mode // "local"' "$cfg")" = "remote" ]; then
         host=$(jq -r '.tari.remote.host // ""' "$cfg")
