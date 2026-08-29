@@ -5,7 +5,8 @@ dashboard/mining_dashboard/config/config.py	717
 dashboard/mining_dashboard/service/alert_service.py	928
 dashboard/mining_dashboard/service/algo_service.py	558
 dashboard/mining_dashboard/service/control_service.py	414
-dashboard/mining_dashboard/service/data_service.py	1852
+dashboard/mining_dashboard/service/data_helpers.py	431
+dashboard/mining_dashboard/service/data_service.py	1454
 dashboard/mining_dashboard/service/egress.py	424
 dashboard/mining_dashboard/service/storage_service.py	1603
 dashboard/mining_dashboard/service/telegram_commands.py	1023
@@ -34,7 +35,8 @@ dashboard/tests/frontend/xvbview.test.mjs	431
 dashboard/tests/service/test_alert_service.py	1102
 dashboard/tests/service/test_algo_service.py	822
 dashboard/tests/service/test_control_service.py	500
-dashboard/tests/service/test_data_service.py	3130
+dashboard/tests/service/test_data_helpers.py	622
+dashboard/tests/service/test_data_service.py	2542
 dashboard/tests/service/test_egress.py	480
 dashboard/tests/service/test_metrics.py	463
 dashboard/tests/service/test_storage_service.py	1646

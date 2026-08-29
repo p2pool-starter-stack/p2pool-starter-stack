@@ -15,7 +15,7 @@ from mining_dashboard.config.config import (
     SECOND_PER_BLOCK_MAIN,
     STRATUM_STATS_PATH,
 )
-from mining_dashboard.service.data_service import _shares_to_record
+from mining_dashboard.service.data_helpers import _shares_to_record
 
 
 class TestDetectPoolType:

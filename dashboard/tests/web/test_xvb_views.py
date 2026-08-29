@@ -31,7 +31,7 @@ import mining_dashboard.web.views as views
 import mining_dashboard.web.xvb_views as xvb_views
 from mining_dashboard.config.config import XVB_STATS_STALE_AFTER_S
 from mining_dashboard.service.metrics import Metrics, SyncMetric
-from mining_dashboard.web.views import _mode_palette, build_hashrate, build_state
+from mining_dashboard.web.series_views import _mode_palette, build_hashrate
 from mining_dashboard.web.xvb_views import (
     build_badges,
     build_earnings,
@@ -422,7 +422,7 @@ class TestWalletChangedBadge:
             "payout_wallet": self._NEW,
             "payout_wallet_prev8": "4Aaaaaaa",
         }.get
-        st = build_state(_data(), sm, "all")
+        st = views.build_state(_data(), sm, "all")
         assert any("Payout wallet changed" in b["text"] for b in st["badges"])
 
 
@@ -598,7 +598,7 @@ class TestEarningsVsActual:
         # earnings dict the Earnings card receives — one build, so the two cannot disagree.
         monkeypatch.setattr(views.config, "PAYOUT_CONFIRM_ENABLED", False)
         monkeypatch.setattr(views.config, "TARI_PAYOUT_CONFIRM_ENABLED", False)
-        st = build_state(_data(), _state_mgr(), "all")
+        st = views.build_state(_data(), _state_mgr(), "all")
         assert set(st["earnings_summary"]) == {"xmr", "tari", "xvb"}
         assert st["earnings_summary"]["xmr"]["enabled"] is False
 
@@ -788,7 +788,7 @@ class TestXvbTemperedDay:
         monkeypatch.setattr(service_metrics, "ENABLE_XVB", True)
         monkeypatch.setattr(views, "xvb_current_tier_reward_day", lambda m, s: 0.016)
         monkeypatch.setattr(views, "xvb_realization", lambda *a, **k: (0.25, 6))
-        st = build_state(_data(), _state_mgr(), "all")
+        st = views.build_state(_data(), _state_mgr(), "all")
         assert st["earnings"]["xvb_day"] == pytest.approx(0.016 * 0.25)
         # Measured tempering applied exactly ONCE on the summary side (0.016 × 30 × 0.25).
         assert st["earnings_summary"]["xmr"]["expected_30d"] == pytest.approx(0.016 * 30 * 0.25)
@@ -801,7 +801,7 @@ class TestXvbTemperedDay:
         monkeypatch.setattr(service_metrics, "ENABLE_XVB", True)
         monkeypatch.setattr(views, "xvb_current_tier_reward_day", lambda m, s: 0.016)
         monkeypatch.setattr(views, "xvb_realization", lambda *a, **k: None)
-        st = build_state(_data(), _state_mgr(), "all")
+        st = views.build_state(_data(), _state_mgr(), "all")
         lo, hi = xvb_views.XVB_REALIZATION_PRIOR
         assert st["earnings"]["xvb_day"] == pytest.approx(0.016 * (lo + hi) / 2)
         assert st["earnings_summary"]["xmr"]["expected_30d"] == pytest.approx(0.016 * 30)

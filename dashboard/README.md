@@ -45,7 +45,9 @@ mining_dashboard/
 ├── config/            # configuration from environment variables
 ├── client/            # external service clients (xmrig, xmrig-proxy, xvb, tari gRPC, monerod RPC, docker control)
 ├── collector/         # local stats collectors (pools, system, docker logs)
-├── service/           # algo_service (XvB switching), data_service (aggregation), storage_service (SQLite),
+├── service/           # algo_service (XvB switching), data_service (the aggregation poll loop),
+│                      #   data_helpers (the pure parsers/aggregators behind that loop, plus
+│                      #   WorkerLifecycle), storage_service (SQLite),
 │                      #   metrics (typed computed domain values consumed by the view layer)
 ├── sim/               # donation_model (the XvB donation simulator; property-tested, #284)
 ├── web/               # server.py (transport: / shell + /api/state + middleware),
