@@ -334,10 +334,27 @@ tests/integration/run.sh --host you@server --dir pithead --readiness
 > NOTE: a pruned chain's file stays large. An in-place prune does not shrink the LMDB file: it
 > stays at the full-chain high-water mark (~250 GiB) with the freed space sitting as internal
 > free pages (Monero reuses them as the chain grows). To reclaim it you must rewrite the DB with
-> `monero-blockchain-prune --copy-pruned-database` (see
+> `monero-blockchain-prune` (see
 > [`compact-chain.sh`](../../tests/integration/compact-chain.sh)). It's slow (it copies every block
-> over hours), though it reads through a snapshot so monerod keeps mining; you then swap the
-> compact copy in during a ~2 min window. The generic `mdb_copy -c` does not work: Monero ships a
+> over hours), though it reads through a snapshot so monerod keeps mining.
+>
+> **The tool is copy-then-swap, so it does not leave the swap to you.** After building
+> `<data-dir>/lmdb-pruned` it renames `<data-dir>/lmdb` to `<data-dir>/lmdb-old` and moves the
+> pruned DB into place. Pointed at a live node's data dir it therefore renames the live chain out
+> from under a running monerod — nothing fails at the time, because the process keeps its open
+> descriptors, and the next restart silently comes up pruned. To run it against a live chain,
+> bind-mount the source so the kernel refuses the rename with `EBUSY`:
+>
+> ```bash
+> mkdir -p <build-dir>/lmdb
+> mount --bind <live-data-dir>/lmdb <build-dir>/lmdb
+> tests/integration/compact-chain.sh <build-dir>   # result at <build-dir>/lmdb-pruned
+> ```
+>
+> Prove the guard before relying on it: `mv <build-dir>/lmdb <build-dir>/x` must answer `Device or
+> resource busy`.
+>
+> The generic `mdb_copy -c` does not work: Monero ships a
 > patched LMDB and stock mdb_copy rejects the format (`MDB_VERSION_MISMATCH`). Often it's simplest
 > to leave the free pages.
 
