@@ -161,8 +161,10 @@ run_rigforge_writable_keys() { # <rig>
 # could safely write back. pithead treats `pools` as opaque passthrough (WORKER_WRITABLE_KEYS checks
 # the key NAME, never the value shape), so a guessed value risks a real rejected/failed instead of
 # proving the round trip — the same reasoning IT_RIG_ROLLBACK_CHANGES applies to the #517 leg.
-# The restore target is `.last_applied.pools`: the dashboard's record of what IT pushed, which is
-# un-stripped, and the same source the real editor prefills from when the rig sends no config.
+# The restore target is `.last_applied.pools`: the dashboard's record of what IT pushed, and the
+# same source the real editor prefills from when the rig sends no config. It is the best available
+# restore value, but being on record is NOT a guarantee that it carries a credential — so the leg
+# checks, rather than assuming (#1546).
 run_rigforge_pools() { # <rig>
     local rig="$1" orig_pools res status ckeys
     if [ -z "${IT_RIG_POOLS_PROBE:-}" ]; then
@@ -174,13 +176,28 @@ run_rigforge_pools() { # <rig>
         return 0
     fi
     orig_pools="$(_worker_detail "$rig" | jq -c '.last_applied.pools // empty' 2>/dev/null)"
-    if [ -z "$orig_pools" ]; then
-        it_skip_leg "pools write (#1002b)" "rig '$rig' has no dashboard-applied pools on record (.last_applied.pools) — can't read a restorable original; the rig's own .rig_config.pools is credential-stripped and must not be written back"
+    # #1546: test the CREDENTIAL, never emptiness as a proxy for it. A pools value being ON RECORD
+    # does not mean it can be written back: an array that is present but whose entries carry no
+    # usable `pass` restores the rig to a credential-less config and strands a borrowed miner —
+    # exactly the outcome the self-derived-pools refusal exists to prevent. Measured against this
+    # function before the guard existed: `[{"url":"real:1"}]` and `[{"url":"real:1","pass":""}]`
+    # both passed the old emptiness check and were POSTed; only an ABSENT key ever skipped.
+    # So the credential is tested FIRST and emptiness only picks the message. Refusing is the
+    # honest answer for the same reason #1236 refuses .rig_config.pools: the harness cannot tell
+    # "this rig has no pass" from "it was stripped", and must not guess on a real miner.
+    if ! printf '%s' "$orig_pools" |
+        jq -e 'type == "array" and length > 0 and all(.[]; (.pass? // "") != "")' >/dev/null 2>&1; then
+        if [ -z "$orig_pools" ]; then
+            it_skip_leg "pools write (#1002b)" "rig '$rig' has no dashboard-applied pools on record (.last_applied.pools) — can't read a restorable original; the rig's own .rig_config.pools is credential-stripped and must not be written back"
+        else
+            it_skip_leg "pools write (#1002b)" "rig '$rig' has .last_applied.pools on record, but it carries no usable credential (a missing or empty \`pass\` on at least one entry) — restoring it would apply a credential-less pools config to a real miner, so this refuses rather than guesses (#1546)"
+        fi
         return 0
     fi
     it_step "Worker Inspect edit: pools -> the operator-supplied probe via /api/control/worker-apply…"
-    # The restore target is last_applied, which still carries `pass` — the same un-stripped value
-    # the revert below uses, and the only one safe to write back (#113). (#1379)
+    # The restore target is last_applied, and the guard above has PROVEN this value carries `pass`
+    # rather than assuming it — the same un-stripped value the revert below uses, and the only one
+    # safe to write back (#113). (#1379, #1546)
     rig_key_mark dash "$rig" pools "$orig_pools"
     res="$(_worker_apply "$rig" "{\"pools\":$IT_RIG_POOLS_PROBE}")"
     status="$(printf '%s' "$res" | jq -r '.status // empty' 2>/dev/null)"
