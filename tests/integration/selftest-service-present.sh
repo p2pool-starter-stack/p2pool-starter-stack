@@ -36,9 +36,7 @@ check "the needle is a literal, not a pattern" "ta.i" "$(printf 'caddy\ntari\nto
 check "a neighbour named *monerod* is not monerod" monerod "$(printf 'caddy\nmonerod-remote\ntor')" 1
 check "monerod itself is still found" monerod "$(printf 'caddy\nmonerod\ntor')" 0
 
-EMPTY=""
-service_present tari "$EMPTY" && it_fail "nothing running -> not present" "matched empty input" ||
-    it_pass "nothing running -> not present"
+check "nothing running -> not present" tari "" 1
 
 echo ""
 echo "selftest-service-present: $IT_PASS passed, $IT_FAIL failed"

@@ -551,9 +551,7 @@ assert_running_state() {
         fi
     fi
     # tari.mode is an independent axis from monero.mode (#103/#942): the bundled tari container
-    # must be absent whenever it's remote, same as monerod above. The exact-line matching all
-    # three sites depend on lives in service_present (#1478) — "tari" is a prefix of "tari-wallet"
-    # (the payout-confirm container, #462), so a substring match would speak for the wrong one.
+    # must be absent whenever it's remote, same as monerod above.
     if [ "$tmode" = "remote" ]; then
         if service_present tari "$running"; then
             it_fail "tari absent in remote mode (#103/#942)" "tari is running"
