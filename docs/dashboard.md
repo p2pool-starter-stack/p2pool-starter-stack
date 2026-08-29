@@ -498,6 +498,15 @@ it because our own database would not open sources that accusation from a fault 
 than from anything the rig did. That case now gets its own line, above: the dashboard says it could
 not tell, and says why.
 
+That contract is no longer local to this one read. A read that wants its failure to be
+distinguishable from an empty answer widens its return type to `T | None` and returns `None` on
+failure, so the decision is one a reader can see in the signature rather than one hidden in a
+handler. `dashboard/tests/service/test_collapsed_return_channels.py` holds that as a package rule
+and re-checks it on every change: a failure path may not return a value the declared success type
+admits. The reads that still collapse the two are reported by name in that test's output rather
+than recorded anywhere as accepted — a list of them would say someone had read and approved them,
+and nobody has.
+
 How it stays safe:
 
 - **The dashboard never holds the rig's token.** It spools the worker name and the change into the
