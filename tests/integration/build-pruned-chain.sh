@@ -7,7 +7,11 @@
 #   1. stop monerod            -> makes the live LMDB consistent for copying
 #   2. copy full data.mdb      -> onto the CoW (btrfs) volume   [downtime window]
 #   3. start monerod           -> mining resumes immediately after the copy
-#   4. prune the COPY in place -> shrinks ~250G -> ~95G, full chain untouched
+#   4. prune the COPY          -> shrinks ~250G -> ~95G, full chain untouched
+#
+# Step 4 targets the COPY, never the canonical chain. `monero-blockchain-prune` is
+# copy-then-swap (#1489) — it renames its result over $DST_DIR/lmdb, which is why the size is
+# read back from there. Never point it at a live data dir; see compact-chain.sh's bind-mount guard.
 #
 # Self-contained + idempotent-ish: logs with timestamps, writes a status sentinel,
 # and always restarts monerod even if the copy fails. Designed to be run under nohup.

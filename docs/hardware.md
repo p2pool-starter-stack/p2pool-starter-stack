@@ -58,7 +58,8 @@ of pruned pushes that toward ~425 GB. Pruning Monero doesn't shrink Tari, so bud
 whenever it runs here. (A *freshly synced* pruned node is ~100 GB, but pruning an existing full
 chain doesn't
 reclaim space in place — run `monero-blockchain-prune` to write a new pruned DB; until then it sits
-at full size.)
+at full size. Stop monerod first: the tool moves the new DB into place itself, renaming the old
+chain aside, and it will do that under a running daemon.)
 
 Both chains keep growing, ~100+ GB/year combined (Tari, a young chain, grows fastest; Monero adds
 tens of GB/year). That's why the table lists a ~330 GB (pruned) / ~530 GB (full) minimum but

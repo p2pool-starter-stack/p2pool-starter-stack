@@ -47,13 +47,26 @@ A workable layout (adjust to taste):
   bloat, so there is nothing to compact. Shrinking it would mean pruning Tari (a config change plus
   re-sync), which is a product decision, not housekeeping.
 
-**Compacting the Monero chain** (reclaim bloat; takes hours, but no downtime until the swap):
+**Compacting the Monero chain** (reclaim bloat; takes hours, no downtime for the copy).
+
+`monero-blockchain-prune` is copy-then-swap: once it has built `lmdb-pruned` it renames `lmdb` to
+`lmdb-old` and moves the pruned DB into place itself (#1489). Pointed straight at a live data dir
+that renames the live chain out from under a running monerod, silently until the next restart. So
+run it against a bind mount, which makes the kernel refuse that rename:
 
 ```bash
-tests/integration/compact-chain.sh <data-dir>/monero   # builds lmdb-pruned/ (monerod stays up)
-# when DONE, swap it in (brief downtime):
+mkdir -p <build-dir>/lmdb
+sudo mount --bind <data-dir>/monero/lmdb <build-dir>/lmdb
+mv <build-dir>/lmdb <build-dir>/x   # MUST answer "Device or resource busy" — prove the guard first
+tests/integration/compact-chain.sh <build-dir>   # monerod stays up; result at <build-dir>/lmdb-pruned
+```
+
+Then swap the compact copy in (brief downtime):
+
+```bash
 docker stop monerod
-cd <data-dir>/monero && mv lmdb lmdb.bloated && mv lmdb-pruned lmdb
+sudo umount <build-dir>/lmdb
+cd <data-dir>/monero && mv lmdb lmdb.bloated && mv <build-dir>/lmdb-pruned lmdb
 docker start monerod        # re-syncs the few blocks added during the copy
 # confirm `pithead status` healthy, then: rm -rf lmdb.bloated
 ```
