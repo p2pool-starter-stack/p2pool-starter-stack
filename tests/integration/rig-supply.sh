@@ -24,7 +24,15 @@
 #                 a resolved address also keeps a literal address out of argv and the log, and avoids
 #                 the bracket quoting a raw IPv6 literal would need in the URL.
 #   IT_RIG_TOKEN  read over the SSH the borrow already holds. /opt/rigforge/config.json is mode 600
-#                 owned by the SSH user, so no sudo is involved.
+#                 owned by the SSH user UNTIL the rig takes its first control-apply — RigForge's
+#                 control service runs as root and rewrites that file, and it is root-owned from
+#                 then on (#1466). This comment used to say "so no sudo is involved", which was true
+#                 of a rig that had never been written to and false forever after on one that had.
+#                 So: unprivileged read first, `sudo -n` only as the fallback when that read FAILED,
+#                 and the read's own error is no longer swallowed. The swallowing is what made this
+#                 expensive — a permission-denied read and a file with no token in it both arrived
+#                 as an empty string, run.sh dropped the whole write phase, and the gate printed
+#                 `✓ E2E PASSED`. The two cases now report as two different sentences.
 #
 # Neither default is TRUSTED. rig_supply dials the rig's control API from the BENCH — the box whose
 # legs will dial it — and reports which case it took, because "the harness does not report which case
@@ -54,16 +62,41 @@ IT_RIG_TOKEN="${IT_RIG_TOKEN:-}"
 # dashboard-side legs are real coverage, and turning a known gap into a failed release gate would be a
 # worse instrument than the one we are fixing. The warnings below are the honest report.
 rig_supply() {
+    local read_cmd unpriv_rc=0 sudo_rc=0
     RIG_HOST="${RIG_HOST:-$MINER_HOST}"
     if [ -z "$IT_RIG_TOKEN" ]; then
-        IT_RIG_TOKEN="$(on_miner "jq -r '.ACCESS_TOKEN // empty' $(quote_arg "$RIGFORGE_CONFIG")" 2>/dev/null)" || IT_RIG_TOKEN=""
+        read_cmd="jq -r '.ACCESS_TOKEN // empty' $(quote_arg "$RIGFORGE_CONFIG")"
+        # No `2>/dev/null` here, deliberately: the read's own error IS the diagnostic (#1466), and
+        # hiding it is what let a denied read pass for a file with no token in it. Nothing in either
+        # substitution may print to stdout — stdout IS the token.
+        IT_RIG_TOKEN="$(on_miner "$read_cmd")" || unpriv_rc=$?
+        # Escalate only when that read FAILED. A rig that is simply tokenless answers with an empty
+        # string and rc 0, and re-asking under sudo would add a "a password is required" error to a
+        # case that has nothing wrong with its permissions.
+        #
+        # The `|| IT_RIG_TOKEN=""` the line above used to carry survives HERE and only here. A failed
+        # read yields no token whatever it managed to print first — ssh can drop after the rig has
+        # written part of its answer, and half a token is worse than none: it dials, 401s, and the
+        # operator is told the phase was supplied. On the first read that guard would be dead, because
+        # this assignment overwrites a partial answer anyway; on the LAST read nothing does.
+        if [ "$unpriv_rc" != 0 ]; then
+            IT_RIG_TOKEN="$(on_miner "sudo -n $read_cmd")" || {
+                sudo_rc=$?
+                IT_RIG_TOKEN=""
+            }
+        fi
     fi
     if [ -z "$RIG_HOST" ]; then
         warn "write phase UNDER-SUPPLIED (#1378): no rig host — set MINER_HOST or RIG_HOST."
         return 0
     fi
     if [ -z "$IT_RIG_TOKEN" ]; then
-        warn "write phase UNDER-SUPPLIED (#1378): no token in $RIGFORGE_CONFIG on $MINER_HOST, and IT_RIG_TOKEN is unset."
+        if [ "$unpriv_rc" != 0 ]; then
+            warn "write phase UNDER-SUPPLIED (#1466): could NOT READ $RIGFORGE_CONFIG on $MINER_HOST (read rc=$unpriv_rc, sudo -n rc=$sudo_rc). The read's own error is above."
+            warn "  That is NOT the same as the file having no token. A rig that has taken a control-apply leaves that file root-owned; set IT_RIG_TOKEN, or allow the SSH user passwordless sudo for the read."
+        else
+            warn "write phase UNDER-SUPPLIED (#1378): no token in $RIGFORGE_CONFIG on $MINER_HOST, and IT_RIG_TOKEN is unset."
+        fi
         warn "  The phase then runs only if the bench baseline already pins a descriptor for this rig, and #516's feed leg cannot run at all."
         return 0
     fi
