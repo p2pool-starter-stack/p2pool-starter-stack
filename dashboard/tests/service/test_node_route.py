@@ -7,44 +7,18 @@ The four edges this is really about (`p2pool`->`monerod`, `p2pool`->`tari`, `das
 `dashboard`->`tari`) all claimed `local` before this, three of them hardcoded. One render could
 already contradict itself: with a remote monerod the node was marked `remote` and p2pool's hop to
 it said `clearnet`, while the dashboard's hop to the SAME daemon still said `local`.
+
+The resting config these tests build on used to be a local ``SAFE`` dict mirroring
+``test_egress.SAFE``.  #1541 merged the two into ``tests/service/conftest.py``, which is what the
+``_posture``, ``_topo`` and ``_edge`` fixtures below read; the merged dict is the UNION, so these
+tests now pin three notify-* keys they used to leave at their signature defaults.  The conftest
+docstring records why that is a no-op and what it costs.
 """
 
 import pytest
 
-from mining_dashboard.service.egress import (
-    CLEARNET,
-    LOCAL,
-    compute_egress_posture,
-    compute_topology,
-)
+from mining_dashboard.service.egress import CLEARNET, LOCAL
 from mining_dashboard.service.topology_graph import LAN, NODE_ROUTES, UNKNOWN, node_route
-
-# The resting config, mirroring test_egress.SAFE: everything private-by-default, so any leak the
-# assertions below see was caused by the route under test and not by an unrelated knob.
-SAFE = {
-    "firewall": True,
-    "p2pool_clearnet": False,
-    "xvb_enabled": True,
-    "xvb_tor": True,
-    "monero_clearnet_sync": False,
-    "tari_clearnet_sync": False,
-    "monero_route": LOCAL,
-    "healthchecks_enabled": False,
-    "telegram_enabled": False,
-}
-
-
-def _posture(**overrides):
-    return compute_egress_posture(**{**SAFE, **overrides})
-
-
-def _topo(**overrides):
-    return compute_topology(**{**SAFE, **overrides})
-
-
-def _edge(topo, src, dst):
-    return next(e for e in topo["edges"] if e["from"] == src and e["to"] == dst)
-
 
 # --- The classifier ----------------------------------------------------------------------
 
@@ -157,7 +131,7 @@ def test_the_classifier_returns_only_declared_routes():
 
 @pytest.mark.parametrize("firewall", [True, False])
 @pytest.mark.parametrize("route", [LAN, UNKNOWN])
-def test_a_lan_or_unknown_node_hop_moves_neither_security_counter(route, firewall):
+def test_a_lan_or_unknown_node_hop_moves_neither_security_counter(route, firewall, _posture):
     # `leaks` is defined at its own declaration as "clearnet egress that actually exposes the host
     # IP". A node on your own LAN does not expose it, so counting one would be inventing a leak —
     # and inventing a leak is as wrong as hiding one. `unknown` must not be counted either: we do
@@ -174,7 +148,7 @@ def test_a_lan_or_unknown_node_hop_moves_neither_security_counter(route, firewal
 
 
 @pytest.mark.parametrize("firewall", [True, False])
-def test_a_clearnet_node_hop_still_moves_a_counter(firewall):
+def test_a_clearnet_node_hop_still_moves_a_counter(firewall, _posture):
     # The control for the test above. Without this, "the counters did not move" would be equally
     # consistent with the monerod hop having stopped reaching the counter at all — which is what
     # a careless edit to the conn at egress.py's p2pool component would actually do.
@@ -183,7 +157,7 @@ def test_a_clearnet_node_hop_still_moves_a_counter(firewall):
     assert summary["blocked_by_firewall"] == (1 if firewall else 0)
 
 
-def test_a_lan_node_visibly_changes_the_count_that_used_to_be_charged(monkeypatch):
+def test_a_lan_node_visibly_changes_the_count_that_used_to_be_charged(monkeypatch, _posture):
     # The behaviour change this PR ships, stated as a test rather than left for an operator to
     # notice. A remote monerod on a private address was charged to the security summary before
     # this (blocked with the firewall on, a LEAK with it off); it now moves neither counter.
@@ -195,7 +169,7 @@ def test_a_lan_node_visibly_changes_the_count_that_used_to_be_charged(monkeypatc
 
 
 @pytest.mark.parametrize("route", NODE_ROUTES)
-def test_every_hop_to_a_relocatable_node_carries_that_node_s_route(route):
+def test_every_hop_to_a_relocatable_node_carries_that_node_s_route(route, _edge, _topo):
     # All four edges, including the three that were hardcoded `local`. Parametrised over every
     # route so a fix that special-cases one state and drops the others cannot pass.
     topo = _topo(monero_route=route, tari_route=route)
@@ -205,7 +179,7 @@ def test_every_hop_to_a_relocatable_node_carries_that_node_s_route(route):
     assert _edge(topo, "dashboard", "tari")["route"] == route
 
 
-def test_the_two_hops_to_one_daemon_can_never_disagree():
+def test_the_two_hops_to_one_daemon_can_never_disagree(_topo):
     # The self-contradiction #1350 is really about: before this, `p2pool`->`monerod` followed the
     # remote knob while `dashboard`->`monerod` was hardcoded local, so one render described the
     # SAME daemon as two different things. They are now derived from one value and cannot drift.
@@ -215,7 +189,7 @@ def test_the_two_hops_to_one_daemon_can_never_disagree():
         assert hops == {"p2pool": route, "dashboard": route}, route
 
 
-def test_a_lan_or_unknown_edge_is_never_tagged_as_a_leak():
+def test_a_lan_or_unknown_edge_is_never_tagged_as_a_leak(_edge, _topo):
     # `leak` / `blocked_by_firewall` are the diagram's own red-flag tags, set by a separate loop
     # from the summary counters — so they need their own assertion, not an inference from the
     # count. Only clearnet may carry either.
@@ -228,7 +202,7 @@ def test_a_lan_or_unknown_edge_is_never_tagged_as_a_leak():
                 assert edge.get("blocked_by_firewall") is None, (route, firewall, src)
 
 
-def test_a_lan_node_still_reads_as_remote_in_the_diagram():
+def test_a_lan_node_still_reads_as_remote_in_the_diagram(_edge, _topo):
     # The node caption and the edge colour answer different questions and must not be conflated:
     # "is it on this machine" (no) and "does reaching it expose me" (no). An operator needs both.
     nodes = {n["id"]: n for n in _topo(monero_route=LAN, tari_route=UNKNOWN)["nodes"]}

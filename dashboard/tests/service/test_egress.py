@@ -14,34 +14,13 @@ from mining_dashboard.service.egress import (
 )
 from mining_dashboard.service.topology_graph import NODE_ROUTES
 
-# The privacy-safe resting config: firewall on, p2pool over Tor, XvB over Tor, local node, no sync,
-# healthchecks off (no ping URL configured), no alert sinks configured.
-SAFE = {
-    "firewall": True,
-    "p2pool_clearnet": False,
-    "xvb_enabled": True,
-    "xvb_tor": True,
-    "monero_clearnet_sync": False,
-    "tari_clearnet_sync": False,
-    "monero_route": LOCAL,
-    "healthchecks_enabled": False,
-    "telegram_enabled": False,
-    "notify_sinks_enabled": False,
-    "notify_tor": True,
-    "notify_sinks_private": False,
-}
-
-
-def _posture(**overrides):
-    return compute_egress_posture(**{**SAFE, **overrides})
-
 
 def _conn(posture, component, needle):
     comp = next(c for c in posture["components"] if c["name"] == component)
     return next(c for c in comp["conns"] if needle in c["to"])
 
 
-def test_safe_config_is_all_tor():
+def test_safe_config_is_all_tor(_posture):
     p = _posture()
     assert p["summary"] == {
         "firewall": True,
@@ -53,7 +32,7 @@ def test_safe_config_is_all_tor():
     }
 
 
-def test_p2pool_clearnet_blocked_by_firewall_is_not_a_leak():
+def test_p2pool_clearnet_blocked_by_firewall_is_not_a_leak(_posture):
     p = _posture(p2pool_clearnet=True, firewall=True)
     assert _conn(p, "p2pool", "sidechain")["route"] == CLEARNET
     assert _conn(p, "p2pool", "sidechain")["blocked_by_firewall"] is True
@@ -62,14 +41,14 @@ def test_p2pool_clearnet_blocked_by_firewall_is_not_a_leak():
     assert p["summary"]["all_tor"] is True  # fail-closed: configured-clearnet can't actually leave
 
 
-def test_p2pool_clearnet_without_firewall_is_a_leak():
+def test_p2pool_clearnet_without_firewall_is_a_leak(_posture):
     p = _posture(p2pool_clearnet=True, firewall=False)
     assert p["summary"]["leaks"] == 1
     assert p["summary"]["level"] == "warn"
     assert "exposing your IP" in p["summary"]["label"]
 
 
-def test_dashboard_xvb_stats_stays_tor_when_xvb_tor_is_off():
+def test_dashboard_xvb_stats_stays_tor_when_xvb_tor_is_off(_posture):
     # xvb.tor gates only the xmrig-proxy donation dial (#166); the dashboard's stats fetch is
     # unconditionally socks5h over Tor (#163/#701), so turning xvb.tor off must not show a leak.
     p = _posture(xvb_tor=False, firewall=True)
@@ -81,13 +60,13 @@ def test_dashboard_xvb_stats_stays_tor_when_xvb_tor_is_off():
     assert p["summary"]["all_tor"] is True
 
 
-def test_xvb_disabled_routes_are_inactive():
+def test_xvb_disabled_routes_are_inactive(_posture):
     p = _posture(xvb_enabled=False)
     assert _conn(p, "dashboard", "XvB stats")["route"] == INACTIVE
     assert _conn(p, "xmrig-proxy", "XvB donation")["route"] == INACTIVE
 
 
-def test_healthchecks_ping_is_tor_when_configured_inactive_otherwise():
+def test_healthchecks_ping_is_tor_when_configured_inactive_otherwise(_posture):
     # A configured ping URL adds a dashboard Tor egress (#79); no URL → inactive, never a leak.
     assert (
         _conn(_posture(healthchecks_enabled=False), "dashboard", "Healthchecks")["route"]
@@ -99,7 +78,7 @@ def test_healthchecks_ping_is_tor_when_configured_inactive_otherwise():
     assert on["summary"]["leaks"] == 0
 
 
-def test_telegram_bot_is_tor_when_enabled_inactive_otherwise():
+def test_telegram_bot_is_tor_when_enabled_inactive_otherwise(_posture):
     # Enabling Telegram adds a dashboard Tor egress (#121/#340); off → inactive, never a leak.
     assert _conn(_posture(telegram_enabled=False), "dashboard", "Telegram")["route"] == INACTIVE
     on = _posture(telegram_enabled=True, firewall=True)
@@ -107,7 +86,7 @@ def test_telegram_bot_is_tor_when_enabled_inactive_otherwise():
     assert on["summary"]["leaks"] == 0  # Tor-routed, so never a leak
 
 
-def test_price_feed_is_tor_when_enabled_inactive_otherwise():
+def test_price_feed_is_tor_when_enabled_inactive_otherwise(_posture):
     # Opting into the price feed adds a dashboard Tor egress (#520); off → inactive, never a leak.
     assert _conn(_posture(price_feed_enabled=False), "dashboard", "price feed")["route"] == INACTIVE
     on = _posture(price_feed_enabled=True, firewall=True)
@@ -115,7 +94,7 @@ def test_price_feed_is_tor_when_enabled_inactive_otherwise():
     assert on["summary"]["leaks"] == 0  # Tor-routed, so never a leak
 
 
-def test_alert_sinks_tor_when_configured_inactive_otherwise():
+def test_alert_sinks_tor_when_configured_inactive_otherwise(_posture):
     # Configuring a webhook/ntfy sink adds a dashboard Tor egress (#380); off → inactive.
     assert _conn(_posture(), "dashboard", "alert sinks")["route"] == INACTIVE
     on = _posture(notify_sinks_enabled=True)
@@ -123,7 +102,7 @@ def test_alert_sinks_tor_when_configured_inactive_otherwise():
     assert on["summary"]["leaks"] == 0  # Tor-routed, so never a leak
 
 
-def test_alert_sinks_clearnet_public_endpoint_leaks_despite_firewall():
+def test_alert_sinks_clearnet_public_endpoint_leaks_despite_firewall(_posture):
     # notifications.tor=false with a public endpoint: the dashboard is host-networked, so the #270
     # firewall can't cover it — every alert POST exposes the host IP.
     p = _posture(notify_sinks_enabled=True, notify_tor=False, firewall=True)
@@ -134,7 +113,7 @@ def test_alert_sinks_clearnet_public_endpoint_leaks_despite_firewall():
     assert p["summary"]["all_tor"] is False
 
 
-def test_alert_sinks_lan_carveout_is_local_not_a_leak():
+def test_alert_sinks_lan_carveout_is_local_not_a_leak(_posture):
     # The LAN carve-out: notifications.tor=false with every sink on a private IP. The POST never
     # leaves your network — route is local, and it must NOT count toward the leak total.
     p = _posture(notify_sinks_enabled=True, notify_tor=False, notify_sinks_private=True)
@@ -165,7 +144,7 @@ def test_sinks_all_private_requires_ip_literal_proof():
     assert _sinks_all_private(["not a url"]) is False
 
 
-def test_xvb_standby_route_classification():
+def test_xvb_standby_route_classification(_posture):
     # The #249 backup→primary pull: onion or any non-private source → Tor (socks5h, no IP leak);
     # a private-IP-literal primary → local (LAN hop); unset → inactive. Never clearnet.
     def route(src):
@@ -184,7 +163,7 @@ def test_xvb_standby_route_classification():
         assert _posture(xvb_standby_source=src)["summary"]["leaks"] == 0
 
 
-def test_xvb_standby_topology_edge_tracks_route():
+def test_xvb_standby_topology_edge_tracks_route(_topo):
     # onion/public source → an edge into the tor hub (never the internet node); a private-IP
     # primary is a LAN hop with no placeable node, so it draws no edge (like the alert-sink case).
     def standby_edges(topo):
@@ -198,12 +177,12 @@ def test_xvb_standby_topology_edge_tracks_route():
     assert standby_edges(_topo(xvb_standby_source="http://192.168.1.5/x")) == []  # LAN, no node
 
 
-def test_the_monerod_rpc_conn_carries_the_route_it_was_given():
+def test_the_monerod_rpc_conn_carries_the_route_it_was_given(_posture):
     assert _conn(_posture(monero_route=LOCAL), "p2pool", "monerod RPC")["route"] == LOCAL
     assert _conn(_posture(monero_route=CLEARNET), "p2pool", "monerod RPC")["route"] == CLEARNET
 
 
-def test_clearnet_initial_sync_surfaces_only_when_enabled():
+def test_clearnet_initial_sync_surfaces_only_when_enabled(_posture):
     base = _posture()
     assert not any(
         "initial" in c["to"]
@@ -213,32 +192,24 @@ def test_clearnet_initial_sync_surfaces_only_when_enabled():
     assert _conn(synced, "monerod", "initial block download")["route"] == CLEARNET
 
 
-def test_monerod_p2p_always_tor():
+def test_monerod_p2p_always_tor(_posture):
     assert _conn(_posture(firewall=False), "monerod", "Monero P2P")["route"] == TOR
 
 
 # --- Topology (#170 trust-boundary view) -----------------------------------------------
 
 
-def _topo(**overrides):
-    return compute_topology(**{**SAFE, **overrides})
-
-
-def _edge(topo, src, dst):
-    return next(e for e in topo["edges"] if e["from"] == src and e["to"] == dst)
-
-
 def _from(topo, src):
     return [e for e in topo["edges"] if e["from"] == src]
 
 
-def test_topology_summary_is_shared_with_egress_list():
+def test_topology_summary_is_shared_with_egress_list(_posture, _topo):
     # The badge can never disagree with the map: same knobs in, identical summary out.
     for overrides in ({}, {"xvb_tor": False}, {"p2pool_clearnet": True, "firewall": False}):
         assert _topo(**overrides)["summary"] == _posture(**overrides)["summary"]
 
 
-def test_topology_safe_has_no_leaks_and_hub_nodes():
+def test_topology_safe_has_no_leaks_and_hub_nodes(_topo):
     topo = _topo()
     ids = {n["id"] for n in topo["nodes"]}
     assert {"tor", "internet", "rigs", "browser"} <= ids
@@ -246,14 +217,14 @@ def test_topology_safe_has_no_leaks_and_hub_nodes():
     assert topo["summary"]["all_tor"] is True
 
 
-def test_topology_lan_ingress_edges():
+def test_topology_lan_ingress_edges(_edge, _topo):
     topo = _topo()
     rigs = _edge(topo, "rigs", "xmrig-proxy")
     assert rigs["kind"] == "ingress" and rigs["route"] == "local"
     assert _edge(topo, "browser", "caddy")["kind"] == "ingress"
 
 
-def test_topology_daemon_p2p_is_bidirectional_over_tor():
+def test_topology_daemon_p2p_is_bidirectional_over_tor(_edge, _topo):
     topo = _topo()
     for daemon in ("monerod", "tari", "p2pool"):
         edge = _edge(topo, daemon, "tor")
@@ -261,7 +232,7 @@ def test_topology_daemon_p2p_is_bidirectional_over_tor():
         assert edge["route"] == TOR, daemon
 
 
-def test_topology_clearnet_link_bypasses_the_tor_hub():
+def test_topology_clearnet_link_bypasses_the_tor_hub(_edge, _topo):
     # A clearnet route must land on `internet`, not `tor`, so a leak visibly skips the hub.
     topo = _topo(p2pool_clearnet=True, firewall=False)
     edge = _edge(topo, "p2pool", "internet")
@@ -269,14 +240,14 @@ def test_topology_clearnet_link_bypasses_the_tor_hub():
     assert not any(e["to"] == "tor" and e["from"] == "p2pool" for e in topo["edges"])
 
 
-def test_topology_clearnet_blocked_by_firewall_is_not_a_leak():
+def test_topology_clearnet_blocked_by_firewall_is_not_a_leak(_edge, _topo):
     topo = _topo(p2pool_clearnet=True, firewall=True)
     edge = _edge(topo, "p2pool", "internet")
     assert edge.get("blocked_by_firewall") is True and edge.get("leak") is None
     assert topo["summary"]["all_tor"] is True
 
 
-def test_topology_dashboard_xvb_stats_stays_on_the_tor_hub_when_xvb_tor_is_off():
+def test_topology_dashboard_xvb_stats_stays_on_the_tor_hub_when_xvb_tor_is_off(_edge, _topo):
     topo = _topo(xvb_tor=False, firewall=True)
     # The dashboard's stats fetch is unconditionally Tor (#163/#701) — it must terminate at the
     # tor hub, never bypass to the internet node.
@@ -288,7 +259,7 @@ def test_topology_dashboard_xvb_stats_stays_on_the_tor_hub_when_xvb_tor_is_off()
     assert not any(e.get("leak") for e in topo["edges"])
 
 
-def test_topology_xvb_disabled_is_inactive_not_a_leak():
+def test_topology_xvb_disabled_is_inactive_not_a_leak(_edge, _topo):
     topo = _topo(xvb_enabled=False)
     assert _edge(topo, "xmrig-proxy", "tor")["route"] == INACTIVE
     assert next(e for e in topo["edges"] if e["label"] == "XvB stats")["route"] == INACTIVE
@@ -296,7 +267,7 @@ def test_topology_xvb_disabled_is_inactive_not_a_leak():
     assert not any(e.get("leak") for e in topo["edges"])
 
 
-def test_topology_internal_mesh_is_flagged_and_includes_merge_mining():
+def test_topology_internal_mesh_is_flagged_and_includes_merge_mining(_edge, _topo):
     topo = _topo()
     merge = _edge(topo, "p2pool", "tari")
     assert merge["kind"] == "internal" and "merge-mine" in merge["label"]
@@ -304,7 +275,7 @@ def test_topology_internal_mesh_is_flagged_and_includes_merge_mining():
     assert docker.get("internal") is True
 
 
-def test_topology_alert_sinks_edge_tracks_the_route():
+def test_topology_alert_sinks_edge_tracks_the_route(_topo):
     # Tor (or unconfigured) → an edge into the tor hub, same as healthchecks.
     def sink_edges(topo):
         return [e for e in topo["edges"] if e["label"] == "alert sinks"]
@@ -322,13 +293,13 @@ def test_topology_alert_sinks_edge_tracks_the_route():
     assert local["summary"]["leaks"] == 0 and local["summary"]["all_tor"] is True
 
 
-def test_topology_clearnet_sync_adds_bypass_edge():
+def test_topology_clearnet_sync_adds_bypass_edge(_edge, _topo):
     topo = _topo(monero_clearnet_sync=True, firewall=False)
     edge = _edge(topo, "monerod", "internet")
     assert edge["route"] == CLEARNET and edge["leak"] is True
 
 
-def test_tari_clearnet_sync_surfaces_in_egress_and_topology():
+def test_tari_clearnet_sync_surfaces_in_egress_and_topology(_edge, _posture, _topo):
     # The Tari clearnet-sync branch is symmetric with Monero's — exercise it explicitly so the
     # tari path can't regress unnoticed (only the monerod one was covered before).
     base = _posture()
@@ -422,7 +393,7 @@ def test_topology_summary_matches_egress_for_all_configs():
         assert compute_topology(**cfg)["summary"] == compute_egress_posture(**cfg)["summary"], cfg
 
 
-def test_firewall_off_counts_every_clearnet_path_as_a_leak():
+def test_firewall_off_counts_every_clearnet_path_as_a_leak(_posture):
     # Firewall down + every clearnet knob on: there's no backstop, so each clearnet path is a real,
     # counted leak — leaks must equal the number of clearnet connections, with nothing "blocked".
     p = _posture(
@@ -441,7 +412,7 @@ def test_firewall_off_counts_every_clearnet_path_as_a_leak():
     assert "exposing your IP" in p["summary"]["label"]
 
 
-def test_firewall_on_blocks_every_clearnet_path():
+def test_firewall_on_blocks_every_clearnet_path(_posture):
     # Same clearnet-everywhere config with the firewall ON: every clearnet path belongs to a
     # container, so all are blocked and nothing leaks — the dashboard's own egress is Tor-only
     # (#163/#701), so the host-networked firewall bypass has nothing clearnet to expose.
