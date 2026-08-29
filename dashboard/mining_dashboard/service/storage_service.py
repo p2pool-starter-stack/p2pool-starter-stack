@@ -347,8 +347,8 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
         # config history on the rig, so Pithead owns it: one row per change the dashboard applied,
         # with the writable-key `changes` we sent (each row IS a diff from the prior state, by
         # construction — we only ever record deltas we authored) and the rig's terminal outcome.
-        # `changes` holds only the writable allowlist keys; NO secret ever lands here (the rig token
-        # stays host-side, #440). change_id is the rig's 16-hex id, or NULL for a request that never
+        # `changes` holds writable allowlist keys only, but `pools` carries `pass`, so #1543 strips
+        # it on write and read. change_id is the rig's 16-hex id, or NULL for a request that never
         # reached a rig (rejected host-side). `type` distinguishes a config apply from a one-click
         # rig upgrade (#1014) — an upgrade's `changes` carries `{"version": ...}` instead of a
         # writable-key diff, and get_last_applied_worker_config must never merge that into the

@@ -454,7 +454,7 @@ class TestWorkerApply:
             "worker": "rig1",
             "changes": {"DONATION": 4},
         }
-        # No secret / addressing leaks into the container-writable spool.
+        # No rig token or addressing in the container-writable spool; a pool `pass` does land.
         assert "host" not in req and "port" not in req and "token" not in req
 
     def test_submit_worker_upgrade_spools_name_and_version_only(self, spool):

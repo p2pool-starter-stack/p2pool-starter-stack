@@ -310,9 +310,9 @@ _RECORDABLE_WORKER_STATUSES = (
 
 def _record_worker_result(state_mgr, worker, changes, res, change_type="apply"):
     """Log a worker-apply or worker-upgrade outcome to the per-worker config history (#185/#1014).
-    Only terminal-ish statuses are kept; ``changes`` carries no secret (the rig token stays
-    host-side). ``worker``/``changes`` come from the caller's own request, never ``res`` — the
-    host runner omits ``worker`` from a pre-dial reject, so this stays correct either way."""
+    Only terminal-ish statuses are kept. ``changes`` is the operator's own POST, so a pool ``pass``
+    can be in it; ``add_worker_config_version`` strips it before the INSERT (#1543). ``worker``/
+    ``changes`` are the caller's own, never ``res``: a pre-dial reject omits ``worker`` there."""
     status = res.get("status", "unknown")
     if status in _RECORDABLE_WORKER_STATUSES:
         state_mgr.add_worker_config_version(
