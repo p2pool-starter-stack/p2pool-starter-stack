@@ -14,13 +14,13 @@
 # Sourced by tests/stack/run.sh.
 #
 # Re-derivations:
-# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; run.sh's "config validation" black-box
-#   calls it once, far earlier than the migration-hold/upgrade/apply-recovery sections below that
-#   read them — that section stays in run.sh (a generic multi-field validator, not a lifecycle
-#   concern). build_val_sandbox() is idempotent (a fixed $SANDBOX/val path, mkdir -p, template
-#   copies), so calling it again here is a safe no-op re-affirm as currently sourced.
-# - $DOCKER_LOG: the "apply preserves secrets + propagates" black-box sets it ($V/docker.log) and
-#   stays in run.sh (a generic multi-key regression, not a lifecycle concern).
+# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; the "config validation" black-box calls it once,
+#   ahead of the migration-hold/upgrade/apply-recovery sections below that read them — that section lives
+#   in tests/stack/test-config.sh, whose stanza run.sh sources before this file (a generic multi-field
+#   validator, not a lifecycle concern). build_val_sandbox() is idempotent (a fixed $SANDBOX/val path,
+#   mkdir -p, template copies), so calling it again here is a safe no-op re-affirm as currently sourced.
+# - $DOCKER_LOG: the "apply preserves secrets + propagates" black-box sets it ($V/docker.log); it lives in
+#   test-secrets.sh, sourced ahead of this file (a generic multi-key regression, not a lifecycle concern).
 # - Everything else below (restart, the two ownership sections, upgrade re-render, apply-recovery,
 #   up's relocated-dir warning, and the control-units convergence check) builds its own throwaway
 #   dir under $SANDBOX (or runs a fully stubbed subshell against $SANDBOX directly) and needs no

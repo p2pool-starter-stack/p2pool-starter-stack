@@ -26,11 +26,11 @@ assert_eq "docker boot persistence ignores podman.socket" "$out" "disabled"
 
 echo "== black-box: doctor --json + support-bundle (#77 phase 1) =="
 # Fresh, uniquely-named sandbox — deliberately NOT the shared $V that build_val_sandbox() (lib.sh,
-# module 1b) builds: that sandbox is threaded through ~2500 lines of run.sh's config-validation /
-# dashboard / payout sections that still live there, so calling build_val_sandbox() again from
-# this file would reset the SAME "$SANDBOX/val" directory out from under them no matter where this
-# file is sourced from. Mirrors build_val_sandbox's body under a non-colliding name instead — the
-# same re-derive-locally move module 8 makes for the shared control sandbox.
+# module 1b) builds: that sandbox is threaded through every domain file calling the builder —
+# config validation, dashboard, secrets and monero/tari among them — all sourced into the same
+# shell, so calling it again here would reset the SAME "$SANDBOX/val" directory out from under
+# them wherever this file is sourced from. Mirrors build_val_sandbox's body under a non-colliding
+# name instead — the same re-derive-locally move module 8 makes for the shared control sandbox.
 DJ="$SANDBOX/doctor-json"
 mkdir -p "$DJ/build/tari" "$DJ/dashboard"
 : >"$DJ/dashboard/Dockerfile"

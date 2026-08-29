@@ -34,11 +34,11 @@
 # either domain (most likely a future rig/worker-domain follow-up, since that is what its code does).
 #
 # Re-derivations:
-# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; run.sh's "config validation" black-box
-#   calls it once, far earlier than the sections below that read them — that section stays in run.sh
-#   (a generic multi-field validator, not a secrets concern). build_val_sandbox() is idempotent (a
-#   fixed $SANDBOX/val path, mkdir -p, template copies), so calling it again here is a safe no-op
-#   re-affirm, the same re-derivation test-monero-tari.sh/test-rig-worker.sh/test-lifecycle.sh use.
+# - $V / $WALLET: lib.sh's build_val_sandbox() sets both; the "config validation" black-box calls it
+#   once, ahead of the sections below that read them — that section lives in test-config.sh, sourced
+#   ahead of this file (a generic multi-field validator, not a secrets concern). build_val_sandbox() is
+#   idempotent (a fixed $SANDBOX/val path, mkdir -p, template copies), so calling it again here is a safe
+#   no-op re-affirm, the same re-derivation test-monero-tari.sh/test-rig-worker.sh/test-lifecycle.sh use.
 # - $DOCKER_LOG: this file's own first section ("apply preserves secrets + propagates") is DOCKER_LOG's
 #   original definition site ($V/docker.log) — every other domain file that reads it re-derives its
 #   own copy instead of reaching back here, per each of their own header notes. Set again explicitly

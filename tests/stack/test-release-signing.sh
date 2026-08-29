@@ -4,11 +4,11 @@
 # gate, cosign_container_path's host-to-container path mapping, and release.sh's signing/refusal/
 # pinned-verifier-image checks (sign the promoted digests, refuse to publish unsigned, validate
 # the pinned cosign verifier before publish). Sourced by tests/stack/run.sh after lib.sh. (The
-# #291 firewall-ordering assertions trailing cosign_container_path stay in run.sh — tor/network,
-# not signing, the documented map trap. The control-channel upgrade's own bundle-signature check
-# and its trailing control-disabled probe also stay in run.sh in full: that section runs the
-# control-run-pending verb against the $C control sandbox, the same run-against-its-own-sandbox
-# reasoning module 4 used for apply --dry-run/symlink-invocation.)
+# #291 firewall-ordering assertions trailing cosign_container_path are not here — tor/network, not
+# signing, the documented map trap; they live in test-tor-network.sh. The control-channel upgrade's
+# own bundle-signature check and its trailing control-disabled probe live in test-control-upgrade.sh
+# in full: that section runs the control-run-pending verb against the $C control sandbox, the same
+# run-against-its-own-sandbox reasoning module 4 used for apply --dry-run/symlink-invocation.)
 
 echo "== black-box: verify_release_images fail-closed gate (#376) =="
 # The verification decision itself, against a fake docker on a PINNED PATH ($VRI/bin:/usr/bin:/bin
