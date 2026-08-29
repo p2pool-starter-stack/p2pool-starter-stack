@@ -417,7 +417,8 @@ no LAN exposure, no firewall rule, no Tor hop.
 XMRig, so answering yes to "Mine on this machine too?" in the setup wizard is the whole job:
 pithead renders the miner's configuration (pool, stratum password, the stack's HugePages
 headroom, and a ceiling on how large the HugePages pool may grow), runs RigForge's setup in its
-appliance mode after the stack is up, and repeats that on every boot — the miner's service lives in `/run` and is re-created each time, like every other
+appliance mode after the stack is up, and repeats that on every boot — the miner's service lives
+in `/run` and is re-created each time, like every other
 derived thing on the appliance. The worker appears in the dashboard's Workers Alive table; toggle
 `local_miner.enabled` from the dashboard's configuration view to turn it off or on again. The
 rest of this section is the DIY flow.

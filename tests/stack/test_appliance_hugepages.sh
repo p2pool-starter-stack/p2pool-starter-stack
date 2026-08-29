@@ -98,6 +98,26 @@ echo "== unit: local_miner_pool_ceiling_mb — the #1103 ceiling and its version
 CEI="$SANDBOX/cei"
 mkdir -p "$CEI/rigforge"
 printf '1.16.0\n' >"$CEI/rigforge/VERSION"
+# ⛔ PIN THE NODE COUNT FOR EVERY CASE BELOW. local_miner_numa_nodes is a REAL detection against the
+# host, so without this the ceiling cases would assert 9216 on a single-node runner and 0 on a
+# multi-node one — passing or failing on the topology of whoever ran the suite rather than on the
+# code. `fake_lscpu` shadows lscpu on PATH; a stub that prints NOTHING stands in for "no lscpu",
+# since an absent binary and a silent one are indistinguishable to this function by construction.
+NUMABIN="$SANDBOX/numabin"
+mkdir -p "$NUMABIN"
+CEI_PATH_SAVED="$PATH"
+PATH="$NUMABIN:$PATH"
+fake_lscpu() { # <numa-nodes|-> <sockets|->   ('-' omits that line)
+    {
+        printf '#!/bin/sh\n'
+        [ "$2" = "-" ] || printf 'echo "Socket(s):             %s"\n' "$2"
+        [ "$1" = "-" ] || printf 'echo "NUMA node(s):          %s"\n' "$1"
+    } >"$NUMABIN/lscpu"
+    chmod +x "$NUMABIN/lscpu"
+}
+NONODES="$SANDBOX/nonodes"
+mkdir -p "$NONODES"
+fake_lscpu 1 1
 assert_eq "full tier + the floor release -> the declared ceiling" \
     "$(PITHEAD_HUGEPAGES_MARKER="$CEI/no-marker" run_sourced "$CEI" local_miner_pool_ceiling_mb "$CEI/rigforge" 2>/dev/null)" "9216"
 printf '1.17.2\n' >"$CEI/rigforge/VERSION"
@@ -128,6 +148,72 @@ printf '1.16.0\n' >"$CEI/rigforge/VERSION"
 printf 'released\npages=0\n' >"$CEI/released-marker"
 assert_eq "released tier + a new-enough tree -> still 0 (uncapped, never guessed)" \
     "$(PITHEAD_HUGEPAGES_MARKER="$CEI/released-marker" run_sourced "$CEI" local_miner_pool_ceiling_mb "$CEI/rigforge" 2>/dev/null)" "0"
+
+echo "== unit: local_miner_numa_nodes mirrors RigForge's precedence, step for step (#1103) =="
+# WHY THIS EXISTS: the 9216 ceiling is a SINGLE-NODE value — rigforge's requirement carries a
+# 1168-page term per NUMA node (util/proposed-grub.sh L100-101 at the pinned ref 4ce29b3d), and
+# EXTRA_2MB_PAGES does not scale with nodes. At NUMA=2 the requirement is 5464 pages (10,928 MB), so
+# the ceiling would cap a HEALTHY box 856 pages short and rigforge would cap-and-continue: a SILENT
+# under-reservation. This function has to predict the count rigforge sizes against, so it mirrors
+# rigforge's precedence rather than picking a reasonable-looking source — a disagreement between the
+# two puts the defect straight back, quietly.
+fake_lscpu 1 1
+assert_eq "lscpu says one node -> 1" \
+    "$(PITHEAD_NODE_SYS="$NONODES" run_sourced "$CEI" local_miner_numa_nodes)" "1"
+fake_lscpu 2 1
+assert_eq "lscpu says two nodes -> 2 (lscpu wins, it is rigforge's first source)" \
+    "$(PITHEAD_NODE_SYS="$NONODES" run_sourced "$CEI" local_miner_numa_nodes)" "2"
+# Step 2: no lscpu answer, count sysfs nodes instead.
+NODESYS="$SANDBOX/nodesys"
+mkdir -p "$NODESYS/node0" "$NODESYS/node1"
+fake_lscpu - -
+assert_eq "no lscpu answer -> falls back to the sysfs node count" \
+    "$(PITHEAD_NODE_SYS="$NODESYS" run_sourced "$CEI" local_miner_numa_nodes)" "2"
+# Step 3 — THE QUIET-DEFECT PATH, and the reason the mirror has three steps and not two. A gate that
+# stopped at sysfs would read 1 here and declare the ceiling, while rigforge read the SOCKET count
+# and sized for four nodes. Not hypothetical: the #1103 bench guest reports Socket(s)=4 with
+# NUMA node(s)=1, so the two sources genuinely disagree on real hardware.
+fake_lscpu - 4
+assert_eq "no lscpu nodes and no sysfs nodes -> the SOCKET count, exactly as rigforge falls back" \
+    "$(PITHEAD_NODE_SYS="$NONODES" run_sourced "$CEI" local_miner_numa_nodes)" "4"
+fake_lscpu - -
+assert_eq "nothing readable anywhere -> 1, rigforge's own final default" \
+    "$(PITHEAD_NODE_SYS="$NONODES" run_sourced "$CEI" local_miner_numa_nodes)" "1"
+
+echo "== unit: the ceiling is declared ONLY on a single-node box (#1103) =="
+fake_lscpu 1 1
+# The NO-OP half: at one node the gate must not disturb what the C1/C2 bench pair measured. That
+# pair ran on a NUMA=1 guest, so this case is what carries its evidence across to the gated code.
+assert_eq "one node -> the measured ceiling, unchanged (the bench pair's regime)" \
+    "$(PITHEAD_HUGEPAGES_MARKER="$CEI/no-marker" PITHEAD_NODE_SYS="$NONODES" run_sourced "$CEI" local_miner_pool_ceiling_mb "$CEI/rigforge" 2>/dev/null)" "9216"
+# The half that proves the gate EXISTS. Without this case the suite would be green on a gate that
+# did nothing, since the fixture is single-node everywhere else.
+fake_lscpu 2 2
+assert_eq "two nodes -> 0, uncapped rather than capped below a healthy requirement" \
+    "$(PITHEAD_HUGEPAGES_MARKER="$CEI/no-marker" PITHEAD_NODE_SYS="$NONODES" run_sourced "$CEI" local_miner_pool_ceiling_mb "$CEI/rigforge" 2>/dev/null)" "0"
+assert_contains "two nodes -> says WHY, naming the count it read" \
+    "$(PITHEAD_HUGEPAGES_MARKER="$CEI/no-marker" PITHEAD_NODE_SYS="$NONODES" run_sourced "$CEI" local_miner_pool_ceiling_mb "$CEI/rigforge" 2>&1 >/dev/null)" "reports 2 NUMA nodes"
+# And through the render path, as a CONTROLLED PAIR: the node count is the ONLY variable moved
+# between these two renders. Without the positive leg, "the key is absent" cannot be told apart
+# from a fixture that never armed — which is how an assertion goes green off the wrong door.
+CNU="$SANDBOX/cnu"
+mkdir -p "$CNU/rigforge"
+printf '{"local_miner":{"enabled":true}}' >"$CNU/config.json"
+printf 'STRATUM_PORT=3333\n' >"$CNU/.env"
+printf '1.16.0\n' >"$CNU/rigforge/VERSION"
+fake_lscpu 1 1
+PITHEAD_APPLIANCE=1 PITHEAD_RIGFORGE_DIR="$CNU/rigforge" PITHEAD_HUGEPAGES_MARKER="$CNU/no-marker" \
+    PITHEAD_NODE_SYS="$NONODES" run_sourced "$CNU" render_local_miner_config >/dev/null 2>&1
+assert_eq "one node -> the key IS rendered (the fixture can arm)" \
+    "$(jq -r '.hugepages_pool_ceiling_mb' "$CNU/rigforge/config.json")" "9216"
+fake_lscpu 2 2
+PITHEAD_APPLIANCE=1 PITHEAD_RIGFORGE_DIR="$CNU/rigforge" PITHEAD_HUGEPAGES_MARKER="$CNU/no-marker" \
+    PITHEAD_NODE_SYS="$NONODES" run_sourced "$CNU" render_local_miner_config >/dev/null 2>&1
+assert_eq "two nodes -> the rendered config carries NO ceiling key at all" \
+    "$(jq -r 'has("hugepages_pool_ceiling_mb")' "$CNU/rigforge/config.json")" "false"
+assert_eq "two nodes -> the headroom hand-off is still untouched" \
+    "$(jq -r '.hugepages_reserve_extra_mb' "$CNU/rigforge/config.json")" "6144"
+fake_lscpu 1 1
 
 echo "== unit: render_local_miner_config declares the ceiling only where it is honoured (#1103) =="
 RCG="$SANDBOX/rcg"
@@ -204,6 +290,10 @@ assert_eq "enabled + full tier -> silent (nothing to warn about)" \
     "$(PITHEAD_APPLIANCE=1 PITHEAD_HUGEPAGES_MARKER="$DLB/no-marker" run_sourced "$DLB" check_local_miner_hugepages_blocked 2>&1)" ""
 assert_eq "off the appliance -> silent regardless" \
     "$(PITHEAD_APPLIANCE=0 PITHEAD_HUGEPAGES_MARKER="$DLB/reduced-marker" run_sourced "$DLB" check_local_miner_hugepages_blocked 2>&1)" ""
+
+# Drop the lscpu shadow — nothing below depends on a pinned node count, and leaving a stub on
+# PATH would make any later case answer to it silently.
+PATH="$CEI_PATH_SAVED"
 
 echo ""
 printf 'appliance-hugepages tests: \033[1;32m%d passed\033[0m, ' "$PASS"

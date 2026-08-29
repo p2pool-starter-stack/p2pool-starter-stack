@@ -262,11 +262,21 @@ the tree it is handing the file to and declares nothing when it cannot confirm t
 
 It is declared only on the full tier, too. The reduced tier still refuses co-location outright, and
 the bench measured why that refusal should stay: lifting it by hand had RigForge ask for 6146 pages
-(12.0 GiB) on a 7.76 GiB box, the kernel granted 356 of them, available memory fell to about 40 MB,
+(12.0 GiB) on a 7.76 GiB box, the kernel grew the pool from 2560 pages to 2916 — 356 new pages of
+the 3586 it was asked to add — available memory fell to about 40 MB,
 and RigForge exited zero reporting a completed deployment. Nothing on the box named the shortfall.
 There is no ceiling value that helps on that tier — anything at or below 5120 MB is at or under the
 pool the boot already sized, so nothing is written at all, and anything above it is drawn from the
 roughly 700 MB the machine has spare.
+
+The ceiling is a single-node value, and the render checks for that too. RigForge sizes the
+fallback reservation as `1168 * nodes + threads + 50 + headroom`, where only the first term scales
+with the machine's NUMA node count. On a two-node box the requirement is 5464 pages — above the
+9216 MB ceiling — so declaring it there would cap a healthy machine short, and RigForge caps the
+write and carries on rather than failing, which would make the shortfall silent. The render reads
+the node count the same way RigForge does, preferring `lscpu`, then the kernel's own node entries,
+then the socket count, and declares nothing when it reads more than one node. Node count is not
+socket count in either direction: the bench guest reports four sockets and one node.
 
 **Still open on #1103:** whether a co-located miner on a reduced-RAM box mines usefully or thrashes
 is unanswered. Answering it needs synced chains rather than another KVM guest, because the sync gate
