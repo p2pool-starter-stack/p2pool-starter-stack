@@ -63,14 +63,14 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
      code, vendored files, data/config, and prose docs are exempt by glob — see `is_exempt()` in
      the script — and so is the shipped `pithead` artifact itself: it is generated, and the gate
      governs its `lib/pithead/*.sh` sources instead, now that Phase 2 has begun splitting it.
-     One row is exempt from the ceilings-only-move-down half, and only that half:
-     `lib/pithead/99-remainder.sh` measures how much of that generated artifact Phase 2 has not
-     split out yet, not the size of a file anyone writes, so it tracks the artifact both ways.
-     Without that, `pithead`'s own exemption became a freeze — the CLI could not gain a line,
-     because the row refused to rise and the file refused to grow past it (issue #1464). The row
-     is still checked against the file on every PR, so a change that grows the artifact has to
-     record the new count, and every Phase 2 cut lowers it; it retires when the remainder reaches
-     the 400 target. See `monotonic_exempt()` in the script),
+     One row was exempt from the ceilings-only-move-down half, and only that half:
+     `lib/pithead/99-remainder.sh` measured how much of that generated artifact Phase 2 had not
+     split out yet, not the size of a file anyone writes. Without that, `pithead`'s own exemption
+     became a freeze — the CLI could not gain a line, because the row refused to rise and the file
+     refused to grow past it (issue #1464). That row has retired, and not by reaching the 400
+     target: Phase 2 split the remainder out completely, so the file was deleted at 949 lines and
+     nothing in `docs/dev/file-budget.tsv` names it now. `monotonic_exempt()` in the script still
+     carries the arm and the reasoning behind it),
      `lint-pithead-parity` (the shipped `pithead` must be exactly what `lib/pithead/*.sh`
      concatenate to: edit a slice, run `scripts/build-pithead.sh`, and commit both — issue #1105
      Phase 2), `lint-trivy-parity` (the CVE
