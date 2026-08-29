@@ -31,6 +31,8 @@ source "$HERE/rig-key-ledger.sh" # must precede any module that marks a write (#
 source "$HERE/rigforge-writable-keys.sh"
 # shellcheck source=tests/integration/rigforge-upgrade.sh
 source "$HERE/rigforge-upgrade.sh"
+# shellcheck source=tests/integration/zmq-probe.sh
+source "$HERE/zmq-probe.sh"
 
 # --- Defaults / globals -----------------------------------------------------
 IT_MODE="ssh"
@@ -626,6 +628,25 @@ assert_running_state() {
 
     # 4. Monero caught up — per monerod's own get_info, not the dashboard UI field.
     if monero_caught_up; then it_pass "monerod reports synced (RPC)"; else it_fail "monerod reports synced (RPC)" "get_info not synchronized"; fi
+    # 4b. The node actually PUBLISHES block notifications (#1497). The check above is satisfied by
+    #     a node that can never publish one — an --offline monerod reports status OK with
+    #     target_height 0, so both disjuncts of monero_caught_up pass. Nothing downstream covers
+    #     the gap either: p2pool's healthcheck is a TCP connect to its OWN stratum port, so a
+    #     stack whose node is ZMQ-dead comes up green and starves p2pool silently. Neither does
+    #     the installer preflight, whose reachability dial is a bare TCP connect and therefore
+    #     passes on a docker-published port with nothing behind it (measured). This is a
+    #     protocol-level ZMTP handshake, which an accept() cannot satisfy.
+    #     Tier A only — asserting an OBSERVED notification needs a MOVING tip, and a height
+    #     comparison cannot discriminate against a STATIC node (#1497).
+    local zmq_host zmq_port zv
+    if [ "$mode" = "remote" ]; then
+        zmq_host="$REMOTE_MONERO_HOST"
+        zmq_port="${REMOTE_MONERO_ZMQ_PORT:-18083}"
+    else
+        zmq_host="127.0.0.1"
+        zmq_port="18083"
+    fi
+    if zv=$(zmq_pub_probe "$zmq_host" "$zmq_port" 8); then it_pass "monero ZMQ publishes block notifications (#1497)"; else it_fail "monero ZMQ publishes block notifications (#1497)" "$zv"; fi
     # The dashboard's sync panel must also read "done" for a synced node — not stay stuck at
     # "loading". A synced monerod reports target_height 0, so the panel has to trust the caught-up
     # flag, not percent-vs-target; getting that wrong left a synced node "loading" forever (the real
