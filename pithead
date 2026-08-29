@@ -2369,11 +2369,9 @@ prefill_from_previous_install() { # <spool-dir>
 # The connect is bounded by wrapping the whole exchange in `timeout` — `timeout` cannot wrap a
 # bare redirection, so an unwrapped `exec` would inherit only the kernel's SYN-retry deadline
 # against a host that stops answering between the dial above and this call.
-# The release-gate harness carries the FULL probe (greeting, READY exchange, advertised socket
-# type). This is deliberately the greeting half alone, because the shipped CLI cannot depend on
-# the test harness and the greeting is the half that separates a publisher from an accept(). The
-# duplication is forced by that boundary, not chosen: if ZMTP's greeting shape ever moves, both
-# copies move together.
+# The release-gate harness carries the full probe. This is the greeting half alone because the
+# shipped CLI cannot depend on the test harness: the duplication is forced by that boundary, not
+# chosen, so if ZMTP's greeting shape moves, both copies move with it.
 # PURE, over the hex the peer sent, so every failure class is reachable from a fixture with no
 # socket: empty (the published-but-dead port), truncated, not-ZMTP, and ZMTP 2.
 # Length first — every slice below is read with `16#`, and `16#` on an empty string is a fatal
