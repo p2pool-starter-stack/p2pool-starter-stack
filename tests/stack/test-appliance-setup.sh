@@ -18,6 +18,17 @@
 #   fixed $SANDBOX/val path, mkdir -p, and template copies, with no removal of the .env or
 #   config.json this domain writes — so the call is a safe re-affirm as currently sourced, and it
 #   is what makes the file sourceable standalone under `set -u`.
+# - The neighbouring warning against this exact call, and why it does not reach it.
+#   test-doctor-appliance.sh — sourced one stanza above this file — warns explicitly against
+#   calling build_val_sandbox() again, because doing so would reset the shared "$SANDBOX/val" out
+#   from under the config-validation / dashboard / payout sections that were still threaded through
+#   run.sh when that comment was written; it mirrors the builder's body under a non-colliding name
+#   instead. That warning is about CLOBBERING A NEIGHBOUR, and it does not reach this call: every
+#   domain file sourced after this one that reads $V or seed_env() outside a comment self-arms at
+#   its own entry, and the builder writes neither the .env nor the config.json this domain writes.
+#   It is cited here rather than left implicit because "idempotent" is the word a future author
+#   will reuse without re-running that audit, and a build_val_sandbox call placed elsewhere in this
+#   neighbourhood could genuinely clobber, exactly as that warning says.
 # - $VALID_TARI is a plain lib.sh top-level constant, not build_val_sandbox()-scoped, so it needs
 #   no arming here.
 # - $SANDBOX, $ROOT and $STACK are lib.sh top-level globals, as are the assertion helpers this
