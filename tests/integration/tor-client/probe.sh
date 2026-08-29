@@ -53,7 +53,12 @@ fi
 
 tor -f "$CFG" >"$DATA/tor.log" 2>&1 &
 TORPID=$!
-trap 'kill "$TORPID" 2>/dev/null || true' EXIT INT TERM
+# Bare EXIT on purpose, and it already covers Ctrl-C, a kill and a cancelled CI job. Naming
+# INT/TERM as well does NOT add coverage: a bash signal handler that RETURNS does not die, so the
+# probe would kill tor and then CARRY ON into the bootstrap wait below, grep a log nothing is
+# writing any more, and spend BOOT_TIMEOUT before reporting "tor did not bootstrap" — a wrong
+# diagnosis for what was really an abort. Proof: selftest-abort-traps.sh (#1401).
+trap 'kill "$TORPID" 2>/dev/null || true' EXIT
 
 # Wait for a fully-bootstrapped client before any fetch — a partial bootstrap can't reach an onion.
 waited=0
