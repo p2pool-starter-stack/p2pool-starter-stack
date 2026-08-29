@@ -164,12 +164,23 @@ case \$? in
 esac
 exec 3<>/dev/tcp/$1/$2 2>/dev/null || { echo "CONNECT-FAIL"; exit 0; }
 printf '$ZMQ_GREETING_BYTES' >&3
-echo "GREETING \$(timeout $3 head -c 64 <&3 | od -An -v -tx1 | tr -d ' \n')"
+g=\$(timeout $3 head -c 64 <&3 | od -An -v -tx1 | tr -d ' \n')
+echo "GREETING \$g"
+# A peer that sent NO greeting cannot send a READY, and zmq_pub_verdict discards the READY
+# result whenever the greeting verdict fails — so both reads below are pure cost against it.
+# Skipping them cannot change a verdict, and it takes this probe's FOUNDING case, the
+# published-but-dead port, from three budgets to one. Measured: 9015ms -> 3006ms at budget 3.
+if [ -z "\$g" ]; then echo "READY "; exec 3<&-; exit 0; fi
 printf '$ZMQ_READY_BYTES' >&3
 hdr=\$(timeout $3 head -c 2 <&3 | od -An -v -tx1 | tr -d ' \n')
+body=
 if [ \${#hdr} -eq 4 ] && [ \$((16#\${hdr:0:2} & 2)) -eq 0 ]; then
   body=\$(timeout $3 head -c \$((16#\${hdr:2:2})) <&3 | od -An -v -tx1 | tr -d ' \n')
-else
+elif [ -n "\$hdr" ]; then
+  # Only worth a second window if the peer sent SOMETHING. With an empty header a 512-byte
+  # read can only return empty too (head -c 2 already drained what was there), so the
+  # unconditional else burned a whole budget to re-derive the empty string it already had.
+  # No backticks in this heredoc: it is unquoted, so they would run at generation time.
   body=\$(timeout $3 head -c 512 <&3 | od -An -v -tx1 | tr -d ' \n')
 fi
 echo "READY \$hdr\$body"
