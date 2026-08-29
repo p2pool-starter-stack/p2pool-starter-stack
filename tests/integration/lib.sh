@@ -243,6 +243,11 @@ absent_services() {
     return 0
 }
 
+# Membership against running_services()'s output: compose SERVICE NAMES, one per line. EXACT-LINE,
+# never substring (#1478) — "tari" prefixes "tari-wallet" (#381/#462), so a loose match calls a DOWN
+# tari up wherever payout-confirm runs. One place, so the three call sites cannot drift apart.
+service_present() { printf '%s\n' "$2" | grep -Fqx -- "$1"; }
+
 # Human-readable pool label as the dashboard reports it, from the config pool key.
 pool_label() {
     case "$1" in
