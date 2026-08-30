@@ -139,6 +139,7 @@ The deploy-time axes — each changes a real runtime path. Full table and assert
 | Situation | Trigger | Tier |
 |---|---|---|
 | Real merge-mining share lands; real hashrate on dashboard | live mining | 4 ▶ |
+| p2pool actually reached the Tari node over gRPC (#1397): the merge-mining client's `uses chain_id` line, which p2pool cannot log without a successful call to the node. Its two sibling lines land ~175 ms earlier and are local, so a check keyed on them would pass with Tari unreachable — that case is a distinct `local-only` verdict and fails. Startup-only (three lines inside ~17.5 s of container start), and the log is ANSI-coloured mid-line, so the escapes are stripped before matching | live p2pool startup log, bounded by the container's own start time | 1 ✅ (verdicts, capture bounds and the ANSI control, `selftest-mergemine-probe.sh`) · 4 ✅ (the leg — run against the live stack read-only, not yet inside a full gate run) |
 | Caddy TLS scheme; Tor onion provisioning; HugePages/AVX2; real disk pressure; prune DB size | real host | 4 ▶ |
 
 ### I. RigForge worker ↔ Pithead contract (#209)

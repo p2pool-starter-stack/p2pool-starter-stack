@@ -325,6 +325,31 @@ and `--list` prints it).
   That distinction is load-bearing: `tari` is a prefix of `tari-wallet`, so a substring match
   would report a stopped `tari` as running whenever the payout-confirm container is up.
 - `pithead status` exit code: `0` for a healthy config.
+- p2pool actually reached the Tari node over gRPC ([#1397](https://github.com/p2pool-starter-stack/pithead/issues/1397)). p2pool's merge-mining
+  client emits three lines at startup and only one of them says anything about Tari:
+  `MergeMiningClientTari tari://<host:port> uses chain_id <id>`, because p2pool cannot know the
+  chain id without a successful call to the node. The other two, `event loop started` and
+  `worker thread ready`, are local — they prove the object was constructed and its threads spun.
+  On the live stack they landed about 175 milliseconds before the chain-id read, so a row keyed on
+  either would pass with Tari unreachable. That case is its own verdict, `local-only`, and it
+  fails rather than passing quietly: it means the client is up and Tari is not answering. Nothing
+  else at any tier watches this leg — `fakes/test_contract.py` looks like it does and does not,
+  since it drives the dashboard's Tari client while merge-mining is a third-party binary's own
+  gRPC. Two properties of the signal shape the read. It is startup-only: the three lines landed
+  within about 17.5 seconds of the container starting, at positions 68, 69 and 71 of a log that
+  had reached 83,070 lines after 30 hours (one sample), so a `--tail` read cannot contain them.
+  The window is therefore a head read, bounded by the container's own start time so that an
+  earlier startup's line cannot satisfy the assertion after a restart. And the log is
+  ANSI-coloured with the escapes mid-line, between the client name and the endpoint, so a pattern
+  written against the rendered text matches nothing at all, silently — a probe that always reports
+  an absence looks exactly like a working one until the day it matters. The escapes are stripped
+  before matching, and the self-test carries that control fired in both directions: zero matches on
+  the captured bytes, one after stripping. When monerod is not caught up the leg skips rather than
+  fails, counted and classed `by-design`, because p2pool constructs the merge-mining client only
+  after its block-header download succeeds — so the signal cannot exist on an unsynced node, and no
+  input to this harness would create it. Only the matching lines cross the wire, which keeps the
+  container's argv line — carrying both wallet addresses, the RPC credential and the onion — out of
+  the capture.
 - Dashboard reads live state. `/api/state` is reachable; Monero is synced (`done`); pruned/full
   display matches `monero.prune` ([#32](https://github.com/p2pool-starter-stack/pithead/issues/32)); the sidechain `pool.type` matches `p2pool.pool`.
 - The Monero node's ZMQ endpoint is a live ZMTP publisher. A ZMTP handshake against the node's ZMQ
