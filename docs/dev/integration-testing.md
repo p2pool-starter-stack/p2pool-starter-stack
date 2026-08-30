@@ -61,10 +61,12 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   is reported `SKIPPED`, never run against the canonical DB.
 - No silent coverage drops. Any scenario whose prerequisite is missing (an alt data dir, a
   remote endpoint) is logged as `SKIPPED` with the reason. It never quietly disappears.
-- Secrets hygiene. RPC creds, the proxy token, and onion addresses are never printed.
-  Secret-preservation is checked by hashing them on the box (`sha256sum`) and comparing the
-  hash, so the plaintext never crosses the wire. All captured artifacts pass through a
-  redactor.
+- Secrets hygiene. RPC creds, the proxy token, wallet addresses and onion addresses are never
+  printed. Secret-preservation is checked by hashing them on the box (`sha256sum`) and comparing
+  the hash, so the plaintext never crosses the wire. All captured artifacts pass through a
+  redactor, which is keyed on the *shape* of a secret — a credential given as a flag value, an
+  address-length opaque run — rather than on a list of known field names. That list is what left
+  the gaps in [#1582](https://github.com/p2pool-starter-stack/pithead/issues/1582).
 - Continue-on-error. A failing assertion doesn't abort the run. The whole matrix is collected
   and summarized, with per-scenario artifacts for the failures.
 
@@ -645,6 +647,12 @@ Several self-tests sit beside it as standalone files, picked up by the same glob
 `selftest-skip-accounting.sh` is the one that keeps the skip accounting honest: besides checking
 the counters and the real `summary()`, it censuses every harness file and fails if a skip leaves
 through a bare `it_warn` — by wording, and by shape for the drops that never say "skipping".
+`selftest-redact.sh` covers the two shapes the redactor used to miss — a credential passed as a
+flag value, and a wallet address in JSON — and asserts in each case that the *raw* value is gone
+rather than that a `<redacted>` marker appeared, since a marker can come from some other field on
+the same line. It also guards the other direction: a sha256 digest and a non-secret flag value
+must survive, because an artifact with its image pins stripped is useless for the triage it exists
+for.
 `selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures, so
 every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
 READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack.

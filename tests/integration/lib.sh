@@ -33,14 +33,14 @@ it_err() { echo -e "${IT_RED}[ITEST]${IT_RESET} $1" >&2; }
 it_step() { echo -e "${IT_DIM}  → $1${IT_RESET}"; }
 
 # --- Secrets hygiene --------------------------------------------------------
-# The box holds real RPC creds, a proxy token, and onion addresses. Redact anything that
-# looks secret before it reaches a log file or the terminal. Defence-in-depth: we also avoid
-# printing these values in the first place. Patterns cover .env KEY=VALUE lines and .onion
-# hostnames. Keep this conservative — over-redaction is safe, leaks are not.
+# The box holds real RPC creds, a proxy token, wallet addresses and onion hostnames. Redact
+# anything that looks secret before it reaches a log file or the terminal. Defence-in-depth: we
+# also avoid printing these values in the first place. Keyed on SHAPE, not on an enumeration of
+# known names — enumerating is how #1582's two gaps opened. Over-redaction is safe, leaks are not.
 redact() {
     sed -E \
-        -e 's/(PROXY_AUTH_TOKEN|MONERO_NODE_PASSWORD|MONERO_NODE_USERNAME|.*_PASSWORD|.*_TOKEN|.*_SECRET)=.*/\1=<redacted>/' \
-        -e 's/[a-z2-7]{56}\.onion/<redacted>.onion/g'
+        -e 's/(PROXY_AUTH_TOKEN|MONERO_NODE_PASSWORD|MONERO_NODE_USERNAME|.*_PASSWORD|.*_TOKEN|.*_SECRET)=.*/\1=<redacted>/; s/(--[a-z-]*(login|password|passwd|secret|token|key))([ =])[^[:space:]]+/\1\3<redacted>/g' \
+        -e 's/[a-z2-7]{56}\.onion/<redacted>.onion/g; s/[A-Za-z0-9]{90,}/<redacted-address>/g'
 }
 
 # --- Assertions -------------------------------------------------------------
