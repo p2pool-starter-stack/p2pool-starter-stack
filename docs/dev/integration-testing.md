@@ -747,6 +747,20 @@ the survivors that make a bundle worth keeping — a public endpoint, an auth mo
 id. Its widening was measured before it shipped: across two archived bundles and the deployed
 `.env` it newly reaches ten keys, the same ten in all three populations, and changes nothing at all
 in the other six captured artifacts.
+`selftest-redact-vocab.sh` asks the question one level out: not whether a given shape is covered,
+but whether the vocabulary reaches every key that needs it. A suffix list is a denylist over a key
+set that keeps growing, so it fails quietly and in the unsafe direction. The population is read out
+of the single heredoc `render_env` writes, which is 129 keys, under a screen again wider than the
+redactor's own list, and a credential-shaped key in neither the redacted nor the survivor list
+fails by name. Measured before it shipped: four keys carried a credential and were reached by
+nothing — the base64 caddy password hash, the sha256 password fingerprint, the webhook URLs, and
+`DASHBOARD_AUTH_USER`, which was missed only because the list carries `USERNAME` while that key
+ends in `USER`. Two more that look like the same gap are not: `XMRIG_API_AUTH` renders an enum of
+`none`, `name` or `token`, and `DASHBOARD_ONION_CLIENT_AUTH` renders a boolean, so both are pinned
+as survivors. A bare `AUTH` suffix would redact the pair and protect nothing, and a bare `URL`
+would take every public endpoint while still missing the webhook key, which ends in `URLS`. Four
+onion addresses are listed apart again, because a shape rule rather than the name rule covers them
+and a name-shaped fixture would report them as leaking.
 `selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures,
 so every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
 READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack. It
