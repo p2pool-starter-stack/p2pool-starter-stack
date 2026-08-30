@@ -41,7 +41,7 @@ moved the data, which is the failure the pin comment below records happening twi
 """
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 28 of 33 modules that hold a failure return at
+# adds the module it finished. Measured at this tip: 29 of 33 modules that hold a failure return at
 # all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
 # the six single-function `client/` modules by slice 2, the four single-function `web/` modules by
 # slice 3, the two single-function `config/` modules by slice 4, the four outbound senders under
@@ -49,9 +49,11 @@ moved the data, which is the failure the pin comment below records happening twi
 # MULTI-function slice — the four parse-or-read pairs under `service/`, each pinned only once BOTH of
 # its failure returns were annotated and read, and the ten handle-guard procedures in
 # `service/storage_service.py` by slice 7, and its three siblings in `service/telemetry_store.py` by
-# slice 8, and the two `except`-door functions in `helper/utils.py` by slice 9. **10 failure
-# returns are still blind**, in five modules — every one through the `except` door, because slice 8
-# closed the handle-guard population entirely.
+# slice 8, and the two `except`-door functions in `helper/utils.py` by slice 9, and the two in
+# `web/server.py` by slice 10. **8 failure returns are still blind**, in four modules — every one
+# through the `except` door, because slice 8 closed the handle-guard population entirely. That
+# last clause is a measurement and not a reading the walk could not contradict: `guard` is a door
+# the same walk still reports 31 times package-wide.
 #
 # Every figure above is re-derived at the head being shipped, never carried across a slice: 5b moved
 # this tuple from 18 to 21 and left the sentence beside it saying 18. A slice adds rows to a tuple
@@ -164,6 +166,50 @@ moved the data, which is the failure the pin comment below records happening twi
 # that function, which is what makes the clean reading on the other two evidence rather than an
 # empty result.
 #
+# Slice 10 is `web/server.py`, and it repeats slice 9's lesson rather than slice 7/8's: two blind
+# functions, both through the `except` door, landing in DIFFERENT verdicts again — one `procedure`,
+# one `signed`, ZERO `unjudged`, so no `_UNJUDGED_AND_READ` entry is owed. Two slices running now, a
+# module's blind pair has not shared a verdict; do not expect the next one to.
+#
+#   `_finalize_worker_upgrade` -> `-> None` is a genuine procedure, measured the way slices 7 and 8
+#     measured theirs: ONE return, ZERO valued, ZERO yields, with `handle_control_preview`'s three
+#     valued returns as the control that the walk can see one. It is #1014's background half — it
+#     records the terminal outcome of a worker upgrade and answers nobody — so its `except` return
+#     is a bare `return` after `logger.exception`, with no success value to hide inside.
+#
+#   `_num` -> `-> float | None` is a true `signed`, and like `detect_host_ipv4` the annotation moves
+#     a promise the code already kept into the signature. All three returns are valued and every one
+#     is a float or `None`: an absent/empty param, the `ValueError` from `float()`, and
+#     `f if math.isfinite(f) else None` because `float()` parses "inf"/"nan". Its docstring already
+#     said so in prose — "anything non-numeric reads as absent" — and the consumer agrees, read
+#     rather than assumed: `_log_filters`' two callers hand the pair straight to
+#     `audit_service.filter_log_entries`, whose docstring says `None` means "don't filter on this
+#     axis". `None` is out-of-band there, distinguishable from every float bound.
+#
+# The anchor is `_finalize_worker_upgrade`: declared first, and top-level where `_num` is a nested
+# closure — lifting or inlining it would drop its row for a reason that is not a walk failure. What
+# is NOT a reason, measured before choosing rather than argued after: the nested-def regression
+# (`_own_nodes` degraded to `ast.walk`) ADDS a `_log_filters` row rather than removing one, so
+# NEITHER candidate fires on it. Neither is double-guarded either, this module contributing no
+# `_UNJUDGED_AND_READ` entry, so law 1's aggregate and this anchor are the whole of its cover.
+#
+# One thing slice 10 has that slices 1-9 did not, and it narrows what the proof claims. Annotating
+# a NESTED def is not free at the bytecode level: both annotated functions ARE bytecode-identical
+# base-vs-head, but the enclosing `_log_filters` is NOT, and that is correct rather than a defect.
+# Its delta was read instruction by instruction and is exactly the annotation built at def time —
+# a `'return'`/`float`/`None`/`BINARY_OP |`/`BUILD_TUPLE` prologue, `MAKE_FUNCTION closure` becoming
+# `MAKE_FUNCTION annotations, closure`, and the two jump offsets that prologue shifts. Nothing else
+# moved, and the package already carries the shape (`wizard.py:build_config`). Measured for what is
+# left, keyed by NODE rather than by name and with a control that the walk can report a nested def
+# at all: of the EIGHT blind functions remaining, SIX are class methods and TWO are module-level.
+# None is nested inside a FUNCTION, which is the only scope that rebuilds the annotation per call —
+# a method's is built once in the class body at import. So no remaining slice of #1556 inherits
+# this. Nothing is claimed about a nested def some future slice might introduce.
+#
+# The module's residue went 3 sites in 2 functions to ZERO, DISCHARGING the prediction slice 9's
+# retraction left standing above: it named `web/server.py` as the module where `blind` and the
+# residue are the SAME SET, and annotating the pair cleared both instruments at once.
+#
 # Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
 # written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
 # (`local_miner_enabled` returning `False`). A slice is coverage of the mechanism, so a slice whose
@@ -208,6 +254,7 @@ PINNED = (
     "service/xvb_standby.py",
     "web/charts.py",
     "web/infra_views.py",
+    "web/server.py",
     "web/views.py",
     "web/xvb_views.py",
 )
@@ -256,6 +303,7 @@ _ANCHORS = {
     "service/worker_config_store.py": "service/worker_config_store.py:note_worker_revision",
     "web/charts.py": "web/charts.py:parse_window",
     "web/infra_views.py": "web/infra_views.py:_ip_to_sort_int",
+    "web/server.py": "web/server.py:_finalize_worker_upgrade",
     "web/views.py": "web/views.py:read_os_update_state",
     "web/xvb_views.py": "web/xvb_views.py:recent_wallet_change",
 }
