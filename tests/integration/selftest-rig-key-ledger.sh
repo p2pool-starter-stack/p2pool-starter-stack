@@ -157,6 +157,105 @@ assert_eq "and the writable key is restored in the same firing" \
     "$(restores)" 'dash|{"DONATION":5}'
 rm -f "$WORK/rig.lock" "$WORK/rig.holder"
 
+echo "== a trap installed AFTER a mark is COMPOSED, not silently displaced (#1404) =="
+# The case #1404 was filed on. `trap … EXIT` REPLACES, so before this the foreign handler took over
+# and every key outstanding at that moment was lost — with no output difference either way, in the
+# one run whose whole point is that it did not reach its own cleanup. Both halves are asserted
+# together on purpose: restoring the keys by stomping the foreign handler straight back satisfies
+# the first assertion while silently breaking somebody else's cleanup instead, and that trade is
+# the one this file exists to refuse.
+scenario 'rig_key_mark dash rig1 DONATION 5' \
+    "trap 'echo FOREIGN-FIRED' EXIT" \
+    'rig_key_mark dash rig1 max_temp_c 100' \
+    'exit 9' >/dev/null
+assert_eq "both keys outstanding across a foreign EXIT trap are still restored (#1404)" \
+    "$(n_restores)" "2"
+assert_eq "and the foreign handler still runs — composed, not stomped (#1404)" \
+    "$(grep -c FOREIGN-FIRED "$SCEN_OUT")" "1"
+
+echo "== repeated marks never capture OUR OWN handler (#1404) =="
+# The self-capture failure the arm's first case exists to stop. Composing at every mark means the
+# second mark reads a trap that is already ours, and capturing it would make rig_key_atexit eval
+# itself: the shell dies of stack exhaustion at exit — measured, rc 139 — AFTER the restores have
+# gone out. So every restore-counting assertion in this file still passes over it, and the child's
+# exit status is the only witness there is. It is asserted here because the multi-key case above
+# discards the rc, which is exactly how a suite goes green over a harness that crashes on the way
+# out. Needs two marks and NO foreign trap between them: with one interposed, the second mark
+# captures that instead and the fault never appears.
+rc="$(scenario 'rig_key_mark dash rig1 DONATION 5' \
+    'rig_key_mark dash rig1 max_temp_c 100' \
+    'exit 9')"
+assert_eq "two marks and no foreign trap leave the exit status intact, not a crash (#1404)" \
+    "$rc" "9"
+assert_eq "and both keys still came back exactly once" "$(n_restores)" "2"
+
+echo "== the captured handler survives quoting intact, and never runs at capture time =="
+# `trap -p` prints the handler single-quoted by bash's own printer, and the capture unquotes it by
+# letting bash re-parse that line. A handler carrying BOTH an apostrophe (which the printer has to
+# escape) and a `$( )` (which must survive to fire time, not expand at capture time) is what
+# separates a correct round trip from a mangled one. Counting the appends is what proves the capture
+# did not execute it: a body run at capture AND at exit appends twice, and the value would still
+# look right.
+: >"$WORK/foreign.log"
+# The HANDLER only; the `trap` line is composed below rather than written out. A literal `trap …`
+# at the start of a line is picked up by selftest-abort-traps.sh's directory walk even inside a
+# quoted heredoc, where it is test data and not an installed trap — and that walk's handler strip
+# cannot span the `'\''` idiom this very handler needs, so it reads the remainder as a signal list
+# and reds a compliant line. Both limits are filed; composing the line here keeps this file's
+# subject #1404 rather than that walk.
+awkward_body="$(
+    cat <<'AWK'
+printf "%s\n" "apostrophe: it'\''s here; substitution: $(echo SUBBED)" >>"$WORK/foreign.log"
+AWK
+)"
+scenario 'rig_key_mark dash rig1 DONATION 5' \
+    "trap '$awkward_body' EXIT" \
+    'rig_key_mark dash rig1 max_temp_c 100' \
+    'exit 9' >/dev/null
+assert_eq "a handler with an apostrophe and a \$( ) round-trips through the capture (#1404)" \
+    "$(cat "$WORK/foreign.log")" "apostrophe: it's here; substitution: SUBBED"
+assert_eq "and ran exactly once — the capture parses the handler, it does not execute it (#1404)" \
+    "$(grep -c . "$WORK/foreign.log")" "1"
+assert_eq "and the keys came back in the same firing" "$(n_restores)" "2"
+
+echo "== NESTED: a foreign trap displacing rig_lock's BEFORE our first mark =="
+# This is the case that keeps the hand-folded holder removal in `rig_key_atexit` honest, and it was
+# built because deleting that fold as redundant is the obvious follow-up to composing foreign traps.
+# In the plain rig_lock scenario above, the capture ALSO replays rig_lock's own handler, so the fold
+# and the capture each remove the breadcrumb and that assertion stays green with the fold deleted —
+# a guard that stops discriminating without ever failing. Here the captured handler is the FOREIGN
+# one, which does not touch the breadcrumb, so the fold is the only thing that can remove it.
+# Measured both ways: with the fold mutated out, this assertion reds and the one above does not.
+scenario 'export RIG_LOCK_FILE="$WORK/rig.lock" RIG_LOCK_HOLDER="$WORK/rig.holder"' \
+    'rig_lock selftest "rig-key-ledger #1404"' \
+    '[ -s "$RIG_LOCK_HOLDER" ] && echo HOLDER-WRITTEN' \
+    "trap 'echo FOREIGN-FIRED' EXIT" \
+    'rig_key_mark dash rig1 DONATION 5' \
+    'exit 9' >/dev/null
+assert_eq "rig_lock really wrote its breadcrumb (the control for the next assertion)" \
+    "$(grep -c HOLDER-WRITTEN "$SCEN_OUT")" "1"
+assert_eq "the breadcrumb is removed though the captured handler is not rig_lock's (#1404)" \
+    "$([ -e "$WORK/rig.holder" ] && echo STRANDED || echo gone)" "gone"
+assert_eq "the displaced foreign handler still ran" "$(grep -c FOREIGN-FIRED "$SCEN_OUT")" "1"
+assert_eq "and the outstanding key was restored" "$(restores)" 'dash|{"DONATION":5}'
+rm -f "$WORK/rig.lock" "$WORK/rig.holder"
+
+echo "== KNOWN LIMIT, pinned deliberately: a trap after the LAST mark still wins =="
+# NOT desired behaviour. A documented hole, asserted so that it is visible in this file's output
+# rather than rediscovered from a stranded rig. Composition happens at a mark, so a trap installed
+# after the last one is never seen — bash offers no hook on `trap`, which makes this structurally
+# unreachable at this layer rather than merely unimplemented. Re-arming at every mark, the fix
+# #1404 proposed, has the identical hole; measured, both restore zero keys here. If this assertion
+# ever reds, the hole has been CLOSED: rewrite the case as the guarantee, do not repair it. (#1404)
+scenario 'rig_key_mark dash rig1 DONATION 5' \
+    'rig_key_mark dash rig1 max_temp_c 100' \
+    "trap 'echo FOREIGN-FIRED' EXIT" \
+    'exit 9' >/dev/null
+assert_eq "KNOWN LIMIT: a trap installed after the last mark strands the ledger (#1404)" \
+    "$(n_restores)" "0"
+assert_eq "and it is the foreign handler that runs in our place (#1404)" \
+    "$(grep -c FOREIGN-FIRED "$SCEN_OUT")" "1"
+
 echo "== dying DURING the apply is covered — which is what mark-before-write buys =="
 # The window the ordering exists for, and the only thing that makes it falsifiable at this tier: a
 # stub that never returns, because the process dies inside the apply itself. Move the mark below

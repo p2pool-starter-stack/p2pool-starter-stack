@@ -40,6 +40,21 @@
 # at tier 1 by driving the real `rig_lock` against sandboxed paths, so if lib.sh's holder-path logic
 # ever changes, this copy reds rather than drifting quietly.
 #
+# THE SAME HAZARD RUNS THE OTHER WAY, AND THAT IS #1404. Folding lib.sh's trap into ours handles the
+# trap that is already installed when we arm. It does nothing about a trap installed AFTER — that one
+# replaces OURS, and every key outstanding at that moment is stranded silently. So `_rig_key_arm` is
+# not a once-only arm: it re-reads the live EXIT trap at every mark and CAPTURES any handler it is
+# about to displace, and `rig_key_atexit` runs the captured handlers. Composition in both directions,
+# which is the same choice lib.sh made, applied to the traps it could not see.
+#
+# WHAT THAT DOES NOT COVER, stated because a limit in a comment is the only honest place for one that
+# cannot be closed here: a foreign trap installed after the LAST mark. Nothing runs again to notice
+# it, so ours stays displaced and those keys are lost. Re-arming on every mark — the fix #1404
+# proposed — has exactly the same hole, measured, and pays for the part it does fix by stomping the
+# foreign trap instead of composing it. There is no bash hook on `trap`, so at this layer the case is
+# structurally unreachable rather than merely unimplemented. `selftest-rig-key-ledger.sh` pins it as
+# a known limit rather than leaving it to be rediscovered.
+#
 # WHY `EXIT` ALONE AND NOT `EXIT INT TERM`. Measured on this box rather than assumed: a bare EXIT
 # trap DOES run when the shell dies of SIGINT or SIGTERM, so naming the signals adds no coverage.
 # What it adds is worse than the second firing it is usually described as — a bash INT/TERM handler
@@ -65,24 +80,56 @@
 # next line starts with, as one credential, and reds the secret scan on this file. The finding
 # is anchored in the commit that introduces it, so renaming back cannot be undone at the tip.
 _RIG_LEDGER=""
-_RIG_KEY_TRAP_ARMED=0
+# Every EXIT handler this file has displaced, newline-separated, oldest first. Empty on the happy
+# path where nothing but ours was ever installed. The installed trap is its own "armed" flag now —
+# a separate boolean is what #1404 turned out to be.
+_RIG_KEY_FOREIGN=""
 
 # The EXIT handler: restore everything still outstanding, THEN do lib.sh's holder cleanup. Ordering
 # matters — the rig restore is the thing worth doing, so it goes first and the breadcrumb removal
 # cannot be skipped by it (no `set -e` here, and every step is best-effort).
 rig_key_atexit() {
     rig_key_unwind
+    # Whatever we displaced, in the order we displaced it (#1404). After the unwind, because the rig
+    # restore is the thing worth doing and a foreign handler is somebody else's best-effort cleanup;
+    # before the holder removal, so a foreign handler cannot skip it.
+    [ -z "$_RIG_KEY_FOREIGN" ] || eval "$_RIG_KEY_FOREIGN"
     # The fold lib.sh:rig_lock's comment prescribes. Re-derived from the durable env/default rather
     # than a local, exactly as the trap it replaces did, and best-effort in the same two steps: a
     # holder marker we cannot remove must never be fatal. (#244/#249)
+    #
+    # KEPT rather than left to the capture above, which looks redundant and is not: if a foreign trap
+    # displaced rig_lock's BEFORE our first mark, the capture replays that foreign handler and the
+    # breadcrumb strands. Measured — deleting this reds the NESTED case in
+    # selftest-rig-key-ledger.sh, which exists to hold it here, and reds nothing else. (#1404)
     local h="${RIG_LOCK_HOLDER:-${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}.holder}"
     rm -f "$h" 2>/dev/null || sudo -n rm -f "$h" 2>/dev/null || true
 }
 
-# Install the composed trap, once, at the FIRST mark. Lazy on purpose: see the no-op reasoning above.
+# Install the composed trap at every mark, capturing anything it displaces (#1404). Still lazy — it
+# runs only from `rig_key_mark`, so a run that writes nothing installs no trap at all, which is the
+# no-op reasoning above and is unchanged.
 _rig_key_arm() {
-    [ "$_RIG_KEY_TRAP_ARMED" = "1" ] && return 0
-    _RIG_KEY_TRAP_ARMED=1
+    local cur
+    cur="$(trap -p EXIT)"
+    case "$cur" in
+    # Already ours, and this branch is load-bearing rather than a shortcut: falling through would
+    # capture OUR OWN handler into the foreign list, and the next exit would run rig_key_atexit
+    # from inside rig_key_atexit.
+    *rig_key_atexit*) return 0 ;;
+    # `?*` is any NON-empty trap. An empty one — the first mark of an ordinary run — matches nothing
+    # here and falls straight to the install below.
+    ?*)
+        # `trap -p` prints `trap -- '<handler>' EXIT`, single-quoted by bash's own printer, so having
+        # bash re-parse that line is what unquotes a handler containing quotes or `$(…)` correctly.
+        # The handler is NOT run here: the quoting survives the round trip, which the self-test pins
+        # with a handler carrying both. Indexed array, not associative — bash 3.2, as everywhere here.
+        local -a _t
+        eval "_t=($cur)"
+        _RIG_KEY_FOREIGN="${_RIG_KEY_FOREIGN}${_t[2]}
+"
+        ;;
+    esac
     trap rig_key_atexit EXIT
     return 0
 }
