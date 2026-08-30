@@ -103,9 +103,10 @@ moved the data, which is the failure the pin comment below records happening twi
 #
 # The reading is also what found **#1615**: `add_block` and `add_worker_history` stamp the per-table
 # write-health signal, and the guard returns BEFORE either stamp — so after a failed corruption
-# recovery every telemetry table reports `healthy: True` while its writes are dropped. Filed rather
-# than fixed here: this slice is annotation-only and proven bytecode-identical, and that fix is a
-# behaviour change to five write paths.
+# recovery every telemetry table REPORTED `healthy: True` while its writes were dropped. Filed
+# rather than fixed here: this slice is annotation-only and proven bytecode-identical. #1615 then
+# fixed it at the READ rather than by stamping the five guards — `get_table_health` derives
+# `healthy` from the handle — so every guard below is untouched and that proof still stands.
 #
 # Slice 8 is `service/telemetry_store.py`, and it is slice 7's shape with nothing new to argue: its
 # three writers are the same closed-handle guard whose whole body is a bare `return`, measured the
