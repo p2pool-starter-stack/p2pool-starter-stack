@@ -9,6 +9,12 @@ over SSH as `$BENCH_HOST`.
 See `docs/dev/test-server-architecture.md` for the full architecture and how to stand a box up from
 scratch.
 
+**This file is the generic twin, and it is meant to differ from the copy on a running box.** A real
+bench keeps its own README naming that box's hosts, users and paths — the detail an operator needs
+and the detail this repo must not carry. Neither copy can be synced onto the other: syncing this way
+would publish a topology, and syncing the other way would delete what the box runs on. Reconcile the
+two by hand, fact by fact, or leave them alone (#1506).
+
 ## ⚠️ Golden rules
 
 This is a test bench, not a production miner — downtime and teardown/redeploy are fine. The

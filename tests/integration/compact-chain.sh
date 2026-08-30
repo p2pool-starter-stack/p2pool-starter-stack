@@ -13,11 +13,19 @@
 #   ~2.5 hours reclaiming nothing. Read `mdb_stat -ef` on an IDLE copy first. (An earlier header
 #   here promised "~95 GiB of live data" — a retired expectation, never a measurement.)
 #
+# THE COST IS SET BY THE SOURCE CHAIN, NOT BY WHAT THE RUN RECLAIMS.
+#   The figure above is this bench's, and it is the case that reclaims nothing — so budget hours
+#   for any mainnet source regardless of how much you expect back. The box's own operational copy
+#   of this script records the reason as a block-by-block rather than page-level copy; that
+#   mechanism is carried here as recorded, not measured. [TODO: verify upstream — read the copy
+#   loop in monero's blockchain_prune before restating it as fact.]
+#
 # THE TOOL IS COPY-THEN-SWAP — IT DOES NOT ONLY READ THE SOURCE (#1489).
 #   After building <data-dir>/lmdb-pruned it renames <data-dir>/lmdb to <data-dir>/lmdb-old and
 #   moves the pruned DB into its place. The binary carries the strings "Swapping databases,
-#   pre-pruning blockchain will be left in", "-old and can be removed if desired" and
-#   "Blockchain pruned OK, but renaming failed". `--copy-pruned-database` does not change that:
+#   pre-pruning blockchain will be left in", "-old and can be removed if desired",
+#   "Blockchain pruned OK, but renaming failed" and "Error renaming" — all four read out of the
+#   binary itself, not out of either header. `--copy-pruned-database` does not change that:
 #   its help text is "Copy database anyway if already pruned", so it lifts an early-exit guard on
 #   an already-pruned source rather than selecting a copy-only mode.
 #
