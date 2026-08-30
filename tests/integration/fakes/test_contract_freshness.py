@@ -57,22 +57,39 @@ def _get(url):
 def test_vendored_contract_bytes_match_the_producer_at_the_baked_ref():
     """Byte-compare tests/integration/fakes/contract/v1/ against RigForge at the baked pin (#1426).
 
-    A transport failure and a non-200 are different findings and are treated differently. A non-200
-    means the pin points somewhere these fixtures cannot be verified against at all — a real red,
-    everywhere. A transport failure is our own reachability, which offline development is allowed to
-    have and a release gate is NOT: in CI it fails, because a producer we could not reach must never
-    be read as a producer we agreed with. That distinction is the whole point of the leg — the
-    failure this file exists to prevent is a guard whose green means less than a reader thinks.
+    Failing to REACH the producer and the producer DISAGREEING with us are different findings and
+    are treated differently — that split is the whole point of the leg, and the failure this file
+    exists to prevent is a guard whose green means less than a reader thinks. Reachability is our
+    own, which offline development is allowed and a release gate is NOT: it skips locally and FAILS
+    in CI, because a producer we could not reach must never be read as one we agreed with. A pin
+    statement is a real red, everywhere.
+
+    THE STATUS CODE DOES NOT MAP ONTO THAT SPLIT BY ITSELF (#1576). A 429 is throttling and a 5xx is
+    the CDN having a bad minute: both are transport wearing a status code, both say nothing about
+    the ref, and filing them under the pin sends whoever reads the failure — at 3am — to check a pin
+    that never moved. A 404 is the one that really is a pin statement: that ref does not serve these
+    files. 403 is deliberately NOT reclassified, being ambiguous between throttling and the
+    repository becoming unreadable; the louder branch is the safer home for a status we have never
+    observed.
     """
     ref = _baked_ref()
     for name in _FILES:
         try:
             resp = _get(_RAW.format(ref=ref, name=name))
+            # Raised into the handler that already exists rather than given a branch of its own, so
+            # there is structurally ONE reachability policy here instead of two kept in step by
+            # hand. HTTPError is a RequestException, and `_get` has already returned, so this adds
+            # no retry.
+            if resp.status_code == 429 or resp.status_code >= 500:
+                raise requests.HTTPError(
+                    f"RigForge's raw host answered HTTP {resp.status_code} — throttled or "
+                    f"unavailable, which says nothing about the ref"
+                )
         except requests.RequestException as exc:
             unproven = (
-                f"could not reach RigForge to verify tests/integration/fakes/contract/v1/{name} "
-                f"against the baked pin {ref}: {exc}. The vendored fixtures are UNVERIFIED against "
-                f"their producer — this run proves nothing about their freshness (#1426)."
+                f"could not verify tests/integration/fakes/contract/v1/{name} against the baked "
+                f"pin {ref}: {exc}. The vendored fixtures are UNVERIFIED against their producer — "
+                f"this run proves nothing about their freshness (#1426)."
             )
             if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
                 pytest.fail(unproven)
