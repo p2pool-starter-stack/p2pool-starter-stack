@@ -94,16 +94,25 @@ abort_trial() { # <trap-spec, "" for none> <signal>
 # strip stops at the first inner quote and reads the remainder as the signal list, which reds a
 # compliant line. The same fault hit `"echo \"hi\""`, a shape #1567 did not name.
 #
+# ANSI-C QUOTING IS ITS OWN PIECE (#1573). `$'a\'b'` is ONE word that bash reads as `a'b`, but
+# the single-quoted alternative stops at that escaped apostrophe: it takes `$` + `'a\'` + `b` and
+# reports the leftover quote as the signal list, redding a compliant line. Only `$'…'` needs an
+# alternative — `$"…"` is a `$` followed by an ordinary double-quoted run, which the pieces below
+# already read correctly.
+#
 # THE DIRECTION THAT MATTERS: this is more permissive than what it replaces, and a strip that goes
 # too far eats the signals and reports `EXIT` for a line naming three — the #1401 false green, from
-# inside the guard against it. It cannot: none of the four pieces matches whitespace outside quotes,
-# so the run always ends at the space before the signal list. The cases below pin that with a row for
-# every shape carrying BOTH an escaped quote and extra signals; each must still come back flagged.
-_TRAP_SQ="'[^']*'"             # a single-quoted run — bash allows no escapes at all inside one
-_TRAP_DQ='"([^"\]|\\.)*"'      # a double-quoted run, which may carry \" and \\
-_TRAP_ESC='\\.'                # a bare backslash escape, the glue in the `'\''` idiom
-_TRAP_BARE="[^[:space:]'\"\\]" # any other single character that is not whitespace or quoting
-_TRAP_WORD="($_TRAP_SQ|$_TRAP_DQ|$_TRAP_ESC|$_TRAP_BARE)+"
+# inside the guard against it. It cannot: none of the five pieces matches whitespace outside
+# QUOTING — the ANSI-C run swallows a space only inside its own `$'…'`, where bash agrees that space
+# belongs to the handler — so the run always ends at the space before the signal list. The cases
+# below pin that with a row for every shape carrying BOTH an escaped quote and extra signals; each
+# must still come back flagged.
+_TRAP_AQ="\\\$'([^'\\]|\\\\.)*'" # an ANSI-C run, `$'…'`, which may carry \' and \\
+_TRAP_SQ="'[^']*'"               # a single-quoted run — bash allows no escapes at all inside one
+_TRAP_DQ='"([^"\]|\\.)*"'        # a double-quoted run, which may carry \" and \\
+_TRAP_ESC='\\.'                  # a bare backslash escape, the glue in the `'\''` idiom
+_TRAP_BARE="[^[:space:]'\"\\]"   # any other single character that is not whitespace or quoting
+_TRAP_WORD="($_TRAP_AQ|$_TRAP_SQ|$_TRAP_DQ|$_TRAP_ESC|$_TRAP_BARE)+"
 
 # The signal list of one `trap` line: everything after the handler argument. The handler is stripped
 # FIRST, so a `#` inside a quoted handler can never be read as a comment; only then is a trailing
@@ -175,6 +184,15 @@ echo "== the classifier reads one trap line correctly, and stays FAIL-LOUD doing
 # once naming extra signals: the second row is the control, and it is the whole reason a more
 # permissive strip is safe here. If a shape ever parses to `EXIT` in BOTH rows the guard has been
 # switched off rather than fixed, which is the one outcome worse than the false red #1567 reports.
+#
+# THE LAST ROW IS A RECORDED LIMIT, NOT AN ENDORSEMENT (#1573). `trap - EXIT` RESETS the handler,
+# so bash installs nothing, yet the strip reads `-` as the handler word and the line parses to
+# `EXIT` and passes. It is not a hole in what this guard is for: #1401's hazard is a handler that
+# CATCHES INT/TERM and returns, and a line installing no handler catches nothing. `trap - INT` and
+# `trap - EXIT INT` both red correctly, and the two existence assertions at the end of this file
+# match the real handler text (`trap restore_all`, `trap 'kill `), so a reset cannot stand in for
+# either of the sites that matter. The row is here so that whoever next widens this classifier
+# trips over the limit instead of rediscovering it and assuming it was missed.
 while IFS='|' read -r want line; do
     [ -n "$want" ] || continue
     assert_eq "signals of [$line]" "$(trap_line_signals "$line")" "$want"
@@ -186,10 +204,15 @@ EXIT|trap 'echo it'\''s here' EXIT
 EXIT INT TERM|trap 'echo it'\''s here' EXIT INT TERM
 EXIT|trap "echo \"hi\"" EXIT
 EXIT TERM|trap "echo \"hi\"" EXIT TERM
+EXIT|trap $'a\'b' EXIT
+EXIT INT TERM|trap $'a\'b' EXIT INT TERM
+EXIT|trap $'a\'b c' EXIT
+EXIT INT|trap $'a\'b c' EXIT INT
 EXIT|    trap rig_key_atexit EXIT
 EXIT|trap 'rm -rf "$D"' EXIT # a trailing comment, cut only after the handler
 EXIT|trap -- 'h' EXIT
 EXIT INT|trap -- 'h' EXIT INT
+EXIT|trap - EXIT
 CASES
 
 echo "== an exemption is DECLARED, never inferred — and it is not blanket (#1567) =="
