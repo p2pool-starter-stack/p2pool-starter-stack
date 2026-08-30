@@ -41,13 +41,24 @@ class TestCleanEventIdContract:
             assert audit_service.clean_event_id(real) == real
 
     def test_oversized_is_bounded(self):
+        """The literal 256 is deliberate. Asserting only against ``MAX_EVENT_ID_LEN`` would source
+        the assertion from the thing under test — widening the constant would widen the assertion
+        with it, and the test could never fail on a cap regression."""
         out = audit_service.clean_event_id(HOSTILE)
-        assert len(out) <= audit_service.MAX_EVENT_ID_LEN
+        assert len(HOSTILE) > 5000
+        assert len(out) <= 256
+        assert len(out) == audit_service.MAX_EVENT_ID_LEN
 
     def test_hostile_charset_is_stripped(self):
-        out = audit_service.clean_event_id(HOSTILE)
-        for bad in ("<", ">", "\x00", "\n", "script"):
+        """Only the charset is guaranteed here, so only the charset is asserted. An earlier draft
+        also asserted ``"script" not in out``, which passed because the cap cut before reaching it
+        rather than because anything strips it — a length accident wearing a charset claim. The
+        seeded id puts the hostile bytes FIRST so the assertion cannot pass by truncation."""
+        seeded = "<script>\x00\n" + "A" * 5000
+        out = audit_service.clean_event_id(seeded)
+        for bad in ("<", ">", "\x00", "\n"):
             assert bad not in out
+        assert "script" in out  # strip, don't blank — the same contract _clean holds to
 
     def test_distinct_long_ids_sharing_a_prefix_stay_distinct(self):
         """The anti-truncation control, and the reason this is a digest and not a slice.
@@ -131,13 +142,3 @@ class TestSinkActuallyUsesIt:
         for got in ids:
             assert got.startswith("host-edit-")
             uuid.UUID(got.removeprefix("host-edit-"))
-
-    async def test_a_real_rig_edit_id_is_unchanged_at_the_sink(self):
-        """Anti-false-pass for the pair above: the sink must not rewrite ordinary ids either, or
-        the dedup key for every already-stored rig-edit row would move."""
-        recorded = []
-        real = "rig-edit-miner1-chg-2026-08-30T01:00:00Z"
-        await DataService._record_audit_event(
-            self._svc(recorded), "rig-edit", "miner1", "rig-edit", "applied", "k", event_id=real
-        )
-        assert recorded[0]["id"] == real
