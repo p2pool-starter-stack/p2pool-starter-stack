@@ -46,7 +46,7 @@ class _HttpSink:
         """This sink pushes every event kind — enabled is the only gate."""
         return self.enabled
 
-    def _post(self, **kwargs):
+    def _post(self, **kwargs) -> bool:
         if not self.enabled:
             return False
         try:

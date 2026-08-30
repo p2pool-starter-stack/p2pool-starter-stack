@@ -68,7 +68,7 @@ class TelegramNotifier:
         """True only when the notifier is usable *and* this event kind is toggled on."""
         return self.enabled and bool(self.events.get(event, False))
 
-    def send(self, text, event=""):
+    def send(self, text, event="") -> bool:
         """Push one message. Returns True on a successful 2xx send, False otherwise
         (including when disabled). Never raises. ``event`` is accepted for sink-interface
         parity (#380) and ignored — Telegram gates per-event upstream via event_enabled."""

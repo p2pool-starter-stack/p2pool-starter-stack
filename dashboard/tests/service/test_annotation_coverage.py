@@ -50,10 +50,11 @@ import pytest
 from tests.service.annotation_gate import classify, classify_package
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 14 of 33 modules that hold a failure return at
+# adds the module it finished. Measured at this tip: 18 of 33 modules that hold a failure return at
 # all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
 # the six single-function `client/` modules by slice 2, the four single-function `web/` modules by
-# slice 3, and the two single-function `config/` modules by slice 4.
+# slice 3, the two single-function `config/` modules by slice 4, and the four outbound senders
+# under `service/` by slice 5a.
 #
 # Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
 # written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
@@ -82,6 +83,10 @@ PINNED = (
     "client/xvb_client.py",
     "config/config.py",
     "config/worker_endpoints.py",
+    "service/healthchecks.py",
+    "service/notify_sinks.py",
+    "service/telegram_notifier.py",
+    "service/tor_heal.py",
     "service/worker_config_store.py",
     "web/charts.py",
     "web/infra_views.py",
@@ -106,6 +111,10 @@ _ANCHORS = {
     "client/xvb_client.py": "client/xvb_client.py:get_stats",
     "config/config.py": "config/config.py:local_miner_enabled",
     "config/worker_endpoints.py": "config/worker_endpoints.py:load_worker_endpoints",
+    "service/healthchecks.py": "service/healthchecks.py:ping",
+    "service/notify_sinks.py": "service/notify_sinks.py:_post",
+    "service/telegram_notifier.py": "service/telegram_notifier.py:send",
+    "service/tor_heal.py": "service/tor_heal.py:_probe_egress",
     "service/worker_config_store.py": "service/worker_config_store.py:note_worker_revision",
     "web/charts.py": "web/charts.py:parse_window",
     "web/infra_views.py": "web/infra_views.py:_ip_to_sort_int",
@@ -147,10 +156,26 @@ _ANCHORS = {
 # local_miner_enabled() else 0)` — so there is no third branch for an out-of-band answer to reach,
 # and False-on-failure and False-because-no-miner move the RAM floor by exactly the same amount.
 # `-> bool | None` would invent a return the function never makes.
+# Slice 5a adds the four OUTBOUND SENDERS as a group, and the shared argument is precisely why
+# they could be read as one: each returns True only when the send demonstrably landed, and False
+# for every other outcome — disabled, throttled, a non-2xx, or an exception. Every caller acts on
+# "the message did not go out", which is what all of those mean, so there is no out-of-band case
+# to declare and `-> bool | None` would invent a return none of them makes. The grouping has to be
+# EARNED, so each was confirmed to be that shape rather than admitted by it:
+#   `notify_sinks.py:_post`     — False when `not self.enabled`, and on `RequestException`.
+#   `telegram_notifier.py:send` — the same two, and its docstring states the contract outright.
+#   `tor_heal.py:_probe_egress` — True iff a clearnet exit answered, False on `RequestException`.
+#   `healthchecks.py:ping`      — a dead-man's switch, and the only one with TWO `except` handlers,
+#     both returning False. Its docstring already enumerates the False cases (not configured,
+#     throttled, request failed, endpoint rejected) as deliberately one answer.
 _UNJUDGED_AND_READ = frozenset(
     {
         "client/docker/docker_control.py:_post",
         "config/config.py:local_miner_enabled",
+        "service/healthchecks.py:ping",
+        "service/notify_sinks.py:_post",
+        "service/telegram_notifier.py:send",
+        "service/tor_heal.py:_probe_egress",
         "service/worker_config_store.py:worker_config_change_known",
     }
 )
