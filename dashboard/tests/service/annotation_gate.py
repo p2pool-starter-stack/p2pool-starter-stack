@@ -187,7 +187,7 @@ def _failure_returns(function: ast.AST) -> list[tuple[str, str, int]]:
 
 
 def classify(source: str, where: str) -> dict[str, list]:
-    """Sort every failure return in one module into the five verdicts.
+    """Sort every failure return in one module into the six verdicts, exhaustively.
 
     ``signed`` — declares an out-of-band marker and honours it.
     ``half_fix`` — declares one and returns an empty container anyway (law 2's quarry).
@@ -196,8 +196,16 @@ def classify(source: str, where: str) -> dict[str, list]:
     ``unjudged`` — annotated, declares NO out-of-band marker, and the failure value is outside
     `_EMPTY`. The gate takes no position on these, and the fifth list exists so that taking no
     position is a thing it SAYS rather than a thing it does silently.
+    ``procedure`` — declared `-> None`, so there is no success value for a failure to hide inside
+    and #1487's rule genuinely cannot apply. Out of scope, and SAID rather than skipped (#1581).
 
-    The fifth verdict was added by #1556 after a measured defect: without it these functions fell
+    Exhaustively is the load-bearing word, and the assertion at the end enforces it. Every law
+    built on this result is phrased as an absence — "nothing under this module is blind" — and an
+    absence is satisfied perfectly by its subject never being classified at all. That has happened
+    twice now, by two different exits, and neither looked wrong where it stood.
+
+    The fifth and sixth verdicts were both added after a measured defect of exactly this shape —
+    #1556 for `unjudged`, #1581 for `procedure`. Taking the fifth: without it these functions fell
     off the end of the branch chain and appeared in no list at all, so a pin asserting "nothing
     under this module is blind" was satisfied by a function VANISHING. Dropping `| None` from a
     signed function moves it here, not to `blind` — which is the one regression #1556's ratchet
@@ -213,7 +221,9 @@ def classify(source: str, where: str) -> dict[str, list]:
         "collapse": [],
         "blind": [],
         "unjudged": [],
+        "procedure": [],
     }
+    walked = 0
     for function in ast.walk(ast.parse(source)):
         if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -221,11 +231,16 @@ def classify(source: str, where: str) -> dict[str, list]:
         if not failures:
             continue
         name = f"{where}:{function.name}"
+        walked += 1
         # A `-> None` procedure is out of scope entirely, not "signed". It has no success value for
         # a failure to hide inside, so the defect this file describes cannot occur in one. Counting
         # its bare `return` as a signed contract would inflate the cleared set with functions that
-        # never made the promise — three of them here — and make the category mean two things.
+        # never made the promise, and make the category mean two things. Being out of scope is a
+        # VERDICT here rather than an exit, for the reason #1556 gave the residual one (#1581): a
+        # function that leaves the walk satisfies every law phrased as an absence, so the exclusion
+        # has to be something this gate SAYS.
         if _returns_nothing(function.returns):
+            verdicts["procedure"].append(name)
             continue
         admits = _admits_none(function.returns)
         values = {literal for _, literal, _ in failures}
@@ -248,6 +263,14 @@ def classify(source: str, where: str) -> dict[str, list]:
             # empty here by construction, so intersecting would record an empty tuple for every row
             # and throw away the only fact that distinguishes them.
             verdicts["unjudged"].append((name, sorted(values)))
+    # TOTALITY, and not a tidiness check — the reasoning is in the docstring above. What it buys
+    # that the six lists do not: a future `continue` added anywhere above trips this on the next
+    # run, instead of quietly shrinking the population every law is quantified over. That is the
+    # difference between a silent door being absent today and being inexpressible.
+    assert sum(len(rows) for rows in verdicts.values()) == walked, (
+        f"{where}: {walked} functions have a failure return but "
+        f"{sum(len(rows) for rows in verdicts.values())} rows were emitted — one left the walk"
+    )
     return verdicts
 
 
@@ -259,6 +282,7 @@ def classify_package() -> dict[str, list]:
         "collapse": [],
         "blind": [],
         "unjudged": [],
+        "procedure": [],
     }
     files = sorted(_PACKAGE.rglob("*.py"))
     # An empty scan is not a clean scan. Every law built on this result is a statement about a set,

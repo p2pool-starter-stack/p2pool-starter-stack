@@ -66,8 +66,9 @@ Every figure here is measured over live source, so it drifts under refactors unr
 annotation, in both directions: quote one with the sha you took it at, and never hang an imperative
 on the number (#1556). At `b0a32bd`, the tip this shipped against — **11 collapses** flagged (all in
 the DB read layer), **5 signed**, **0 half-fixes**, **57 blind**. At `a0ddbec` plus this slice
-(`client/xvb_client.py`) — **11**, **10**, **0**, **52**. #1556 annotates the blind layer slice by
-slice; the flagged count is expected to RISE wherever a slice brings a genuine collapse into scope.
+(`client/xvb_client.py`) — **11**, **10**, **0**, **52**, since joined by `unjudged` **1** (#1556)
+and `procedure` **3** (#1581) at `17722da` — six, which `classify` asserts are exhaustive. #1556
+annotates the blind layer slice by slice; the flagged count RISES as slices bring collapses in.
 
 `add_payouts` is worth naming out of the 11, because it shows the class is not academic here: a
 failed INSERT returns `[]`, indistinguishable from "every row was already stored", and that value
@@ -152,6 +153,10 @@ class TestTheResidualIsReportedNotCertified:
             )
             for name, values in sorted(package["unjudged"]):
                 print(f"    {name} -> {','.join(values)}")
+            # NAMED, not counted — already non-empty, so an arrival moves no count anyone reads.
+            print(f"  and {len(package['procedure'])} `-> None` procedures — out of scope (#1581):")
+            for name in sorted(package["procedure"]):
+                print(f"    {name}")
 
     def test_the_blind_spot_is_measured_rather_than_described(self, package):
         """The unannotated layer is this gate's real limit, so it is asserted to be a known
@@ -260,6 +265,7 @@ class Store:
             "collapse": [],
             "blind": [],
             "unjudged": [],
+            "procedure": [],
         }
 
     def test_an_unannotated_function_is_blind_rather_than_clean(self):
@@ -332,11 +338,10 @@ class Store:
         assert classify(seeded, "m.py")["signed"] == ["m.py:get"]
 
     def test_a_procedure_returning_nothing_is_not_counted_as_a_signed_contract(self):
-        """NEGATIVE CONTROL. `reconcile_worker_config_status` and two siblings are `-> None`
-        procedures whose handle guard is a bare `return`. Once bare returns were read as `None`
-        they began scoring as signed — inflating the cleared set with three functions that never
-        made the promise, which is the same overstatement in miniature that this file refuses to
-        make about the eleven."""
+        """NEGATIVE CONTROL, sharpened by #1581. `reconcile_worker_config_status` and two
+        siblings are `-> None` procedures whose handle guard is a bare `return`; read as `None`
+        they scored as signed, inflating the cleared set with functions that never made the
+        promise. It now asserts the row is NAMED `procedure`, not merely absent from `signed`."""
         seeded = (
             "class C:\n    def do(self) -> None:\n"
             "        if not self._conn:\n            return\n"
@@ -348,6 +353,7 @@ class Store:
             "collapse": [],
             "blind": [],
             "unjudged": [],
+            "procedure": ["m.py:do"],
         }
 
     def test_an_annotated_function_whose_failure_value_is_untracked_is_unjudged(self):
