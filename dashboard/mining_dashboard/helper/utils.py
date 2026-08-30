@@ -299,7 +299,7 @@ def resolve_target_threshold(tiers, stable_hr, donation_level, max_fraction):
     return target, sustainable
 
 
-def is_ip_address(value):
+def is_ip_address(value) -> bool:
     """True if ``value`` is a literal IP address (IPv4 or IPv6), False for a hostname.
 
     Used to decide whether the configured ``dashboard.host`` already *is* an address, in
@@ -312,7 +312,7 @@ def is_ip_address(value):
         return False
 
 
-def detect_host_ipv4():
+def detect_host_ipv4() -> str | None:
     """Best-effort primary LAN IPv4 of the host this dashboard runs on.
 
     Opens a UDP socket toward an off-link sentinel address so the kernel selects the source
