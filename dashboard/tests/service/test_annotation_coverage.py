@@ -50,11 +50,19 @@ import pytest
 from tests.service.annotation_gate import classify, classify_package
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 2 of 33 modules that hold a failure return at
-# all, `client/xvb_client.py` by slice 1 and `service/worker_config_store.py` by pre-existing work.
+# adds the module it finished. Measured at this tip: 8 of 33 modules that hold a failure return at
+# all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
+# and the six single-function `client/` modules by slice 2, which finishes the package: no module
+# under `client/` holds an unannotated failure return any more.
 # **Only ever add a module you have read.** Adding one because the gate happens to score it clean
 # is the baseline #1487 refused, wearing this file's name.
 PINNED = (
+    "client/docker/docker_control.py",
+    "client/monero/monero_client.py",
+    "client/monero/monero_wallet_client.py",
+    "client/tari/tari_client.py",
+    "client/tari/tari_wallet_client.py",
+    "client/xmrig_client.py",
     "client/xvb_client.py",
     "service/worker_config_store.py",
 )
@@ -65,6 +73,14 @@ PINNED = (
 # `rglob` all produce. `note_worker_revision` is the deliberate choice for its module — it is the
 # one signed function `_SIGNED` never named.
 _ANCHORS = {
+    "client/docker/docker_control.py": "client/docker/docker_control.py:_post",
+    "client/monero/monero_client.py": "client/monero/monero_client.py:get_info",
+    "client/monero/monero_wallet_client.py": "client/monero/monero_wallet_client.py:_rpc",
+    "client/tari/tari_client.py": "client/tari/tari_client.py:_fetch_sync_status",
+    "client/tari/tari_wallet_client.py": (
+        "client/tari/tari_wallet_client.py:get_confirmed_payouts"
+    ),
+    "client/xmrig_client.py": "client/xmrig_client.py:_safe_probe_host",
     "client/xvb_client.py": "client/xvb_client.py:get_stats",
     "service/worker_config_store.py": "service/worker_config_store.py:note_worker_revision",
 }
@@ -80,8 +96,18 @@ _ANCHORS = {
 # handle and its docstring argues the fail-open choice at length, including why it must answer the
 # same for a closed handle and a `sqlite3.Error` while its sibling must not. That reading is what
 # this entry stands for. `_EMPTY` simply has no `"False"`, on #1487's own measured grounds.
+#
+# `docker_control.py:_post` (slice 2) is the second, and it is one of the five instances those
+# grounds were measured ON — `annotation_gate._EMPTY`'s own comment names `_post` among the
+# outbound senders where False-on-failure and False-elsewhere mean the same thing to a caller.
+# Read here rather than taken on that comment's word: it returns True only on HTTP 204/304, and
+# False on every other status and on any exception. Its callers act on "the container action did
+# not happen", which is what both False paths mean, so there is no out-of-band case to declare.
+# Annotating it `-> bool | None` to reach `signed` would be inventing a return the function never
+# makes — the reason this list exists is to say the gate declines, not to manufacture a verdict.
 _UNJUDGED_AND_READ = frozenset(
     {
+        "client/docker/docker_control.py:_post",
         "service/worker_config_store.py:worker_config_change_known",
     }
 )

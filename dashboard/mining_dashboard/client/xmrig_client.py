@@ -197,7 +197,7 @@ def parse_worker_control_status(payload):
     return {"change_id": change_id, "status": status, "reason": ctrl.get("reason")}
 
 
-def _safe_probe_host(ip):
+def _safe_probe_host(ip) -> str | None:
     """Return a safe host string to probe, or None.
 
     SSRF guard (#122): the dashboard runs ``network_mode: host`` and a connecting miner fully

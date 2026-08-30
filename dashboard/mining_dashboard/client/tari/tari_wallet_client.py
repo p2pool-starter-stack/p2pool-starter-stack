@@ -66,7 +66,7 @@ class TariWalletClient:
         self._channel = None
         self._stub = None
 
-    async def get_confirmed_payouts(self, min_height=0):
+    async def get_confirmed_payouts(self, min_height=0) -> list[dict]:
         """Return confirmed incoming payouts at or above ``min_height`` as normalized dicts.
 
         The caller seeds ``min_height`` from the highest stored Tari payout height, so a restart

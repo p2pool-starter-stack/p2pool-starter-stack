@@ -42,7 +42,7 @@ class MoneroWalletClient:
         self._auth = HTTPDigestAuth(username, password) if username else None
         self.timeout = timeout
 
-    def _rpc(self, method, params=None):
+    def _rpc(self, method, params=None) -> dict | None:
         """POST one JSON-RPC call; return the ``result`` dict, or None on any error."""
         payload = {"jsonrpc": "2.0", "id": "0", "method": method, "params": params or {}}
         try:

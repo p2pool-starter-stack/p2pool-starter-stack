@@ -61,7 +61,9 @@ class DockerControl:
             request_timeout=request_timeout,
         )
 
-    async def _post(self, path, params, action, container, quiet=False, request_timeout=None):
+    async def _post(
+        self, path, params, action, container, quiet=False, request_timeout=None
+    ) -> bool:
         url = f"{self.base_url}{path}"
         try:
             async with aiohttp.ClientSession() as session:
