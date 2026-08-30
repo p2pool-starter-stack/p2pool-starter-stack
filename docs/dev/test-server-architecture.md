@@ -152,6 +152,11 @@ cp ~/pithead/tests/integration/testbench-README.md ~/pithead-testbench/README.md
 ~/pithead-testbench/system-info.sh > ~/pithead-testbench/system-info.md
 ```
 
+These copies seed a **fresh** box. On a box that already has them they overwrite whatever the
+operator annotated locally, and both halves have held such detail (#1506): the README names hosts,
+users and paths the repo twin deliberately does not carry, and a deployed script has outlived the
+tracked one on a safety warning. Diff before you copy, and reconcile by hand rather than overwrite.
+
 **6. Validate it's release-fit:**
 
 ```bash
