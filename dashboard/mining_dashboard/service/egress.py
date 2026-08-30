@@ -74,7 +74,7 @@ def _xvb_standby_route(source):
     return LOCAL if (ip.is_private or ip.is_loopback or ip.is_link_local) else TOR
 
 
-def _sinks_all_private(urls):
+def _sinks_all_private(urls) -> bool:
     """True when every configured sink URL targets a private/loopback IP literal — the LAN
     carve-out proof. A hostname can't be verified without a DNS lookup (which a pure config
     derivation must never do), so any hostname makes this False."""

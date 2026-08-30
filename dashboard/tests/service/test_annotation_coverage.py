@@ -53,8 +53,13 @@ from tests.service.annotation_gate import classify, classify_package
 # adds the module it finished. Measured at this tip: 18 of 33 modules that hold a failure return at
 # all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
 # the six single-function `client/` modules by slice 2, the four single-function `web/` modules by
-# slice 3, the two single-function `config/` modules by slice 4, and the four outbound senders
-# under `service/` by slice 5a.
+# slice 3, the two single-function `config/` modules by slice 4, the four outbound senders under
+# `service/` by slice 5a, and the last three `service/` singletons by slice 5b. That finishes the
+# SINGLETON tail, not #1556: **33 failure returns are still blind**, all in multi-function modules.
+#
+# The `client/` scoping below applies to `tor_heal.py` too, measured: `decide` holds four
+# unannotated `None` returns and `check` two bare ones, all six OUTSIDE the gate's two doors —
+# pinned, law 1 honestly green, and NOT "fully annotated".
 #
 # Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
 # written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
@@ -86,7 +91,10 @@ PINNED = (
     "service/healthchecks.py",
     "service/notify_sinks.py",
     "service/telegram_notifier.py",
+    "service/egress.py",
+    "service/steering_projection.py",
     "service/tor_heal.py",
+    "service/update_checker.py",
     "service/worker_config_store.py",
     "web/charts.py",
     "web/infra_views.py",
@@ -114,7 +122,10 @@ _ANCHORS = {
     "service/healthchecks.py": "service/healthchecks.py:ping",
     "service/notify_sinks.py": "service/notify_sinks.py:_post",
     "service/telegram_notifier.py": "service/telegram_notifier.py:send",
+    "service/egress.py": "service/egress.py:_sinks_all_private",
+    "service/steering_projection.py": "service/steering_projection.py:won_round_live",
     "service/tor_heal.py": "service/tor_heal.py:_probe_egress",
+    "service/update_checker.py": "service/update_checker.py:latest_release",
     "service/worker_config_store.py": "service/worker_config_store.py:note_worker_revision",
     "web/charts.py": "web/charts.py:parse_window",
     "web/infra_views.py": "web/infra_views.py:_ip_to_sort_int",
@@ -131,25 +142,15 @@ _ANCHORS = {
 # here may be added because the gate happened to score it this way — that is the baseline #1487
 # refused, wearing this file's name. `worker_config_change_known` returns `False` on a closed
 # handle and its docstring argues the fail-open choice at length, including why it must answer the
-# same for a closed handle and a `sqlite3.Error` while its sibling must not. That reading is what
-# this entry stands for. `_EMPTY` simply has no `"False"`, on #1487's own measured grounds.
-#
-# `docker_control.py:_post` (slice 2) is the second, and it is one of the five instances those
-# grounds were measured ON — `annotation_gate._EMPTY`'s own comment names `_post` among the
-# outbound senders where False-on-failure and False-elsewhere mean the same thing to a caller.
-# Read here rather than taken on that comment's word: it returns True only on HTTP 204/304, and
-# False on every other status and on any exception. Its callers act on "the container action did
-# not happen", which is what both False paths mean, so there is no out-of-band case to declare.
-# Annotating it `-> bool | None` to reach `signed` would be inventing a return the function never
-# makes — the reason this list exists is to say the gate declines, not to manufacture a verdict.
+# same for a closed handle and a `sqlite3.Error` while its sibling must not. That reading, not the
+# gate's score, is what the entry stands for.
 #
 # `config/config.py:local_miner_enabled` (slice 4) is the third, and the first member that is NOT
 # an outbound sender — so it deliberately does not lean on the grounds `annotation_gate._EMPTY`
-# records. Those grounds name five senders, and it is worth knowing what they are a sample OF:
-# measured at `b0a32bd`, the tip that comment was written against, TWELVE functions already held a
-# `False` failure return and this was one of them, unannotated. The five were a subset somebody
-# read, never the whole population, so no later member may be waved through by that class — each
-# is read on its own terms, which is what this list is. It returns False when
+# records (see #1599: measured at `b0a32bd`, the tip that comment was written against, TWELVE
+# functions already held a `False` failure return and this was one of them, so its five senders
+# were a subset somebody read, never the whole population). No member is waved through by that
+# class; each is read on its own terms. It returns False when
 # the masked-config mount is missing or unreadable, and its docstring argues the choice outright:
 # DIY stacks without the mount never run the built-in miner. Its sole production caller is
 # arithmetic — `config.py:low_ram_floor_gb` does `+ (LOW_RAM_LOCAL_MINER_GB if
@@ -168,6 +169,20 @@ _ANCHORS = {
 #   `healthchecks.py:ping`      — a dead-man's switch, and the only one with TWO `except` handlers,
 #     both returning False. Its docstring already enumerates the False cases (not configured,
 #     throttled, request failed, endpoint rejected) as deliberately one answer.
+#   `docker/docker_control.py:_post` (slice 2) is the same class and is folded in here: True only
+#     on HTTP 204/304, False on every other status and any exception, and its callers act on "the
+#     container action did not happen", which is what both False paths mean.
+#
+# Slice 5b adds two MORE, listed separately rather than folded into the group above, because they
+# fail in OPPOSITE directions — which is why `service/` was split rather than taken whole:
+#   `egress.py:_sinks_all_private` is FAIL-CLOSED. False means "assume public", DENYING the LAN
+#     carve-out; its docstring gives the reason (a hostname cannot be verified without a DNS
+#     lookup, which a pure config derivation must never do), so False-on-ValueError and
+#     False-because-genuinely-public are one instruction: do not grant it.
+#   `steering_projection.py:won_round_live` is FAIL-OPEN by design. False means steer normally —
+#     the hold is a yield optimization, never a safety path, so a read error must not freeze
+#     steering. Collapsing these two readings into one would be the bulk-fill this list refuses:
+#     same shape, opposite safety argument. Neither reaches `signed` without inventing a return.
 _UNJUDGED_AND_READ = frozenset(
     {
         "client/docker/docker_control.py:_post",
@@ -175,6 +190,8 @@ _UNJUDGED_AND_READ = frozenset(
         "service/healthchecks.py:ping",
         "service/notify_sinks.py:_post",
         "service/telegram_notifier.py:send",
+        "service/egress.py:_sinks_all_private",
+        "service/steering_projection.py:won_round_live",
         "service/tor_heal.py:_probe_egress",
         "service/worker_config_store.py:worker_config_change_known",
     }

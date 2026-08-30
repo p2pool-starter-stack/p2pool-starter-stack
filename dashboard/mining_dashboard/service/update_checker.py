@@ -51,7 +51,7 @@ class GitHubReleaseClient:
         self.api_url = api_url
         self.tor_proxy = tor_proxy
 
-    def latest_release(self):
+    def latest_release(self) -> dict | None:
         """Return ``{"tag": ..., "url": ...}`` for the latest published release, or ``None`` on any
         failure (network, non-200, malformed JSON). Routed through Tor when a proxy is set."""
         proxies = {"http": self.tor_proxy, "https": self.tor_proxy} if self.tor_proxy else None
