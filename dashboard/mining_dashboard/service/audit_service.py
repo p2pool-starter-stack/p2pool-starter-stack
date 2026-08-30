@@ -81,7 +81,7 @@ def clean_event_id(event_id):
     return f"{safe[:keep]}-{digest[:_EVENT_ID_DIGEST_LEN]}"
 
 
-def _tail_json_lines(path):
+def _tail_json_lines(path) -> list | None:
     """The trailing complete JSON objects of ``path`` (newest last), or None if unreadable.
 
     Reads at most the last ``_TAIL_BYTES`` so a large log costs one bounded read; a partial
@@ -139,7 +139,7 @@ def recent_changes(limit=50):
 # time — an undatable row has no place) but still matches a pure text search.
 
 
-def _entry_epoch(ts):
+def _entry_epoch(ts) -> float | None:
     """``ts`` as epoch seconds, or None when unreadable. Accepts the two shapes the log surfaces
     actually emit: a number (access log) or the canonical UTC ISO string (audit trail)."""
     if isinstance(ts, (int, float)):

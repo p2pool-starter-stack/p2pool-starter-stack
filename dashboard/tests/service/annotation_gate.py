@@ -6,8 +6,8 @@ still owns it. The rule is:
     a FAILURE path may not return a value that inhabits the function's declared SUCCESS type.
 
 `test_collapsed_return_channels.py` holds the argument, the controls, and the two hard laws.
-`test_annotation_coverage.py` holds #1556's per-module pins. Both need the same walk over the
-package, and a sibling test module is not importable by name here — `--import-mode=importlib` with
+`test_annotation_coverage.py` holds #1556's per-module pin laws, and `annotation_pins.py` beside
+it holds the data those laws run over. Both need the same walk over the package, and a sibling test module is not importable by name here — `--import-mode=importlib` with
 no `__init__.py` means `from test_collapsed_return_channels import classify` raises
 `ModuleNotFoundError`. That is why this is a non-test module rather than a helper left where it was.
 

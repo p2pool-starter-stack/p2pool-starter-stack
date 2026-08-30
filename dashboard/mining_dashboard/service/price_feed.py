@@ -28,7 +28,7 @@ COINGECKO_SIMPLE_PRICE = "https://api.coingecko.com/api/v3/simple/price"
 COINGECKO_IDS = {"xmr": "monero", "tari": "minotari"}
 
 
-def parse_prices(data, currency):
+def parse_prices(data, currency) -> dict | None:
     """``{"xmr": float, "tari": float}`` from a CoinGecko ``simple/price`` payload, or ``None``
     when either coin (or the requested currency) is missing/invalid. Both-or-nothing on purpose:
     a pair from two different fetches could disagree on the exchange rate. Pure + unit-tested."""
@@ -53,7 +53,7 @@ class CoinGeckoClient:
         self.currency = currency
         self.tor_proxy = tor_proxy
 
-    def fetch(self):
+    def fetch(self) -> dict | None:
         """Return ``{"xmr": ..., "tari": ...}`` in ``self.currency``, or ``None`` on any failure
         (network, non-200, malformed JSON, unsupported currency). Routed through Tor when set."""
         # ``currency`` doubles as a free-form display label (any printable ASCII passes pithead's
