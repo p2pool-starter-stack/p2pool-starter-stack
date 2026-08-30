@@ -43,7 +43,7 @@ class TelemetryStoreMixin:
         fail_count: int = 0,
         donation_fraction: float = 0.0,
         mode: str = "",
-    ):
+    ) -> None:
         """Record one XvB-scalars sample (#196), 30-day retention. The caller wall-clock-gates
         this to ~5 min (DataService._sync_xvb_stats) so the cadence survives an UPDATE_INTERVAL
         change, and only calls it on a genuine XvB fetch (never on a failed one)."""
@@ -91,7 +91,7 @@ class TelemetryStoreMixin:
         height: int = 0,
         reward: float = 0.0,
         pool_hashrate: float = 0.0,
-    ):
+    ) -> None:
         """Record one hourly network-stats sample (#196): Monero difficulty/height/reward plus the
         pool's own hashrate. 90-day retention. DB-only (nothing reads this per-cycle)."""
         try:
@@ -136,7 +136,7 @@ class TelemetryStoreMixin:
         monero_db_bytes: int = 0,
         disk_used_gb: float = 0.0,
         disk_total_gb: float = 0.0,
-    ):
+    ) -> None:
         """Record one hourly disk-growth sample (#196): monerod's DB size plus host disk usage.
         Permanent (no retention prune — tiny, ~24 rows/day; it's a capacity trend line)."""
         try:

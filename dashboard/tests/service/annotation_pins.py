@@ -41,14 +41,16 @@ moved the data, which is the failure the pin comment below records happening twi
 """
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 26 of 33 modules that hold a failure return at
+# adds the module it finished. Measured at this tip: 27 of 33 modules that hold a failure return at
 # all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
 # the six single-function `client/` modules by slice 2, the four single-function `web/` modules by
 # slice 3, the two single-function `config/` modules by slice 4, the four outbound senders under
 # `service/` by slice 5a, and the last three `service/` singletons by slice 5b. Slice 6 is the first
 # MULTI-function slice — the four parse-or-read pairs under `service/`, each pinned only once BOTH of
 # its failure returns were annotated and read, and the ten handle-guard procedures in
-# `service/storage_service.py` by slice 7. **15 failure returns are still blind**, in seven modules.
+# `service/storage_service.py` by slice 7, and its three siblings in `service/telemetry_store.py` by
+# slice 8. **12 failure returns are still blind**, in six modules — every one through the `except`
+# door, because slice 8 closed the handle-guard population entirely.
 #
 # Every figure above is re-derived at the head being shipped, never carried across a slice: 5b moved
 # this tuple from 18 to 21 and left the sentence beside it saying 18. A slice adds rows to a tuple
@@ -97,6 +99,27 @@ moved the data, which is the failure the pin comment below records happening twi
 # than fixed here: this slice is annotation-only and proven bytecode-identical, and that fix is a
 # behaviour change to five write paths.
 #
+# Slice 8 is `service/telemetry_store.py`, and it is slice 7's shape with nothing new to argue: its
+# three writers are the same closed-handle guard whose whole body is a bare `return`, measured the
+# same way (zero valued returns, zero yields, with `get_xvb_history`'s three valued returns as the
+# control that the walk can see one). Three more `procedure` rows, ZERO to `signed`. It closes the
+# HANDLE-GUARD population — every one of the twelve failure returns still blind now comes through
+# the `except` door.
+#
+# One thing here is worth carrying: this module's residue and its blind set were the SAME THREE
+# SITES. The gate saw them through the guard door, and #1604's sweep saw them as falsy returns from
+# functions declaring nothing — two instruments answering different questions about one site. So
+# annotating cleared both at once, and the module now reports **0 residue sites**. That zero is a
+# disclosure, not an absence: it is printed because the module is pinned, which is the whole of why
+# #1604 prints the clean modules too.
+#
+# That overlap is NOT unique and the first draft of this comment said it was, unmeasured. Measured
+# at this tip: `helper/utils.py` has the same shape — 2 residue functions and the same 2 blind — and
+# it is not pinned yet, so the slice that takes it should expect its residue to go to zero too. In
+# every other module the two sets are DISJOINT (`storage_service.py`'s residue is `add_shares` and
+# `save_snapshot`, neither of them among the ten slice 7 annotated). **Do not infer one set from the
+# other; they answer different questions and only sometimes coincide.**
+#
 # Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
 # written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
 # (`local_miner_enabled` returning `False`). A slice is coverage of the mechanism, so a slice whose
@@ -133,6 +156,7 @@ PINNED = (
     "service/price_feed.py",
     "service/steering_projection.py",
     "service/storage_service.py",
+    "service/telemetry_store.py",
     "service/tor_heal.py",
     "service/update_checker.py",
     "service/worker_config_store.py",
@@ -150,7 +174,8 @@ PINNED = (
 # one signed function `_SIGNED` never named. `add_block` is the choice for
 # `storage_service.py` — of that module's eleven procedures it is one of the two carrying the
 # per-table health channel #1615 is about, so it is the one whose silent exit from the walk would
-# cost most.
+# cost most. For `telemetry_store.py` all three writers are equivalent for this purpose and
+# `add_xvb_history` is simply the first declared — recorded so nobody hunts for a reason.
 _ANCHORS = {
     "client/docker/docker_control.py": "client/docker/docker_control.py:_post",
     "client/monero/monero_client.py": "client/monero/monero_client.py:get_info",
@@ -173,6 +198,7 @@ _ANCHORS = {
     "service/xvb_standby.py": "service/xvb_standby.py:parse_standby",
     "service/steering_projection.py": "service/steering_projection.py:won_round_live",
     "service/storage_service.py": "service/storage_service.py:add_block",
+    "service/telemetry_store.py": "service/telemetry_store.py:add_xvb_history",
     "service/tor_heal.py": "service/tor_heal.py:_probe_egress",
     "service/update_checker.py": "service/update_checker.py:latest_release",
     "service/worker_config_store.py": "service/worker_config_store.py:note_worker_revision",
