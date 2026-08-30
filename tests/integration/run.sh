@@ -637,9 +637,12 @@ assert_running_state() {
     #     connect and so passes against a docker-published port with nothing behind it. A
     #     protocol-level ZMTP handshake, which an accept() cannot satisfy, closes THAT case, and
     #     only that case. MEASURED, four targets on one host: a permanently-silent XPUB and a live
-    #     monerod on a MOVING tip are INDISTINGUISHABLE here — both "ok ... XPUB". So the observed
-    #     notification is tier B, it is genuinely missing, and it is declared below as a COUNTED
-    #     SKIP rather than left in a comment: a skip announces itself, a false green does not.
+    #     monerod on a MOVING tip are INDISTINGUISHABLE to the handshake — both "ok ... XPUB".
+    # 4c. So tier B SUBSCRIBES and waits for the peer to actually send something, which separates
+    #     those two by construction (measured both ways: live node passes in ~2s, silent XPUB reds
+    #     at the budget). What remains uncovered is narrower than it was — that the published frame
+    #     was a BLOCK notification rather than txpool or miner_data — and stays a COUNTED SKIP
+    #     below: a skip announces itself, a false green does not.
     local zmq_host zmq_port zv
     if [ "$mode" = "remote" ]; then
         zmq_host="$REMOTE_MONERO_HOST"
@@ -649,7 +652,8 @@ assert_running_state() {
         zmq_port="18083"
     fi
     if zv=$(zmq_pub_probe "$zmq_host" "$zmq_port" 8); then it_pass "monero ZMQ endpoint is a live ZMTP publisher (#1497)"; else it_fail "monero ZMQ endpoint is a live ZMTP publisher (#1497)" "$zv"; fi
-    it_skip_leg "monero ZMQ observed block notification" "tier B (#1497): needs a MOVING chain tip — the handshake above cannot separate a live publisher from a permanently silent one" missing
+    if zv=$(zmq_publishes_probe "$zmq_host" "$zmq_port" 8 90); then it_pass "monero ZMQ endpoint actually publishes, not merely a live socket (#1497)"; else it_fail "monero ZMQ endpoint actually publishes, not merely a live socket (#1497)" "$zv"; fi
+    it_skip_leg "monero ZMQ published frame is a BLOCK notification" "tier C (#1497): the row above proves the publisher is not silent, which is the starving-p2pool failure; proving the frame was chain_main rather than txpool_add needs a new block, a wait of minutes against seconds" missing
     # The dashboard's sync panel must also read "done" for a synced node — not stay stuck at
     # "loading". A synced monerod reports target_height 0, so the panel has to trust the caught-up
     # flag, not percent-vs-target; getting that wrong left a synced node "loading" forever (the real
