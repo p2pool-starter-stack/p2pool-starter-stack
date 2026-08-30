@@ -176,7 +176,7 @@ KNOWN_GAP="notifications.ntfy.url"
 
 SENTINEL="S3nt1nelVALUE" # short, alphanumeric: reachable by the NAME rule and by no other
 SCREENED="$(
-    python3 - "$REF" <<'PY'
+    python3 - "$REF" "$HERE/lib.sh" <<'PY'
 import json, re, sys
 
 # INVARIANT: this screen must be a SUPERSET of redact()'s JSON name list, or a field carrying
@@ -200,9 +200,31 @@ def walk(node, path=""):
 for path, value in walk(json.load(open(sys.argv[1], encoding="utf-8"))):
     if isinstance(value, str) and SCREEN.search(path.split(".")[-1]):
         print(path)
+# The invariant above, MECHANICALLY (#1590): it shipped as a comment and was already false once,
+# at `wallet`. Both lists are READ OUT of lib.sh — a list restated here is the drift this asserts.
+lib = open(sys.argv[2], encoding="utf-8").read()
+j = re.search(r"\[A-Za-z0-9_\]\*\(([a-z_|]+)\)", lib)
+e = re.search(r"\[A-Za-z0-9_\]\*\(([A-Z_|]+)\)", lib)
+if not j or not e or len(j.group(1).split("|")) < 8:
+    print("!!could not read redact()'s two suffix vocabularies out of lib.sh")
+else:
+    for entry in j.group(1).split("|"):
+        if not SCREEN.search(entry):
+            print("!!the screen does not reach redact()'s JSON suffix: " + entry)
+    d = set(j.group(1).split("|")) ^ {x.lower() for x in e.group(1).split("|")}
+    if d:
+        print("!!KEY=value and JSON vocabularies disagree (#1611): " + " ".join(sorted(d)))
 PY
 )"
+# Violations are prefixed, so one python run reports both the population and the invariant.
+VOCAB_BAD="$(printf '%s\n' "$SCREENED" | sed -n 's/^!!//p')"
+SCREENED="$(printf '%s\n' "$SCREENED" | grep -v '^!!')"
 [ -n "$SCREENED" ] || it_fail "screen over config.reference.json returns fields" "empty population"
+if [ -n "$VOCAB_BAD" ]; then
+    it_fail "redact()'s two suffix vocabularies agree, and the screen covers them" "$VOCAB_BAD"
+else
+    it_pass "redact()'s two suffix vocabularies agree, and the screen covers them"
+fi
 
 # Word-splitting, not a `case` glob: the lists above wrap across lines, and a space-delimited
 # haystack silently misses every entry sitting next to a newline.
