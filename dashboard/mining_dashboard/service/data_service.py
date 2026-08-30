@@ -707,15 +707,15 @@ class DataService:
         trail is served through (``audit_service._clean``) — defense in depth: ``actor``/``keys``
         here are already schema-shaped (a validated worker name, dotted config-key paths), but
         every field the Security panel serves gets the identical whitelist treatment regardless of
-        source, so a future caller can't accidentally skip it.
+        source — the row ``id`` included, since #1561.
 
         ``event_id`` lets a caller supply a DETERMINISTIC row id so ``INSERT OR IGNORE`` collapses
         repeat reports of the SAME event to one row (rig-edit: a rig re-reports its last change_id
-        every poll). A host-edit passes None — each detection is a genuinely distinct event, so a
-        random id is right there."""
+        every poll); ``clean_event_id`` bounds it HERE, at the sink, not at each caller. A host-edit
+        passes None — a distinct event each time, so the random id is right there."""
         await asyncio.to_thread(
             self.state_manager.add_audit_event,
-            id=event_id or f"{source}-{uuid.uuid4()}",
+            id=audit_service.clean_event_id(event_id) or f"{source}-{uuid.uuid4()}",
             ts=_iso_now(),
             source=audit_service._clean(source, 16),
             actor=audit_service._clean(actor, 64),
