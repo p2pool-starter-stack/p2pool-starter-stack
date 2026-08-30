@@ -507,6 +507,14 @@ admits. The reads that still collapse the two are reported by name in that test'
 than recorded anywhere as accepted — a list of them would say someone had read and approved them,
 and nobody has.
 
+A rule of that shape can only judge a function that declares a return type at all, and most of
+the package does not. `dashboard/tests/service/test_annotation_coverage.py` holds the other half
+(#1556): once a module's failure returns have been annotated and read, that file reds if any of
+them goes back to declaring nothing. It pins coverage of the rule rather than the rule's
+verdicts — a pinned module may still hold a reported collapse, and the report is where that
+belongs. The two files share one classifier, `dashboard/tests/service/annotation_gate.py`, which
+is a plain module and not a test.
+
 How it stays safe:
 
 - **The dashboard never holds the rig's token.** It spools the worker name and the change into the
