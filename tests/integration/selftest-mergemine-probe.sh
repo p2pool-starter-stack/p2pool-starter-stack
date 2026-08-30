@@ -238,9 +238,12 @@ assert_eq "an unreadable container start time FAILS separately — 0 pass, 1 fai
 
 echo "== an unanswerable monerod RPC cannot book a covered leg as an accepted hole (#1597) =="
 
-# `monero_caught_up` reduces several independent conditions to ONE bit: its `curl -fsS` discards
+# `monero_caught_up` REDUCED several independent conditions to ONE bit: its `curl -fsS` discards
 # stderr, so an unreachable host, a refused connection and a 401 all leave the body empty, and
-# `jq -e` over an empty body answers exactly as it does for a node that is genuinely behind. The
+# `jq -e` over an empty body answered exactly as it does for a node that is genuinely behind.
+# #1605 split that bit three ways (0 / 1 / any other rc); the stub below still returns a single
+# not-caught-up bit because this leg deliberately treats both nonzero doors alike — see the note
+# above `assert_mergemine_roundtrip`. Its three answers are covered in selftest-monero-caught-up.sh. The
 # stub below returns that not-caught-up bit — which is what a perfectly synced monerod produces
 # behind a broken credential. `lib.sh`'s own env_bake_verdict comment records a day of that state.
 #

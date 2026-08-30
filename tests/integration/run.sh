@@ -629,7 +629,7 @@ assert_running_state() {
     it_pass "dashboard /api/state reachable"
 
     # 4. Monero caught up — per monerod's own get_info, not the dashboard UI field.
-    if monero_caught_up; then it_pass "monerod reports synced (RPC)"; else it_fail "monerod reports synced (RPC)" "get_info not synchronized"; fi
+    if monero_caught_up; then it_pass "monerod reports synced (RPC)"; elif [ $? = 1 ]; then it_fail "monerod reports synced (RPC)" "get_info answered: not synchronized"; else it_fail "monerod reports synced (RPC)" "get_info could not be asked — unreachable, refused, timed out or rejected"; fi
     # 4b. The node's ZMQ endpoint is a live ZMTP PUBLISHER (#1497) — strictly less than "publishes
     #     block notifications", and this row is named for what it proves, not for what the issue
     #     wants. Step 4 is satisfied by a node that can never publish one: an --offline monerod
@@ -1057,7 +1057,7 @@ assert_release_readiness() {
     it_log "── release-server readiness ────────────────────────"
 
     # 1. The whole point of a release server: chains already synced, reused in minutes.
-    if monero_caught_up; then it_pass "Monero is synced (chain reusable by the matrix)"; else it_fail "Monero is synced" "monerod not caught up — the matrix would have to re-sync"; fi
+    if monero_caught_up; then it_pass "Monero is synced (chain reusable by the matrix)"; elif [ $? = 1 ]; then it_fail "Monero is synced" "monerod answered: not caught up — the matrix would have to re-sync"; else it_fail "Monero is synced" "monerod could not be asked — unreachable, refused, timed out or rejected; sync state unknown"; fi
     pithead status >/dev/null 2>&1
     assert_rc "stack is healthy (pithead status)" "$?" "0"
 

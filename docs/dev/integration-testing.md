@@ -379,10 +379,16 @@ and `--list` prints it).
   an absence looks exactly like a working one until the day it matters. The escapes are stripped
   before matching, and the self-test carries that control fired in both directions: zero matches on
   the captured bytes, one after stripping. The capture is read before the caught-up predicate, and
-  that order is itself an assertion ([#1597](https://github.com/p2pool-starter-stack/pithead/issues/1597)). `monero_caught_up` answers with one bit that cannot
-  separate a node that is behind from an RPC that could not be answered at all: its `curl`
+  that order is itself an assertion ([#1597](https://github.com/p2pool-starter-stack/pithead/issues/1597)). `monero_caught_up` answered, at the time, with one bit that could
+  not separate a node that is behind from an RPC that could not be answered at all: its `curl`
   discards stderr, so an unreachable host, a refused connection and a 401 alike leave the empty
-  body that `jq` reads as not caught up. Asked first, that bit decided the whole leg, and a stack
+  body that `jq` reads as not caught up.
+  ([#1605](https://github.com/p2pool-starter-stack/pithead/issues/1605) has since given the
+  predicate three answers — `0` caught up, `1` answered and behind, any other rc could-not-ask,
+  the open top end so that `rx`'s own ssh failure at `255` cannot be reported as a node that is
+  behind. The merge-mining leg still treats both nonzero doors alike, deliberately, and the
+  ordering below is what makes that honest rather than the predicate's precision.)
+  Asked first, that bit decided the whole leg, and a stack
   whose merge-mining client was up and reading chain_ids would have been booked as an accepted
   hole for as long as a credential stayed broken — a state this repo has recorded lasting a day.
   Any `MergeMiningClientTari` line is itself proof that monerod caught up, since p2pool builds no

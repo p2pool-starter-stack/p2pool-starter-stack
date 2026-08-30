@@ -113,9 +113,15 @@ mm_capture_startup() {
 # The release-gate leg: PASS, FAIL, or an honest counted SKIP — never a silent green.
 #
 # THE CAPTURE IS READ BEFORE THE PREDICATE, AND THAT ORDER IS ITSELF AN ASSERTION (#1597).
-# `monero_caught_up` reduces several independent conditions to one bit: its `curl -fsS` discards
+# `monero_caught_up` REDUCED several independent conditions to one bit: its `curl -fsS` discards
 # stderr and leaves the body EMPTY on an unreachable RPC, a refused connection or a 401, and
-# `jq -e` over an empty body answers exactly as it does for a node that is genuinely behind.
+# `jq -e` over an empty body answered exactly as it does for a node that is genuinely behind.
+# #1605 has since split that bit three ways — 0 caught up, 1 answered-and-behind, any other rc
+# could-not-ask — but THIS SITE DELIBERATELY TAKES BOTH NONZERO DOORS: `! monero_caught_up` below
+# is true for each, and the skip's own text says "could not be confirmed caught up", which is a
+# true statement about both. The capture-first order, not the predicate's precision, is what keeps
+# this skip honest; narrowing the test to `= 1` here would make the leg red on an unreachable RPC
+# in the one case p2pool has already proved the signal cannot exist.
 # Asked first, that one bit decided the whole leg — so a stack whose monerod was synced and whose
 # merge-mining client was up and reading chain_ids would have been booked as an ACCEPTED HOLE for
 # as long as the RPC stayed unanswerable. That state is not hypothetical here — `lib.sh`'s
