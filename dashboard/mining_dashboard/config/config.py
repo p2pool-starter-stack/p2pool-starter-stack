@@ -44,7 +44,7 @@ LOW_RAM_LOCAL_TARI_GB = 6
 LOW_RAM_LOCAL_MINER_GB = 3
 
 
-def local_miner_enabled(path=None):
+def local_miner_enabled(path=None) -> bool:
     """Whether this box runs the built-in RigForge miner (config.json: local_miner.enabled),
     read live off the same read-only masked-config mount as the worker descriptors below — no
     env plumb, and a dashboard toggle moves the floor without a container restart. A missing or
