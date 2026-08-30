@@ -247,6 +247,61 @@ class WorkerConfigStoreMixin:
             self.logger.error(f"Worker Config Lookup Error: {e}")
             return True  # fail toward NOT flagging a false rig-edit on a DB read hiccup
 
+    def note_worker_revision(self, worker: str, meta: dict | None) -> dict | None:
+        """Record the config revision ``worker`` is serving NOW and report an edit that nothing
+        recorded (#1551) — the one door #1542 leaves open.
+
+        Takes the ALREADY-VALIDATED meta from ``client/rig_config_meta.parse_config_meta``, never a
+        raw rig body: parsing a remote feed is the client layer's job, and this stays a store.
+
+        Read-then-write under the one ``_db_lock``, in a single method, because the comparison IS
+        the read: two polls of the same rig interleaving a read and a write would both see the same
+        "previous" and one of the two moves would go unreported. Same handle, same lock, same
+        transaction scope as every other accessor here (#1369).
+
+        Returns ``None`` for the ordinary case — nothing to compare (a rig seen for the first time,
+        or one serving no revision), a revision that has not moved, or a move that WAS recorded.
+        A dict ``{worker, before, after}`` means the rig's config changed with no new
+        ``last_change_id`` beside it: a hand-edit underneath RigForge, which moves the revision and
+        stamps nothing, so neither #1345's provenance line nor #1367's ``config_drift`` can see it.
+
+        It fails CLOSED like ``get_worker_config_change``: any read/write error returns ``None`` and
+        accuses nobody. A missed detection is a poll's delay — the next poll compares against the
+        same stored row, because a failed write leaves it unchanged — whereas a false accusation is
+        a permanent audit row naming an operator's rig for something it did not do.
+        """
+        revision = (meta or {}).get("revision")
+        if not worker or not revision:
+            return None
+        last_change_id = meta.get("last_change_id")
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return None
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT revision, last_change_id FROM worker_config_revision WHERE worker = ?",
+                    (worker,),
+                )
+                row = cursor.fetchone()
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO worker_config_revision "
+                    "(worker, revision, last_change_id, ts) VALUES (?, ?, ?, ?)",
+                    (worker, revision, last_change_id, time.time()),
+                )
+                self._conn.commit()
+        except sqlite3.Error as e:
+            self._db_error("Worker Revision Write Error", e)
+            return None
+        if row is None or row["revision"] == revision:
+            return None
+        # The revision moved. A new last_change_id beside it means something DID record the change
+        # (ours via #185, or a rig-local apply #530 already flags), so only an unchanged id — including
+        # None on both sides, a rig that has never recorded one — is the case nothing else can see.
+        if row["last_change_id"] != last_change_id:
+            return None
+        return {"worker": worker, "before": row["revision"], "after": revision}
+
     def get_last_applied_worker_config(self, worker: str) -> dict[str, Any]:
         """The merged writable config the dashboard last successfully applied to ``worker`` — the
         best prefill for the editor, since the rig's enriched feed does not expose the writable config
