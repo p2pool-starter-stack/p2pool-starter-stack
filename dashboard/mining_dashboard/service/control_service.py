@@ -250,7 +250,7 @@ def env_key_config_paths(env_key):
     return EDITABLE_ENV_KEY_PATHS.get(env_key, ())
 
 
-def _load_core_keys():
+def _load_core_keys() -> list:
     """The wizard's core-key shortlist (#502/#529), read from the SAME file ``./pithead setup``
     reads — the one shared artifact, not a second hand-maintained list. Degrades to an empty list
     on a missing/unreadable/malformed file, matching the reference-merge fallback below."""
@@ -387,7 +387,7 @@ def validate_worker_changes(changes):
     return ""
 
 
-def result(rid):
+def result(rid) -> dict | None:
     """The runner's result for ``rid``, or None while pending. The id is validated as a UUID
     before it touches a path (it arrives from a query param)."""
     rid = str(uuid.UUID(rid))

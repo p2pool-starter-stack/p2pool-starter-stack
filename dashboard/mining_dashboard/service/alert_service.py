@@ -787,7 +787,7 @@ class AlertService:
     def _fmt(self, text):
         return f"[{self.host_label}] {text}" if self.host_label else text
 
-    async def process(self, **signals):
+    async def process(self, **signals) -> list[tuple[str, str]]:
         """Evaluate this cycle's signals and dispatch any alerts to every sink that carries
         them (#380). Near-no-op when every sink is disabled — except the payout-wallet baseline
         (#375), which must persist every cycle regardless: the dashboard's 72h tamper banner
@@ -894,7 +894,7 @@ class AlertService:
                 await asyncio.to_thread(sink.send, text)
         return text
 
-    async def maybe_daily_summary(self, now, summary_provider):
+    async def maybe_daily_summary(self, now, summary_provider) -> str | None:
         """Push a once-daily status digest at the configured local time.
 
         ``summary_provider()`` builds the digest text and is called **only when a send is actually
