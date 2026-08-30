@@ -60,11 +60,30 @@ class MoneroWalletClient:
         except ValueError:
             logger.error(f"wallet-rpc {method} returned a non-JSON body")
             return None
+        # A JSON body is not necessarily a JSON OBJECT. An array, string, number or null parses
+        # cleanly and then dies below — at the membership test for a number or null, at the `.get`
+        # for an array or string — a raise, where the docstring above promises None (#1592).
+        if not isinstance(data, dict):
+            logger.error(
+                f"wallet-rpc {method} returned a JSON {type(data).__name__}, not an object"
+            )
+            return None
         # monero-wallet-rpc reports errors as a top-level "error" object, not an HTTP status.
         if "error" in data and data["error"]:
             logger.warning(f"wallet-rpc {method} error: {data['error']}")
             return None
-        return data.get("result") or {}
+        result = data.get("result")
+        if result is None:
+            return {}  # the call succeeded and carried no result — an empty answer, not an error.
+        if not isinstance(result, dict):
+            # A truthy non-dict `result` used to be handed straight back, escaping the annotation
+            # above as a returned VALUE rather than as an exception — and then raising one level up
+            # in `get_confirmed_payouts`, whose own docstring says it never raises (#1592).
+            logger.warning(
+                f"wallet-rpc {method} returned a {type(result).__name__} result, not an object"
+            )
+            return None
+        return result
 
     def get_confirmed_payouts(self, min_height=0):
         """Return confirmed incoming transfers at or above ``min_height`` as normalized dicts.
@@ -92,7 +111,20 @@ class MoneroWalletClient:
         if result is None:
             return []
         payouts = []
-        for t in result.get("in", []) or []:
+        # `in` is the wallet's word for its own payload shape, and the same "never raises" promise
+        # covers it. A non-list `in` was iterated anyway — a dict yields its KEYS, a string its
+        # CHARACTERS, and both then died at `.get` below; a number raised on the `for` itself
+        # (#1592). Refuse the payload rather than the poll: `[]` is what every other failure here
+        # returns, and the caller cannot distinguish it from "no payouts" in any case.
+        rows = result.get("in") or []
+        if not isinstance(rows, list):
+            logger.warning(
+                f"wallet-rpc get_transfers sent a {type(rows).__name__} 'in', not a list"
+            )
+            return []
+        for t in rows:
+            if not isinstance(t, dict):
+                continue  # a non-object transfer is unusable — the same skip as the two below
             txid = t.get("txid")
             amount = t.get("amount")
             if not txid or amount is None:

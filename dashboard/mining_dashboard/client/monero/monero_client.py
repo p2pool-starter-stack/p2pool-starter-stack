@@ -58,6 +58,14 @@ class MoneroClient:
             logger.error("monerod get_info returned a non-JSON body")
             return None
 
+        # A JSON body is not necessarily a JSON OBJECT. An array, string, number or null parses
+        # cleanly and then dies at the first `.get` below — a raise, where the signature and the
+        # docstring above both promise None (#1592). Route it to the unreachable channel, which is
+        # what `get_sync_status` already degrades on.
+        if not isinstance(data, dict):
+            logger.error(f"monerod get_info returned a JSON {type(data).__name__}, not an object")
+            return None
+
         # get_info embeds its own status string; anything other than OK (e.g. "BUSY")
         # means the heights aren't trustworthy yet.
         status = data.get("status")
