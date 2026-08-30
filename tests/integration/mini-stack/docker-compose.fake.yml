@@ -90,6 +90,13 @@ services:
     ports: ["28081:18081"]   # 28081 on the host (avoids a real monerod's 18081), → 18081 inside
     volumes: ["../fakes:/fakes:ro"]
 
+  # Read by the DASHBOARD's Tari client and nothing else here (TARI_GRPC_ADDRESS above; the runner
+  # flips this fake's mode over the control port to drive the sync gate). p2pool's OWN merge-mining
+  # gRPC — the leg that makes Tari pay — is NOT exercised in this stack and cannot be: the p2pool
+  # below is a busybox stand-in, and the real p2pool builds no merge-mining client until its Monero
+  # block-header download completes, so a fake would have to re-implement a synced monerod to be
+  # reached at all (#1397, measured at p2pool v4.18's source). That leg lives at tier 4 only —
+  # `assert_mergemine_roundtrip` in mergemine-probe.sh, which carries the measurement.
   fake-tari:
     image: *fake_image
     container_name: itest-fake-tari
