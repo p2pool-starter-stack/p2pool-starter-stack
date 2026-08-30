@@ -131,8 +131,9 @@ structurally cannot.
 - `make test-inventory` writes a generated (git-ignored) coverage list you can read locally — handy
   for seeing what already exists before you add a test.
 - Secrets: never print tokens, creds, or onions. The harness redacts artifacts and hashes secrets
-  on the box. If you add a secret-bearing field, confirm `redact()` covers it (there's a self-test
-  for the patterns).
+  on the box. If you add a secret-bearing field to `config.reference.json`,
+  `tests/integration/selftest-redact.sh` fails until you classify it — either `redact()` covers it,
+  or the file records why it is safe to keep.
 
 ## Gotchas learned on real hardware
 

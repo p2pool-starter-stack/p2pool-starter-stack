@@ -75,5 +75,123 @@ assert_contains "a sha256 digest survives" "$OUT" "$SHA"
 assert_contains "a non-secret KEY=value survives" "$OUT" "HOST_IP=box.lan"
 assert_contains "a non-secret flag value survives" "$OUT" "--merge-mine tari://node:18142"
 
+echo "== redact: the JSON shape, keyed on the field name (#1587) =="
+# #1582 was the argv shape. This is the JSON one, and it could not be fixed the same way: a
+# view key and a container digest are both 64 hex characters, so nothing in the VALUE separates
+# them. The rule is therefore keyed on the field NAME's suffix — the opposite of the argv fix,
+# deliberately, because that case had a usable value shape and this one does not.
+#
+# The population below is DERIVED from config.reference.json rather than listed here, so a
+# sensitive field added to the schema later cannot quietly go uncovered. The screen that selects
+# it is deliberately BROADER than redact()'s own list: if the two lists were the same, this file
+# would be green by construction — the exact defect #1582 was found by.
+REF="$(cd "$HERE/../.." && pwd)/config.reference.json"
+
+# Hand-classified, and the classification is the judgement this test encodes. A field the screen
+# picks up that appears in NEITHER list fails below by name, so the schema cannot drift past it.
+MUST_REDACT="monero.wallet_address monero.node_username monero.node_password monero.view_key
+tari.wallet_address tari.view_key tari.spend_public_key p2pool.stratum_password xvb.donor_id
+xmrig_proxy.donor_id dashboard.auth.username dashboard.auth.password workers.api_token
+ssh.authorized_key healthchecks.ping_url telegram.bot_token notifications.ntfy.token"
+# Survivors, each for a stated reason — over-redaction is safe for secrets and not for anything
+# else: a bundle with its endpoints stripped is useless for the debugging it exists for.
+#   xvb.url / xmrig_proxy.url  public service endpoints
+#   workers.api_auth           an auth MODE string ("token"/"none"), not a credential
+#   telegram.chat_id           a routing id, not a secret
+MUST_SURVIVE="xvb.url xmrig_proxy.url workers.api_auth telegram.chat_id"
+# ⛔ NOT a survivor on merit. `notifications.ntfy.url` IS a capability URL and ought to be
+# redacted; a line-wise filter cannot reach it, because the key is the bare word "url" and only
+# its NESTING distinguishes it from xvb.url. Asserted at its CURRENT behaviour so the gap is
+# stated rather than hidden — when someone closes it, this line fails and moves to MUST_REDACT.
+KNOWN_GAP="notifications.ntfy.url"
+
+SENTINEL="S3nt1nelVALUE" # short, alphanumeric: reachable by the NAME rule and by no other
+SCREENED="$(
+    python3 - "$REF" <<'PY'
+import json, re, sys
+
+# INVARIANT: this screen must be a SUPERSET of redact()'s JSON name list, or a field carrying
+# that suffix is never classified and the drift alarm above cannot fire for it. `wallet` is here
+# for exactly that reason — it is in redact() and is reachable by no other alternative.
+SCREEN = re.compile(r"(password|passwd|secret|token|login|username|key|wallet|address|seed"
+                    r"|mnemonic|credential|url|auth|_id)$")
+
+
+def walk(node, path=""):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from walk(v, f"{path}.{k}" if path else k)
+    elif isinstance(node, list):
+        for v in node:
+            yield from walk(v, path + "[]")
+    else:
+        yield path, node
+
+
+for path, value in walk(json.load(open(sys.argv[1], encoding="utf-8"))):
+    if isinstance(value, str) and SCREEN.search(path.split(".")[-1]):
+        print(path)
+PY
+)"
+[ -n "$SCREENED" ] || it_fail "screen over config.reference.json returns fields" "empty population"
+
+# Word-splitting, not a `case` glob: the lists above wrap across lines, and a space-delimited
+# haystack silently misses every entry sitting next to a newline.
+in_list() { # <field> <list>
+    local needle="$1" item
+    for item in $2; do [ "$item" = "$needle" ] && return 0; done
+    return 1
+}
+
+for field in $SCREENED; do
+    key="${field##*.}"
+    out="$(printf '  "%s": "%s",\n' "$key" "$SENTINEL" | redact)"
+    if ! in_list "$field" "$MUST_REDACT $MUST_SURVIVE $KNOWN_GAP"; then
+        it_fail "config.reference.json field $field is classified" \
+            "new sensitive-looking field — add it to MUST_REDACT or MUST_SURVIVE with a reason"
+        continue
+    fi
+    if in_list "$field" "$MUST_REDACT"; then
+        case "$out" in
+        *"$SENTINEL"*) it_fail "$field redacted in JSON" "raw value survived: $out" ;;
+        *) it_pass "$field redacted in JSON" ;;
+        esac
+        continue
+    fi
+    # The gap gets a label that cannot be misread as approval. A green row saying a secret-bearing
+    # field "survives redaction" is exactly the confidence this file exists to refuse.
+    if in_list "$field" "$KNOWN_GAP"; then
+        assert_contains "KNOWN GAP (#1587) — $field is NOT redacted and should be" "$out" "$SENTINEL"
+        continue
+    fi
+    assert_contains "$field survives redaction" "$out" "$SENTINEL"
+done
+it_warn "KNOWN GAP (#1587): $KNOWN_GAP is a capability URL and is NOT redacted — nesting is invisible to a line-wise filter"
+
+# A value containing an escaped quote must be replaced WHOLE. A pattern stopping at the first
+# quote would leave the tail behind, which is the partial-redaction failure this file exists for.
+OUT="$(printf '  "node_password": "ab\\"%s",\n' "$SENTINEL" | redact)"
+case "$OUT" in *"$SENTINEL"*) it_fail "escaped quote inside a secret value" "tail survived: $OUT" ;; *) it_pass "escaped quote inside a secret value" ;; esac
+
+# Measured read-only against the live stack: `api-state.json` carries both wallet addresses, and
+# it carries them under the leaf key `wallet` — not under a secret-sounding name. Before the name
+# rule they were reached only by the >=90 length bar, which is the coincidence #1587 objects to.
+# A SHORT value under that key is what discriminates: no other rule in redact() can reach it.
+SHORTWALLET="4ShortNotAnAddress"
+OUT="$(printf '{"stratum":{"wallet":"%s"},"tari":{"wallet":"%s"}}\n' "$SHORTWALLET" "$SHORTWALLET" | redact)"
+case "$OUT" in *"$SHORTWALLET"*) it_fail "a short value under a \"wallet\" key is redacted by NAME" "value survived: $OUT" ;; *) it_pass "a short value under a \"wallet\" key is redacted by NAME" ;; esac
+
+# `passwd`, `secret` and `login` have no field in today's schema, so the derived population
+# above cannot exercise them. They are forward cover, mirroring the flag-value rule's word list —
+# and an unexercised pattern is one typo away from being dead, so they get an explicit case.
+OUT="$(printf '{"passwd":"%s","client_secret":"%s","rpc_login":"%s"}\n' "$SENTINEL" "$SENTINEL" "$SENTINEL" | redact)"
+case "$OUT" in *"$SENTINEL"*) it_fail "the spellings passwd/secret/login redact, though no schema field uses them" "value survived: $OUT" ;; *) it_pass "the spellings passwd/secret/login redact, though no schema field uses them" ;; esac
+
+# Compact JSON on one line — api-state.json is not pretty-printed, and a per-line filter has to
+# replace every occurrence on that line, not just the first.
+OUT="$(printf '{"username":"%s","mode":"local","view_key":"%s","port":18081}\n' "$SENTINEL" "$SENTINEL" | redact)"
+case "$OUT" in *"$SENTINEL"*) it_fail "compact JSON: both secrets on one line" "value survived: $OUT" ;; *) it_pass "compact JSON: both secrets on one line" ;; esac
+assert_contains "compact JSON: non-secret neighbours survive" "$OUT" '"mode":"local"'
+
 echo "selftest-redact: $IT_PASS passed, $IT_FAIL failed"
 [ "$IT_FAIL" -eq 0 ] || exit 1

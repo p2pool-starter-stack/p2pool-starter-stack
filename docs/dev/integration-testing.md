@@ -67,14 +67,16 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   suggests**, and the gap is worth knowing before you trust a bundle. It reaches: a `KEY=value`
   line whose name ends in `_PASSWORD` / `_TOKEN` / `_SECRET`; a credential given as a flag value;
   a v3 onion; and any opaque run of 90 or more characters, which is what catches wallet addresses
-  (and a sha512 with them). **It does not reach JSON at all** — `"key": "value"` has neither an
-  `=` nor a `--` — so the bundle's verbatim `config.json` still carries six of its eight sensitive
-  fields, key material among them:
-  [#1587](https://github.com/p2pool-starter-stack/pithead/issues/1587). The two fields that *do*
-  redact there are addresses long enough to trip the length rule, which is a coincidence rather
-  than the redactor understanding JSON.
+  (and a sha512 with them); and a JSON `"key": "value"` whose key ends in one of a list of secret
+  words — `password`, `token`, `key`, `username`, `wallet` and the rest.
   [#1582](https://github.com/p2pool-starter-stack/pithead/issues/1582) closed the flag-value and
-  address-shape gaps only.
+  address-shape gaps; [#1587](https://github.com/p2pool-starter-stack/pithead/issues/1587) added
+  the JSON one. **That last rule is keyed on the field NAME, not the value, and that is forced**:
+  a view key and a container digest are both 64 hex characters, so nothing in the value separates
+  them. **The name list is open, and one field is still out of reach** — `notifications.ntfy.url`
+  is a capability URL whose key is the bare word `url`, which only its nesting separates from the
+  public `xvb.url`, and a line-wise filter cannot see nesting. The self-test states that gap
+  rather than hiding it.
 - Continue-on-error. A failing assertion doesn't abort the run. The whole matrix is collected
   and summarized, with per-scenario artifacts for the failures.
 
@@ -655,12 +657,14 @@ Several self-tests sit beside it as standalone files, picked up by the same glob
 `selftest-skip-accounting.sh` is the one that keeps the skip accounting honest: besides checking
 the counters and the real `summary()`, it censuses every harness file and fails if a skip leaves
 through a bare `it_warn` — by wording, and by shape for the drops that never say "skipping".
-`selftest-redact.sh` covers the two shapes the redactor used to miss — a credential passed as a
-flag value, and a wallet address in JSON — and asserts in each case that the *raw* value is gone
-rather than that a `<redacted>` marker appeared, since a marker can come from some other field on
-the same line. It also guards the other direction: a sha256 digest and a non-secret flag value
-must survive, because an artifact with its image pins stripped is useless for the triage it exists
-for.
+`selftest-redact.sh` covers the shapes the redactor used to miss — a credential passed as a flag
+value, and secrets in JSON — and asserts in each case that the *raw* value is gone rather than
+that a `<redacted>` marker appeared, since a marker can come from some other field on the same
+line. Its JSON population is derived from `config.reference.json` rather than listed in the file,
+under a screen deliberately wider than the redactor's own list, so a sensitive field added to the
+schema fails the test by name until someone classifies it as redacted or as a stated survivor. It
+also guards the other direction: a sha256 digest and a non-secret flag value must survive, because
+an artifact with its image pins stripped is useless for the triage it exists for.
 `selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures, so
 every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
 READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack.
