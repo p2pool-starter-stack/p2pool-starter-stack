@@ -1,5 +1,7 @@
-"""#1556's pin data: which modules are pinned, what anchors each one, and which `unjudged`
-functions inside them somebody read and signed off on.
+"""#1556's pin data: which modules are pinned, and what anchors each one.
+
+The read exceptions moved out at slice 12 and now live in `annotation_readings.py`, with the
+reading for each entry beside it; that file's docstring carries the reason for the second split.
 
 Nothing here is a test and nothing here asserts anything. The three laws and the vacuity guards
 that read this data live in `test_annotation_coverage.py`, and so does the argument for the pin —
@@ -10,8 +12,8 @@ this one only holds what the laws run over.
 ## Why the data is a separate module
 
 The pin grows by construction. Every slice of #1556 adds a row to `PINNED` and a row to
-`_ANCHORS`, and a slice that reads an `unjudged` function adds an entry to `_UNJUDGED_AND_READ`
-with the reading beside it. Held in the test file, that growth ran straight into
+`_ANCHORS`, and a slice that reads an `unjudged` function adds an entry to the set that is now in
+`annotation_readings.py`. Held in the test file, that growth ran straight into
 `docs/dev/file-budget.tsv`, whose ceilings only ever go down: at slice 6 the file was 592 lines
 against a recorded ceiling of 579, with 8 of 33 modules still unpinned. Raising the ceiling was
 refused — 579 against a 400 target is already 1.45x, and `--generate` rewrites every row to the
@@ -22,32 +24,45 @@ So the split is the third answer, and the rule it implements is: the part that g
 part that is budgeted. This module is under the 400-line target and therefore records no ceiling
 at all. If it ever crosses 400 that is the moment to re-read the split, not to raise a number.
 
+That moment arrived at slice 12, which is what `annotation_readings.py` is. This file stood at
+exactly 400 lines and slice 12 owed two more readings than would fit, so the sentence above was
+honoured rather than argued with: the read exceptions left with their readings, and no row was
+added to `docs/dev/file-budget.tsv`. The split was cut between two datasets and never between an
+entry and its argument, which is the constraint the paragraph below states.
+
 The cost was priced and accepted: the data now sits one file away from the laws that read it. The
 argument for each entry travels WITH the entry — the comments below moved here from the test file
-along with the values they explain — so the split is between data and laws, never between an
-entry and its justification. Three sentences changed in the move and only three: two that said
+along with the values they explain, and the read exceptions moved on again at slice 12 with theirs
+— so the split is between data and laws, never between an entry and its justification. Of that
+FIRST move, three sentences changed and only three: two that said
 "wearing this file's name" while meaning the pin's, and one that pointed at a test class as
 "below" when it is now in the sibling file.
 
-## The names keep their leading underscores
+## The name keeps its leading underscore
 
-`_ANCHORS` and `_UNJUDGED_AND_READ` are imported by name, which is what a leading underscore
-usually argues against. They keep it for two reasons. The underscore states their real scope:
-they exist for `test_annotation_coverage.py`'s laws, and nothing else may read them. And two
-docstrings in that file quote `_UNJUDGED_AND_READ` by name while arguing why law 2 is shaped as
-it is — `_unsigned_unjudged_under`'s account of the mutation that survived a count-based form,
-and the narrowness control's — so a rename would have falsified prose in the same commit that
+`_ANCHORS` is imported by name, which is what a leading underscore usually argues against. It
+keeps it because the underscore states the real scope: it exists for
+`test_annotation_coverage.py`'s vacuity guard, and nothing else may read it. The same reasoning
+kept `_UNJUDGED_AND_READ`'s underscore when that set moved to `annotation_readings.py`, and there
+it is load-bearing rather than tidy — two docstrings in the test file quote that name while
+arguing why law 2 is shaped as it is, so a rename would falsify prose in the same commit that
 moved the data, which is the failure the pin comment below records happening twice already.
 """
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
 # adds the module it finished, and a module holding more than one is pinned only once EVERY one of
 # its failure returns has been annotated and read. Which slice took which module is in #1556 and in
-# git, not here. Measured at this tip: 32 of 33 modules that hold a failure return at all. **2
-# failure returns are still blind**, both in `service/clearnet_sync.py` and both through the
-# `except` door — the handle-guard population closed at slice 8. That last clause is a measurement
-# and not a reading the walk could not contradict: `guard` is a door the walk still reports 31
-# times package-wide.
+# git, not here. Measured at this tip: **33 of the 33 modules that hold a failure return at all**,
+# and **`blind` is EMPTY package-wide**. Slice 12 took the last two, both in
+# `service/clearnet_sync.py` and both through the `except` door — the handle-guard population
+# closed at slice 8. That last clause is a measurement and not a reading the walk could not
+# contradict: `guard` is a door the walk still reports 31 times package-wide.
+#
+# A pinned set covering every module that holds a failure return is NOT a fully annotated package,
+# and with `blind` empty the two are easy to read as one. What closed is scoped to the gate's two
+# doors. Falsy returns from functions declaring no return type sit outside both, inside pinned
+# modules, in a number `TestTheResidueThePinCannotRuleOn` prints — deliberately not copied here,
+# because a slice falsifies a copy while the printer cannot go stale.
 #
 # Every figure above is re-derived at the head being shipped, never carried across a slice: 5b moved
 # this tuple from 18 to 21 and left the sentence beside it saying 18. A slice adds rows to a tuple
@@ -147,8 +162,9 @@ moved the data, which is the failure the pin comment below records happening twi
 #     the out-of-band answer, distinguishable from every success value, which is what `signed`
 #     means. The annotation moves a promise the code already kept into the signature.
 #
-# `is_ip_address` is the `unjudged` one and its reading is filed with its entry below rather than
-# here, so that the argument travels WITH the value the way every other entry in this file does.
+# `is_ip_address` is the `unjudged` one and its reading is filed with its entry in
+# `annotation_readings.py` rather than here, so that the argument travels WITH the value the way
+# every entry in both files does.
 #
 # Both functions were proven bytecode-identical base-vs-head, with a seeded `return True` ->
 # `return False` inside `is_ip_address` as the positive control: it flipped that function and ONLY
@@ -226,6 +242,37 @@ moved the data, which is the failure the pin comment below records happening twi
 # So the claim is scoped to the instrument that makes it — no unannotated failure return **that
 # this gate can see**. A pin is coverage of a mechanism, never a certificate about a package.
 #
+# Slice 12 is `service/clearnet_sync.py`, and it is the LAST one. At its head `classify` returns an
+# EMPTY `blind` list over the whole package, which is the state #1556 was opened to reach: every
+# failure return the gate's two doors can see now declares a type. Its two functions are
+# `_marker_exists` and `_write_marker` — both class methods, both through the `except` door, both
+# returning `False` — and both were MEASURED into `unjudged` after annotating rather than predicted
+# into it. That makes this the first slice since 9 to owe a written reading and the first ever to
+# owe two; both are in `annotation_readings.py` beside their entries.
+#
+# It is also the first slice whose blind pair SHARES a verdict. Slices 9, 10 and 11 each split
+# across two, and the note above saying not to expect a shared one was right for them; it stops
+# being a rule here. What makes this pair share is that neither reaches `signed` — not that either
+# was signed — so nothing about the earlier reasoning is overturned by it.
+#
+# The anchor is `_write_marker`, and this is the first module where the standing rule could NOT be
+# followed. "Anchor where the other guard is not" is unsatisfiable here: `_rows_under` finds exactly
+# TWO rows for this module and both are `unjudged`, so whichever one is named is already held alive
+# by `_UNJUDGED_AND_READ`'s own vacuity guard, and the anchor guards it a second time. That is
+# measured, not assumed — `maybe_transition` returns `False` twice but through NEITHER door, so the
+# walk emits no row for it and it cannot serve as the anchor. Of the two that can, `_write_marker`
+# is the one whose silent exit from the walk would cost most, on the ground `add_block` was chosen
+# for `storage_service.py`: the class's fail-safe turns on it, since the marker must be on disk
+# before any restart.
+#
+# What slice 12 does NOT do is make law 1 a statement about the package. Law 1 quantifies over
+# `PINNED`, so a NEW module arriving with an unannotated failure return is outside it, and an empty
+# `blind` list does not change that. The gap is closed in the sibling file rather than here:
+# `test_collapsed_return_channels.py`'s blind-spot measurement was written to red the day this set
+# emptied — "if it collapses to zero the package became fully annotated and the gate's reach grew —
+# both worth a deliberate look" — and slice 12 is that day. It now asserts the EMPTY set instead of
+# the non-empty one, which is a law over the whole package that no per-module pin can be.
+#
 # **Only ever add a module you have read.** Adding one because the gate happens to score it clean
 # is the baseline #1487 refused, wearing the pin's name.
 PINNED = (
@@ -244,6 +291,7 @@ PINNED = (
     "service/telegram_notifier.py",
     "service/alert_service.py",
     "service/audit_service.py",
+    "service/clearnet_sync.py",
     "service/control_service.py",
     "service/data_helpers.py",
     "service/egress.py",
@@ -274,7 +322,8 @@ PINNED = (
 # `add_xvb_history` is simply the first declared — recorded so nobody hunts for a reason.
 # `helper/utils.py` names `detect_host_ipv4` on a stronger ground than "either would do": that
 # module's other candidate, `is_ip_address`, is ALREADY held alive by the separate vacuity guard on
-# `_UNJUDGED_AND_READ`, which requires every entry to still exist and still score `unjudged`.
+# `_UNJUDGED_AND_READ` (`annotation_readings.py`), which requires every entry to still exist and
+# still score `unjudged`.
 # Anchoring here on `is_ip_address` would guard one function twice and leave the `signed` one
 # guarded by nothing but law 1's aggregate — which a vanished module satisfies perfectly. The
 # anchor goes where the other guard is not.
@@ -296,6 +345,7 @@ _ANCHORS = {
     "service/telegram_notifier.py": "service/telegram_notifier.py:send",
     "service/alert_service.py": "service/alert_service.py:process",
     "service/audit_service.py": "service/audit_service.py:_tail_json_lines",
+    "service/clearnet_sync.py": "service/clearnet_sync.py:_write_marker",
     "service/control_service.py": "service/control_service.py:result",
     "service/data_helpers.py": "service/data_helpers.py:_read_host_config",
     "service/egress.py": "service/egress.py:_sinks_all_private",
@@ -314,87 +364,3 @@ _ANCHORS = {
     "web/views.py": "web/views.py:read_os_update_state",
     "web/xvb_views.py": "web/xvb_views.py:recent_wallet_change",
 }
-
-
-# The `unjudged` functions inside a pinned module that have been READ, one entry per function.
-# `unjudged` means the #1487 gate declines to rule: the function is annotated but declares no
-# out-of-band marker, and its failure value is outside the `_EMPTY` set that gate measures.
-#
-# This list records that a human read the function; it does NOT certify the design, and nothing
-# here may be added because the gate happened to score it this way — that is the baseline #1487
-# refused, wearing the pin's name. `worker_config_change_known` returns `False` on a closed
-# handle and its docstring argues the fail-open choice at length, including why it must answer the
-# same for a closed handle and a `sqlite3.Error` while its sibling must not. That reading, not the
-# gate's score, is what the entry stands for.
-#
-# `config/config.py:local_miner_enabled` (slice 4) is the third, and the first member that is NOT
-# an outbound sender — so it deliberately does not lean on the grounds `annotation_gate._EMPTY`
-# records (see #1599: measured at `b0a32bd`, the tip that comment was written against, TWELVE
-# functions already held a `False` failure return and this was one of them, so its five senders
-# were a subset somebody read, never the whole population). No member is waved through by that
-# class; each is read on its own terms. It returns False when
-# the masked-config mount is missing or unreadable, and its docstring argues the choice outright:
-# DIY stacks without the mount never run the built-in miner. Its sole production caller is
-# arithmetic — `config.py:low_ram_floor_gb` does `+ (LOW_RAM_LOCAL_MINER_GB if
-# local_miner_enabled() else 0)` — so there is no third branch for an out-of-band answer to reach,
-# and False-on-failure and False-because-no-miner move the RAM floor by exactly the same amount.
-# `-> bool | None` would invent a return the function never makes.
-# Slice 5a adds the four OUTBOUND SENDERS as a group, and the shared argument is precisely why
-# they could be read as one: each returns True only when the send demonstrably landed, and False
-# for every other outcome — disabled, throttled, a non-2xx, or an exception. Every caller acts on
-# "the message did not go out", which is what all of those mean, so there is no out-of-band case
-# to declare and `-> bool | None` would invent a return none of them makes. The grouping has to be
-# EARNED, so each was confirmed to be that shape rather than admitted by it:
-#   `notify_sinks.py:_post`     — False when `not self.enabled`, and on `RequestException`.
-#   `telegram_notifier.py:send` — the same two, and its docstring states the contract outright.
-#   `tor_heal.py:_probe_egress` — True iff a clearnet exit answered, False on `RequestException`.
-#   `healthchecks.py:ping`      — a dead-man's switch, and the only one with TWO `except` handlers,
-#     both returning False. Its docstring already enumerates the False cases (not configured,
-#     throttled, request failed, endpoint rejected) as deliberately one answer.
-#   `docker/docker_control.py:_post` (slice 2) is the same class and is folded in here: True only
-#     on HTTP 204/304, False on every other status and any exception, and its callers act on "the
-#     container action did not happen", which is what both False paths mean.
-#
-# Slice 5b adds two MORE, listed separately rather than folded into the group above, because they
-# fail in OPPOSITE directions — which is why `service/` was split rather than taken whole:
-#   `egress.py:_sinks_all_private` is FAIL-CLOSED. False means "assume public", DENYING the LAN
-#     carve-out; its docstring gives the reason (a hostname cannot be verified without a DNS
-#     lookup, which a pure config derivation must never do), so False-on-ValueError and
-#     False-because-genuinely-public are one instruction: do not grant it.
-#   `steering_projection.py:won_round_live` is FAIL-OPEN by design. False means steer normally —
-#     the hold is a yield optimization, never a safety path, so a read error must not freeze
-#     steering. Collapsing these two readings into one would be the bulk-fill this list refuses:
-#     same shape, opposite safety argument. Neither reaches `signed` without inventing a return.
-#
-# Slice 9 adds `helper/utils.py:is_ip_address`, and it is the first member whose `except` handler
-# is not an ERROR PATH at all — which is the whole reason it is readable rather than a collapse.
-# `ipaddress.ip_address` communicates "this is not an address" by RAISING `ValueError`, so the
-# handler is where the function's negative answer is computed, not where a failure is absorbed.
-# `AttributeError` is the same answer arriving by a second route: `value.strip()` raises it when
-# `value` is not a string, and a non-string is not an IP address either. So both handled cases and
-# the `False` they return mean one thing — "not a literal IP" — and there is no third outcome for
-# an out-of-band value to carry. `-> bool | None` would invent a return the function never makes.
-#
-# The sole production caller agrees, and was read rather than assumed: `web/views.py`'s
-# `host_display_addr` does `if is_ip_address(host): return None`, i.e. "the configured host is
-# already an address, so show it alone". On False it falls through and tries `detect_host_ipv4()`.
-# A malformed or `None` host takes the False branch, which is correct there for the same reason —
-# it is not an address, so there is something worth trying to add beside it. No caller branch
-# exists that a third answer could reach.
-#
-# What this entry does NOT claim: that `False` is the right answer for every future caller. It is
-# a reading of the two paths that exist at this head, which is all any entry in this list is.
-_UNJUDGED_AND_READ = frozenset(
-    {
-        "client/docker/docker_control.py:_post",
-        "config/config.py:local_miner_enabled",
-        "service/healthchecks.py:ping",
-        "service/notify_sinks.py:_post",
-        "service/telegram_notifier.py:send",
-        "helper/utils.py:is_ip_address",
-        "service/egress.py:_sinks_all_private",
-        "service/steering_projection.py:won_round_live",
-        "service/tor_heal.py:_probe_egress",
-        "service/worker_config_store.py:worker_config_change_known",
-    }
-)

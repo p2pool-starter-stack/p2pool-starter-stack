@@ -48,13 +48,13 @@ class ClearnetSyncSupervisor:
     def marker_path(self, name):
         return os.path.join(self.state_dir, f"{name}.synced")
 
-    def _marker_exists(self, name):
+    def _marker_exists(self, name) -> bool:
         try:
             return os.path.exists(self.marker_path(name))
         except OSError:
             return False
 
-    def _write_marker(self, name):
+    def _write_marker(self, name) -> bool:
         """Persist the per-chain transition marker. Returns True on success."""
         try:
             os.makedirs(self.state_dir, exist_ok=True)

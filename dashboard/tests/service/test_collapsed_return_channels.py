@@ -68,7 +68,7 @@ on the number (#1556). At `b0a32bd`, the tip this shipped against — **11 colla
 the DB read layer), **5 signed**, **0 half-fixes**, **57 blind**. At `a0ddbec` plus this slice
 (`client/xvb_client.py`) — **11**, **10**, **0**, **52**, since joined by `unjudged` **1** (#1556)
 and `procedure` **3** (#1581) at `17722da` — six, which `classify` asserts are exhaustive. #1556
-annotates the blind layer slice by slice; the flagged count RISES as slices bring collapses in.
+annotated the blind layer slice by slice and CLOSED it at 12; the flagged count rose as it did.
 
 `add_payouts` is worth naming out of the 11, because it shows the class is not academic here: a
 failed INSERT returns `[]`, indistinguishable from "every row was already stored", and that value
@@ -160,11 +160,11 @@ class TestTheResidualIsReportedNotCertified:
                 print(f"    {name}")
 
     def test_the_blind_spot_is_measured_rather_than_described(self, package):
-        """The unannotated layer is this gate's real limit, so it is asserted to be a known
-        quantity rather than left as a sentence in the docstring. If it collapses to zero the
-        package became fully annotated and the gate's reach grew — both worth a deliberate look
-        rather than a silent change in what the green means."""
-        assert package["blind"], "an unannotated layer of zero would change what this gate covers"
+        """The unannotated layer was this gate's real limit and is now EMPTY: #1556's last slice
+        annotated the pair in `service/clearnet_sync.py`. This assertion was written to red on that
+        day rather than let the reach grow in silence, so it IS the deliberate look, taken and then
+        reversed — and it is stronger than the per-module pins, which cannot see a NEW module."""
+        assert package["blind"] == [], f"a failure return went unannotated: {package['blind']}"
 
 
 class TestTheCheckerCanSeeWhatItIsBeingAskedAbout:
