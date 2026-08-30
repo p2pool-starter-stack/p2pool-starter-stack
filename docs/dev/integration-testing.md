@@ -354,12 +354,21 @@ and `--list` prints it).
   written against the rendered text matches nothing at all, silently — a probe that always reports
   an absence looks exactly like a working one until the day it matters. The escapes are stripped
   before matching, and the self-test carries that control fired in both directions: zero matches on
-  the captured bytes, one after stripping. When monerod is not caught up the leg skips rather than
-  fails, counted and classed `by-design`, because p2pool constructs the merge-mining client only
-  after its block-header download succeeds — so the signal cannot exist on an unsynced node, and no
-  input to this harness would create it. Only the matching lines cross the wire, which keeps the
-  container's argv line — carrying both wallet addresses, the RPC credential and the onion — out of
-  the capture.
+  the captured bytes, one after stripping. The capture is read before the caught-up predicate, and
+  that order is itself an assertion ([#1597](https://github.com/p2pool-starter-stack/pithead/issues/1597)). `monero_caught_up` answers with one bit that cannot
+  separate a node that is behind from an RPC that could not be answered at all: its `curl`
+  discards stderr, so an unreachable host, a refused connection and a 401 alike leave the empty
+  body that `jq` reads as not caught up. Asked first, that bit decided the whole leg, and a stack
+  whose merge-mining client was up and reading chain_ids would have been booked as an accepted
+  hole for as long as a credential stayed broken — a state this repo has recorded lasting a day.
+  Any `MergeMiningClientTari` line is itself proof that monerod caught up, since p2pool builds no
+  client until the header download succeeds, so the log settles what the RPC could not. The leg
+  skips only when the window was read and held no such line: p2pool then built no client, the
+  download did not complete, and no input to this harness would create the signal, which is what
+  earns the counted `by-design` class rather than the predicate's bit. Every case the order moves,
+  it moves out of the skip ledger into a pass or a fail, never the other way. Only the matching
+  lines cross the wire, which keeps the container's argv line — carrying both wallet addresses,
+  the RPC credential and the onion — out of the capture.
 - Dashboard reads live state. `/api/state` is reachable; Monero is synced (`done`); pruned/full
   display matches `monero.prune` ([#32](https://github.com/p2pool-starter-stack/pithead/issues/32)); the sidechain `pool.type` matches `p2pool.pool`.
 - The Monero node's ZMQ endpoint is a live ZMTP publisher. A ZMTP handshake against the node's ZMQ
@@ -692,22 +701,21 @@ the counters and the real `summary()`, it censuses every harness file and fails 
 through a bare `it_warn` — by wording, and by shape for the drops that never say "skipping".
 `selftest-redact.sh` covers the shapes the redactor used to miss — a credential passed as a flag
 value, and secrets in JSON under a key of any case — and asserts in each case that the *raw* value
-is gone rather than
-that a `<redacted>` marker appeared, since a marker can come from some other field on the same
-line. Its JSON population is derived from `config.reference.json` rather than listed in the file,
-under a screen deliberately wider than the redactor's own list, so a sensitive field added to the
-schema fails the test by name until someone classifies it as redacted or as a stated survivor. It
-also guards the other direction: a sha256 digest and a non-secret flag value must survive, because
-an artifact with its image pins stripped is useless for the triage it exists for.
-`selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures, so
-every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
-READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack.
-It also covers the truncated and hostile frames that used to end the parser rather than be named
-by it ([#1500](https://github.com/p2pool-starter-stack/pithead/issues/1500)): every length field is read with `16#`, which is fatal on an
-empty string, so a peer that stalled part-way through a header left an interpreter error on stderr
-and an empty verdict. Those cases assert the empty stderr alongside the reason, because the return
-code was already 1 while the bug was live and a case checking only the code would have passed
-against it.
+is gone rather than that a `<redacted>` marker appeared, since a marker can come from some other
+field on the same line. Its JSON population is derived from `config.reference.json` rather than
+listed in the file, under a screen deliberately wider than the redactor's own list, so a sensitive
+field added to the schema fails the test by name until someone classifies it as redacted or as a
+stated survivor. It also guards the other direction: a sha256 digest and a non-secret flag value
+must survive, because an artifact with its image pins stripped is useless for the triage it exists
+for. `selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures,
+so every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
+READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack. It
+also covers the truncated and hostile frames that used to end the parser rather than be named by
+it ([#1500](https://github.com/p2pool-starter-stack/pithead/issues/1500)): every length field is
+read with `16#`, which is fatal on an empty string, so a peer that stalled part-way through a
+header left an interpreter error on stderr and an empty verdict. Those cases assert the empty
+stderr alongside the reason, because the return code was already 1 while the bug was live and a
+case checking only the code would have passed against it.
 
 ---
 

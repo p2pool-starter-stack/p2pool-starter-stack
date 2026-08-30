@@ -112,20 +112,38 @@ mm_capture_startup() {
 
 # The release-gate leg: PASS, FAIL, or an honest counted SKIP — never a silent green.
 #
-# The skip is classed `by-design` rather than `missing` on the skip-accounting test: no input,
-# flag or env var to THIS harness would make the signal exist on an unsynced node, because
-# p2pool does not construct the client at all until the header download completes (cycle 40
-# measured zero Tari gRPC calls across five legs against absent, synced-fake and partial-fake
-# monerods). Covering it means running against a synced chain, not supplying something.
+# THE CAPTURE IS READ BEFORE THE PREDICATE, AND THAT ORDER IS ITSELF AN ASSERTION (#1597).
+# `monero_caught_up` reduces several independent conditions to one bit: its `curl -fsS` discards
+# stderr and leaves the body EMPTY on an unreachable RPC, a refused connection or a 401, and
+# `jq -e` over an empty body answers exactly as it does for a node that is genuinely behind.
+# Asked first, that one bit decided the whole leg — so a stack whose monerod was synced and whose
+# merge-mining client was up and reading chain_ids would have been booked as an ACCEPTED HOLE for
+# as long as the RPC stayed unanswerable. That state is not hypothetical here — `lib.sh`'s
+# env_bake_verdict comment records a day of it; read the incident there, not a second copy of it.
+# The capture answers the question the predicate was standing in for, and answers it from p2pool
+# rather than from the RPC we could not reach: p2pool constructs a MergeMiningClientTari only
+# after its block-header download succeeds, so ANY such line is proof that monerod caught up.
+#
+# The skip stays classed `by-design` rather than `missing` on the skip-accounting test, and
+# reading the capture first is what makes that class honest rather than merely conventional. It
+# is now reached only when the startup window WAS read and held no merge-mining line at all — so
+# p2pool built no client, so the header download did not complete, so no input, flag or env var
+# to THIS harness would make the signal exist (cycle 40 measured zero Tari gRPC calls across five
+# legs against absent, synced-fake and partial-fake monerods). Covering it means running against
+# a synced chain, not supplying something.
+#
+# Every case the reorder moves, it moves OUT of the skip ledger into a pass or a fail; no case
+# that previously passed or failed can become a skip. That direction is the safety argument, and
+# the self-test asserts all three moved cases rather than resting on it.
 assert_mergemine_roundtrip() {
     local lines verdict
-    if ! monero_caught_up; then
-        it_skip_leg "p2pool merge-mining gRPC round-trip (#1397)" \
-            "monerod is not caught up, and p2pool constructs its merge-mining client only after the block-header download succeeds — the signal cannot exist on this run" by-design
-        return 0
-    fi
     if ! lines="$(mm_capture_startup)"; then
         it_fail "p2pool merge-mining gRPC round-trip (#1397)" "could not read p2pool's container start time"
+        return 0
+    fi
+    if [ -z "$lines" ] && ! monero_caught_up; then
+        it_skip_leg "p2pool merge-mining gRPC round-trip (#1397)" \
+            "p2pool built no merge-mining client and monerod could not be confirmed caught up — p2pool constructs the client only after the block-header download succeeds, so the signal cannot exist on this run" by-design
         return 0
     fi
     verdict="$(mm_roundtrip_verdict "$lines")"
