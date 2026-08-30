@@ -71,7 +71,11 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   `KEY=value` side uppercase-only because `.env` is generated uppercase throughout; a credential
   given as a flag value; a v3 onion; any opaque run of 90 or more characters (and a sha512 with
   them); the token after `--wallet` and the one after `--merge-mine`'s URI, by POSITION; and a
-  globally-routable IP address, by SCOPE. What it keeps is exactly the set
+  globally-routable IP address, by SCOPE. The IP rule protects the reserved ranges by mangling one
+  dot to a `\x01` sentinel and restoring it at the end, and it neutralises any sentinel already in
+  the input before doing so ([#1613](https://github.com/p2pool-starter-stack/pithead/issues/1613)):
+  without that step the closing restore ran after every rule, so a `\x01` sitting inside what would
+  otherwise be a public quad came out as a dotted, routable address that no rule had inspected. What it keeps is exactly the set
   `is_public_ip` calls private — loopback, RFC1918, link-local and CGNAT — because an artifact whose
   port map and container addresses have been stripped cannot be triaged, and because holding the two
   lists identical is what makes the coverage argument checkable rather than anecdotal.
@@ -734,7 +738,10 @@ opening with a 2 supplies the first hextet and the clock supplies the colon grou
 for 278 of the 280 lines the first draft of the IP rule changed across two captured bundles, and
 `lint-topology` makes the same reading of it. That file also holds the vocabulary invariant: both
 of redact()'s suffix lists are read out of `lib.sh` and checked to agree with each other and to sit
-inside the screen, so the drift #1611 found cannot reopen quietly. `selftest-redact-env.sh` carries
+inside the screen, so the drift #1611 found cannot reopen quietly. `selftest-redact-ip.sh` carries the IP shape,
+including the sentinel cases: a `\x01` in the input must not reconstitute a quad, must not become a
+dot, and must not disturb the protect/restore round trip that keeps the reserved ranges readable.
+`selftest-redact-env.sh` carries
 the `KEY=value` shape separately, including the three Tari address forms as `.env` renders them and
 the survivors that make a bundle worth keeping — a public endpoint, an auth mode string, a routing
 id. Its widening was measured before it shipped: across two archived bundles and the deployed
