@@ -518,11 +518,12 @@ declare no return type and hand back an empty answer from a path the rule cannot
 counts those per pinned module and prints them in its own output, so a module holding none reads as
 measured rather than merely unmentioned. The two files share one classifier,
 `dashboard/tests/service/annotation_gate.py`, which is a plain module and not a test. The pin's
-data — the modules pinned, the anchor function each one is checked through, and the exceptions
-somebody read and signed — sits in a second plain module beside it,
-`dashboard/tests/service/annotation_pins.py`. It is separate because it is the part that grows: a
-slice adds rows to it, while the file holding the laws records a ceiling in
-`docs/dev/file-budget.tsv` that only ever goes down.
+data sits in two more plain modules beside it: `dashboard/tests/service/annotation_pins.py` holds
+the modules pinned and the anchor function each one is checked through, and
+`dashboard/tests/service/annotation_readings.py` holds the exceptions somebody read and signed,
+each with its reading. They are separate because they are the part that grows: a slice adds rows to
+them, while the file holding the laws records a ceiling in `docs/dev/file-budget.tsv` that only
+ever goes down.
 
 How it stays safe:
 

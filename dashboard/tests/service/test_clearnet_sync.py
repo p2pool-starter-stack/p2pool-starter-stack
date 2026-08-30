@@ -1,5 +1,6 @@
 """Tests for the clearnet→Tor auto-transition supervisor (#183/#234)."""
 
+import logging
 import os
 from unittest.mock import AsyncMock, MagicMock
 
@@ -136,5 +137,23 @@ class TestClearnetSyncSupervisor:
         sup._write_marker = MagicMock(return_value=False)
         exposed = await sup.maybe_transition("monero", "monerod", flag_on=True, synced=True)
         assert exposed is True
+        dc.stop.assert_not_called()
+        dc.start.assert_not_called()
+
+    async def test_marker_write_failure_is_reported_by_the_method_itself(self, tmp_path, caplog):
+        """The sibling test above STUBS `_write_marker`, so nothing there exercises the handler
+        that produces the value the caller acts on — a fixture performing what production is
+        supposed to do. #1556 slice 12 records `False` here as "hold, retry next cycle", and this
+        is what makes that reading checkable rather than asserted.
+
+        A directory standing where the marker file belongs raises `IsADirectoryError` for ANY uid;
+        a permission bit would not, because the test job can run as root."""
+        sup, dc = make_supervisor(tmp_path)
+        os.mkdir(sup.marker_path("monero"))
+        with caplog.at_level(logging.ERROR, logger="ClearnetSync"):
+            assert sup._write_marker("monero") is False
+        assert any("could not write Tor-resync marker" in r.getMessage() for r in caplog.records)
+        # ...and the caller holds, with no stub in the way this time.
+        assert await sup.maybe_transition("monero", "monerod", flag_on=True, synced=True) is True
         dc.stop.assert_not_called()
         dc.start.assert_not_called()

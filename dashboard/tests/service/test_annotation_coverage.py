@@ -46,13 +46,13 @@ was not. That gap was in the tree at the base of this branch, not introduced by 
 
 ## Where the data is
 
-`PINNED`, `_ANCHORS` and `_UNJUDGED_AND_READ` live in `tests/service/annotation_pins.py`, together
-with the comments that argue each entry. They are the part of this mechanism that grows with every
-slice; what stayed here is what does not — the three laws, their vacuity guards, and the controls
-that seed each shape across the boundary a law decides on. That module's docstring carries the
-reason for the split and the figures behind it, and deliberately carries them ONLY there: a
-budget argument copied into two files is two numbers to keep true, which is the failure this
-file's own header records twice.
+`PINNED` and `_ANCHORS` live in `tests/service/annotation_pins.py`, and `_UNJUDGED_AND_READ` in
+`tests/service/annotation_readings.py`, each together with the comments that argue its entries.
+They are the part of this mechanism that grows with every slice; what stayed here is what does not
+— the three laws, their vacuity guards, and the controls that seed each shape across the boundary
+a law decides on. Those modules' docstrings carry the reason for each split and the figures behind
+it, and deliberately carry them ONLY there: a budget argument copied into another file is two
+numbers to keep true, which is the failure this file's own header records twice.
 """
 
 import pytest
@@ -63,7 +63,8 @@ from tests.service.annotation_gate import (
     unannotated_falsy_by_module,
     unannotated_falsy_returns,
 )
-from tests.service.annotation_pins import _ANCHORS, _UNJUDGED_AND_READ, PINNED
+from tests.service.annotation_pins import _ANCHORS, PINNED
+from tests.service.annotation_readings import _UNJUDGED_AND_READ
 
 
 def _blind_under(module: str, verdicts: dict[str, list]) -> list[str]:
@@ -278,8 +279,9 @@ class TestTheResidueThePinCannotRuleOn:
     """#1604 — what the pin has never said, said.
 
     Law 1 says no FAILURE RETURN in a pinned module is unannotated. It has never said the module is
-    annotated, and the difference is not academic: seventeen of the thirty-two hold functions that
-    declare no return type and return a falsy value. Those returns come through neither of the
+    annotated, and the difference is not academic: eighteen of the thirty-three hold functions that
+    declare no return type and return a falsy value. Slice 12 emptied the `blind` set package-wide
+    and moved that figure UP, which is the plainest statement of the gap there is. Those returns come through neither of the
     gate's two doors, so `classify` emits no row for them, and every law above is silent about them
     — correctly, because the mechanism genuinely cannot reach them.
 

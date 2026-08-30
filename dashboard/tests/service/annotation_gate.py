@@ -6,10 +6,13 @@ still owns it. The rule is:
     a FAILURE path may not return a value that inhabits the function's declared SUCCESS type.
 
 `test_collapsed_return_channels.py` holds the argument, the controls, and the two hard laws.
-`test_annotation_coverage.py` holds #1556's per-module pin laws, and `annotation_pins.py` beside
-it holds the data those laws run over. Both need the same walk over the package, and a sibling test module is not importable by name here — `--import-mode=importlib` with
-no `__init__.py` means `from test_collapsed_return_channels import classify` raises
-`ModuleNotFoundError`. That is why this is a non-test module rather than a helper left where it was.
+`test_annotation_coverage.py` holds #1556's per-module pin laws, and two plain modules beside it
+hold the data those laws run over: `annotation_pins.py` (which modules are pinned, and each one's
+anchor) and `annotation_readings.py` (the `unjudged` functions somebody read, with the reading).
+Both need the same walk over the package, and a sibling test module is not importable by name here
+— `--import-mode=importlib` with no `__init__.py` means `from test_collapsed_return_channels import
+classify` raises `ModuleNotFoundError`. That is why this is a non-test module rather than a helper
+left where it was, and why the two data modules are plain modules too.
 
 Import it as `from tests.service.annotation_gate import ...`. `tests` resolves as a namespace
 package because pytest runs with `dashboard/` on `sys.path`; both the `make test-dashboard`
