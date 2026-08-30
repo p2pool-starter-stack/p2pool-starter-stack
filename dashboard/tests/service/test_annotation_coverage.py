@@ -278,7 +278,7 @@ class TestTheResidueThePinCannotRuleOn:
     """#1604 — what the pin has never said, said.
 
     Law 1 says no FAILURE RETURN in a pinned module is unannotated. It has never said the module is
-    annotated, and the difference is not academic: fourteen of the twenty-seven hold functions that
+    annotated, and the difference is not academic: fourteen of the twenty-eight hold functions that
     declare no return type and return a falsy value. Those returns come through neither of the
     gate's two doors, so `classify` emits no row for them, and every law above is silent about them
     — correctly, because the mechanism genuinely cannot reach them.
@@ -294,7 +294,7 @@ class TestTheResidueThePinCannotRuleOn:
         residual report gives at length: a bound over sites nobody has read certifies whatever they
         contain, and this pass read none of them.
 
-        Every pinned module gets a line INCLUDING the twelve that score zero, and the zero lines
+        Every pinned module gets a line INCLUDING the fourteen that score zero, and the zero lines
         are the half that makes this a disclosure rather than a second asymmetry — an unmentioned
         module and a measured-clean module are the same silence otherwise, which is the whole of
         #1604."""
