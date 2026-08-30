@@ -71,7 +71,7 @@ from mining_dashboard.helper.utils import (
     pplns_block_time,
     shares_in_pplns_window,
 )
-from mining_dashboard.service import audit_service
+from mining_dashboard.service import audit_service, worker_change_audit
 from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.service.control_service import (
@@ -120,13 +120,17 @@ _HOURLY_CAPTURE_SEC = 3600  # disk_growth + network_history
 _WORKER_HISTORY_CAPTURE_SEC = 300  # ~5 min
 
 
-# Per-worker flood cap on NEW rig-edit audit rows (#724). The enriched worker feed is
+# Per-worker flood cap on NEW out-of-band audit rows (#724). The enriched worker feed is
 # unauthenticated LAN input, so a rogue device presenting as a worker can report a fresh random
 # change_id every poll — each a distinct, permanent audit_events row (#530's deterministic id only
 # collapses REPEATS of one change_id, never distinct ones). At most _RIG_EDIT_CAP_PER_HOUR genuine
-# rig-edit rows per worker per rolling hour; beyond that, rows are dropped and a single
-# rate-limited marker is recorded + logged. A real fleet edits a rig a handful of times an hour at
-# most, so a legitimate cadence never trips it — only a flood does.
+# rows per worker per rolling hour; beyond that, rows are dropped and a single rate-limited marker
+# is recorded + logged. A real fleet edits a rig a handful of times an hour at most, so a
+# legitimate cadence never trips it — only a flood does.
+# ONE budget covers BOTH detections on this feed: rig-edit (#530) and revision-drift (#1551).
+# revision has the identical property — the store's dedup collapses an UNCHANGED revision and does
+# nothing about one that changes every poll — so a second window would just double what one
+# untrusted source can make permanent. See service/worker_change_audit.py.
 _RIG_EDIT_CAP_PER_HOUR = 12
 _RIG_EDIT_WINDOW_SEC = 3600
 
@@ -845,6 +849,10 @@ class DataService:
         unlike host-edit's ``keys`` this can only name the change_id — a real limitation, not an
         oversight; see the #530 PR notes.
 
+        Each worker's revision is also checked for drift here (#1551), before the control-status
+        guard below, because a rig can serve a moved ``revision`` with no terminal outcome beside
+        it and that is the case nothing else can see; it shares this method's flood cap.
+
         A rig keeps reporting its last terminal change_id every poll, so this fires ONCE per
         (worker, change_id): an in-memory guard skips the redundant work in the steady state, and
         the audit row's deterministic id makes the write itself idempotent even across a restart
@@ -854,11 +862,15 @@ class DataService:
 
         DISTINCT change_ids each clear that dedup, though, so a rogue rig on the unauthenticated
         feed can still write one permanent row per poll (#724). ``_rig_edit_within_cap`` bounds NEW
-        rig-edit rows to ``_RIG_EDIT_CAP_PER_HOUR`` per worker per hour; beyond that the row is
-        dropped, but never silently — a single ``rate-limited`` marker is logged and recorded so the
-        flood stays visible in the Security panel. host-edit rows are unaffected (a different,
+        out-of-band rows to ``_RIG_EDIT_CAP_PER_HOUR`` per worker per hour — rig-edit and
+        revision-drift share the one budget; beyond that the row is dropped, but never silently: a
+        single ``rate-limited`` marker naming which detection tipped it is logged and recorded so
+        the flood stays visible in the Security panel. host-edit rows are unaffected (a different,
         non-attacker-controlled path)."""
         for w, extra_stats in zip(workers, worker_results, strict=False):
+            await worker_change_audit.note_revision_drift(
+                self, w, extra_stats, _RIG_EDIT_CAP_PER_HOUR
+            )
             ctrl = parse_worker_control_status(extra_stats) if extra_stats else None
             if not ctrl:
                 continue
@@ -879,27 +891,12 @@ class DataService:
                     continue
                 allowed, first_over = self._rig_edit_within_cap(worker, time.time())
                 if not allowed:
-                    # Over cap this window — drop the row (don't add to the guard set, so its size
-                    # stays bounded by what we actually record, not by the flood). Surface the cap
-                    # once per window: a warning plus one marker row, its deterministic id keyed to
-                    # this worker's window start so it's idempotent even if a restart re-trips
-                    # `first_over`, and a fresh window later gets its own distinct marker.
+                    # Over cap this window — drop the row, and don't add to the guard set, so its
+                    # size stays bounded by what we actually record rather than by the flood. The
+                    # marker itself is shared with revision-drift (#1551): one budget, one marker.
                     if first_over:
-                        window_start = self._rig_edit_window[worker][0]
-                        logger.warning(
-                            "Worker %s exceeded %d rig-edit audit rows this hour (#724) — a rig "
-                            "reporting distinct change_ids on the unauthenticated feed; further "
-                            "rig-edit rows are dropped until the window resets.",
-                            worker,
-                            _RIG_EDIT_CAP_PER_HOUR,
-                        )
-                        await self._record_audit_event(
-                            "rig-edit",
-                            worker,
-                            "rate-limited",
-                            "dropped",
-                            f"rig-edit rows capped at {_RIG_EDIT_CAP_PER_HOUR}/hour",
-                            event_id=f"rig-edit-ratelimited-{worker}-{int(window_start)}",
+                        await worker_change_audit.record_cap_marker(
+                            self, worker, _RIG_EDIT_CAP_PER_HOUR, "rig-edit"
                         )
                     continue
                 self._flagged_rig_changes.add(guard_key)

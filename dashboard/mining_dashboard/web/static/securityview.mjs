@@ -1,6 +1,7 @@
 // Security panel (#349): recent dashboard accesses (Caddy's access log, read-only) and the
-// config-change audit trail (the #33 host-side audit log, read-only, plus the #530 out-of-band
-// host-edit/rig-edit detections and their persisted history). Both APIs serve server-sanitized
+// config-change audit trail (the #33 host-side audit log, read-only, plus the out-of-band
+// host-edit/rig-edit (#530) and rig-drift (#1551) detections and their persisted history). Both
+// APIs serve server-sanitized
 // fields — the backend whitelists every character before it leaves the host logs — and everything
 // here renders through Preact text nodes, never markup, so a hostile log line stays inert even if
 // the server-side filter regressed.
