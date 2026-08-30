@@ -420,6 +420,15 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
             "(id TEXT PRIMARY KEY, ts TEXT, source TEXT, actor TEXT, action TEXT, status TEXT, "
             "keys TEXT)"
         )
+        # The config revision each rig was last OBSERVED serving (#1551), one row per worker.
+        # Additive, mirroring events / share_stats: no _migrate_db change, and the PRIMARY KEY is
+        # the only index it wants. Holding the rig's opaque `revision` NEXT TO the `last_change_id`
+        # beside it is the point: a later poll tells a recorded change (both moved) from an edit
+        # underneath RigForge (only the revision moved) — the door #1542 leaves open.
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS worker_config_revision "
+            "(worker TEXT PRIMARY KEY, revision TEXT, last_change_id TEXT, ts REAL)"
+        )
 
     def _create_indexes(self):
         """Creates indexes. Called after migrations so the indexed columns are guaranteed to
@@ -1299,21 +1308,13 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
             self._db_error("KV Write Error", e)
 
     def save_snapshot(self, data: dict[str, Any]):
-        """Persists the full application state snapshot to the KV store."""
+        """Persists the full application state snapshot to the KV store, through ``set_kv`` — one
+        kv_store key like any other, where the hand-rolled INSERT was a second copy of that
+        method's body. A failed write still reaches ``_db_error``; only its label changes."""
         if not data:
             return
         try:
-            json_str = json.dumps(data)
-            with self._db_lock:
-                if not self._conn:
-                    return
-                with self._conn:
-                    self._conn.execute(
-                        "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)",
-                        ("snapshot_latest_data", json_str),
-                    )
-        except sqlite3.Error as e:
-            self._db_error("Snapshot Save Error", e)
+            self.set_kv("snapshot_latest_data", json.dumps(data))
         except TypeError as e:
             # A non-serializable snapshot is a persistent write failure (data lost on restart),
             # so flag persistence unhealthy like every other write path — otherwise the #131
@@ -1321,19 +1322,17 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
             self._db_error("Snapshot Serialization Error", e)
 
     def load_snapshot(self) -> dict[str, Any] | None:
-        """Loads the last persisted application state snapshot."""
+        """Loads the last persisted application state snapshot, through ``get_kv``. Absent key,
+        empty value and failed read all reach the caller as ``None`` — what the hand-rolled read
+        did too, since it treated a falsy ``row[0]`` as "no snapshot" rather than as a value."""
+        raw = self.get_kv("snapshot_latest_data")
+        if not raw:
+            return None
         try:
-            with self._db_lock:
-                if not self._conn:
-                    return None
-                cursor = self._conn.cursor()
-                cursor.execute("SELECT value FROM kv_store WHERE key = 'snapshot_latest_data'")
-                row = cursor.fetchone()
-                if row and row[0]:
-                    return json.loads(row[0])
-        except (json.JSONDecodeError, sqlite3.Error) as e:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as e:
             self.logger.error(f"Snapshot Load Error: {e}")
-        return None
+            return None
 
     def get_history(self) -> list[dict[str, Any]]:
         """Returns a copy of the hashrate history."""

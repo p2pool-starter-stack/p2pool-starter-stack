@@ -163,6 +163,14 @@ class TestSnapshot:
         assert state_manager.is_db_healthy() is False
         assert state_manager.load_snapshot() is None  # nothing was persisted
 
+    def test_corrupt_snapshot_reads_as_none(self, state_manager):
+        # A stored value that is not JSON reaches the caller as None rather than raising into the
+        # restore path — the same answer an absent snapshot gives. #1551 rewrote load_snapshot to
+        # read through ``get_kv``, which moved this decode onto its own branch; without this the
+        # branch is unreached and the rewrite could have started raising here unnoticed.
+        state_manager.set_kv("snapshot_latest_data", "{not json")
+        assert state_manager.load_snapshot() is None
+
     def test_share_stats_persist_across_instances(self, tmp_path):
         # Issue #82: the per-worker share counts and the proxy /summary totals ride along in the
         # latest_data snapshot, so they survive a dashboard restart (the snapshot is what
