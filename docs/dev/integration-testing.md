@@ -61,12 +61,20 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   is reported `SKIPPED`, never run against the canonical DB.
 - No silent coverage drops. Any scenario whose prerequisite is missing (an alt data dir, a
   remote endpoint) is logged as `SKIPPED` with the reason. It never quietly disappears.
-- Secrets hygiene. RPC creds, the proxy token, wallet addresses and onion addresses are never
-  printed. Secret-preservation is checked by hashing them on the box (`sha256sum`) and comparing
-  the hash, so the plaintext never crosses the wire. All captured artifacts pass through a
-  redactor, which is keyed on the *shape* of a secret — a credential given as a flag value, an
-  address-length opaque run — rather than on a list of known field names. That list is what left
-  the gaps in [#1582](https://github.com/p2pool-starter-stack/pithead/issues/1582).
+- Secrets hygiene. Secret-preservation is checked by hashing on the box (`sha256sum`) and
+  comparing the hash, so the plaintext never crosses the wire, and every captured artifact passes
+  through a redactor. **What that redactor covers is narrower than "artifacts are redacted"
+  suggests**, and the gap is worth knowing before you trust a bundle. It reaches: a `KEY=value`
+  line whose name ends in `_PASSWORD` / `_TOKEN` / `_SECRET`; a credential given as a flag value;
+  a v3 onion; and any opaque run of 90 or more characters, which is what catches wallet addresses
+  (and a sha512 with them). **It does not reach JSON at all** — `"key": "value"` has neither an
+  `=` nor a `--` — so the bundle's verbatim `config.json` still carries six of its eight sensitive
+  fields, key material among them:
+  [#1587](https://github.com/p2pool-starter-stack/pithead/issues/1587). The two fields that *do*
+  redact there are addresses long enough to trip the length rule, which is a coincidence rather
+  than the redactor understanding JSON.
+  [#1582](https://github.com/p2pool-starter-stack/pithead/issues/1582) closed the flag-value and
+  address-shape gaps only.
 - Continue-on-error. A failing assertion doesn't abort the run. The whole matrix is collected
   and summarized, with per-scenario artifacts for the failures.
 
