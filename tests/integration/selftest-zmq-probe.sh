@@ -263,6 +263,15 @@ _mutated=$(
 )
 assert_eq "without the emptiness guard the SILENT node passes (mutation proof)" "$_mutated" "0"
 
+# A SHORT ZMTP message frame begins with a 0x00 flags byte, so the one byte tier B reads is very
+# often NUL. If the read pipeline collapsed that to the empty string, every publisher whose first
+# frame is short would be reported SILENT — the row would red on healthy nodes and, worse, its
+# passing cases would prove nothing. Assert both directions of the same pipeline the snippet runs.
+assert_eq "a NUL first byte is data, not silence" \
+    "$(printf '\x00\x01\x02' | head -c 1 | od -An -v -tx1 | tr -d ' \n')" "00"
+assert_eq "a genuinely empty stream still reads as silence" \
+    "$(printf '' | head -c 1 | od -An -v -tx1 | tr -d ' \n')" ""
+
 # Behavioural: a publish budget must not become the cost of an unreachable port. The connect
 # fails first, so the 90s wait is never entered — a regression here would add 90s per scenario
 # to a gate that is already failing.
