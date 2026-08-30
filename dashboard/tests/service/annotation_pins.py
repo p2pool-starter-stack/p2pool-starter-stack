@@ -228,6 +228,27 @@ moved the data, which is the failure the pin comment below records happening twi
 # the quiet success is NOT claimed — seeing that needs the callee's returns, a whole-package
 # inference this walk deliberately does not make.
 #
+# #1628 RE-DERIVED that population and CONFIRMED it at three, by a different route rather than by
+# re-reading this paragraph. The figures above resolved the callee BY NAME across the package,
+# which #1628 says is approximate in both directions and had already produced one false positive
+# removed by hand (`control_service.py:result` calling stdlib `json.load`, matched against
+# `storage_service.py:load`). The re-derivation binds instead — `self.X` to the enclosing class,
+# a bare name to module defs then that module's imports, a dotted name to an in-package module —
+# and reports anything it cannot bind rather than scoring it clean. Same three rows, same counts,
+# and `result` falls out MECHANICALLY into the unresolved bucket, which holds five rows in all —
+# `result`'s `json.load`, `float` twice, `json.loads`, and a chained `datetime` call. Shown able to answer
+# otherwise, both ways, against the real package: de-noning `parse_prices` drops `fetch` to two
+# rows, and giving `mask_secrets` one `None` return moves `_read_host_config` from clean to flagged
+# at four. The instrument is NOT shipped — resolving callees is the inference #1487's ruling
+# governs, and #1628's own ruling was to leave `classify` alone.
+#
+# `_safe_reply_for`'s collapse is DELIBERATE, which is #1628's first question answered: its caller
+# does `if reply:` and sends nothing either way, so a handler that raised and a message that was
+# not a command are the same event downstream, and the docstring's "a broken command just goes
+# quiet" is the intent rather than an oversight. That sentence belongs beside the code and is here
+# instead: `telegram_commands.py` stands at 1023 lines against a recorded ceiling of 1023, and
+# paying for a comment by compressing production code is worse than the gap it documents.
+#
 # Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
 # written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
 # (`local_miner_enabled` returning `False`). A slice is coverage of the mechanism, so a slice whose
