@@ -275,7 +275,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
             self.db_unrecoverable = True
             self._db_error("DB Recovery Error", e)
 
-    def _prune_quarantined(self):
+    def _prune_quarantined(self) -> None:
         """Keep only the newest ``_CORRUPT_KEEP`` ``<db>.corrupt-*`` files; delete older ones."""
         directory = os.path.dirname(self.db_path) or "."
         base = os.path.basename(self.db_path) + ".corrupt-"
@@ -493,7 +493,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
             self.logger.info("Migrating DB: Adding type column to worker_config")
             self._conn.execute("ALTER TABLE worker_config ADD COLUMN type TEXT DEFAULT 'apply'")
 
-    def load(self):
+    def load(self) -> None:
         """
         Loads state from SQLite into memory on startup.
         """
@@ -593,7 +593,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
 
     def update_history(
         self, hashrate: float, p2pool_hr: float = 0, xvb_hr: float = 0, windows=None
-    ):
+    ) -> None:
         """Appends a new hashrate data point to the history buffer.
 
         ``windows`` (Issue #168) is an optional ``{window: (p2pool_hr, xvb_hr)}`` mapping of the
@@ -677,7 +677,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
         except sqlite3.Error as e:
             self._db_error("History Update Error", e)
 
-    def add_share(self, ts: float, difficulty: float):
+    def add_share(self, ts: float, difficulty: float) -> None:
         """Appends a new share to history and persists it to the DB."""
         with self._lock:
             # Check if share already exists to prevent duplicate in-memory appends
@@ -724,7 +724,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
         with self._lock:
             return list(self.state.get("shares", []))
 
-    def add_event(self, ts: float, event_type: str, detail: str = ""):
+    def add_event(self, ts: float, event_type: str, detail: str = "") -> None:
         """Record a chart event marker (#99) — a degradation/recovery point the chart draws and the
         history window prunes, mirroring shares. Persisted so it survives a dashboard restart."""
         with self._lock:
@@ -757,7 +757,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
 
     def add_share_stats(
         self, ts: float, accepted: int = 0, rejected: int = 0, invalid: int = 0, expired: int = 0
-    ):
+    ) -> None:
         """Record one poll's pool-wide share-health DELTAS (#116) — how much each cumulative
         proxy counter advanced since the previous poll — in memory and in the DB. Mirrors
         add_event: retention-pruned in memory, probabilistically pruned on disk."""
@@ -928,7 +928,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
         the data-service poll loop is one big try/except, so nothing else would surface that."""
         return {k: dict(v) for k, v in self.table_health.items()}
 
-    def add_block(self, ts: float, height: int, difficulty: float):
+    def add_block(self, ts: float, height: int, difficulty: float) -> None:
         """Record one pool block-found event (#196): permanent (no retention prune — a handful of
         rows/week, like payouts). The caller (DataService) reuses `_shares_to_record` on p2pool's
         cumulative blocks_found counter so this fires exactly once per genuinely NEW block; a
@@ -1029,7 +1029,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
             self.logger.error(f"Raffle Win Read Error: {e}")
             return []
 
-    def add_worker_history(self, rows: list[dict[str, Any]]):
+    def add_worker_history(self, rows: list[dict[str, Any]]) -> None:
         """Record one poll's per-worker hashrate/share-count samples (#196) in a SINGLE
         executemany call — the caller batches every online worker for one wall-clock tick rather
         than issuing N inserts per cycle. 30-day retention. Each row needs ts/name/h15/accepted/
@@ -1199,7 +1199,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
         avg_1h: float | None = None,
         fail_count: int | None = None,
         **kwargs,
-    ):
+    ) -> None:
         """
         Updates specific fields within the XvB statistics state.
 
@@ -1293,7 +1293,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
             self.logger.error(f"KV Read Error: {e}")
             return None
 
-    def set_kv(self, key: str, value):
+    def set_kv(self, key: str, value) -> None:
         """Insert-or-replace one kv_store value (#375). Values are stored as strings, mirroring
         the XvB stats writes above."""
         try:

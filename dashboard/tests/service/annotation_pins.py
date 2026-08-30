@@ -41,30 +41,61 @@ moved the data, which is the failure the pin comment below records happening twi
 """
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 25 of 33 modules that hold a failure return at
+# adds the module it finished. Measured at this tip: 26 of 33 modules that hold a failure return at
 # all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
 # the six single-function `client/` modules by slice 2, the four single-function `web/` modules by
 # slice 3, the two single-function `config/` modules by slice 4, the four outbound senders under
 # `service/` by slice 5a, and the last three `service/` singletons by slice 5b. Slice 6 is the first
 # MULTI-function slice — the four parse-or-read pairs under `service/`, each pinned only once BOTH of
-# its failure returns were annotated and read. **25 failure returns are still blind.**
+# its failure returns were annotated and read, and the ten handle-guard procedures in
+# `service/storage_service.py` by slice 7. **15 failure returns are still blind**, in seven modules.
 #
-# That "25 of 33" read 18 until this slice measured it: 5b moved this tuple from 18 to 21 and left
-# the sentence beside it saying 18. A slice adds rows to a tuple and the counting prose next to it is
-# falsified in the same commit, silently — re-derive it here rather than carrying it.
+# Every figure above is re-derived at the head being shipped, never carried across a slice: 5b moved
+# this tuple from 18 to 21 and left the sentence beside it saying 18. A slice adds rows to a tuple
+# and the counting prose next to it is falsified in the same commit, silently, and no gate in this
+# repo can see it — re-derive it here rather than carrying it. Slice 7 found two more of exactly
+# that kind already standing below, one of them spelled in WORDS, where a digit-keyed sweep misses.
 #
 # The `client/` scoping below applies to `tor_heal.py` too, measured: `decide` holds four
 # unannotated `None` returns and `check` two bare ones, all six OUTSIDE the gate's two doors —
 # pinned, law 1 honestly green, and NOT "fully annotated".
 #
-# That sentence was true and, until #1604, it was the ONLY one of its kind here. Eight other pinned
-# modules hold the same residue and were named nowhere but inside the tuple below, so a reader who
-# found `tor_heal.py`'s disclosure could reasonably infer the rest were clean: an asymmetric
-# disclosure is worse than a uniform absence, because the silence beside the others reads as a
-# statement. The residue is now MEASURED for all twenty-one and printed by
-# `TestTheResidueThePinCannotRuleOn` in `test_annotation_coverage.py`, which is the form of
-# disclosure that cannot go
-# asymmetric again — a module joining `PINNED` gets a line whether anyone writes a sentence or not.
+# That sentence was true and, until #1604, it was the ONLY one of its kind here. At #1604 eight
+# other pinned modules held the same residue and were named nowhere but inside the tuple below, so
+# a reader who found `tor_heal.py`'s disclosure could reasonably infer the rest were clean: an
+# asymmetric disclosure is worse than a uniform absence, because the silence beside the others
+# reads as a statement. That count is written in the past tense on purpose — it was `Eight other
+# pinned modules hold`, present tense, and two slices had made it false. The residue is now
+# MEASURED for every pinned module and printed by `TestTheResidueThePinCannotRuleOn` in
+# `test_annotation_coverage.py`, which is the form of disclosure that cannot go asymmetric again —
+# a module joining `PINNED` gets a line whether anyone writes a sentence or not.
+#
+# Slice 7 is `service/storage_service.py`, the first slice carried by the HANDLE GUARD rather than
+# the `except` door: nine of its ten come through the guard, and `_prune_quarantined` is the one
+# handler. Ten, not the nine a guard-door count gives — that miscount was in the handoff this
+# slice started from, and pinning the module needs all ten. All ten are the same shape and were
+# read as one only after each was confirmed to BE that shape: the guard's whole body is a bare
+# `return`, and the function returns no value on any path. That was measured, not eyeballed —
+# zero valued returns and zero yields across all ten, with
+# a positive control (`get_kv`, which has three valued returns) to show the walk could see one.
+#
+# So every one is a genuine `-> None` procedure, and the slice adds ZERO to `signed` and ten to
+# `procedure`. That is the whole outcome and it is stated plainly rather than dressed up: what this
+# module's pin asserts is that #1487's rule structurally CANNOT apply to these ten — a procedure has
+# no success value for a failure to hide inside — and that this is now SAID rather than silent,
+# which is exactly what #1581 added the sixth verdict for. Law 2 is NOT vacuous here despite the
+# module holding no `unjudged` row: re-signing one of them `-> bool` sends its bare `return` to
+# `unjudged`, and law 2 reds. That was seeded and confirmed, because a law nobody fired is a law
+# nobody has evidence for.
+#
+# The module's EIGHT `collapse` rows are untouched by this slice and stay flagged, as does the
+# residue below. A pin is coverage of the mechanism; it clears nothing.
+#
+# The reading is also what found **#1615**: `add_block` and `add_worker_history` stamp the per-table
+# write-health signal, and the guard returns BEFORE either stamp — so after a failed corruption
+# recovery every telemetry table reports `healthy: True` while its writes are dropped. Filed rather
+# than fixed here: this slice is annotation-only and proven bytecode-identical, and that fix is a
+# behaviour change to five write paths.
 #
 # Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
 # written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
@@ -101,6 +132,7 @@ PINNED = (
     "service/egress.py",
     "service/price_feed.py",
     "service/steering_projection.py",
+    "service/storage_service.py",
     "service/tor_heal.py",
     "service/update_checker.py",
     "service/worker_config_store.py",
@@ -115,7 +147,10 @@ PINNED = (
 # statement about "no blind names under this prefix" is satisfied perfectly by a module that has
 # vanished from the walk, and that is the reading a deleted file, a moved package root or a broken
 # `rglob` all produce. `note_worker_revision` is the deliberate choice for its module — it is the
-# one signed function `_SIGNED` never named.
+# one signed function `_SIGNED` never named. `add_block` is the choice for
+# `storage_service.py` — of that module's eleven procedures it is one of the two carrying the
+# per-table health channel #1615 is about, so it is the one whose silent exit from the walk would
+# cost most.
 _ANCHORS = {
     "client/docker/docker_control.py": "client/docker/docker_control.py:_post",
     "client/monero/monero_client.py": "client/monero/monero_client.py:get_info",
@@ -137,6 +172,7 @@ _ANCHORS = {
     "service/price_feed.py": "service/price_feed.py:parse_prices",
     "service/xvb_standby.py": "service/xvb_standby.py:parse_standby",
     "service/steering_projection.py": "service/steering_projection.py:won_round_live",
+    "service/storage_service.py": "service/storage_service.py:add_block",
     "service/tor_heal.py": "service/tor_heal.py:_probe_egress",
     "service/update_checker.py": "service/update_checker.py:latest_release",
     "service/worker_config_store.py": "service/worker_config_store.py:note_worker_revision",
