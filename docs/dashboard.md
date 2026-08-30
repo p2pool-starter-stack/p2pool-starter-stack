@@ -523,7 +523,12 @@ the modules pinned and the anchor function each one is checked through, and
 `dashboard/tests/service/annotation_readings.py` holds the exceptions somebody read and signed,
 each with its reading. They are separate because they are the part that grows: a slice adds rows to
 them, while the file holding the laws records a ceiling in `docs/dev/file-budget.tsv` that only
-ever goes down.
+ever goes down. Being the part that grows, they are also the part that can quietly shrink, and
+every law above is a statement about a set that a smaller set satisfies. So the laws record a floor
+under each of the three: adding a row passes untouched, removing one reds, and the way back to
+green is to lower the recorded number in the same change. That does not stop anyone from narrowing
+what the pin covers — it makes the narrowing something a reviewer reads rather than something that
+happens in a data file in silence.
 
 How it stays safe:
 
