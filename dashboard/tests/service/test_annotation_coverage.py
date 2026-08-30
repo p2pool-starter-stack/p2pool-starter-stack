@@ -47,7 +47,12 @@ was not. That gap was in the tree at the base of this branch, not introduced by 
 
 import pytest
 
-from tests.service.annotation_gate import classify, classify_package
+from tests.service.annotation_gate import (
+    classify,
+    classify_package,
+    unannotated_falsy_by_module,
+    unannotated_falsy_returns,
+)
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
 # adds the module it finished. Measured at this tip: 18 of 33 modules that hold a failure return at
@@ -60,6 +65,14 @@ from tests.service.annotation_gate import classify, classify_package
 # The `client/` scoping below applies to `tor_heal.py` too, measured: `decide` holds four
 # unannotated `None` returns and `check` two bare ones, all six OUTSIDE the gate's two doors —
 # pinned, law 1 honestly green, and NOT "fully annotated".
+#
+# That sentence was true and, until #1604, it was the ONLY one of its kind here. Eight other pinned
+# modules hold the same residue and were named nowhere but inside the tuple below, so a reader who
+# found `tor_heal.py`'s disclosure could reasonably infer the rest were clean: an asymmetric
+# disclosure is worse than a uniform absence, because the silence beside the others reads as a
+# statement. The residue is now MEASURED for all twenty-one and printed by
+# `TestTheResidueThePinCannotRuleOn` below, which is the form of disclosure that cannot go
+# asymmetric again — a module joining `PINNED` gets a line whether anyone writes a sentence or not.
 #
 # Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
 # written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
@@ -242,6 +255,12 @@ def package() -> dict[str, list]:
     return classify_package()
 
 
+@pytest.fixture(scope="module")
+def residue() -> dict[str, list[tuple[str, str, int]]]:
+    """Every falsy return in an unannotated function, keyed by module, over the real package."""
+    return unannotated_falsy_by_module()
+
+
 class TestAnAnnotatedModuleStaysAnnotated:
     """The law. It ratchets coverage of the mechanism, never a verdict the mechanism returned."""
 
@@ -398,3 +417,163 @@ class Client:
         it cannot start to quietly."""
         assert _rows_under("client/xvb_client", package) == []
         assert _rows_under("service/worker_config_store", package) == []
+
+
+class TestTheResidueThePinCannotRuleOn:
+    """#1604 — what the pin has never said, said.
+
+    Law 1 says no FAILURE RETURN in a pinned module is unannotated. It has never said the module is
+    annotated, and the difference is not academic: nine of the twenty-one hold functions that
+    declare no return type and return a falsy value. Those returns come through neither of the
+    gate's two doors, so `classify` emits no row for them, and every law above is silent about them
+    — correctly, because the mechanism genuinely cannot reach them.
+
+    Nothing here rules on a single site. #1604 read none of them, and a count that grew a bound
+    would be the baseline #1487 refused, wearing a third file's name. What is asserted is that the
+    number exists and that the sweep producing it can tell one module from another."""
+
+    def test_the_residue_in_every_pinned_module_is_reported_without_being_ruled_on(
+        self, residue, capsys
+    ):
+        """Deliberately asserts NOTHING about the counts, for the reason the sibling file's
+        residual report gives at length: a bound over sites nobody has read certifies whatever they
+        contain, and this pass read none of them.
+
+        Every pinned module gets a line INCLUDING the twelve that score zero, and the zero lines
+        are the half that makes this a disclosure rather than a second asymmetry — an unmentioned
+        module and a measured-clean module are the same silence otherwise, which is the whole of
+        #1604."""
+        with capsys.disabled():
+            rows = {module: residue[module] for module in PINNED}
+            sites = sum(len(found) for found in rows.values())
+            functions = {name for found in rows.values() for name, _, _ in found}
+            holding = sum(1 for found in rows.values() if found)
+            print(
+                f"\n#1604 residue — {sites} falsy returns in {len(functions)} functions that "
+                f"declare no return type, across {holding} of the {len(PINNED)} pinned modules. "
+                "The gate reaches none of them:"
+            )
+            for module, found in sorted(rows.items(), key=lambda row: (-len(row[1]), row[0])):
+                names = {name for name, _, _ in found}
+                print(f"    {len(found):3d} sites {len(names):2d} fns  {module}")
+                for name, literal, lineno in sorted(found, key=lambda row: row[2]):
+                    print(f"        {name}:{lineno} -> {literal}")
+
+    def test_the_residue_sweep_tells_the_pinned_modules_apart(self, residue):
+        """VACUITY AND DISCRIMINATION guard, and it is here because the instrument arrived with
+        exactly this defect: #1604's first sweep keyed on a needle that also matched the `PINNED`
+        tuple itself, scored all twenty-one modules identically, and read as a clean bill. A sweep
+        that flags everything and a sweep that flags nothing are the same non-answer, so both ends
+        are asserted.
+
+        The membership check is the third failure this guards, and a different one: `residue` holds
+        every module the walk found, so a pinned module MISSING from it is a file that was deleted
+        or renamed while the rest of the package still walks — the absence that satisfies every law
+        phrased as one.
+
+        The lower bound reds the day the package becomes fully annotated. That is the same
+        deliberate choice the sibling file's blind-spot measurement makes, and for the same reason:
+        the pin would then cover something different from what it covers today, which is worth a
+        look rather than a silent green."""
+        missing = [module for module in PINNED if module not in residue]
+        assert missing == [], f"pinned modules that left the walk entirely: {missing}"
+        holding = [module for module in PINNED if residue[module]]
+        assert holding, "a residue of zero everywhere would change what this pin covers"
+        assert len(holding) < len(PINNED), "a sweep that flags every module discriminates nothing"
+
+
+class TestTheResidueSweepCanSeeWhatItIsCounting:
+    """The report above is a count, and a count nobody controlled is a number with no source. Each
+    control is seeded ACROSS the annotation boundary the sweep keys on, so a sweep that answered
+    "residue" to everything — or to nothing — fails them."""
+
+    _UNANNOTATED = """
+def read_window(request):
+    value = request.query.get("window")
+    if value not in _WINDOWS:
+        return None
+    return value
+"""
+
+    _ANNOTATED = """
+def read_window(request) -> str | None:
+    value = request.query.get("window")
+    if value not in _WINDOWS:
+        return None
+    return value
+"""
+
+    _TRUTHY = """
+def read_window(request):
+    value = request.query.get("window")
+    if value not in _WINDOWS:
+        return "1h"
+    return value
+"""
+
+    def test_it_counts_a_falsy_return_from_a_function_that_declared_nothing(self):
+        """POSITIVE CONTROL, and the second assertion is what makes this residue rather than
+        `blind` under another name: the SAME source through the gate produces no row in any of the
+        six verdicts, because the return is through neither door. That is why every law in this
+        file is silent about these sites, and why the count has to exist at all."""
+        assert "-> " not in self._UNANNOTATED  # arming readback: the annotation really is absent
+        found = unannotated_falsy_returns(self._UNANNOTATED, "web/charts.py")
+        assert [(name, literal) for name, literal, _ in found] == [
+            ("web/charts.py:read_window", "None")
+        ]
+        verdicts = classify(self._UNANNOTATED, "web/charts.py")
+        assert all(rows == [] for rows in verdicts.values()), verdicts
+
+    def test_it_drops_the_same_function_once_it_declares_a_return_type(self):
+        """NEGATIVE CONTROL, one annotation apart from the positive one — same body, same falsy
+        value, same call. A sweep keying on anything but the annotation could not tell these two
+        apart, and every annotated function it swept in would be a function the gate already
+        rules on, reported as a place the gate cannot reach."""
+        assert self._ANNOTATED == self._UNANNOTATED.replace("(request)", "(request) -> str | None")
+        assert unannotated_falsy_returns(self._ANNOTATED, "web/charts.py") == []
+
+    def test_it_does_not_count_a_truthy_return_from_an_unannotated_function(self):
+        """NARROWNESS CONTROL, and the near-miss that separates this count from "every return in an
+        unannotated function". The package is mostly unannotated (#284 is closed for that reason),
+        so a sweep that dropped the falsy half would report a number in the hundreds and mean
+        nothing by it."""
+        assert self._TRUTHY == self._UNANNOTATED.replace("return None", 'return "1h"')
+        assert unannotated_falsy_returns(self._TRUTHY, "web/charts.py") == []
+
+    def test_the_empty_string_is_counted_here_and_is_still_invisible_to_the_gate(self):
+        """`""` is the one shape this sweep adds to the set `_collapsed_literal` tracks, and the
+        two assertions are the two halves of that decision. It is counted here because a report
+        that leaves out a falsy shape flatters its own number; it stays out of the gate's set
+        because that set feeds verdicts quoted with a sha, and widening it would move them."""
+        unannotated = 'def render(rows):\n    if not rows:\n        return ""\n    return rows[0]\n'
+        found = unannotated_falsy_returns(unannotated, "web/charts.py")
+        assert [literal for _, literal, _ in found] == ['""']
+        collapsing = (
+            "class Store:\n"
+            "    def name(self) -> str:\n"
+            "        try:\n"
+            "            return self._conn.execute(SQL).fetchone()[0]\n"
+            "        except Exception:\n"
+            '            return ""\n'
+        )
+        verdicts = classify(collapsing, "service/storage_service.py")
+        assert all(rows == [] for rows in verdicts.values()), verdicts
+
+    def test_a_nested_def_is_counted_against_itself(self):
+        """A nested def is its own function with its own contract, so its returns are never the
+        parent's — and this is the control for a defect that HAS happened rather than a
+        hypothetical. `web/xvb_views.py` is the case: `build_xvb_calc` holds `_odds_day` and
+        `_face_value`, and a sweep using `ast.walk(function)` scored their returns at lines 731 and
+        767 against `build_xvb_calc`, which holds no residue return of its own, while still
+        counting them as themselves. That double count is the whole of #1604's 12-sites-in-6-
+        functions figure where the truth is 10 in 5."""
+        seeded = (
+            "def build(rows):\n"
+            "    def _odds(agg):\n"
+            "        if not agg:\n"
+            "            return None\n"
+            "        return agg['n']\n"
+            "    return _odds(rows)\n"
+        )
+        found = unannotated_falsy_returns(seeded, "web/xvb_views.py")
+        assert [name for name, _, _ in found] == ["web/xvb_views.py:_odds"]
