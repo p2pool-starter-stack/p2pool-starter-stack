@@ -932,7 +932,7 @@ class TelegramCommandBot:
             return
         await self._dispatch_control(verb, uid)
 
-    async def _dispatch_control(self, verb, uid):
+    async def _dispatch_control(self, verb, uid) -> None:
         """Drop the confirmed intent into the #33 host-control spool. This is the ONLY privileged
         leg, and it is the shared one: the root ``control-run-pending`` runner validates and runs the
         fixed verb, and records the actor + outcome in the host-side audit log. The bot never runs a
@@ -1003,7 +1003,7 @@ class TelegramCommandBot:
         except Exception as exc:
             logger.debug("Telegram answerCallbackQuery failed (%s)", type(exc).__name__)
 
-    def _safe_reply_for(self, text):
+    def _safe_reply_for(self, text) -> str | None:
         """Never let a formatting/read bug kill the poll loop — a broken command just goes quiet."""
         try:
             return self.reply_for(text)

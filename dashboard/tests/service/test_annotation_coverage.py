@@ -278,7 +278,7 @@ class TestTheResidueThePinCannotRuleOn:
     """#1604 — what the pin has never said, said.
 
     Law 1 says no FAILURE RETURN in a pinned module is unannotated. It has never said the module is
-    annotated, and the difference is not academic: fourteen of the twenty-nine hold functions that
+    annotated, and the difference is not academic: seventeen of the thirty-two hold functions that
     declare no return type and return a falsy value. Those returns come through neither of the
     gate's two doors, so `classify` emits no row for them, and every law above is silent about them
     — correctly, because the mechanism genuinely cannot reach them.

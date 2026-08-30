@@ -41,19 +41,13 @@ moved the data, which is the failure the pin comment below records happening twi
 """
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 29 of 33 modules that hold a failure return at
-# all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
-# the six single-function `client/` modules by slice 2, the four single-function `web/` modules by
-# slice 3, the two single-function `config/` modules by slice 4, the four outbound senders under
-# `service/` by slice 5a, and the last three `service/` singletons by slice 5b. Slice 6 is the first
-# MULTI-function slice — the four parse-or-read pairs under `service/`, each pinned only once BOTH of
-# its failure returns were annotated and read, and the ten handle-guard procedures in
-# `service/storage_service.py` by slice 7, and its three siblings in `service/telemetry_store.py` by
-# slice 8, and the two `except`-door functions in `helper/utils.py` by slice 9, and the two in
-# `web/server.py` by slice 10. **8 failure returns are still blind**, in four modules — every one
-# through the `except` door, because slice 8 closed the handle-guard population entirely. That
-# last clause is a measurement and not a reading the walk could not contradict: `guard` is a door
-# the same walk still reports 31 times package-wide.
+# adds the module it finished, and a module holding more than one is pinned only once EVERY one of
+# its failure returns has been annotated and read. Which slice took which module is in #1556 and in
+# git, not here. Measured at this tip: 32 of 33 modules that hold a failure return at all. **2
+# failure returns are still blind**, both in `service/clearnet_sync.py` and both through the
+# `except` door — the handle-guard population closed at slice 8. That last clause is a measurement
+# and not a reading the walk could not contradict: `guard` is a door the walk still reports 31
+# times package-wide.
 #
 # Every figure above is re-derived at the head being shipped, never carried across a slice: 5b moved
 # this tuple from 18 to 21 and left the sentence beside it saying 18. A slice adds rows to a tuple
@@ -65,15 +59,12 @@ moved the data, which is the failure the pin comment below records happening twi
 # unannotated `None` returns and `check` two bare ones, all six OUTSIDE the gate's two doors —
 # pinned, law 1 honestly green, and NOT "fully annotated".
 #
-# That sentence was true and, until #1604, it was the ONLY one of its kind here. At #1604 eight
-# other pinned modules held the same residue and were named nowhere but inside the tuple below, so
-# a reader who found `tor_heal.py`'s disclosure could reasonably infer the rest were clean: an
-# asymmetric disclosure is worse than a uniform absence, because the silence beside the others
-# reads as a statement. That count is written in the past tense on purpose — it was `Eight other
-# pinned modules hold`, present tense, and two slices had made it false. The residue is now
-# MEASURED for every pinned module and printed by `TestTheResidueThePinCannotRuleOn` in
-# `test_annotation_coverage.py`, which is the form of disclosure that cannot go asymmetric again —
-# a module joining `PINNED` gets a line whether anyone writes a sentence or not.
+# That sentence was true and, until #1604, the ONLY one of its kind here — eight other pinned
+# modules held the same residue, named nowhere but inside the tuple below, so a reader who found
+# `tor_heal.py`'s disclosure could reasonably infer the rest were clean. An asymmetric disclosure is
+# worse than a uniform absence: the silence beside the others reads as a statement. The residue is
+# now MEASURED for every pinned module and printed by `TestTheResidueThePinCannotRuleOn` — a module
+# joining `PINNED` gets a line whether anyone writes a sentence or not, and cannot go asymmetric.
 #
 # Slice 7 is `service/storage_service.py`, the first slice carried by the HANDLE GUARD rather than
 # the `except` door: nine of its ten come through the guard, and `_prune_quarantined` is the one
@@ -93,8 +84,7 @@ moved the data, which is the failure the pin comment below records happening twi
 # `unjudged`, and law 2 reds. That was seeded and confirmed, because a law nobody fired is a law
 # nobody has evidence for.
 #
-# The module's EIGHT `collapse` rows are untouched by this slice and stay flagged, as does the
-# residue below. A pin is coverage of the mechanism; it clears nothing.
+# The module's `collapse` rows and its residue are untouched by this slice and stay flagged.
 #
 # The reading is also what found **#1615**: `add_block` and `add_worker_history` stamp the per-table
 # write-health signal, and the guard returns BEFORE either stamp — so after a failed corruption
@@ -107,12 +97,11 @@ moved the data, which is the failure the pin comment below records happening twi
 # same way (zero valued returns, zero yields, with `get_xvb_history`'s three valued returns as the
 # control that the walk can see one). Three more `procedure` rows, ZERO to `signed`. It closes the
 # HANDLE-GUARD population — at slice 8's own head every one of the twelve failure returns still
-# blind came through the `except` door. That figure is deliberately left scoped to that head rather
-# than updated in place: slice 9 took two of them and the live count is in the header above. A
-# past-tense sentence about a shipped slice cannot be falsified by a LATER slice — but it can still
-# be wrong at the head it describes, and slice 9 found exactly that in the sibling test file, where
-# "the twelve that score zero" had drifted to thirteen before any slice noticed. Scoping a figure
-# to its head protects it from the future, not from the measurement.
+# blind came through the `except` door, a figure left scoped to that head rather than updated in
+# place. A past-tense sentence cannot be falsified by a LATER slice, but it can still be wrong at
+# the head it describes: slice 9 found exactly that in the sibling test file, where "the twelve
+# that score zero" had drifted to thirteen unnoticed. Scoping a figure to its head protects it
+# from the future, not from the measurement.
 #
 # One thing here is worth carrying: this module's residue and its blind set were the SAME THREE
 # SITES. The gate saw them through the guard door, and #1604's sweep saw them as falsy returns from
@@ -195,20 +184,32 @@ moved the data, which is the failure the pin comment below records happening twi
 #
 # One thing slice 10 has that slices 1-9 did not, and it narrows what the proof claims. Annotating
 # a NESTED def is not free at the bytecode level: both annotated functions ARE bytecode-identical
-# base-vs-head, but the enclosing `_log_filters` is NOT, and that is correct rather than a defect.
-# Its delta was read instruction by instruction and is exactly the annotation built at def time —
-# a `'return'`/`float`/`None`/`BINARY_OP |`/`BUILD_TUPLE` prologue, `MAKE_FUNCTION closure` becoming
-# `MAKE_FUNCTION annotations, closure`, and the two jump offsets that prologue shifts. Nothing else
-# moved, and the package already carries the shape (`wizard.py:build_config`). Measured for what is
-# left, keyed by NODE rather than by name and with a control that the walk can report a nested def
-# at all: of the EIGHT blind functions remaining, SIX are class methods and TWO are module-level.
-# None is nested inside a FUNCTION, which is the only scope that rebuilds the annotation per call —
-# a method's is built once in the class body at import. So no remaining slice of #1556 inherits
+# base-vs-head, but the enclosing `_log_filters` is NOT — its whole delta is the annotation built at
+# def time, read instruction by instruction, and that is correct rather than a defect. A FUNCTION
+# scope is the only one that rebuilds an annotation per call; a method's is built once in the class
+# body at import. Re-measured at this tip keyed by NODE, with a control that the walk can report a
+# nested def at all: both blind functions left are class methods, so nothing remaining inherits
 # this. Nothing is claimed about a nested def some future slice might introduce.
 #
 # The module's residue went 3 sites in 2 functions to ZERO, DISCHARGING the prediction slice 9's
 # retraction left standing above: it named `web/server.py` as the module where `blind` and the
 # residue are the SAME SET, and annotating the pair cleared both instruments at once.
+#
+# Slice 11 takes `alert_service.py`, `control_service.py` and `telegram_commands.py` under
+# `service/` together, because not one of them owes an `_UNJUDGED_AND_READ` entry. Every verdict was
+# READ off `classify` after annotating, never predicted: `process` and `_load_core_keys` ->
+# `collapse` (each returns `[]` where the success value is a list — the defect #1556 documents, not
+# one a slice fixes); `maybe_daily_summary`, `result`, `_safe_reply_for` -> `signed`;
+# `_dispatch_control` -> `procedure` (ONE return, bare, in the handler). No pair shared a verdict.
+#
+# Three `signed` rows are weaker than the word — one here, two from earlier slices, recorded
+# together because disclosing only the new one is what #1604 was. `classify` reads `signed` off the
+# FAILURE returns ALONE and cannot see a SUCCESS return that is a CALL producing the same marker.
+# Measured over all 31: `_safe_reply_for` (`reply_for` answers `None` on 3 of its 15 returns),
+# `client/xvb_client.py:get_stats` (`_parse_html`, 2), `service/price_feed.py:fetch`
+# (`parse_prices`, 2). Each type is the true one and stays; that a caller can tell the failure from
+# the quiet success is NOT claimed — seeing that needs the callee's returns, a whole-package
+# inference this walk deliberately does not make.
 #
 # Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
 # written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
@@ -241,12 +242,15 @@ PINNED = (
     "service/healthchecks.py",
     "service/notify_sinks.py",
     "service/telegram_notifier.py",
+    "service/alert_service.py",
     "service/audit_service.py",
+    "service/control_service.py",
     "service/data_helpers.py",
     "service/egress.py",
     "service/price_feed.py",
     "service/steering_projection.py",
     "service/storage_service.py",
+    "service/telegram_commands.py",
     "service/telemetry_store.py",
     "service/tor_heal.py",
     "service/update_checker.py",
@@ -290,13 +294,16 @@ _ANCHORS = {
     "service/healthchecks.py": "service/healthchecks.py:ping",
     "service/notify_sinks.py": "service/notify_sinks.py:_post",
     "service/telegram_notifier.py": "service/telegram_notifier.py:send",
+    "service/alert_service.py": "service/alert_service.py:process",
     "service/audit_service.py": "service/audit_service.py:_tail_json_lines",
+    "service/control_service.py": "service/control_service.py:result",
     "service/data_helpers.py": "service/data_helpers.py:_read_host_config",
     "service/egress.py": "service/egress.py:_sinks_all_private",
     "service/price_feed.py": "service/price_feed.py:parse_prices",
     "service/xvb_standby.py": "service/xvb_standby.py:parse_standby",
     "service/steering_projection.py": "service/steering_projection.py:won_round_live",
     "service/storage_service.py": "service/storage_service.py:add_block",
+    "service/telegram_commands.py": "service/telegram_commands.py:_dispatch_control",
     "service/telemetry_store.py": "service/telemetry_store.py:add_xvb_history",
     "service/tor_heal.py": "service/tor_heal.py:_probe_egress",
     "service/update_checker.py": "service/update_checker.py:latest_release",
