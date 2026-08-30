@@ -451,7 +451,7 @@ def build_proxy_summary(data):
     }
 
 
-def _ip_to_sort_int(ip):
+def _ip_to_sort_int(ip) -> int:
     """Pack a dotted-quad IP into an int for client-side numeric sorting; 0 on malformed input."""
     try:
         a, b, c, d = (int(part) for part in ip.split("."))
