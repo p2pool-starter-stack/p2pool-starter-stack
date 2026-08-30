@@ -85,25 +85,29 @@ _RIG_LEDGER=""
 # a separate boolean is what #1404 turned out to be.
 _RIG_KEY_FOREIGN=""
 
-# The EXIT handler: restore everything still outstanding, THEN do lib.sh's holder cleanup. Ordering
-# matters — the rig restore is the thing worth doing, so it goes first and the breadcrumb removal
-# cannot be skipped by it (no `set -e` here, and every step is best-effort).
+# The EXIT handler: restore everything still outstanding, THEN lib.sh's holder cleanup, THEN
+# whatever we displaced. The order is the whole content of this function, and OUR OWN work is
+# sequenced ahead of anyone else's because only the last step can end the process (no `set -e` here,
+# and every step is best-effort).
 rig_key_atexit() {
     rig_key_unwind
-    # Whatever we displaced, in the order we displaced it (#1404). After the unwind, because the rig
-    # restore is the thing worth doing and a foreign handler is somebody else's best-effort cleanup;
-    # before the holder removal, so a foreign handler cannot skip it.
-    [ -z "$_RIG_KEY_FOREIGN" ] || eval "$_RIG_KEY_FOREIGN"
     # The fold lib.sh:rig_lock's comment prescribes. Re-derived from the durable env/default rather
     # than a local, exactly as the trap it replaces did, and best-effort in the same two steps: a
     # holder marker we cannot remove must never be fatal. (#244/#249)
     #
-    # KEPT rather than left to the capture above, which looks redundant and is not: if a foreign trap
+    # KEPT rather than left to the capture below, which looks redundant and is not: if a foreign trap
     # displaced rig_lock's BEFORE our first mark, the capture replays that foreign handler and the
     # breadcrumb strands. Measured — deleting this reds the NESTED case in
     # selftest-rig-key-ledger.sh, which exists to hold it here, and reds nothing else. (#1404)
     local h="${RIG_LOCK_HOLDER:-${RIG_LOCK_FILE:-/var/lock/rig-e2e.lock}.holder}"
     rm -f "$h" 2>/dev/null || sudo -n rm -f "$h" 2>/dev/null || true
+    # Whatever we displaced, in the order we displaced it (#1404) — and LAST (#1571). A captured
+    # handler that calls `exit` ends the shell from inside this trap, and bash does not re-enter an
+    # EXIT trap on an `exit` inside one, so anything sequenced after such a handler never runs at
+    # all. The first shape of this ran the capture first and asserted in a comment that the removal
+    # could not be skipped by it; it could, and that is #1571. Nothing wants the other order: the
+    # breadcrumb is display-only and no handler reads it.
+    [ -z "$_RIG_KEY_FOREIGN" ] || eval "$_RIG_KEY_FOREIGN"
 }
 
 # Install the composed trap at every mark, capturing anything it displaces (#1404). Still lazy — it
