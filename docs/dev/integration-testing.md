@@ -66,13 +66,21 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   through a redactor. **What that redactor covers is narrower than "artifacts are redacted"
   suggests**, and the gap is worth knowing before you trust a bundle. It reaches: a `KEY=value`
   line whose name ends in `_PASSWORD` / `_TOKEN` / `_SECRET`; a credential given as a flag value;
-  a v3 onion; and any opaque run of 90 or more characters, which is what catches wallet addresses
-  (and a sha512 with them); and a JSON `"key": "value"` whose key ends in one of a list of secret
-  words — `password`, `token`, `key`, `username`, `wallet` and the rest, matched without regard to
-  case, so `apiKey` and `PASSWORD` are reached alongside `api_key`.
+  a v3 onion; any opaque run of 90 or more characters (and a sha512 with them); the token after
+  `--wallet` and the one after `--merge-mine`'s URI, by POSITION; and a JSON `"key": "value"` whose
+  key ends in one of a list of secret words — `password`, `token`, `key`, `username`, `wallet` and
+  the rest, matched without regard to case, so `apiKey` and `PASSWORD` are reached alongside
+  `api_key`.
   [#1582](https://github.com/p2pool-starter-stack/pithead/issues/1582) closed the flag-value and
   address-shape gaps; [#1587](https://github.com/p2pool-starter-stack/pithead/issues/1587) added
-  the JSON one. **That last rule is keyed on the field NAME, not the value, and that is forced**:
+  the JSON one; [#1596](https://github.com/p2pool-starter-stack/pithead/issues/1596) added the
+  positional one. **The length rule never covered wallet addresses as widely as it read**: a
+  positional argument has no name to key on, so that rule was the ONLY one reaching the Tari
+  address, and of the three Tari forms this repo accepts it reached only the base58 one — by a
+  single character.
+  Lowering the bound is not available: it starts matching ordinary log tokens well before it
+  reaches the 48-character form, and no bound reaches the emoji form at all.
+  **The JSON rule is keyed on the field NAME, not the value, and that is forced**:
   a view key and a container digest are both 64 hex characters, so nothing in the value separates
   them. **The name list is open, and one field is still out of reach** — `notifications.ntfy.url`
   is a capability URL whose key is the bare word `url`, which only its nesting separates from the
@@ -700,7 +708,8 @@ Several self-tests sit beside it as standalone files, picked up by the same glob
 the counters and the real `summary()`, it censuses every harness file and fails if a skip leaves
 through a bare `it_warn` — by wording, and by shape for the drops that never say "skipping".
 `selftest-redact.sh` covers the shapes the redactor used to miss — a credential passed as a flag
-value, and secrets in JSON under a key of any case — and asserts in each case that the *raw* value
+value, an address given by POSITION in an argv line, and secrets in JSON under a key of any case —
+and asserts in each case that the *raw* value
 is gone rather than that a `<redacted>` marker appeared, since a marker can come from some other
 field on the same line. Its JSON population is derived from `config.reference.json` rather than
 listed in the file, under a screen deliberately wider than the redactor's own list, so a sensitive

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Self-test for the two redaction shapes #1582 found missing.
+# Self-test for the redaction shapes successive issues found missing: #1582's two to begin with,
+# then #1587's JSON form, #1590's casing, and #1596's positional addresses. Sections are labelled.
 #
 # redact() guarded two shapes — `KEY=value` for *_PASSWORD/*_TOKEN/*_SECRET, and v3 onion
 # hostnames — and selftest.sh asserted exactly those four cases. So the coverage matched the
@@ -66,6 +67,68 @@ case "$OUT" in *"$XMR"*) it_fail "argv line: wallet absent" "wallet leaked" ;; *
 assert_contains "argv line: onion still redacted" "$OUT" "<redacted>.onion"
 assert_contains "argv line: non-secret argument kept" "$OUT" "--stratum 0.0.0.0:3333"
 
+echo "== redact: addresses by POSITION — the shape no length bar reaches (#1596) =="
+# The p2pool launch line (docker-compose.yml:416-421) names the Monero address as `--wallet <addr>`
+# and gives the Tari one as a BARE POSITIONAL after `--merge-mine tari://host:port`. A positional
+# has no name to key on, so the >=90-char SHAPE rule was carrying both — and it reaches only one of
+# the three Tari forms `28-parse-and-validate-config.sh` accepts: the base58 form clears 90 by a
+# SINGLE character, and the other two sit far below it. Lowering the bar is not the fix — it starts
+# matching ordinary log tokens, and no threshold reaches the emoji form at all. Hence POSITION.
+#
+# The cases below are written from the THREE FORMS the validator accepts, not from what the
+# expression happens to handle — the failure #1582 was found by. Which case proves which arm is
+# stated at ATTRIBUTION, because two of them are ALSO reachable by the length bar. The Monero
+# address is NOT re-asserted per form — the --wallet path is identical on all three lines, so
+# that would be one measurement printed three times; the two arms are proven to coexist on one
+# line by the quoted COMMAND column case below, which asserts both.
+TARI_B58="12$(printf 'B%.0s' $(seq 1 89))"                # 91 chars — cleared the old bar by ONE
+TARI_SINGLE="1224$(printf 'C%.0s' $(seq 1 44))"           # 48 chars — below any usable bar
+TARI_EMOJI="$(printf '\xf0\x9f\x90\xa2%.0s' $(seq 1 67))" # 67 glyphs, non-alphanumeric
+for _form in "base58:$TARI_B58" "single:$TARI_SINGLE" "emoji:$TARI_EMOJI"; do
+    _name="${_form%%:*}"
+    _addr="${_form#*:}"
+    OUT="$(printf -- 'p2pool --wallet %s --merge-mine tari://node:18142 %s --stratum 0.0.0.0:3333\n' \
+        "$XMR" "$_addr" | redact)"
+    case "$OUT" in
+    *"$_addr"*) it_fail "argv positional: Tari $_name address absent" "address survived: $OUT" ;;
+    *) it_pass "argv positional: Tari $_name address absent" ;;
+    esac
+done
+
+# ATTRIBUTION. `single` and `emoji` are the rows that discriminate for the --merge-mine arm; the
+# base58 row is 91 characters and the >=90 bar kills it either way. For the --wallet arm the
+# discriminating case is a SHORT value — below every length bar and under no JSON key, so the
+# POSITION rule is the only thing in redact() that can reach it. Without this row, deleting the
+# --wallet pattern leaves this whole file green, the 95-char Monero fixture being caught twice.
+SHORT_ARGV_WALLET="4ShortNotAnAddress"
+OUT="$(printf -- 'p2pool --wallet %s --stratum 0.0.0.0:3333\n' "$SHORT_ARGV_WALLET" | redact)"
+case "$OUT" in
+*"$SHORT_ARGV_WALLET"*) it_fail "argv positional: a SHORT value after --wallet is redacted" "value survived: $OUT" ;;
+*) it_pass "argv positional: a SHORT value after --wallet is redacted" ;;
+esac
+
+# The token match is GREEDY to the next space, deliberately, so it absorbs punctuation attached to
+# the address — `compose-ps.txt` quotes its COMMAND column and the closing quote goes with it. The
+# tidier alternative (stop the match at a quote) was MEASURED and refused: on `--wallet "<addr>"`
+# it declines the leading quote, matches nothing, and the address survives WHOLE. Absorbing a
+# quote is cosmetic; leaving one behind is the partial redaction this file exists to catch. Both
+# quotings are pinned here so the trade-off cannot be reversed for tidiness without a red row.
+OUT="$(printf -- 'itest-p2pool "/entrypoint.sh --wallet %s --merge-mine tari://n:1 %s" Up\n' \
+    "$XMR" "$TARI_SINGLE" | redact)"
+case "$OUT" in
+*"$XMR"*) it_fail "quoted COMMAND column: Monero address absent" "address survived: $OUT" ;;
+*) it_pass "quoted COMMAND column: Monero address absent" ;;
+esac
+case "$OUT" in
+*"$TARI_SINGLE"*) it_fail "quoted COMMAND column: Tari address absent" "address survived: $OUT" ;;
+*) it_pass "quoted COMMAND column: Tari address absent" ;;
+esac
+OUT="$(printf -- 'cmd --wallet "%s" --stratum 0.0.0.0:3333\n' "$TARI_SINGLE" | redact)"
+case "$OUT" in
+*"$TARI_SINGLE"*) it_fail "a QUOTED address after --wallet is redacted WHOLE" "address survived: $OUT" ;;
+*) it_pass "a QUOTED address after --wallet is redacted WHOLE" ;;
+esac
+
 echo "== redact: over-redaction guard — debugging value must survive =="
 # "Over-redaction is safe" is true of secrets, not of everything: an artifact with the image
 # digests and endpoints stripped is useless for the debugging it exists for. These are the
@@ -74,6 +137,12 @@ OUT="$(printf 'sha256:%s\nHOST_IP=box.lan\n--merge-mine tari://node:18142\n' "$S
 assert_contains "a sha256 digest survives" "$OUT" "$SHA"
 assert_contains "a non-secret KEY=value survives" "$OUT" "HOST_IP=box.lan"
 assert_contains "a non-secret flag value survives" "$OUT" "--merge-mine tari://node:18142"
+# The positional rule replaces the token AFTER the URI, never the URI itself, and refuses a token
+# beginning with `-`: a flag is never an address, so a change in argument order cannot silently
+# corrupt the line the endpoint explains. The assertion above is the same guard with the URI last.
+OUT="$(printf -- 'p2pool --merge-mine tari://node:18142 --local-api --stratum 0.0.0.0:3333\n' | redact)"
+assert_contains "the --merge-mine endpoint itself survives" "$OUT" "tari://node:18142"
+assert_contains "a FLAG after the endpoint is not taken for an address" "$OUT" "--local-api"
 
 echo "== redact: the JSON shape, keyed on the field name (#1587) =="
 # #1582 was the argv shape. This is the JSON one, and it could not be fixed the same way: a

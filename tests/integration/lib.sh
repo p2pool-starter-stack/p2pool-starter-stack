@@ -33,13 +33,13 @@ it_err() { echo -e "${IT_RED}[ITEST]${IT_RESET} $1" >&2; }
 it_step() { echo -e "${IT_DIM}  → $1${IT_RESET}"; }
 
 # --- Secrets hygiene --------------------------------------------------------
-# Redact before anything reaches a log or the terminal. Three shapes: KEY=value / --flag value by
-# NAME, an opaque run >=90 chars by SHAPE, and JSON "key": "value" by the key's SUFFIX (#1587),
-# matched CASE-INSENSITIVELY (#1590) — add new SPELLINGS, never case variants. THE LIST IS OPEN;
-# a closed one opened #1582. Nesting is invisible line-wise: ntfy's bare "url" is secret, xvb's not.
+# Redact before anything reaches a log or the terminal. FOUR shapes: KEY=value / --flag value by NAME;
+# an opaque run >=90 chars by SHAPE; the token after --wallet and after --merge-mine's URI by POSITION
+# (#1596: two of three Tari forms are too short for SHAPE); JSON "key": "value" by key SUFFIX (#1587)
+# CASE-INSENSITIVELY (#1590) — add SPELLINGS, never case. LIST IS OPEN (#1582); gaps: selftest-redact.sh
 redact() {
     sed -E \
-        -e 's/(PROXY_AUTH_TOKEN|MONERO_NODE_PASSWORD|MONERO_NODE_USERNAME|.*_PASSWORD|.*_TOKEN|.*_SECRET)=.*/\1=<redacted>/; s/(--[a-z-]*(login|password|passwd|secret|token|key))([ =])[^[:space:]]+/\1\3<redacted>/g' \
+        -e 's/(PROXY_AUTH_TOKEN|MONERO_NODE_PASSWORD|MONERO_NODE_USERNAME|.*_PASSWORD|.*_TOKEN|.*_SECRET)=.*/\1=<redacted>/; s/(--[a-z-]*(login|password|passwd|secret|token|key))([ =])[^[:space:]]+/\1\3<redacted>/g; s/(--wallet[ =])[^-[:space:]][^[:space:]]*/\1<redacted-address>/g; s/(--merge-mine[ =][^[:space:]]+[[:space:]]+)[^-[:space:]][^[:space:]]*/\1<redacted-address>/g' \
         -e 's/("[A-Za-z0-9_]*(password|passwd|secret|token|login|username|key|wallet|wallet_address|ping_url|donor_id)"[[:space:]]*:[[:space:]]*")([^"\]|\\.)*/\1<redacted>/gI; s/[a-z2-7]{56}\.onion/<redacted>.onion/g; s/[A-Za-z0-9]{90,}/<redacted-address>/g'
 }
 
