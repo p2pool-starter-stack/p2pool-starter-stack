@@ -338,6 +338,37 @@ class TestTelemetryTableHealth:
         health["blocks"]["healthy"] = False
         assert state_manager.get_table_health()["blocks"]["healthy"] is True
 
+    def test_a_closed_handle_reads_unhealthy_for_every_table(self, state_manager):
+        # #1615: the closed-handle guard returns before either stamp, so the RAW entries stay
+        # healthy while every write is dropped -- get_table_health folds the handle in instead.
+        state_manager.add_block(time.time(), height=1, difficulty=1.0)
+        # Control against a derivation that is wrong in the other direction: a write that DID
+        # land, on a live handle, still reads healthy.
+        assert state_manager.get_table_health()["blocks"]["healthy"] is True
+        state_manager.close()
+        assert [t for t, row in state_manager.get_table_health().items() if row["healthy"]] == []
+        # ...and the raw dict is untouched, so the fix is at the read and not a fifth stamp.
+        assert state_manager.table_health["blocks"]["healthy"] is True
+
+    def test_last_write_survives_a_closed_handle(self, state_manager):
+        # `last_write` is a historical fact about a write that landed; only `healthy` is derived.
+        t0 = time.time()
+        state_manager.add_block(t0, height=1, difficulty=1.0)
+        state_manager.close()
+        assert state_manager.get_table_health()["blocks"] == {"healthy": False, "last_write": t0}
+
+    def test_a_failed_recovery_reads_unhealthy(self, state_manager, monkeypatch):
+        # The production path #1615 reports, rather than close(): _recover_corrupt_db's reconnect
+        # raises, `_conn` stays None for good, and every telemetry write is dropped from then on.
+        def boom(*_a, **_kw):
+            raise sqlite3.OperationalError("unable to open database file")
+
+        monkeypatch.setattr("mining_dashboard.service.storage_service.sqlite3.connect", boom)
+        state_manager._recover_corrupt_db("test: forced reconnect failure")
+        assert state_manager.is_db_unrecoverable() is True
+        state_manager.add_block(time.time(), height=1, difficulty=1.0)
+        assert state_manager.get_table_health()["blocks"]["healthy"] is False
+
 
 class TestTelemetryTablesAfterClose:
     """After close() the connection is None — every v1.7 telemetry-table accessor must no-op /

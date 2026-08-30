@@ -69,7 +69,7 @@ WORKER_HISTORY_RETENTION_SEC = HISTORY_RETENTION_SEC  # 30 days
 # unbounded: keep the newest N. Decades of legit wins fit; a hostile feed cannot grow it past this.
 RAFFLE_WINS_MAX_ROWS = 5000
 
-# Table names carrying a per-table write-health signal (see __init__ / _table_write_ok below).
+# Table names carrying a per-table write-health signal (see get_table_health / _table_write_ok).
 # It stays HERE and stays a plain name list: __init__ is its only reader, it seeds a dict of
 # health entries from it, and it never dispatches into a method — so the three tables whose
 # writers moved to telemetry_store.py (#1369) need no indirection back out of this module.
@@ -158,15 +158,11 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
         # on the next recovery attempt that succeeds.
         self.db_unrecoverable = False
 
-        # Per-table "last successful write" health signal for the v1.7 telemetry backbone (#196
-        # Wave-0), mirroring db_healthy above but per table: DataService's whole poll loop is one
-        # big try/except, so a capture hook that starts silently raising would otherwise stop
-        # writing forever with no visible symptom. `healthy` flips False on a write failure
-        # (routed through _db_error, so it also trips the global #131 badge); `last_write` is the
-        # wall-clock of the last successful write, None until the first one lands.
-        self.table_health = {
-            name: {"healthy": True, "last_write": None} for name in _TELEMETRY_TABLES
-        }
+        # Per-table write health for the v1.7 telemetry backbone (#196 Wave-0), mirroring
+        # db_healthy above but per table. RAW: these entries record write ATTEMPTS only and know
+        # nothing about the handle, so a closed one leaves them all reading healthy — read through
+        # get_table_health, which folds that in (#1615), never this dict directly.
+        self.table_health = {n: {"healthy": True, "last_write": None} for n in _TELEMETRY_TABLES}
 
         self._conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -925,8 +921,11 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
     def get_table_health(self) -> dict[str, dict[str, Any]]:
         """Per-table write health for the v1.7 telemetry backbone (#196): ``{table: {"healthy",
         "last_write"}}``. Lets a caller notice a capture hook that has silently stopped writing —
-        the data-service poll loop is one big try/except, so nothing else would surface that."""
-        return {k: dict(v) for k, v in self.table_health.items()}
+        the data-service poll loop is one big try/except, so nothing else would surface that. A
+        closed handle drops every write at the guard before either stamp runs, so ``healthy`` is
+        derived here (#1615) — no table reads healthy while there is no handle to write through."""
+        live = bool(self._conn)  # the very test each writer's guard makes, not a re-spelling of it
+        return {k: {**v, "healthy": v["healthy"] and live} for k, v in self.table_health.items()}
 
     def add_block(self, ts: float, height: int, difficulty: float) -> None:
         """Record one pool block-found event (#196): permanent (no retention prune — a handful of
