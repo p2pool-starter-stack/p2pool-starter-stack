@@ -65,12 +65,13 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   comparing the hash, so the plaintext never crosses the wire, and every captured artifact passes
   through a redactor. **What that redactor covers is narrower than "artifacts are redacted"
   suggests**, and the gap is worth knowing before you trust a bundle. It reaches: a `KEY=value`
-  line whose name ends in `_PASSWORD` / `_TOKEN` / `_SECRET`; a credential given as a flag value;
-  a v3 onion; any opaque run of 90 or more characters (and a sha512 with them); the token after
-  `--wallet` and the one after `--merge-mine`'s URI, by POSITION; a JSON `"key": "value"` whose
-  key ends in one of a list of secret words — `password`, `token`, `key`, `username`, `wallet` and
-  the rest, matched without regard to case, so `apiKey` and `PASSWORD` are reached alongside
-  `api_key`; and a globally-routable IP address, by SCOPE. What it keeps is exactly the set
+  line and a JSON `"key": "value"` whose key ends in one of a SINGLE shared list of secret words —
+  `password`, `token`, `key`, `username`, `wallet`, `ping_url` and the rest — the JSON side matched
+  without regard to case, so `apiKey` and `PASSWORD` are reached alongside `api_key`, the
+  `KEY=value` side uppercase-only because `.env` is generated uppercase throughout; a credential
+  given as a flag value; a v3 onion; any opaque run of 90 or more characters (and a sha512 with
+  them); the token after `--wallet` and the one after `--merge-mine`'s URI, by POSITION; and a
+  globally-routable IP address, by SCOPE. What it keeps is exactly the set
   `is_public_ip` calls private — loopback, RFC1918, link-local and CGNAT — because an artifact whose
   port map and container addresses have been stripped cannot be triaged, and because holding the two
   lists identical is what makes the coverage argument checkable rather than anecdotal.
@@ -79,7 +80,13 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   the JSON one; [#1596](https://github.com/p2pool-starter-stack/pithead/issues/1596) added the
   positional one; [#1609](https://github.com/p2pool-starter-stack/pithead/issues/1609) added the
   IP one, after an audit found `pithead doctor` writing the host's own public address into
-  `doctor.txt`. **The length rule never covered wallet addresses as widely as it read**: a
+  `doctor.txt`; and [#1611](https://github.com/p2pool-starter-stack/pithead/issues/1611) put the
+  `KEY=value` rule onto the JSON rule's vocabulary. Those two had DRIFTED, which is a sharper
+  failure than a missing spelling: the same field carrying the same value was classified two ways
+  depending only on the syntax it arrived in, so a wallet address below the length bar was
+  redacted in `config.json` and survived verbatim in `env.redacted.txt`. Keying one rule on the
+  other's list leaves one list to extend rather than two to drift apart, and the self-test asserts
+  mechanically that they still agree. **The length rule never covered wallet addresses as widely as it read**: a
   positional argument has no name to key on, so that rule was the ONLY one reaching the Tari
   address, and of the three Tari forms this repo accepts it reached only the base58 one — by a
   single character.
@@ -725,7 +732,14 @@ its port map stripped is useless for the triage it exists for. That timestamp is
 near-miss: HAProxy's `DD/Mon/YYYY:HH:MM:SS` reads as an IPv6 address, because a four-digit year
 opening with a 2 supplies the first hextet and the clock supplies the colon groups. It accounted
 for 278 of the 280 lines the first draft of the IP rule changed across two captured bundles, and
-`lint-topology` makes the same reading of it.
+`lint-topology` makes the same reading of it. That file also holds the vocabulary invariant: both
+of redact()'s suffix lists are read out of `lib.sh` and checked to agree with each other and to sit
+inside the screen, so the drift #1611 found cannot reopen quietly. `selftest-redact-env.sh` carries
+the `KEY=value` shape separately, including the three Tari address forms as `.env` renders them and
+the survivors that make a bundle worth keeping — a public endpoint, an auth mode string, a routing
+id. Its widening was measured before it shipped: across two archived bundles and the deployed
+`.env` it newly reaches ten keys, the same ten in all three populations, and changes nothing at all
+in the other six captured artifacts.
 `selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures,
 so every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
 READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack. It

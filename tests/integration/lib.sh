@@ -33,13 +33,13 @@ it_err() { echo -e "${IT_RED}[ITEST]${IT_RESET} $1" >&2; }
 it_step() { echo -e "${IT_DIM}  → $1${IT_RESET}"; }
 
 # --- Secrets hygiene --------------------------------------------------------
-# Redact before anything reaches a log or the terminal. FIVE shapes: KEY=value / --flag value by NAME;
-# an opaque run >=90 chars by SHAPE; the token after --wallet and after --merge-mine's URI by POSITION
-# (#1596: two of three Tari forms are too short for SHAPE); JSON "key": "value" by key SUFFIX (#1587)
-# CASE-INSENSITIVELY (#1590) — add SPELLINGS, never case; an IP by SCOPE (#1609). OPEN: selftest-redact.sh
+# Redact before anything reaches a log or the terminal. FIVE shapes: KEY=value and JSON "key": "value"
+# share ONE key-SUFFIX vocabulary (#1587; #1590 case-insensitive JSON-side; #1611 — they had drifted, so
+# one field was classified two ways); --flag value by NAME; >=90 chars by SHAPE; --wallet/--merge-mine's
+# next token by POSITION (#1596); an IP by SCOPE (#1609). SPELLINGS go in BOTH; selftest-redact*.sh.
 redact() {
     sed -E \
-        -e 's/(PROXY_AUTH_TOKEN|MONERO_NODE_PASSWORD|MONERO_NODE_USERNAME|.*_PASSWORD|.*_TOKEN|.*_SECRET)=.*/\1=<redacted>/; s/(--[a-z-]*(login|password|passwd|secret|token|key))([ =])[^[:space:]]+/\1\3<redacted>/g; s/(--wallet[ =])[^-[:space:]][^[:space:]]*/\1<redacted-address>/g; s/(--merge-mine[ =][^[:space:]]+[[:space:]]+)[^-[:space:]][^[:space:]]*/\1<redacted-address>/g' \
+        -e 's/([A-Za-z0-9_]*(PASSWORD|PASSWD|SECRET|TOKEN|LOGIN|USERNAME|KEY|WALLET|WALLET_ADDRESS|PING_URL|DONOR_ID))=.*/\1=<redacted>/; s/(--[a-z-]*(login|password|passwd|secret|token|key))([ =])[^[:space:]]+/\1\3<redacted>/g; s/(--wallet[ =])[^-[:space:]][^[:space:]]*/\1<redacted-address>/g; s/(--merge-mine[ =][^[:space:]]+[[:space:]]+)[^-[:space:]][^[:space:]]*/\1<redacted-address>/g' \
         -e 's/("[A-Za-z0-9_]*(password|passwd|secret|token|login|username|key|wallet|wallet_address|ping_url|donor_id)"[[:space:]]*:[[:space:]]*")([^"\]|\\.)*/\1<redacted>/gI; s/[a-z2-7]{56}\.onion/<redacted>.onion/g; s/[A-Za-z0-9]{90,}/<redacted-address>/g; s/(^|[^0-9.])(0|10|127|192\.168|169\.254|172\.(1[6-9]|2[0-9]|3[01])|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7]))\./\1\2\x01/g; s/(^|[^0-9.])([0-9]{1,3}(\.[0-9]{1,3}){3})\b/\1<redacted-ip>/g; s/(^|[^0-9a-fA-F:\/])([23][0-9a-fA-F]{3}(:[0-9a-fA-F]{0,4}){2,7})/\1<redacted-ip>/g; s/\x01/./g'
 }
 
