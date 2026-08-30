@@ -141,6 +141,17 @@ class TestTheResidualIsReportedNotCertified:
                 f"  and {len(package['blind'])} failure returns in UNANNOTATED functions, which "
                 "this mechanism cannot judge either way."
             )
+            # The `unjudged` rows are NAMED, not counted, and that is the difference between this
+            # line and the one above it. There are few enough to name; the day there are not, the
+            # count alone would be the baseline #1487 refused. Reporting them here matters because
+            # the verdict was added precisely so that declining to rule is something this gate
+            # SAYS — a residual report that omits it puts the silence back one level up.
+            print(
+                f"  and {len(package['unjudged'])} where the gate DECLINES to rule — annotated, "
+                "no out-of-band marker, failure value outside `_EMPTY`:"
+            )
+            for name, values in sorted(package["unjudged"]):
+                print(f"    {name} -> {','.join(values)}")
 
     def test_the_blind_spot_is_measured_rather_than_described(self, package):
         """The unannotated layer is this gate's real limit, so it is asserted to be a known
