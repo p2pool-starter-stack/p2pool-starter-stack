@@ -385,7 +385,7 @@ async def handle_worker_apply(request):
     return web.json_response({"id": rid, **res})
 
 
-async def _finalize_worker_upgrade(state_mgr, worker, version, rid, latest_data=None):
+async def _finalize_worker_upgrade(state_mgr, worker, version, rid, latest_data=None) -> None:
     """The server-side half of recording a worker-upgrade attempt (#1014): ``handle_worker_upgrade``
     returns 202 before any result exists (a rig rebuild can take minutes, so it never waits inline
     like ``handle_worker_apply`` does), so this runs as its own background task and records the
@@ -493,7 +493,7 @@ def _log_filters(request):
     non-numeric reads as absent — a malformed bound must never 500 a log view) and ``q`` trimmed
     and length-capped (it's compared, never stored or echoed unsanitized)."""
 
-    def _num(name):
+    def _num(name) -> float | None:
         v = request.query.get(name)
         if v in (None, ""):
             return None
