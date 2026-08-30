@@ -40,7 +40,7 @@ class MoneroClient:
         self._auth = HTTPDigestAuth(username, password) if username else None
         self.timeout = timeout
 
-    def get_info(self):
+    def get_info(self) -> dict | None:
         """Return monerod's `get_info` payload as a dict, or None if unreachable/errored."""
         try:
             resp = bounded_get(self.url, auth=self._auth, timeout=self.timeout)

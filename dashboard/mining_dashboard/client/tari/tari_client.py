@@ -69,7 +69,7 @@ class TariClient:
             return {**self._last_sync_status, "reachable": False}
         return {"is_syncing": False, "reachable": False}
 
-    async def _fetch_sync_status(self):
+    async def _fetch_sync_status(self) -> dict | None:
         """
         Read sync progress from the node's gRPC. Returns the status dict, or None if the
         node is unreachable (so the caller can fall back to the last known state).
