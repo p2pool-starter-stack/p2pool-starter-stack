@@ -42,7 +42,7 @@ def _valid_watts(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 1e6 else None
 
 
-def load_worker_endpoints(path):
+def load_worker_endpoints(path) -> list[dict]:
     """The validated workers.list[] entries (#506); invalid entries dropped, first name wins.
 
     dashboard.workers[] (#172) is read as a deprecated fallback when workers.list is unset or an

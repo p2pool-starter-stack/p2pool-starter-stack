@@ -50,10 +50,15 @@ import pytest
 from tests.service.annotation_gate import classify, classify_package
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 12 of 33 modules that hold a failure return at
+# adds the module it finished. Measured at this tip: 14 of 33 modules that hold a failure return at
 # all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
-# the six single-function `client/` modules by slice 2, and the four single-function `web/` modules
-# by slice 3.
+# the six single-function `client/` modules by slice 2, the four single-function `web/` modules by
+# slice 3, and the two single-function `config/` modules by slice 4.
+#
+# Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
+# written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
+# (`local_miner_enabled` returning `False`). A slice is coverage of the mechanism, so a slice whose
+# two functions both decline to be signable has done its whole job.
 #
 # Slice 2 wrote here that "no module under `client/` holds an unannotated failure return any more".
 # That is TRUE under `_failure_returns`' definition and it READS as "`client/` is done, never look
@@ -75,6 +80,8 @@ PINNED = (
     "client/tari/tari_wallet_client.py",
     "client/xmrig_client.py",
     "client/xvb_client.py",
+    "config/config.py",
+    "config/worker_endpoints.py",
     "service/worker_config_store.py",
     "web/charts.py",
     "web/infra_views.py",
@@ -97,6 +104,8 @@ _ANCHORS = {
     ),
     "client/xmrig_client.py": "client/xmrig_client.py:_safe_probe_host",
     "client/xvb_client.py": "client/xvb_client.py:get_stats",
+    "config/config.py": "config/config.py:local_miner_enabled",
+    "config/worker_endpoints.py": "config/worker_endpoints.py:load_worker_endpoints",
     "service/worker_config_store.py": "service/worker_config_store.py:note_worker_revision",
     "web/charts.py": "web/charts.py:parse_window",
     "web/infra_views.py": "web/infra_views.py:_ip_to_sort_int",
@@ -124,9 +133,24 @@ _ANCHORS = {
 # not happen", which is what both False paths mean, so there is no out-of-band case to declare.
 # Annotating it `-> bool | None` to reach `signed` would be inventing a return the function never
 # makes — the reason this list exists is to say the gate declines, not to manufacture a verdict.
+#
+# `config/config.py:local_miner_enabled` (slice 4) is the third, and the first member that is NOT
+# an outbound sender — so it deliberately does not lean on the grounds `annotation_gate._EMPTY`
+# records. Those grounds name five senders, and it is worth knowing what they are a sample OF:
+# measured at `b0a32bd`, the tip that comment was written against, TWELVE functions already held a
+# `False` failure return and this was one of them, unannotated. The five were a subset somebody
+# read, never the whole population, so no later member may be waved through by that class — each
+# is read on its own terms, which is what this list is. It returns False when
+# the masked-config mount is missing or unreadable, and its docstring argues the choice outright:
+# DIY stacks without the mount never run the built-in miner. Its sole production caller is
+# arithmetic — `config.py:low_ram_floor_gb` does `+ (LOW_RAM_LOCAL_MINER_GB if
+# local_miner_enabled() else 0)` — so there is no third branch for an out-of-band answer to reach,
+# and False-on-failure and False-because-no-miner move the RAM floor by exactly the same amount.
+# `-> bool | None` would invent a return the function never makes.
 _UNJUDGED_AND_READ = frozenset(
     {
         "client/docker/docker_control.py:_post",
+        "config/config.py:local_miner_enabled",
         "service/worker_config_store.py:worker_config_change_known",
     }
 )
