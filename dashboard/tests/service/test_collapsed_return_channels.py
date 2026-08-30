@@ -140,7 +140,8 @@ class TestTheResidualIsReportedNotCertified:
                 print(f"    {name} -> {','.join(values)}")
             print(
                 f"  and {len(package['blind'])} failure returns in UNANNOTATED functions, which "
-                "this mechanism cannot judge either way."
+                "this mechanism cannot judge. Falsy returns through NEITHER door fall outside "
+                "every count here; `test_annotation_coverage.py` measures those (#1604)."
             )
             # The `unjudged` rows are NAMED, not counted, and that is the difference between this
             # line and the one above it. There are few enough to name; the day there are not, the

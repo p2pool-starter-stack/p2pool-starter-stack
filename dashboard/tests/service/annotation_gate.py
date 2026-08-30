@@ -277,6 +277,21 @@ def classify(source: str, where: str) -> dict[str, list]:
     return verdicts
 
 
+def _package_files() -> list[pathlib.Path]:
+    """Every module in `mining_dashboard`, with the enumeration guard both walks depend on.
+
+    An empty scan is not a clean scan. Every law and every count built on these files is a
+    statement about a set, and a set that is empty because the walk found no files satisfies all of
+    them for the wrong reason. The guard belongs here rather than in any caller, and the comment
+    that used to say so was advice a single caller could not enforce: a second caller inheriting
+    the walk without inheriting the guard is how an empty scan starts reading as a clean one. #1604
+    brought the second caller, so the advice became the shared function it was describing.
+    """
+    files = sorted(_PACKAGE.rglob("*.py"))
+    assert len(files) > 50, "enumeration guard: the package walk found almost nothing"
+    return files
+
+
 def classify_package() -> dict[str, list]:
     """Every failure return in `mining_dashboard`, classified, in one pass over the real package."""
     total: dict[str, list] = {
@@ -287,14 +302,78 @@ def classify_package() -> dict[str, list]:
         "unjudged": [],
         "procedure": [],
     }
-    files = sorted(_PACKAGE.rglob("*.py"))
-    # An empty scan is not a clean scan. Every law built on this result is a statement about a set,
-    # and a set that is empty because the walk found no files satisfies all of them for the wrong
-    # reason. The guard belongs here rather than in either caller: a second caller inheriting the
-    # walk without inheriting the guard is how an empty scan starts reading as a clean one.
-    assert len(files) > 50, "enumeration guard: the package walk found almost nothing"
-    for path in files:
+    for path in _package_files():
         where = str(path.relative_to(_PACKAGE))
         for verdict, rows in classify(path.read_text(), where).items():
             total[verdict].extend(rows)
     return total
+
+
+def _falsy_literal(value: ast.AST | None) -> str | None:
+    """The falsy value a ``return`` yields, or None if it is not one of them — the residue's set.
+
+    Built ON `_collapsed_literal` rather than beside it: every shape that one tracks is falsy, and
+    a second hand-written list of the same shapes is two definitions of one thing, free to drift
+    apart in a direction nobody is measuring. A bare `return` normalises to `None` here for the
+    reason `classify` gives where it does the same — the two spell a single value, and nothing this
+    count is used for can turn on the spelling.
+
+    `""` is the one addition, and it is added HERE rather than in `_collapsed_literal` because the
+    two sets answer opposite questions: that one is what a law FLAGS, kept narrow so every finding
+    is real and so the verdicts quoted with a sha stay put, while this is what a report DISCLOSES,
+    kept wide so the disclosure cannot flatter its own number.
+    """
+    literal = _collapsed_literal(value)
+    if literal is not None:
+        return "None" if literal == "<bare>" else literal
+    if isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value == "":
+        return '""'
+    return None
+
+
+def unannotated_falsy_returns(source: str, where: str) -> list[tuple[str, str, int]]:
+    """``(function, literal, lineno)`` for every falsy return in a function that DECLARES NO TYPE.
+
+    This is not a seventh verdict and it is not `blind` widened. `blind` is a function this gate
+    REACHED — it has a failure return through one of the two doors — and then could not rule on for
+    want of an annotation. This walk asks a question the gate never asks: which functions return a
+    falsy value at all, having promised nothing about their return? Most of those returns come
+    through neither door, so `classify` emits no row for them and every law built on it is silent
+    about them, correctly. #1604 is that silence being read as a clean bill.
+
+    Annotated functions are excluded on the annotation alone: a function that declared a type is
+    this mechanism's subject, never its blind spot, however falsy the value it returns.
+    """
+    found: list[tuple[str, str, int]] = []
+    for function in ast.walk(ast.parse(source)):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if function.returns is not None:
+            continue
+        # `_own_nodes` for the same reason `_failure_returns` uses it, and it is the ONE choice
+        # here that a measured sweep already got wrong: `ast.walk(function)` descends into nested
+        # defs, so the enclosing function absorbs their returns AND they are counted again as
+        # themselves. #1604's table read `web/xvb_views.py` as 12 sites in 6 functions for exactly
+        # that reason — `build_xvb_calc` scored the returns at lines 731 and 767, which belong to
+        # the nested `_odds_day` and `_face_value` and to nothing of its own. The truth is 10 in 5.
+        for node in _own_nodes(function):
+            if not isinstance(node, ast.Return):
+                continue
+            if (literal := _falsy_literal(node.value)) is not None:
+                found.append((f"{where}:{function.name}", literal, node.lineno))
+    return found
+
+
+def unannotated_falsy_by_module() -> dict[str, list[tuple[str, str, int]]]:
+    """The residue in `mining_dashboard`, keyed by module path, over the real package.
+
+    A module holding none is present with an EMPTY LIST rather than absent. The caller's question
+    is "how much residue does this pinned module hold", and a dict that answers a clean module with
+    a `KeyError` gives the clean answer and the module-has-vanished answer the same shape — the
+    exact absence the pin's own vacuity guards exist to refuse.
+    """
+    residue: dict[str, list[tuple[str, str, int]]] = {}
+    for path in _package_files():
+        where = str(path.relative_to(_PACKAGE))
+        residue[where] = unannotated_falsy_returns(path.read_text(), where)
+    return residue
