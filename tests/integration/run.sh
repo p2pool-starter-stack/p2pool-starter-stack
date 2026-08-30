@@ -33,6 +33,8 @@ source "$HERE/rigforge-writable-keys.sh"
 source "$HERE/rigforge-upgrade.sh"
 # shellcheck source=tests/integration/zmq-probe.sh
 source "$HERE/zmq-probe.sh"
+# shellcheck source=tests/integration/mergemine-probe.sh
+source "$HERE/mergemine-probe.sh"
 
 # --- Defaults / globals -----------------------------------------------------
 IT_MODE="ssh"
@@ -654,6 +656,7 @@ assert_running_state() {
     if zv=$(zmq_pub_probe "$zmq_host" "$zmq_port" 8); then it_pass "monero ZMQ endpoint is a live ZMTP publisher (#1497)"; else it_fail "monero ZMQ endpoint is a live ZMTP publisher (#1497)" "$zv"; fi
     if zv=$(zmq_publishes_probe "$zmq_host" "$zmq_port" 8 90); then it_pass "monero ZMQ endpoint actually publishes, not merely a live socket (#1497)"; else it_fail "monero ZMQ endpoint actually publishes, not merely a live socket (#1497)" "$zv"; fi
     it_skip_leg "monero ZMQ published frame is a BLOCK notification" "tier C (#1497): the row above proves the publisher is not silent, which is the starving-p2pool failure; proving the frame was chain_main rather than txpool_add needs a new block, a wait of minutes against seconds" missing
+    assert_mergemine_roundtrip
     # The dashboard's sync panel must also read "done" for a synced node — not stay stuck at
     # "loading". A synced monerod reports target_height 0, so the panel has to trust the caught-up
     # flag, not percent-vs-target; getting that wrong left a synced node "loading" forever (the real
