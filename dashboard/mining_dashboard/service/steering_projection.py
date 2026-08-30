@@ -15,7 +15,7 @@ def reference_hr(target_hr, maint_margin_pct, maint_margin_abs_cap):
     return target_hr + min(target_hr * maint_margin_pct, maint_margin_abs_cap)
 
 
-def won_round_live(state_manager, hold_s, now=None, logger=None):
+def won_round_live(state_manager, hold_s, now=None, logger=None) -> bool:
     """Whether a won raffle round may still be running: any recorded win newer
     than ``hold_s``. Steering the donation down during a live won round can sag
     the credited 1h average through the round minimum and terminate the round
