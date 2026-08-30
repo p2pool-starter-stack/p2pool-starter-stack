@@ -33,14 +33,14 @@ it_err() { echo -e "${IT_RED}[ITEST]${IT_RESET} $1" >&2; }
 it_step() { echo -e "${IT_DIM}  → $1${IT_RESET}"; }
 
 # --- Secrets hygiene --------------------------------------------------------
-# The box holds real RPC creds, a proxy token, wallet addresses and onion hostnames. Redact
-# anything that looks secret before it reaches a log file or the terminal. Only the ADDRESS rule
-# is shape-keyed (any opaque run >=90 chars — a sha512 goes with them); the CREDENTIAL rule is
-# still a name list, and JSON-form secrets are reached by NEITHER — read #1587 before trusting it.
+# Redact before anything reaches a log or the terminal. Three shapes: KEY=value / --flag value by
+# NAME, an opaque run >=90 chars by SHAPE, and JSON "key": "value" by the key's SUFFIX (#1587).
+# THE SUFFIX LIST IS OPEN — add the spelling you meet; a closed enumeration is what opened #1582.
+# Nesting is invisible line-wise, so a bare "url" key is unreachable: ntfy's is secret, xvb's is not.
 redact() {
     sed -E \
         -e 's/(PROXY_AUTH_TOKEN|MONERO_NODE_PASSWORD|MONERO_NODE_USERNAME|.*_PASSWORD|.*_TOKEN|.*_SECRET)=.*/\1=<redacted>/; s/(--[a-z-]*(login|password|passwd|secret|token|key))([ =])[^[:space:]]+/\1\3<redacted>/g' \
-        -e 's/[a-z2-7]{56}\.onion/<redacted>.onion/g; s/[A-Za-z0-9]{90,}/<redacted-address>/g'
+        -e 's/("[A-Za-z0-9_]*(password|passwd|secret|token|login|username|key|wallet|wallet_address|ping_url|donor_id)"[[:space:]]*:[[:space:]]*")([^"\]|\\.)*/\1<redacted>/g; s/[a-z2-7]{56}\.onion/<redacted>.onion/g; s/[A-Za-z0-9]{90,}/<redacted-address>/g'
 }
 
 # --- Assertions -------------------------------------------------------------
