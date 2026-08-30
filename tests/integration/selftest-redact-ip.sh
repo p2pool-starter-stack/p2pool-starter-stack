@@ -121,12 +121,11 @@ esac
 # The ordering is what this pins, so the discriminating case puts all three on ONE line: a stray
 # sentinel, a genuinely public address that must still be redacted, and a reserved address that must
 # still survive its own protect/restore round trip. Neutralising too late — or neutralising the
-# protect step's own sentinel — breaks one of the two arms while the rows above stay green.
+# protect step's own sentinel — breaks one of the two arms while the rows above stay green. It does
+# NOT re-assert the quad: deleting the neutralisation reds that claim on the first row already, so
+# a second copy here would be one measurement printed twice. Only these two survive that mutation
+# and red under the mis-ordered one, which is what earns them.
 OUT="$(printf 'inet 198.51.100.9 gw 172.18.0.1 tag 203.0.113%s45\n' "$SOH" | redact)"
-case "$OUT" in
-*"203.0.113.45"*) it_fail "sentinel neutralised BEFORE the protect step" "quad emerged: $OUT" ;;
-*) it_pass "sentinel neutralised BEFORE the protect step" ;;
-esac
 assert_contains "a public address on that line is still redacted" "$OUT" "<redacted-ip>"
 assert_contains "a reserved address on that line still survives" "$OUT" "172.18.0.1"
 
