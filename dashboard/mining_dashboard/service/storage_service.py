@@ -409,10 +409,11 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
         # #33 control.log is host-owned, read-only from this container, and the writers already trim
         # it — so it can't back a month-level drill-down on its own. This table mirrors each
         # control.log row (source="control", `id` reused as the primary key — INSERT OR IGNORE makes
-        # the mirror idempotent) AND records the two kinds this dashboard detects itself:
-        # source="host-edit" (config.json changed without a matching control-channel commit) and
-        # source="rig-edit" (a rig's control-apply outcome carries a change_id this dashboard never
-        # issued). `keys` is names only — never a value — the same contract as control.log itself.
+        # the mirror idempotent) AND the three kinds this dashboard detects itself: "host-edit"
+        # (config.json changed with no matching commit), "rig-edit" (an apply outcome carrying an
+        # unissued change_id) and "rig-drift" (#1551 — a revision moved with no new change_id); the
+        # last two read the unauthenticated worker feed and SHARE one #724 per-worker flood cap.
+        # `keys` is names only — never a value — the same contract as control.log itself.
         # Permanent, no pruning, like blocks/payouts/disk_growth: these are human-paced admin events,
         # not a hot metrics series.
         self._conn.execute(
@@ -874,10 +875,10 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
     def add_audit_event(
         self, id: str, ts: str, source: str, actor: str, action: str, status: str, keys: str
     ) -> None:
-        """Record one audit-trail row (#530) — mirrored from the #33 control.log (``source`` =
-        "control", the log's own ``id`` reused as the primary key) or detected out-of-band
-        ("host-edit" / "rig-edit"). ``INSERT OR IGNORE`` makes both idempotent: a re-mirrored
-        control.log row and a re-detected out-of-band event are no-ops. ``keys`` is names only —
+        """Record one audit-trail row (#530, #1551) — mirrored from the #33 control.log
+        (``source`` = "control", the log's own ``id`` reused as the primary key) or detected
+        out-of-band ("host-edit" / "rig-edit" / "rig-drift"). ``INSERT OR IGNORE`` makes every kind
+        idempotent: a re-mirrored control.log row and a re-detected out-of-band event are no-ops. ``keys`` is names only —
         the caller is responsible for the same no-values contract the log itself holds to."""
         try:
             with self._db_lock:

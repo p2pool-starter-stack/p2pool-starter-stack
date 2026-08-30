@@ -109,18 +109,23 @@ The stack's defaults:
   anonymous prober stored XSS against the operator. Both logs are size-bounded (Caddy's native
   rolling; a trim-before-append cap in the audit writer). Neither ever records a secret: Caddy
   redacts credential headers by default, and the audit writer logs key names only.
-- Out-of-band change detection (#530): the audit trail above only sees requests the dashboard
-  itself handled. Its poll loop separately watches for a `config.json` change with no matching
-  control-channel commit, and a worker control-API report for a change the dashboard never sent,
-  and appends both — `host-edit` / `rig-edit` — to the same trail, keys or worker names only. The
-  persisted trail (mirrored `control.log` rows plus these two out-of-band kinds) lives in the
-  dashboard's own database, not just the log tail, so the Security panel's range presets, date
-  fields and search cover more than `control.log`'s own trimmed window. The `rig-edit` source reads off the
-  unauthenticated worker feed, so it is rate-capped per worker (#724): a rig reporting distinct
-  change_ids on every poll can add at most a bounded number of rows per hour before the rest are
-  dropped behind a single `rate-limited` marker — one LAN device can't grow the database without
-  limit. The `host-edit` and mirrored `control.log` rows are not attacker-controllable and are not
-  capped.
+- Out-of-band change detection (#530, #1551): the audit trail above only sees requests the
+  dashboard itself handled. Its poll loop separately watches for a `config.json` change with no
+  matching control-channel commit, a worker control-API report for a change the dashboard never
+  sent, and a rig whose own config revision moved with no new change id beside it — the edit made
+  underneath RigForge, which reports nothing to notice. All three — `host-edit` / `rig-edit` /
+  `rig-drift` — append to the same trail, keys or worker names only. The persisted trail (mirrored
+  `control.log` rows plus these three out-of-band kinds) lives in the dashboard's own database, not
+  just the log tail, so the Security panel's range presets, date fields and search cover more than
+  `control.log`'s own trimmed window. The `rig-edit` and `rig-drift` sources both read off the
+  unauthenticated worker feed, so they SHARE one rate cap per worker (#724): a rig reporting
+  distinct change_ids — or a fresh revision — on every poll can add at most a bounded number of
+  rows per hour between them before the rest are dropped behind a single `rate-limited` marker that
+  names which of the two tipped it, so one LAN device can't grow the database without limit. One
+  budget rather than one each, because two would double what that device can make permanent. Values
+  from that feed are also validated to a short opaque token before they reach the store, so a rig
+  cannot choose an audit row's own identifier. The `host-edit` and mirrored `control.log` rows are
+  not attacker-controllable and are not capped.
 
 ### Telegram control commands (#338)
 
