@@ -187,14 +187,33 @@ def _failure_returns(function: ast.AST) -> list[tuple[str, str, int]]:
 
 
 def classify(source: str, where: str) -> dict[str, list]:
-    """Sort every failure return in one module into the four verdicts.
+    """Sort every failure return in one module into the five verdicts.
 
     ``signed`` — declares an out-of-band marker and honours it.
     ``half_fix`` — declares one and returns an empty container anyway (law 2's quarry).
     ``collapse`` — declares a type the failure value fits, so no caller can tell them apart.
     ``blind`` — unannotated, and therefore outside what this mechanism can judge.
+    ``unjudged`` — annotated, declares NO out-of-band marker, and the failure value is outside
+    `_EMPTY`. The gate takes no position on these, and the fifth list exists so that taking no
+    position is a thing it SAYS rather than a thing it does silently.
+
+    The fifth verdict was added by #1556 after a measured defect: without it these functions fell
+    off the end of the branch chain and appeared in no list at all, so a pin asserting "nothing
+    under this module is blind" was satisfied by a function VANISHING. Dropping `| None` from a
+    signed function moves it here, not to `blind` — which is the one regression #1556's ratchet
+    exists to catch, and it was invisible. Two sub-cases share the verdict deliberately: the
+    failure value may inhabit the declared type (`-> bool` returning `False`, a collapse that
+    `_EMPTY` is too narrow to name) or fail to inhabit it (`-> dict` returning `None`, an annotation
+    that is simply wrong). Both mean the same thing HERE — this mechanism cannot rule — and telling
+    them apart needs a type checker, not an AST walk.
     """
-    verdicts: dict[str, list] = {"signed": [], "half_fix": [], "collapse": [], "blind": []}
+    verdicts: dict[str, list] = {
+        "signed": [],
+        "half_fix": [],
+        "collapse": [],
+        "blind": [],
+        "unjudged": [],
+    }
     for function in ast.walk(ast.parse(source)):
         if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -222,12 +241,25 @@ def classify(source: str, where: str) -> dict[str, list]:
             verdicts["half_fix"].append((name, sorted(values & _EMPTY)))
         elif not admits and values & _EMPTY:
             verdicts["collapse"].append((name, sorted(values & _EMPTY)))
+        else:
+            # The residual, and it is REPORTED rather than dropped. Every earlier branch is a
+            # position the gate is willing to defend; falling past all of them is also a position
+            # and it used to be taken in silence. The values are carried unfiltered — `& _EMPTY` is
+            # empty here by construction, so intersecting would record an empty tuple for every row
+            # and throw away the only fact that distinguishes them.
+            verdicts["unjudged"].append((name, sorted(values)))
     return verdicts
 
 
 def classify_package() -> dict[str, list]:
     """Every failure return in `mining_dashboard`, classified, in one pass over the real package."""
-    total: dict[str, list] = {"signed": [], "half_fix": [], "collapse": [], "blind": []}
+    total: dict[str, list] = {
+        "signed": [],
+        "half_fix": [],
+        "collapse": [],
+        "blind": [],
+        "unjudged": [],
+    }
     files = sorted(_PACKAGE.rglob("*.py"))
     # An empty scan is not a clean scan. Every law built on this result is a statement about a set,
     # and a set that is empty because the walk found no files satisfies all of them for the wrong

@@ -248,6 +248,7 @@ class Store:
             "half_fix": [],
             "collapse": [],
             "blind": [],
+            "unjudged": [],
         }
 
     def test_an_unannotated_function_is_blind_rather_than_clean(self):
@@ -335,7 +336,35 @@ class Store:
             "half_fix": [],
             "collapse": [],
             "blind": [],
+            "unjudged": [],
         }
+
+    def test_an_annotated_function_whose_failure_value_is_untracked_is_unjudged(self):
+        """THE FIFTH VERDICT, and the one that had no name until #1556 measured its absence.
+
+        `-> dict` returning `None` on failure: annotated, so not `blind`; declares no out-of-band
+        marker, so not `signed`; and `None` is not in `_EMPTY`, so not `collapse` either. Before
+        this verdict existed the function fell past every branch and landed in NO list, which made
+        it invisible to any law phrased as an absence — a pin asserting "nothing here is blind" was
+        satisfied by the function disappearing rather than by the function being clean.
+
+        Both halves are the control. The first is the seeded shape; the second is its `| None`
+        sibling, one token apart, which must score `signed` — without it a classifier that answered
+        `unjudged` to everything would pass this test."""
+        seeded = (
+            "class C:\n    def get(self) -> dict:\n"
+            "        try:\n            return self._fetch()\n"
+            "        except Exception:\n            return None\n"
+        )
+        assert "-> dict:" in seeded  # arming readback: the marker really is absent
+        verdicts = classify(seeded, "m.py")
+        assert verdicts["unjudged"] == [("m.py:get", ["None"])]
+        assert verdicts["blind"] == []
+        assert verdicts["signed"] == []
+
+        signed = seeded.replace("-> dict:", "-> dict | None:")
+        assert classify(signed, "m.py")["signed"] == ["m.py:get"]
+        assert classify(signed, "m.py")["unjudged"] == []
 
     def test_a_nested_def_is_attributed_to_itself(self):
         """`web/server.py:_log_filters` holds a `_num` closure, and a walk that folded the two
