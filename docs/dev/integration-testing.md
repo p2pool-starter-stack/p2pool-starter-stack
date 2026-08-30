@@ -67,14 +67,19 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   suggests**, and the gap is worth knowing before you trust a bundle. It reaches: a `KEY=value`
   line whose name ends in `_PASSWORD` / `_TOKEN` / `_SECRET`; a credential given as a flag value;
   a v3 onion; any opaque run of 90 or more characters (and a sha512 with them); the token after
-  `--wallet` and the one after `--merge-mine`'s URI, by POSITION; and a JSON `"key": "value"` whose
+  `--wallet` and the one after `--merge-mine`'s URI, by POSITION; a JSON `"key": "value"` whose
   key ends in one of a list of secret words — `password`, `token`, `key`, `username`, `wallet` and
   the rest, matched without regard to case, so `apiKey` and `PASSWORD` are reached alongside
-  `api_key`.
+  `api_key`; and a globally-routable IP address, by SCOPE. What it keeps is exactly the set
+  `is_public_ip` calls private — loopback, RFC1918, link-local and CGNAT — because an artifact whose
+  port map and container addresses have been stripped cannot be triaged, and because holding the two
+  lists identical is what makes the coverage argument checkable rather than anecdotal.
   [#1582](https://github.com/p2pool-starter-stack/pithead/issues/1582) closed the flag-value and
   address-shape gaps; [#1587](https://github.com/p2pool-starter-stack/pithead/issues/1587) added
   the JSON one; [#1596](https://github.com/p2pool-starter-stack/pithead/issues/1596) added the
-  positional one. **The length rule never covered wallet addresses as widely as it read**: a
+  positional one; [#1609](https://github.com/p2pool-starter-stack/pithead/issues/1609) added the
+  IP one, after an audit found `pithead doctor` writing the host's own public address into
+  `doctor.txt`. **The length rule never covered wallet addresses as widely as it read**: a
   positional argument has no name to key on, so that rule was the ONLY one reaching the Tari
   address, and of the three Tari forms this repo accepts it reached only the base58 one — by a
   single character.
@@ -708,15 +713,20 @@ Several self-tests sit beside it as standalone files, picked up by the same glob
 the counters and the real `summary()`, it censuses every harness file and fails if a skip leaves
 through a bare `it_warn` — by wording, and by shape for the drops that never say "skipping".
 `selftest-redact.sh` covers the shapes the redactor used to miss — a credential passed as a flag
-value, an address given by POSITION in an argv line, and secrets in JSON under a key of any case —
-and asserts in each case that the *raw* value
-is gone rather than that a `<redacted>` marker appeared, since a marker can come from some other
-field on the same line. Its JSON population is derived from `config.reference.json` rather than
+value, an address given by POSITION in an argv line, secrets in JSON under a key of any case, and
+the host's own public IP address — and asserts in each case that the *raw* value is gone rather
+than that a `<redacted>` marker appeared, since a marker can come from some other field on the
+same line. Its JSON population is derived from `config.reference.json` rather than
 listed in the file, under a screen deliberately wider than the redactor's own list, so a sensitive
 field added to the schema fails the test by name until someone classifies it as redacted or as a
-stated survivor. It also guards the other direction: a sha256 digest and a non-secret flag value
-must survive, because an artifact with its image pins stripped is useless for the triage it exists
-for. `selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures,
+stated survivor. It also guards the other direction: a sha256 digest, a non-secret flag value, the
+reserved IP ranges and a HAProxy timestamp must survive, because an artifact with its image pins or
+its port map stripped is useless for the triage it exists for. That timestamp is not a hypothetical
+near-miss: HAProxy's `DD/Mon/YYYY:HH:MM:SS` reads as an IPv6 address, because a four-digit year
+opening with a 2 supplies the first hextet and the clock supplies the colon groups. It accounted
+for 278 of the 280 lines the first draft of the IP rule changed across two captured bundles, and
+`lint-topology` makes the same reading of it.
+`selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures,
 so every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
 READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack. It
 also covers the truncated and hostile frames that used to end the parser rather than be named by
