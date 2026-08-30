@@ -245,7 +245,7 @@ def visible_update(update, running=None):
     return update
 
 
-def read_os_update_state():
+def read_os_update_state() -> dict | None:
     """The appliance OS-update state (step + post-reboot verdict), or ``None`` off an appliance.
 
     Host-written under a fixed name in the read-only results/ mount — only a Pithead OS

@@ -60,7 +60,7 @@ def _chart_tension(duration_s):
     return _MAX_TENSION
 
 
-def parse_window(from_arg, to_arg):
+def parse_window(from_arg, to_arg) -> tuple[float, float] | None:
     """Parse optional ``from``/``to`` query params (epoch seconds) into a ``(from, to)`` window,
     or ``None`` if absent or malformed. Defensive — any bad input falls back to ``None`` so the
     caller uses the preset ``range`` instead of erroring (Issue #47)."""

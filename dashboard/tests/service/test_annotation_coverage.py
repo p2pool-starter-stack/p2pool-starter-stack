@@ -50,10 +50,21 @@ import pytest
 from tests.service.annotation_gate import classify, classify_package
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 8 of 33 modules that hold a failure return at
+# adds the module it finished. Measured at this tip: 12 of 33 modules that hold a failure return at
 # all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
-# and the six single-function `client/` modules by slice 2, which finishes the package: no module
-# under `client/` holds an unannotated failure return any more.
+# the six single-function `client/` modules by slice 2, and the four single-function `web/` modules
+# by slice 3.
+#
+# Slice 2 wrote here that "no module under `client/` holds an unannotated failure return any more".
+# That is TRUE under `_failure_returns`' definition and it READS as "`client/` is done, never look
+# here again". It is not. The gate sees exactly two doors — a `return` lexically inside an `except`
+# handler, and a return that is the whole body of a `self._conn` guard — and **14 unannotated
+# functions under `client/` hold collapse-shaped returns outside both of them**, measured.
+# `client/monero/monero_wallet_client.py:get_confirmed_payouts` is a genuine failure path among
+# them: it returns `[]` when `_rpc` returned `None`, which no caller can tell from "no payouts".
+# So the claim is scoped to the instrument that makes it — no unannotated failure return **that
+# this gate can see**. A pin is coverage of a mechanism, never a certificate about a package.
+#
 # **Only ever add a module you have read.** Adding one because the gate happens to score it clean
 # is the baseline #1487 refused, wearing this file's name.
 PINNED = (
@@ -65,6 +76,10 @@ PINNED = (
     "client/xmrig_client.py",
     "client/xvb_client.py",
     "service/worker_config_store.py",
+    "web/charts.py",
+    "web/infra_views.py",
+    "web/views.py",
+    "web/xvb_views.py",
 )
 
 # One function per pinned module, as the vacuity anchor. Law 1's own guard uses this shape: a
@@ -83,6 +98,10 @@ _ANCHORS = {
     "client/xmrig_client.py": "client/xmrig_client.py:_safe_probe_host",
     "client/xvb_client.py": "client/xvb_client.py:get_stats",
     "service/worker_config_store.py": "service/worker_config_store.py:note_worker_revision",
+    "web/charts.py": "web/charts.py:parse_window",
+    "web/infra_views.py": "web/infra_views.py:_ip_to_sort_int",
+    "web/views.py": "web/views.py:read_os_update_state",
+    "web/xvb_views.py": "web/xvb_views.py:recent_wallet_change",
 }
 
 
