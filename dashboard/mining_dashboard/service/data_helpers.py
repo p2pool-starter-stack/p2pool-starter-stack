@@ -344,7 +344,7 @@ def _diff_config_keys(old, new):
     return sorted(changed)
 
 
-def _parse_audit_ts(ts):
+def _parse_audit_ts(ts) -> float | None:
     """Parse a #33 audit-log ``ts`` string (``%Y-%m-%dT%H:%M:%SZ``) to epoch seconds, or None for
     anything else — a malformed/garbage ts (already length-capped and charset-stripped by
     ``audit_service._clean``) must never crash the out-of-band watcher, just fail to "explain" a
@@ -356,7 +356,7 @@ def _parse_audit_ts(ts):
         return None
 
 
-def _read_host_config():
+def _read_host_config() -> dict | None:
     """The masked config.json (``config.HOST_CONFIG_PATH``, #440), or None if the mount isn't
     ready / isn't valid JSON yet. A plain blocking function — ``_watch_host_config`` runs it via
     ``asyncio.to_thread`` rather than opening the file directly in an ``async def``.

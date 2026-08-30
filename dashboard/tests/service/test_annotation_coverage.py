@@ -40,9 +40,19 @@ disturb and a new function cannot slip past: **no failure return in this module 
 Adding an unannotated one to a pinned module goes red, which is the point and is also the cost, and
 it is a cost paid by exactly the modules someone has already done the work on.
 
-`service/worker_config_store.py` is here for a reason that predates #1556: it was fully annotated
+`service/worker_config_store.py` is pinned for a reason that predates #1556: it was fully annotated
 already, and two of its three signed functions were pinned by `_SIGNED` while `note_worker_revision`
 was not. That gap was in the tree at the base of this branch, not introduced by any slice.
+
+## Where the data is
+
+`PINNED`, `_ANCHORS` and `_UNJUDGED_AND_READ` live in `tests/service/annotation_pins.py`, together
+with the comments that argue each entry. They are the part of this mechanism that grows with every
+slice; what stayed here is what does not — the three laws, their vacuity guards, and the controls
+that seed each shape across the boundary a law decides on. That module's docstring carries the
+reason for the split and the figures behind it, and deliberately carries them ONLY there: a
+budget argument copied into two files is two numbers to keep true, which is the failure this
+file's own header records twice.
 """
 
 import pytest
@@ -53,162 +63,7 @@ from tests.service.annotation_gate import (
     unannotated_falsy_by_module,
     unannotated_falsy_returns,
 )
-
-# The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 18 of 33 modules that hold a failure return at
-# all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
-# the six single-function `client/` modules by slice 2, the four single-function `web/` modules by
-# slice 3, the two single-function `config/` modules by slice 4, the four outbound senders under
-# `service/` by slice 5a, and the last three `service/` singletons by slice 5b. That finishes the
-# SINGLETON tail, not #1556: **33 failure returns are still blind**, all in multi-function modules.
-#
-# The `client/` scoping below applies to `tor_heal.py` too, measured: `decide` holds four
-# unannotated `None` returns and `check` two bare ones, all six OUTSIDE the gate's two doors —
-# pinned, law 1 honestly green, and NOT "fully annotated".
-#
-# That sentence was true and, until #1604, it was the ONLY one of its kind here. Eight other pinned
-# modules hold the same residue and were named nowhere but inside the tuple below, so a reader who
-# found `tor_heal.py`'s disclosure could reasonably infer the rest were clean: an asymmetric
-# disclosure is worse than a uniform absence, because the silence beside the others reads as a
-# statement. The residue is now MEASURED for all twenty-one and printed by
-# `TestTheResidueThePinCannotRuleOn` below, which is the form of disclosure that cannot go
-# asymmetric again — a module joining `PINNED` gets a line whether anyone writes a sentence or not.
-#
-# Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
-# written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
-# (`local_miner_enabled` returning `False`). A slice is coverage of the mechanism, so a slice whose
-# two functions both decline to be signable has done its whole job.
-#
-# Slice 2 wrote here that "no module under `client/` holds an unannotated failure return any more".
-# That is TRUE under `_failure_returns`' definition and it READS as "`client/` is done, never look
-# here again". It is not. The gate sees exactly two doors — a `return` lexically inside an `except`
-# handler, and a return that is the whole body of a `self._conn` guard — and **14 unannotated
-# functions under `client/` hold collapse-shaped returns outside both of them**, measured.
-# `client/monero/monero_wallet_client.py:get_confirmed_payouts` is a genuine failure path among
-# them: it returns `[]` when `_rpc` returned `None`, which no caller can tell from "no payouts".
-# So the claim is scoped to the instrument that makes it — no unannotated failure return **that
-# this gate can see**. A pin is coverage of a mechanism, never a certificate about a package.
-#
-# **Only ever add a module you have read.** Adding one because the gate happens to score it clean
-# is the baseline #1487 refused, wearing this file's name.
-PINNED = (
-    "client/docker/docker_control.py",
-    "client/monero/monero_client.py",
-    "client/monero/monero_wallet_client.py",
-    "client/tari/tari_client.py",
-    "client/tari/tari_wallet_client.py",
-    "client/xmrig_client.py",
-    "client/xvb_client.py",
-    "config/config.py",
-    "config/worker_endpoints.py",
-    "service/healthchecks.py",
-    "service/notify_sinks.py",
-    "service/telegram_notifier.py",
-    "service/egress.py",
-    "service/steering_projection.py",
-    "service/tor_heal.py",
-    "service/update_checker.py",
-    "service/worker_config_store.py",
-    "web/charts.py",
-    "web/infra_views.py",
-    "web/views.py",
-    "web/xvb_views.py",
-)
-
-# One function per pinned module, as the vacuity anchor. Law 1's own guard uses this shape: a
-# statement about "no blind names under this prefix" is satisfied perfectly by a module that has
-# vanished from the walk, and that is the reading a deleted file, a moved package root or a broken
-# `rglob` all produce. `note_worker_revision` is the deliberate choice for its module — it is the
-# one signed function `_SIGNED` never named.
-_ANCHORS = {
-    "client/docker/docker_control.py": "client/docker/docker_control.py:_post",
-    "client/monero/monero_client.py": "client/monero/monero_client.py:get_info",
-    "client/monero/monero_wallet_client.py": "client/monero/monero_wallet_client.py:_rpc",
-    "client/tari/tari_client.py": "client/tari/tari_client.py:_fetch_sync_status",
-    "client/tari/tari_wallet_client.py": (
-        "client/tari/tari_wallet_client.py:get_confirmed_payouts"
-    ),
-    "client/xmrig_client.py": "client/xmrig_client.py:_safe_probe_host",
-    "client/xvb_client.py": "client/xvb_client.py:get_stats",
-    "config/config.py": "config/config.py:local_miner_enabled",
-    "config/worker_endpoints.py": "config/worker_endpoints.py:load_worker_endpoints",
-    "service/healthchecks.py": "service/healthchecks.py:ping",
-    "service/notify_sinks.py": "service/notify_sinks.py:_post",
-    "service/telegram_notifier.py": "service/telegram_notifier.py:send",
-    "service/egress.py": "service/egress.py:_sinks_all_private",
-    "service/steering_projection.py": "service/steering_projection.py:won_round_live",
-    "service/tor_heal.py": "service/tor_heal.py:_probe_egress",
-    "service/update_checker.py": "service/update_checker.py:latest_release",
-    "service/worker_config_store.py": "service/worker_config_store.py:note_worker_revision",
-    "web/charts.py": "web/charts.py:parse_window",
-    "web/infra_views.py": "web/infra_views.py:_ip_to_sort_int",
-    "web/views.py": "web/views.py:read_os_update_state",
-    "web/xvb_views.py": "web/xvb_views.py:recent_wallet_change",
-}
-
-
-# The `unjudged` functions inside a pinned module that have been READ, one entry per function.
-# `unjudged` means the #1487 gate declines to rule: the function is annotated but declares no
-# out-of-band marker, and its failure value is outside the `_EMPTY` set that gate measures.
-#
-# This list records that a human read the function; it does NOT certify the design, and nothing
-# here may be added because the gate happened to score it this way — that is the baseline #1487
-# refused, wearing this file's name. `worker_config_change_known` returns `False` on a closed
-# handle and its docstring argues the fail-open choice at length, including why it must answer the
-# same for a closed handle and a `sqlite3.Error` while its sibling must not. That reading, not the
-# gate's score, is what the entry stands for.
-#
-# `config/config.py:local_miner_enabled` (slice 4) is the third, and the first member that is NOT
-# an outbound sender — so it deliberately does not lean on the grounds `annotation_gate._EMPTY`
-# records (see #1599: measured at `b0a32bd`, the tip that comment was written against, TWELVE
-# functions already held a `False` failure return and this was one of them, so its five senders
-# were a subset somebody read, never the whole population). No member is waved through by that
-# class; each is read on its own terms. It returns False when
-# the masked-config mount is missing or unreadable, and its docstring argues the choice outright:
-# DIY stacks without the mount never run the built-in miner. Its sole production caller is
-# arithmetic — `config.py:low_ram_floor_gb` does `+ (LOW_RAM_LOCAL_MINER_GB if
-# local_miner_enabled() else 0)` — so there is no third branch for an out-of-band answer to reach,
-# and False-on-failure and False-because-no-miner move the RAM floor by exactly the same amount.
-# `-> bool | None` would invent a return the function never makes.
-# Slice 5a adds the four OUTBOUND SENDERS as a group, and the shared argument is precisely why
-# they could be read as one: each returns True only when the send demonstrably landed, and False
-# for every other outcome — disabled, throttled, a non-2xx, or an exception. Every caller acts on
-# "the message did not go out", which is what all of those mean, so there is no out-of-band case
-# to declare and `-> bool | None` would invent a return none of them makes. The grouping has to be
-# EARNED, so each was confirmed to be that shape rather than admitted by it:
-#   `notify_sinks.py:_post`     — False when `not self.enabled`, and on `RequestException`.
-#   `telegram_notifier.py:send` — the same two, and its docstring states the contract outright.
-#   `tor_heal.py:_probe_egress` — True iff a clearnet exit answered, False on `RequestException`.
-#   `healthchecks.py:ping`      — a dead-man's switch, and the only one with TWO `except` handlers,
-#     both returning False. Its docstring already enumerates the False cases (not configured,
-#     throttled, request failed, endpoint rejected) as deliberately one answer.
-#   `docker/docker_control.py:_post` (slice 2) is the same class and is folded in here: True only
-#     on HTTP 204/304, False on every other status and any exception, and its callers act on "the
-#     container action did not happen", which is what both False paths mean.
-#
-# Slice 5b adds two MORE, listed separately rather than folded into the group above, because they
-# fail in OPPOSITE directions — which is why `service/` was split rather than taken whole:
-#   `egress.py:_sinks_all_private` is FAIL-CLOSED. False means "assume public", DENYING the LAN
-#     carve-out; its docstring gives the reason (a hostname cannot be verified without a DNS
-#     lookup, which a pure config derivation must never do), so False-on-ValueError and
-#     False-because-genuinely-public are one instruction: do not grant it.
-#   `steering_projection.py:won_round_live` is FAIL-OPEN by design. False means steer normally —
-#     the hold is a yield optimization, never a safety path, so a read error must not freeze
-#     steering. Collapsing these two readings into one would be the bulk-fill this list refuses:
-#     same shape, opposite safety argument. Neither reaches `signed` without inventing a return.
-_UNJUDGED_AND_READ = frozenset(
-    {
-        "client/docker/docker_control.py:_post",
-        "config/config.py:local_miner_enabled",
-        "service/healthchecks.py:ping",
-        "service/notify_sinks.py:_post",
-        "service/telegram_notifier.py:send",
-        "service/egress.py:_sinks_all_private",
-        "service/steering_projection.py:won_round_live",
-        "service/tor_heal.py:_probe_egress",
-        "service/worker_config_store.py:worker_config_change_known",
-    }
-)
+from tests.service.annotation_pins import _ANCHORS, _UNJUDGED_AND_READ, PINNED
 
 
 def _blind_under(module: str, verdicts: dict[str, list]) -> list[str]:
@@ -423,7 +278,7 @@ class TestTheResidueThePinCannotRuleOn:
     """#1604 — what the pin has never said, said.
 
     Law 1 says no FAILURE RETURN in a pinned module is unannotated. It has never said the module is
-    annotated, and the difference is not academic: nine of the twenty-one hold functions that
+    annotated, and the difference is not academic: thirteen of the twenty-five hold functions that
     declare no return type and return a falsy value. Those returns come through neither of the
     gate's two doors, so `classify` emits no row for them, and every law above is silent about them
     — correctly, because the mechanism genuinely cannot reach them.

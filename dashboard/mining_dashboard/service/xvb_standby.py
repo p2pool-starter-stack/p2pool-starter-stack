@@ -38,7 +38,7 @@ from mining_dashboard.service.egress import LOCAL, _xvb_standby_route
 logger = logging.getLogger("XvbStandby")
 
 
-def parse_standby(payload):
+def parse_standby(payload) -> dict | None:
     """The minimal warm state from a primary's ``/api/xvb-standby`` body, or ``None`` when the
     payload is unusable. Pure + unit-tested. Coerces the numeric fields defensively — the source is
     another stack's API, trusted but still validated so a malformed body degrades to "no pull"
@@ -91,7 +91,7 @@ class XvbStandbyPuller:
             }
         )
 
-    def fetch_once(self):
+    def fetch_once(self) -> dict | None:
         """Pull the primary's ``/api/xvb-standby`` once and store it as standby. Returns the stored
         blob, or ``None`` on any failure (kept silent — the last-held standby stands)."""
         if not self.enabled:
