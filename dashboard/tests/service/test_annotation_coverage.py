@@ -121,14 +121,12 @@ def _shortfall(structure: Collection[str], floor: int) -> int:
 # reds it, and the way back to green is to lower a number HERE, in the diff that removed the entry.
 # That records a judgement and is NOT a gate — drop an entry and lower the floor together and it
 # passes, exactly as `docs/dev/file-budget.tsv` does when somebody lowers a ceiling. What it buys
-# is that the narrowing is WRITTEN DOWN where a reviewer reads it instead of happening silently in
-# a module that reads as "just data". The argument for the shape, and what each structure was
-# measured to be exposed to, is in `TestThePinSetOnlyGrows`.
-#
-# The figures are NOT copies of the counting prose in the data modules: that prose says what the
-# population IS and a slice falsifies it in the same commit; these say what it may never fall
-# BELOW and a slice leaves them true. Keeping them tight as the population grows is a convention
-# and not a law — the reporting test below prints the slack so it cannot drift unseen.
+# is that the narrowing is WRITTEN DOWN where a reviewer reads it instead of happening silently in a
+# module that reads as "just data". The argument for the shape, and each structure's exposure, is in
+# `TestThePinSetOnlyGrows`. The figures are NOT copies of the counting prose in the data modules:
+# that prose says what the population IS and a slice falsifies it in the same commit; these say what
+# it may never fall BELOW and a slice leaves them true. Keeping them tight as the population grows
+# is a convention and not a law — the reporting test prints the slack so it cannot drift unseen.
 _FLOORS: dict[str, tuple[Collection[str], int]] = {
     "PINNED": (PINNED, 33),
     "_ANCHORS": (_ANCHORS, 33),
@@ -198,6 +196,24 @@ class TestAnAnnotatedModuleStaysAnnotated:
         law's job hides the law's absence, because the suite goes red either way."""
         assert _rows_under(module, package), f"the walk found nothing at all in {module}"
         assert _ANCHORS[module] in _rows_under(module, package)
+
+    def test_every_anchored_module_is_also_a_pinned_one(self):
+        """VACUITY GUARD, in the direction the walk guard cannot see (#1639). That guard subscripts
+        `_ANCHORS[module]` over `PINNED`, so a MISSING anchor raises `KeyError`; an anchor for a
+        module nobody pins is read by NOTHING, because every law here parametrizes over `PINNED`.
+        Such a key is dead data that reads as a live pin — someone scanning `_ANCHORS` finds the
+        module and concludes it is covered when no law mentions it.
+
+        Its own test rather than a second assertion in the walk guard, which runs per module: a
+        whole-set statement placed there is one measurement run 33 times behind two failure doors.
+
+        **It does not make the `_ANCHORS` floor redundant, and the cleanup that says so reopens
+        #1614.** Retiring a module drops its `PINNED` and `_ANCHORS` rows together — both sets
+        shrink, this holds at 32 == 32, and the floors are again the ONLY catchers."""
+        assert set(_ANCHORS) == set(PINNED), (
+            f"anchored but not pinned: {sorted(set(_ANCHORS) - set(PINNED))}; "
+            f"pinned but not anchored: {sorted(set(PINNED) - set(_ANCHORS))}"
+        )
 
 
 class TestThePinCanSeeWhatItIsPinning:
@@ -315,21 +331,25 @@ class TestThePinSetOnlyGrows:
     entries still THERE are real, and an entry that left is not there.
 
     **The three are not equally exposed, and #1614 over-generalises from `PINNED`.** Measured, one
-    removal per structure, against a control-0 of 124 passed:
+    removal per structure, against a control-0 of 125 passed:
 
-    - `PINNED` — dropping `web/xvb_views.py` reds THIS LAW AND NOTHING ELSE (1 failed, 120 passed;
-      the missing three are that module's own law-1, law-2 and walk-guard cases, which vanished
-      with it rather than failing). This is the hole the issue describes, and it was real.
+    - `PINNED` — dropping `web/xvb_views.py` reds this law and #1639's equality guard (2 failed,
+      120 passed; the missing three are that module's own law-1, law-2 and walk-guard cases, which
+      vanished with it rather than failing). This is the hole the issue describes, and it was real.
     - `_ANCHORS` — dropping the same module's entry ALSO reds
       `test_a_pinned_module_is_actually_in_the_walk[web/xvb_views.py]`, which subscripts `_ANCHORS`
-      by a module still in `PINNED` and raises `KeyError` (2 failed, 122 passed).
+      by a module still in `PINNED` and raises `KeyError` (3 failed, 122 passed).
     - `_UNJUDGED_AND_READ` — dropping `service/clearnet_sync.py:_write_marker` ALSO reds law 2 for
-      that module, which stops excusing a function still scoring `unjudged` (2 failed, 122 passed).
+      that module, which stops excusing a function still scoring `unjudged` (2 failed, 123 passed).
 
-    So on the two sibling structures this is defence in depth and not the sole catcher. It is kept
-    because an incidental `KeyError` is a crash rather than a stated law and moves with any
-    refactor of the guard raising it, and because law 2's catch is a side effect of what the entry
-    MEANS rather than of the set having a size. Neither survives being relied on silently.
+    So on the two sibling structures this is defence in depth and not the sole catcher — **for the
+    one-structure removal seeded above, and only there.** Retiring a module drops its `PINNED` and
+    `_ANCHORS` rows TOGETHER: both sibling catches need the module still in `PINNED`, so their
+    cases are DELETED rather than failed, `set(_ANCHORS) == set(PINNED)` still holds at 32 == 32,
+    and these floors are the only assertions left. Measured on that seed: **2 failed, 120 passed,
+    and both are floors.** They are kept for the sibling case too, because an incidental `KeyError`
+    is a crash rather than a stated law and moves with any refactor of the guard raising it, and
+    because law 2's catch is a side effect of what the entry MEANS, not of the set having a size.
 
     **One honest cost, on `_UNJUDGED_AND_READ` alone.** An entry whose function was properly
     annotated is a stale exception the vacuity guard already demands be removed, so that set has a
