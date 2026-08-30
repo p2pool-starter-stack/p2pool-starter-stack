@@ -362,22 +362,22 @@ def test_fake_matches_the_vendored_wire_contract():
     assert set(_key_paths(down["rigforge"])) == pinned | {"xmrig_api"}
 
 
-def test_vendored_contract_matches_the_baked_rigforge_pin():
-    """The vendored fixtures are from the RigForge the appliance actually bakes.
+def test_vendored_contract_ref_line_agrees_with_the_baked_pin():
+    """PROVENANCE's ref line agrees with the ref the appliance bakes — the string, not the bytes.
 
     A vendored snapshot with no freshness mechanism is just a slower drift: it agrees with the
-    producer on the day it is copied and silently stops. A pin bump that leaves these fixtures
-    stale reddens here, cheaply, instead of on a live box — but only until someone edits
-    PROVENANCE. This compares two hand-edited strings; it cannot see the bytes (#1426).
+    producer on the day it is copied and silently stops. This half is offline and reads two
+    hand-edited strings, so it cannot see the fixture content; the bytes are covered by
+    test_contract_freshness.py, which consults the producer itself (#1426).
     """
     provenance = dict(line.split("=", 1) for line in (_CONTRACT / "PROVENANCE").read_text().split())
     dockerfile = (_REPO / "os" / "rootfs" / "Dockerfile").read_text()
     baked = re.search(r"^ARG RIGFORGE_REF=(\S+)", dockerfile, re.M)
     assert baked, "RIGFORGE_REF not found in os/rootfs/Dockerfile — did the pin move or rename?"
     assert provenance["ref"] == baked.group(1), (
-        "the baked RigForge pin moved and tests/integration/fakes/contract/v1/ was not re-vendored. "
-        "Re-copy tests/contract/v1/{feed,control-status}.json from RigForge at the new ref, THEN "
-        "update PROVENANCE — this guard reads the ref line only, never the bytes (#1426)."
+        "the baked RigForge pin moved and PROVENANCE was not updated. Re-copy "
+        "tests/contract/v1/{feed,control-status}.json from RigForge at the new ref, THEN update "
+        "PROVENANCE — this guard reads the ref line; the bytes are test_contract_freshness.py."
     )
 
 
