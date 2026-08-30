@@ -98,10 +98,13 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   reaches the 48-character form, and no bound reaches the emoji form at all.
   **The JSON rule is keyed on the field NAME, not the value, and that is forced**:
   a view key and a container digest are both 64 hex characters, so nothing in the value separates
-  them. **The name list is open, and one field is still out of reach** — `notifications.ntfy.url`
+  them. **The name list is open, and one field is out of the FILTER's reach** — `notifications.ntfy.url`
   is a capability URL whose key is the bare word `url`, which only its nesting separates from the
-  public `xvb.url`, and a line-wise filter cannot see nesting. The self-test states that gap
-  rather than hiding it. **Two further JSON shapes are stated rather than closed**
+  public `xvb.url`, and a line-wise filter cannot see nesting. That is a limit of the filter, not
+  of the bundle: since [#1630](https://github.com/p2pool-starter-stack/pithead/issues/1630) the
+  `config.json` artifact is masked BY PATH before it reaches the filter (*Artifacts & triage*
+  below), so the topic does not survive a capture. The self-test states the filter's gap rather
+  than hiding it, and deliberately does not assert a redaction the filter cannot deliver. **Two further JSON shapes are stated rather than closed**
   ([#1590](https://github.com/p2pool-starter-stack/pithead/issues/1590)): a JSON payload logged as
   an escaped string inside another field (`"msg":"{\"password\":\"…\"}"`), and a secret whose
   value is not a string (`"api_token":12345678`). Both were measured absent from every artifact
@@ -655,6 +658,22 @@ On a scenario failure, the harness captures (redacted) to `results/<scenario>/`:
 `compose-ps.txt`, `status.txt`, `doctor.txt`, `config.json`, `env.redacted.txt`,
 `api-state.json`, and `logs.txt` (last 200 lines per service). The end-of-run summary lists
 each failed assertion and points at these.
+
+`config.json` is the one artifact that is not streamed straight through the redactor. A config is a
+document with an enumerable shape, and the stack already classifies it by PATH:
+`render_masked_config` walks `CONTROL_SECRET_PATHS` plus the three variable-length array cases a
+fixed-path walk cannot reach (`workers.list[].token`, the deprecated `dashboard.workers[].token`,
+and `notifications.webhooks[]`, where the whole URL is the bearer secret). The capture SOURCES the
+box's own `./pithead` and calls that function rather than restating the list or the jq program
+here: sourcing is the shipped contract, since the prelude sets `_STACK_SOURCED` and skips the `cd`,
+the traps and `main`. One classification, one place to change it. The masked document then passes
+through the redactor as before, so the shape, position and IP rules keep their reach over
+everything the path list does not name — the pass is additive and cannot narrow coverage. It
+renders from the LIVE config at capture time rather than copying the box's pre-rendered
+`$CONTROL_DIR/masked/config.json`, which is refreshed only on setup/apply/upgrade and is documented
+as degrading to a stale copy on a render hiccup: an artifact presenting stale state as the state
+under test is the failure this harness exists to catch. If the program cannot be sourced the
+capture writes no config rather than falling back to the raw file, and says so in the artifact.
 
 ### Reading the verdict — what did not run
 

@@ -171,7 +171,14 @@ MUST_SURVIVE="xvb.url xmrig_proxy.url workers.api_auth telegram.chat_id"
 # ⛔ NOT a survivor on merit. `notifications.ntfy.url` IS a capability URL and ought to be
 # redacted; a line-wise filter cannot reach it, because the key is the bare word "url" and only
 # its NESTING distinguishes it from xvb.url. Asserted at its CURRENT behaviour so the gap is
-# stated rather than hidden — when someone closes it, this line fails and moves to MUST_REDACT.
+# stated rather than hidden.
+# ⛔ THE ARTIFACT EXPOSURE IS CLOSED (#1630); THIS ROW IS STILL TRUE, AND THAT IS NOT A
+# CONTRADICTION. `capture_artifacts` no longer pipes the config document through redact() alone —
+# it masks BY PATH first, using the box's own `render_masked_config`, so the topic never reaches a
+# captured bundle. redact() ITSELF is unchanged and still cannot see nesting, which is what this
+# row measures. So the pin does NOT move to MUST_REDACT: asserting redaction here would assert
+# something false about the stream filter. The rows that measure the closed exposure live in
+# selftest-capture-config.sh. Anyone closing the gap INSIDE redact() reds this line, as before.
 # ⛔ THE .env HALF OF THIS VALUE WAS CLOSED (#1626); THIS ONE IS STILL OPEN. `NTFY_URL` fell to a
 # specific suffix catching exactly itself. That does not transfer, because this key is the bare
 # word `url` and only its nesting separates it from `xvb.url`. `ntfy_url` IS carried in both of
@@ -259,12 +266,12 @@ for field in $SCREENED; do
     # The gap gets a label that cannot be misread as approval. A green row saying a secret-bearing
     # field "survives redaction" is exactly the confidence this file exists to refuse.
     if in_list "$field" "$KNOWN_GAP"; then
-        assert_contains "KNOWN GAP (#1587) — $field is NOT redacted and should be" "$out" "$SENTINEL"
+        assert_contains "KNOWN GAP (#1630) — $field is NOT redacted by the STREAM filter" "$out" "$SENTINEL"
         continue
     fi
     assert_contains "$field survives redaction" "$out" "$SENTINEL"
 done
-it_warn "KNOWN GAP (#1587): $KNOWN_GAP is a capability URL and is NOT redacted — nesting is invisible to a line-wise filter"
+it_warn "KNOWN GAP (#1630): $KNOWN_GAP is a capability URL that redact() cannot reach — nesting is invisible to a line-wise filter. Captured bundles are covered by the path-keyed pass in capture_artifacts, not by this filter."
 
 # A value containing an escaped quote must be replaced WHOLE. A pattern stopping at the first
 # quote would leave the tail behind, which is the partial-redaction failure this file exists for.
