@@ -240,6 +240,44 @@ assert_eq "the displaced foreign handler still ran" "$(grep -c FOREIGN-FIRED "$S
 assert_eq "and the outstanding key was restored" "$(restores)" 'dash|{"DONATION":5}'
 rm -f "$WORK/rig.lock" "$WORK/rig.holder"
 
+echo "== a captured handler that EXITS cannot skip the holder removal (#1571) =="
+# The removal is sequenced AHEAD of the capture for exactly this. A foreign handler that calls
+# `exit` ends the shell from inside the trap, and bash does not re-enter an EXIT trap on an `exit`
+# inside one, so anything after it never runs. The first shape of #1404 ran the capture first and
+# claimed in a comment that the removal could not be skipped by it — measured, it could.
+rc_exiting="$(scenario 'export RIG_LOCK_FILE="$WORK/rig.lock" RIG_LOCK_HOLDER="$WORK/rig.holder"' \
+    'rig_lock selftest "rig-key-ledger #1571"' \
+    '[ -s "$RIG_LOCK_HOLDER" ] && echo HOLDER-WRITTEN' \
+    "trap 'echo FOREIGN-FIRED; exit 3' EXIT" \
+    'rig_key_mark dash rig1 DONATION 5' \
+    'exit 9')"
+assert_eq "rig_lock really wrote its breadcrumb (the control for the assertions below)" \
+    "$(grep -c HOLDER-WRITTEN "$SCEN_OUT")" "1"
+assert_eq "the breadcrumb is removed though the captured handler EXITS (#1571)" \
+    "$([ -e "$WORK/rig.holder" ] && echo STRANDED || echo gone)" "gone"
+assert_eq "the handler really ran — a removal that happened because nothing ran proves nothing" \
+    "$(grep -c FOREIGN-FIRED "$SCEN_OUT")" "1"
+assert_eq "and the outstanding key was restored ahead of both" "$(restores)" 'dash|{"DONATION":5}'
+assert_eq "the exiting handler's own status wins, as it does for any handler that exits" \
+    "$rc_exiting" "3"
+rm -f "$WORK/rig.lock" "$WORK/rig.holder"
+
+# The paired control, differing in ONE character sequence — the `exit 3`. It duplicates the NESTED
+# case's shape on purpose: a pair that must be read as a pair is worth more adjacent than referenced
+# sixty lines away, and without it "the breadcrumb is gone" above is equally consistent with an
+# ordering that never mattered. Only the two discriminating facts are asserted here, so this stays a
+# control and does not become a second test of behaviour NESTED already covers.
+rc_plain="$(scenario 'export RIG_LOCK_FILE="$WORK/rig.lock" RIG_LOCK_HOLDER="$WORK/rig.holder"' \
+    'rig_lock selftest "rig-key-ledger #1571"' \
+    "trap 'echo FOREIGN-FIRED' EXIT" \
+    'rig_key_mark dash rig1 DONATION 5' \
+    'exit 9')"
+assert_eq "control: the same handler WITHOUT the exit also leaves no breadcrumb" \
+    "$([ -e "$WORK/rig.holder" ] && echo STRANDED || echo gone)" "gone"
+assert_eq "control: and there the script's own status survives, so the pair differs only in the exit" \
+    "$rc_plain" "9"
+rm -f "$WORK/rig.lock" "$WORK/rig.holder"
+
 echo "== KNOWN LIMIT, pinned deliberately: a trap after the LAST mark still wins =="
 # NOT desired behaviour. A documented hole, asserted so that it is visible in this file's output
 # rather than rediscovered from a stranded rig. Composition happens at a mark, so a trap installed
