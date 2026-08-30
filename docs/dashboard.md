@@ -1028,9 +1028,10 @@ size bounds, and rotation steps.
 
 The audit trail above only sees requests that went through the control channel. Two things can
 change the stack without it: a hand-edit (or a `pithead apply` run from the host CLI) to
-`config.json`, and a config change applied directly to a rig's own control API instead of through
-Worker Inspect ([#530](https://github.com/p2pool-starter-stack/pithead/issues/530)). The dashboard
-watches for both on its normal poll cycle and appends them to the SAME audit trail:
+`config.json`, a config change applied directly to a rig's own control API instead of through
+Worker Inspect ([#530](https://github.com/p2pool-starter-stack/pithead/issues/530)), and a rig quietly serving a config whose change nothing recorded
+at all ([#1551](https://github.com/p2pool-starter-stack/pithead/issues/1551)). The dashboard watches for all three on its normal poll cycle and
+appends them to the SAME audit trail:
 
 - **`host-edit`** — `config.json` changed since the last poll and no control-channel commit
   explains it. The row names the changed setting paths (e.g. `xvb.donation_level`); it never
@@ -1039,19 +1040,29 @@ watches for both on its normal poll cycle and appends them to the SAME audit tra
   row names the worker and the rig's own change id; RigForge's status feed reports only the
   outcome of a change, not a per-key diff, so unlike `host-edit` this can't name which setting
   moved — inspect the rig directly to see what changed, where Worker Inspect's own
-  [config-origin line](#worker-inspect) names what applied the rig's current config. This one source reads off the
-  unauthenticated worker feed, so it is rate-capped per worker
-  ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a fresh
-  change id every poll can add only a bounded number of `rig-edit` rows per hour before the rest
-  are dropped behind a single `rate-limited` row. A real occasional rig change still records; only
-  a flood is capped.
+  [config-origin line](#worker-inspect) names what applied the rig's current config.
+- **`rig-drift`** — a rig's own config revision moved with no new change id beside it
+  ([#1551](https://github.com/p2pool-starter-stack/pithead/issues/1551)): the rig is running a config whose change nothing recorded. This is the case
+  `rig-edit` cannot see, rather than a second way of seeing the same one — a file edited underneath
+  RigForge moves the revision and stamps no change id, so there is no reported change to compare
+  against and no per-key diff to take. The row names the worker and the revision either side of the
+  move. It cannot say which setting moved either: the revision is a digest over the rig's whole
+  writable config, so it says THAT the config changed and never what to. A rig seen for the first
+  time records nothing — there is no earlier revision to compare it against.
 
-Either kind is worth treating like a rotate-now signal in the same spirit as
+The last two read off the same unauthenticated worker feed, so they share ONE rate cap per worker
+([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a fresh change id — or a fresh revision — every poll can add only
+a bounded number of rows per hour between them before the rest are dropped behind a single
+`rate-limited` row that names which of the two tipped it. One budget rather than one each, because
+two would double what a single LAN device can make permanent. A real occasional rig change
+still records; only a flood is capped.
+
+Any of the three is worth treating like a rotate-now signal in the same spirit as
 [Operations › Watching for intruders](operations.md#watching-for-intruders): if you didn't make
 the change, someone or something with host or rig access did.
 
 The audit trail is no longer only a log tail: entries — both mirrored from `control.log` and the
-two out-of-band kinds above — persist to the dashboard's own database, so the range presets, date
+three out-of-band kinds above — persist to the dashboard's own database, so the range presets, date
 fields and search reach further back than the log's own trimmed tail. Walk the result with the
 page-size control (5, 10, 20, 50 or 100 rows a page), newest first.
 

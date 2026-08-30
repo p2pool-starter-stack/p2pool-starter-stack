@@ -300,22 +300,26 @@ rotate-now signal. Secret rotation beyond the dashboard password is tracked in
 [#378](https://github.com/p2pool-starter-stack/pithead/issues/378).
 
 `control.log` only sees requests that went through the dashboard. The dashboard's own poll loop
-additionally watches for two changes it did NOT make and appends them to the same audit trail
-([#530](https://github.com/p2pool-starter-stack/pithead/issues/530),
+additionally watches for three changes it did NOT make and appends them to the same audit trail
+([#530](https://github.com/p2pool-starter-stack/pithead/issues/530), [#1551](https://github.com/p2pool-starter-stack/pithead/issues/1551),
 [details](dashboard.md#catching-changes-made-outside-the-dashboard)): a `config.json` edit with no
-matching commit (`host-edit`), and a worker's control API reporting a change the dashboard never
-sent (`rig-edit`). Both name only what changed — settings or a worker, never a secret value — and
-both are the same rotate-now signal as an unexplained `control.log` entry.
+matching commit (`host-edit`), a worker's control API reporting a change the dashboard never sent
+(`rig-edit`), and a rig whose config revision moved with nothing recording the change at all
+(`rig-drift`) — the hand-edit underneath RigForge that reports no change to notice. All three name
+only what changed — settings, a worker, a revision, never a secret value — and all three are the
+same rotate-now signal as an unexplained `control.log` entry.
 
 Unlike `control.log`, which the writer trims to bound its size, the audit trail served by the
-dashboard persists to its own database — mirrored `control.log` rows plus the two out-of-band
+dashboard persists to its own database — mirrored `control.log` rows plus the three out-of-band
 kinds above — so the Security panel's range presets, date fields and search look back further than
-the log's own trimmed window. Because `rig-edit` reads off the unauthenticated worker feed, it is rate-capped
-per worker ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a
-fresh change_id every poll can add only a bounded number of `rig-edit` rows per hour before the
-rest are dropped behind a single `rate-limited` marker, so no one LAN device can grow the database
-without limit. A genuine occasional rig change still records normally; only a flood is capped, and
-the cap is visible — the marker names it, and the dashboard logs a warning.
+the log's own trimmed window. Because `rig-edit` and `rig-drift` both read off the unauthenticated
+worker feed, they share one rate cap per worker ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a fresh
+change_id, or a fresh revision, every poll can add only a bounded number of rows per hour between
+them before the rest are dropped behind a single `rate-limited` marker, so no one LAN device can
+grow the database without limit. They share one budget rather than holding one each, since two
+would double what that device can make permanent. A genuine occasional rig change still records
+normally; only a flood is capped, and the cap is visible — the marker names which detection tipped
+it, and the dashboard logs a warning.
 
 ---
 
