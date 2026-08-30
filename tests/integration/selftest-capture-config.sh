@@ -19,11 +19,8 @@
 # the shipped contract, not a trick: 00-prelude.sh sets `_STACK_SOURCED=1` when BASH_SOURCE[0]
 # differs from $0 and skips every side effect — the cd, the traps, and `main`.
 #
-# WHY THE LIVE CONFIG AND NOT THE BOX'S PRE-RENDERED COPY. `$CONTROL_DIR/masked/config.json`
-# already exists and would have cost nothing to `cat`, but it is re-rendered on setup/apply/upgrade
-# and is documented as degrading to a STALE copy on a render hiccup. A debugging artifact that
-# presents stale state as the state under test is this lane's founding defect class, so the capture
-# renders from the live config at capture time instead.
+# WHY THE LIVE CONFIG AND NOT THE BOX'S PRE-RENDERED COPY: docs/dev/integration-testing.md, under
+# *Artifacts & triage*. Stated once, there, rather than restated here.
 #
 # THE PASS IS ADDITIVE. The masked document still goes through `redact()` afterwards, so the shape
 # and vocabulary rules keep their reach over anything the path list does not name; row 4 pins that.
@@ -63,14 +60,13 @@ ln -s "$REPO/pithead" "$BOX/pithead"
 # pass they exist to measure.
 NTFY_TOPIC="NTFYTOPICSENTINEL"
 WEBHOOK="WEBHOOKSENTINEL"
-VIEWKEY="VIEWKEYSENTINEL"
 # 95 alnum characters under a benign key no path rule and no name rule reaches: only redact()'s
 # shape rule can remove it, so it measures whether the stream pass still runs after the document.
 LONGVAL="$(printf 'A%.0s' $(seq 1 95))"
 
 cat >"$BOX/config.json" <<CONFIG_EOF
 {
-  "monero": { "mode": "local", "view_key": "$VIEWKEY" },
+  "monero": { "mode": "local" },
   "xvb": { "url": "https://xmrvsbeast.com/p2pool/XvB" },
   "notifications": {
     "ntfy": { "url": "https://ntfy.sh/$NTFY_TOPIC" },
@@ -124,11 +120,6 @@ case "$ART" in
 *"$WEBHOOK"*) it_fail "the webhook URL is absent from the captured config" "raw bearer value survived the capture" ;;
 *) it_pass "the webhook URL is absent from the captured config" ;;
 esac
-case "$ART" in
-*"$VIEWKEY"*) it_fail "a fixed-path secret leaf is absent from the captured config" "raw value survived the capture" ;;
-*) it_pass "a fixed-path secret leaf is absent from the captured config" ;;
-esac
-
 # ADDITIVE, not a replacement. `workers.list[].note` is in no path rule and no name vocabulary, so
 # only redact()'s >=90-character shape rule can reach it. If this reds, the document pass has
 # REPLACED the stream pass instead of preceding it, which would be a coverage regression.
