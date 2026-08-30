@@ -182,8 +182,8 @@ import json, re, sys
 # INVARIANT: this screen must be a SUPERSET of redact()'s JSON name list, or a field carrying
 # that suffix is never classified and the drift alarm above cannot fire for it. `wallet` is here
 # for exactly that reason — it is in redact() and is reachable by no other alternative.
-SCREEN = re.compile(r"(password|passwd|secret|token|login|username|key|wallet|address|seed"
-                    r"|mnemonic|credential|url|auth|_id)$")
+SCREEN = re.compile(r"(password|passwd|secret|token|login|username|user|key|wallet|address"
+                    r"|seed|mnemonic|credential|urls?|hash_b64|pw_fp|auth|_id)$")
 
 
 def walk(node, path=""):
@@ -203,8 +203,8 @@ for path, value in walk(json.load(open(sys.argv[1], encoding="utf-8"))):
 # The invariant above, MECHANICALLY (#1590): it shipped as a comment and was already false once,
 # at `wallet`. Both lists are READ OUT of lib.sh — a list restated here is the drift this asserts.
 lib = open(sys.argv[2], encoding="utf-8").read()
-j = re.search(r"\[A-Za-z0-9_\]\*\(([a-z_|]+)\)", lib)
-e = re.search(r"\[A-Za-z0-9_\]\*\(([A-Z_|]+)\)", lib)
+j = re.search(r"\[A-Za-z0-9_\]\*\(([a-z0-9_|]+)\)", lib)
+e = re.search(r"\[A-Za-z0-9_\]\*\(([A-Z0-9_|]+)\)", lib)
 if not j or not e or len(j.group(1).split("|")) < 8:
     print("!!could not read redact()'s two suffix vocabularies out of lib.sh")
 else:
