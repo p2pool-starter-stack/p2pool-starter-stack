@@ -70,6 +70,7 @@ assert_rc "a ZMTP 2 peer is refused — the READY exchange needs 3.x" "$?" "1"
 printf '{"monero":{"mode":"remote","remote":{"host":"127.0.0.1","rpc_port":18081,"zmq_port":18083}},"tari":{"mode":"local"}}' >"$PFSB/zmq.json"
 out=$(
     cd "$PFSB" || exit
+    # shellcheck disable=SC1090
     source "$STACK"
     set +e
     timeout() { return 0; }
@@ -82,6 +83,7 @@ assert_contains "the refusal names the ZMQ port" "$out" "18083"
 # preflight that refuses everything.
 out=$(
     cd "$PFSB" || exit
+    # shellcheck disable=SC1090
     source "$STACK"
     set +e
     timeout() {
