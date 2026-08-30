@@ -196,11 +196,23 @@ mm_leg_outcome() { # <synced-rc> <capture> -> "<pass> <fail> <skipped-legs> <by-
     )
 }
 
+# The skip that REMAINS after #1597: the window was READ and held no merge-mining line, so
+# p2pool built no client, so the header download did not complete. That is what earns the
+# `by-design` class — not the predicate's bit, which on its own cannot tell "behind" from
+# "unanswerable". The reason string must therefore stop asserting monerod's state as known.
 out="$(mm_leg_outcome 1 "")"
-assert_eq "an unsynced monerod skips the leg — 0 pass, 0 fail, 1 counted skip" \
+assert_eq "no client AND no caught-up confirmation skips the leg — 0 pass, 0 fail, 1 counted skip" \
     "$(printf '%s' "$out" | cut -d' ' -f1-3)" "0 0 1"
 assert_eq "and the skip is classed by-design, not missing" "$(printf '%s' "$out" | cut -d' ' -f4)" "1"
 assert_contains "and the skip names itself and #1397" "$out" "#1397"
+assert_contains "and the reason hedges monerod's state rather than asserting it (#1597)" \
+    "$out" "could not be confirmed caught up"
+# The negative sibling of that assert_contains. A reason can carry the new hedge and the old
+# claim at once, which would read as fixed while still telling a reader the node is behind.
+case "$out" in
+*"monerod is not caught up"*) it_fail "the skip reason never states the unanswerable bit as fact (#1597)" "the reason still asserts monerod is not caught up" ;;
+*) it_pass "the skip reason never states the unanswerable bit as fact (#1597)" ;;
+esac
 
 out="$(mm_leg_outcome 0 "$MM_FULL")"
 assert_eq "a synced node with a chain_id line PASSES — 1 pass, 0 fail, 0 skips" \
@@ -222,6 +234,39 @@ assert_eq "no merge-mining client at all FAILS, and is never a skip — 0 pass, 
 # above.
 out="$(mm_leg_outcome 0 "@FAIL")"
 assert_eq "an unreadable container start time FAILS separately — 0 pass, 1 fail, 0 skips" \
+    "$(printf '%s' "$out" | cut -d' ' -f1-3)" "0 1 0"
+
+echo "== an unanswerable monerod RPC cannot book a covered leg as an accepted hole (#1597) =="
+
+# `monero_caught_up` reduces several independent conditions to ONE bit: its `curl -fsS` discards
+# stderr, so an unreachable host, a refused connection and a 401 all leave the body empty, and
+# `jq -e` over an empty body answers exactly as it does for a node that is genuinely behind. The
+# stub below returns that not-caught-up bit — which is what a perfectly synced monerod produces
+# behind a broken credential. `lib.sh`'s own env_bake_verdict comment records a day of that state.
+#
+# All three cases were a counted `by-design` skip before the capture was moved ahead of the
+# predicate. `by-design` on the skip ledger means an ACCEPTED HOLE, so each was an uncovered — or
+# in the first case a demonstrably WORKING — leg, filed as a hole the project had agreed to.
+# These assert the direction of the whole change: cases leave the skip ledger, never enter it.
+
+# The one that matters most. A chain_id line is proof monerod caught up, taken from p2pool rather
+# than from the RPC we could not reach: p2pool constructs no MergeMiningClientTari at all until
+# its block-header download succeeds. A working merge-mining round-trip must not be filed as a
+# hole because a credential broke.
+out="$(mm_leg_outcome 1 "$MM_FULL")"
+assert_eq "a chain_id line PASSES though the RPC says not-caught-up — the log outranks the predicate" \
+    "$(printf '%s' "$out" | cut -d' ' -f1-3)" "1 0 0"
+
+# Its sharper sibling: here the leg is genuinely BROKEN — the client is up and Tari is not
+# answering — and the old order hid that red behind an accepted hole.
+out="$(mm_leg_outcome 1 "$MM_LOCAL_ONLY")"
+assert_eq "a client that never read a chain_id FAILS though the RPC says not-caught-up" \
+    "$(printf '%s' "$out" | cut -d' ' -f1-3)" "0 1 0"
+
+# And the harness-fault case. p2pool is in EXPECTED_ALWAYS (lib.sh), so a container with no
+# readable start time is a broken measurement, not a hole in coverage.
+out="$(mm_leg_outcome 1 "@FAIL")"
+assert_eq "an unreadable container start time FAILS though the RPC says not-caught-up" \
     "$(printf '%s' "$out" | cut -d' ' -f1-3)" "0 1 0"
 
 echo ""
