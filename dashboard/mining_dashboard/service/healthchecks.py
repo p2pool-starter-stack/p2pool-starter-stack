@@ -94,7 +94,7 @@ class HealthchecksClient:
             return True
         return (now - self._last_ping) >= self.interval
 
-    def ping(self):
+    def ping(self) -> bool:
         """Send one liveness heartbeat if due. Never raises.
 
         This is a pure dead-man's switch: it only reports that the stack (this dashboard loop) is

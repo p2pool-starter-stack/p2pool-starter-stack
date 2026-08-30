@@ -124,7 +124,7 @@ class TorEgressHealer:
             )
 
     @staticmethod
-    def _probe_egress():
+    def _probe_egress() -> bool:
         """One SOCKS request through the tor container; True iff a clearnet exit answered."""
         try:
             bounded_get(
