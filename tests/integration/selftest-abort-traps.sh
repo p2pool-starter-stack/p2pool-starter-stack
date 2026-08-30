@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 #
-# Self-test for the harness's ABORT TRAPS (#1401): checks exactly two named sites — e2e.sh's
-# `restore_all` trap and tor-client/probe.sh's `kill`-tor trap — and asserts each names `EXIT` and
-# nothing else. This is NOT a directory-wide sweep: it is two hardcoded (file, handler) pairs, not a
-# walk over tests/integration/, so a third file adding the same `EXIT INT TERM` idiom would pass this
-# file unnoticed (#1515, filed to widen this to a real walk). Standalone (not sourced by selftest.sh)
-# so it never touches that file's budget ceiling — the #1258/#1301 "moved into its own file"
-# precedent. Run directly, or via `make test-integration-selftest`. No server needed.
+# Self-test for the harness's ABORT TRAPS (#1401): WALKS every `*.sh` under tests/integration/ and
+# asserts that each `trap` statement names `EXIT` and nothing else. It checked two hardcoded (file,
+# handler) pairs until #1515, and the walk is the fix: measured, the two-site version stayed green
+# against all three shapes that reintroduce the defect — a signal added to a file the change never
+# touched, a brand-new selftest, and a second handler beside the guarded one inside e2e.sh itself.
+# The scan is `*.sh` only; verified at the time of writing that no shell file under this directory
+# lacks that extension, so nothing is currently out of reach, but one added later would be.
+# Standalone (not sourced by selftest.sh) so it never touches that file's budget ceiling — the
+# #1258/#1301 "moved into its own file" precedent. Run directly, or via
+# `make test-integration-selftest`. No server needed.
 #
 # WHAT THIS EXISTS TO STOP, and why a comment alone would not have. `trap handler EXIT INT TERM` is
 # the common idiom and it READS as more careful than bare `EXIT`, so it gets re-added by anyone who
@@ -79,16 +82,15 @@ abort_trial() { # <trap-spec, "" for none> <signal>
     TRIAL_CONTINUED="$(grep -c CONTINUED "$out")"
 }
 
-# The signal list of a `trap` line: everything after the handler argument.
-trap_signals() { # <file> <extended-regex matching the whole trap line>
-    local line
-    line="$(grep -hE "$2" "$1" | head -n1)"
-    [ -n "$line" ] || {
-        echo "__NO_TRAP_LINE_MATCHED__"
-        return
-    }
-    # Strip the leading `trap` and the handler (quoted or bare), leaving the signal names.
-    printf '%s\n' "$line" | sed -E "s/^trap[[:space:]]+('[^']*'|\"[^\"]*\"|[^[:space:]]+)[[:space:]]*//"
+# The signal list of one `trap` line: everything after the handler argument. The handler is stripped
+# FIRST, so a `#` inside a quoted handler can never be read as a comment; only then is a trailing
+# comment cut, which is safe because signal names contain no `#`. Leading indentation is allowed —
+# two of the shipped traps are installed inside functions, and anchoring on a bare `^trap` would
+# silently skip both, reporting a clean sweep over a population it never looked at.
+trap_line_signals() { # <the text of one trap line>
+    printf '%s\n' "$1" |
+        sed -E "s/^[[:space:]]*trap[[:space:]]+('[^']*'|\"[^\"]*\"|[^[:space:]]+)[[:space:]]*//" |
+        sed -E 's/#.*$//; s/[[:space:]]+$//'
 }
 
 echo "== CONTROLS: with no trap at all, the signal MUST kill the victim (#1401) =="
@@ -120,18 +122,39 @@ for sig in INT TERM; do
         "$TRIAL_FIRED" "2"
 done
 
-echo "== the shipped abort traps name EXIT and nothing else =="
-# e2e.sh: restore_all is the borrowed rig's only unwind. If this reds, read the block above before
-# "fixing" it by re-adding the signals — that is the change this file exists to refuse.
-sigs="$(trap_signals "$HERE/e2e.sh" '^trap[[:space:]]+restore_all[[:space:]]')"
-assert_ne "e2e.sh's restore_all trap line was found at all" "$sigs" "__NO_TRAP_LINE_MATCHED__"
-assert_eq "e2e.sh traps restore_all on EXIT alone (#1401)" "$sigs" "EXIT"
+echo "== every trap under tests/integration/ names EXIT and nothing else (#1401/#1515) =="
+# A WALK, not a list of known sites: #1401's second live instance was found by enumerating the class,
+# and a check wired to named sites cannot enumerate anything. If one of these reds, read the block at
+# the top of this file before "fixing" it by re-adding the signals — that is the change this file
+# exists to refuse.
+#
+# The scan reads the WORKING TREE, not `git ls-files`, so a file not yet `git add`ed is still swept;
+# #1486 is this same kind of check made blind in exactly that way.
+trap_scan="$(grep -rnE '^[[:space:]]*trap[[:space:]]' --include='*.sh' "$HERE")"
 
-# tor-client/probe.sh: same class, different consequence — naming the signals would kill tor and
-# then carry on into the bootstrap wait, spending BOOT_TIMEOUT to report a wrong diagnosis.
-sigs="$(trap_signals "$HERE/tor-client/probe.sh" "^trap[[:space:]]+'kill")"
-assert_ne "probe.sh's tor-kill trap line was found at all" "$sigs" "__NO_TRAP_LINE_MATCHED__"
-assert_eq "probe.sh traps the tor kill on EXIT alone (#1401)" "$sigs" "EXIT"
+# Fed by a heredoc rather than a pipe on purpose: `grep ... | while` runs the loop body in a
+# SUBSHELL, so every it_pass/it_fail it recorded would be discarded when the pipeline ended and the
+# summary below would count zero of them while printing green.
+while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    hit_file="${hit%%:*}"
+    hit_rest="${hit#*:}"
+    assert_eq "${hit_file#"$HERE"/}:${hit_rest%%:*} traps on EXIT alone (#1401)" \
+        "$(trap_line_signals "${hit_rest#*:}")" "EXIT"
+done <<EOF
+$trap_scan
+EOF
+
+# The walk alone is silently green over a tree whose traps were all DELETED, and green is the wrong
+# answer there: restore_all is the borrowed rig's only unwind, and probe.sh's kill is what stops a
+# leaked tor. So require the two load-bearing sites to still be present, read out of the same scan
+# rather than re-derived by a second mechanism that could drift from it.
+assert_num_ge "the walk found trap statements at all — a 0 here is a broken scan, not a clean tree" \
+    "$(printf '%s\n' "$trap_scan" | grep -c .)" "2"
+assert_contains "e2e.sh's restore_all trap is still installed — the borrowed rig's only unwind" \
+    "$trap_scan" "trap restore_all"
+assert_contains "probe.sh's tor-kill trap is still installed (#1401's second site)" \
+    "$trap_scan" "trap 'kill "
 
 echo ""
 echo "selftest-abort-traps: $IT_PASS passed, $IT_FAIL failed"
