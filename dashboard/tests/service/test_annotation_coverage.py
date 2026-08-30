@@ -55,6 +55,8 @@ it, and deliberately carry them ONLY there: a budget argument copied into anothe
 numbers to keep true, which is the failure this file's own header records twice.
 """
 
+from collections.abc import Collection
+
 import pytest
 
 from tests.service.annotation_gate import (
@@ -103,6 +105,35 @@ def _rows_under(module: str, verdicts: dict[str, list]) -> list[str]:
             if name.startswith(f"{module}:"):
                 found.append(name)
     return sorted(found)
+
+
+def _shortfall(structure: Collection[str], floor: int) -> int:
+    """How far a pin structure has fallen below its recorded floor. Zero means it held, or grew.
+
+    Named here rather than spelled in the law for the reason `_unsigned_unjudged_under` above is:
+    a control that re-spells its subject's predicate is mutated in lockstep with it and witnesses
+    nothing. The law and both controls below call THIS function."""
+    return max(0, floor - len(structure))
+
+
+# #1614's recorded floors. **Each is a FLOOR, not a count.** A slice that ADDS a module satisfies
+# the law untouched, so nothing here is ever edited to make the suite go green; only a DELETION
+# reds it, and the way back to green is to lower a number HERE, in the diff that removed the entry.
+# That records a judgement and is NOT a gate — drop an entry and lower the floor together and it
+# passes, exactly as `docs/dev/file-budget.tsv` does when somebody lowers a ceiling. What it buys
+# is that the narrowing is WRITTEN DOWN where a reviewer reads it instead of happening silently in
+# a module that reads as "just data". The argument for the shape, and what each structure was
+# measured to be exposed to, is in `TestThePinSetOnlyGrows`.
+#
+# The figures are NOT copies of the counting prose in the data modules: that prose says what the
+# population IS and a slice falsifies it in the same commit; these say what it may never fall
+# BELOW and a slice leaves them true. Keeping them tight as the population grows is a convention
+# and not a law — the reporting test below prints the slack so it cannot drift unseen.
+_FLOORS: dict[str, tuple[Collection[str], int]] = {
+    "PINNED": (PINNED, 33),
+    "_ANCHORS": (_ANCHORS, 33),
+    "_UNJUDGED_AND_READ": (_UNJUDGED_AND_READ, 12),
+}
 
 
 @pytest.fixture(scope="module")
@@ -273,6 +304,98 @@ class Client:
         it cannot start to quietly."""
         assert _rows_under("client/xvb_client", package) == []
         assert _rows_under("service/worker_config_store", package) == []
+
+
+class TestThePinSetOnlyGrows:
+    """#1614 — the population the three laws quantify over may not shrink.
+
+    Every law above is a statement ABOUT a set, so each is satisfied by that set getting SMALLER.
+    Laws 1 and 2 and the walk guard are parametrized over `PINNED`, so dropping a module does not
+    fail their cases, it DELETES them; the vacuity guard on `_UNJUDGED_AND_READ` asks only that the
+    entries still THERE are real, and an entry that left is not there.
+
+    **The three are not equally exposed, and #1614 over-generalises from `PINNED`.** Measured, one
+    removal per structure, against a control-0 of 124 passed:
+
+    - `PINNED` — dropping `web/xvb_views.py` reds THIS LAW AND NOTHING ELSE (1 failed, 120 passed;
+      the missing three are that module's own law-1, law-2 and walk-guard cases, which vanished
+      with it rather than failing). This is the hole the issue describes, and it was real.
+    - `_ANCHORS` — dropping the same module's entry ALSO reds
+      `test_a_pinned_module_is_actually_in_the_walk[web/xvb_views.py]`, which subscripts `_ANCHORS`
+      by a module still in `PINNED` and raises `KeyError` (2 failed, 122 passed).
+    - `_UNJUDGED_AND_READ` — dropping `service/clearnet_sync.py:_write_marker` ALSO reds law 2 for
+      that module, which stops excusing a function still scoring `unjudged` (2 failed, 122 passed).
+
+    So on the two sibling structures this is defence in depth and not the sole catcher. It is kept
+    because an incidental `KeyError` is a crash rather than a stated law and moves with any
+    refactor of the guard raising it, and because law 2's catch is a side effect of what the entry
+    MEANS rather than of the set having a size. Neither survives being relied on silently.
+
+    **One honest cost, on `_UNJUDGED_AND_READ` alone.** An entry whose function was properly
+    annotated is a stale exception the vacuity guard already demands be removed, so that set has a
+    LEGITIMATE way to shrink and this law reds on it. That is intended rather than a false pass:
+    the exception surface genuinely narrowed, and lowering the floor in the same diff is the
+    recording the ratchet exists to force. `PINNED` and `_ANCHORS` have no such case."""
+
+    @pytest.mark.parametrize("name", sorted(_FLOORS))
+    def test_the_structure_has_not_fallen_below_its_recorded_floor(self, name):
+        """THE LAW. The parametrization over all three structures is load-bearing, not tidiness.
+        `_UNJUDGED_AND_READ` moved to `annotation_readings.py` at slice 12, so a guard written over
+        `PINNED` and `_ANCHORS` alone would cover one file and read as covering the pin — and
+        seeding ONE structure would have passed while proving nothing about the other two, which is
+        why the class docstring above records a separate removal against each."""
+        structure, floor = _FLOORS[name]
+        assert _shortfall(structure, floor) == 0, (
+            f"{name} holds {len(structure)} entries against a recorded floor of {floor}. "
+            "An entry was removed, which narrows what the #1487 gate covers. Restore it, or lower "
+            "the floor in the same diff and say in the PR body what the gate stopped covering."
+        )
+
+
+class TestTheFloorCanSeeAShrinkingPinSet:
+    """A green floor names nothing on its own: a comparison that answered "fine" to every input
+    would pass the law above against all three structures. Both controls run the REAL structures
+    through the SAME function the law calls, seeded across the boundary the law decides on."""
+
+    @pytest.mark.parametrize("name", sorted(_FLOORS))
+    def test_a_structure_one_entry_short_of_its_floor_is_caught(self, name):
+        """POSITIVE CONTROL. One short of the floor is the smallest edit the defect can arrive as,
+        and it is what a careless deletion in a data module looks like. Built from the REAL
+        structure, because a hand-made stub would prove only that a short list is short.
+
+        Truncating to `floor - 1` rather than dropping ONE element is what keeps this a control
+        instead of a second exact count: once a slice grows a population past its floor, "the real
+        set minus one" is still ABOVE the floor and this test would red on a legitimate addition —
+        the bump-to-pass failure #1614 refused. The floors are tight today, so the two are the same
+        edit; the truncation is what survives the slack."""
+        structure, floor = _FLOORS[name]
+        shrunk = sorted(structure)[: floor - 1]
+        assert len(shrunk) == floor - 1, f"{name} is already below its own floor of {floor}"
+        assert _shortfall(shrunk, floor) == 1
+
+    @pytest.mark.parametrize("name", sorted(_FLOORS))
+    def test_a_structure_that_grew_does_not_disturb_the_floor(self, name):
+        """NEGATIVE CONTROL, and the one that separates a floor from the exact count #1614 refused.
+        A structure with an entry ADDED must still satisfy the law with this table untouched. If
+        this ever reds, the guard has become a number every slice has to bump, which is the failure
+        mode the issue named and the reason shape B was taken over a hardcoded size."""
+        structure, floor = _FLOORS[name]
+        grown = [*sorted(structure), "service/some_new_module.py:some_new_function"]
+        assert len(grown) == len(structure) + 1
+        assert _shortfall(grown, floor) == 0
+
+    def test_the_slack_between_each_population_and_its_floor_is_reported(self, capsys):
+        """Deliberately asserts NOTHING, in the idiom `TestTheResidueThePinCannotRuleOn` below uses
+        and for the same reason: a floor ratchets only as tightly as it is kept, and keeping it
+        tight is a convention no assertion can enforce without becoming the exact count #1614
+        refused. So the slack is PRINTED — the entries in that gap are the ones a deletion could
+        take without reddening anything, and they should not be able to accumulate unseen."""
+        with capsys.disabled():
+            print("\n#1614 pin-set floors — a population may never fall below its recorded floor:")
+            for name, (structure, floor) in sorted(_FLOORS.items()):
+                slack = len(structure) - floor
+                note = "tight" if slack == 0 else f"{slack} entries a deletion could take unseen"
+                print(f"    {name:22s} {len(structure):3d} against floor {floor:3d}  ({note})")
 
 
 class TestTheResidueThePinCannotRuleOn:
