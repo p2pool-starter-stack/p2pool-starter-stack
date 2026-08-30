@@ -93,10 +93,9 @@ _EMPTY = {"[]", "{}", "0"}
 _HANDLE = "_conn"
 
 # Measured, read at source, and cleared — the only set this file ratchets. Each declares `T | None`
-# and returns `None` from every failure path, which is the three-valued contract #1409 established.
-# `get_worker_config_change` documents it in its own docstring: "None means the read FAILED ...
-# {} means there is genuinely no such row". Listing them by name is what makes law 1 enforceable;
-# the vacuity guard below is what keeps the list from silently becoming a check against nothing.
+# and returns `None` from every failure path: the three-valued contract #1409 established,
+# documented in `get_worker_config_change`'s own docstring. Naming them is what makes law 1
+# enforceable; the vacuity guard below keeps the list from becoming a check against nothing.
 _SIGNED = {
     "service/storage_service.py:get_xvb_standby",
     "service/storage_service.py:get_kv",
@@ -320,9 +319,10 @@ class TestTheSignedContractHolds:
         assert "service/worker_config_store.py:get_worker_config_history" in package["signed"]
 
     def test_every_signed_function_still_declares_its_out_of_band_failure(self, package):
-        """LAW 1. These five were read at source and cleared. Dropping the `| None` from one would
-        move it back into the collapsed class with nothing to notice — #1409 undone by an edit that
-        looks like a simplification."""
+        """LAW 1. These five were read at source and cleared. Dropping the `| None` from one
+        would move it back into the collapsed class with nothing to notice — #1409 undone by an
+        edit that looks like a simplification. A rename UPDATES its entry; deleting it shrinks
+        the pinned set, and nothing IN THIS FILE goes red after that."""
         assert _SIGNED <= set(package["signed"])
 
     def test_no_signature_promises_an_out_of_band_failure_and_collapses_anyway(self, package):
