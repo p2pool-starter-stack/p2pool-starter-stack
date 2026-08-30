@@ -42,10 +42,15 @@ SENTINEL="S3nt1nelVALUE" # short, alphanumeric: reachable by the NAME rule and b
 echo "== redact: KEY=value keyed on the JSON rule's vocabulary (#1611) =="
 # ATTRIBUTION. Every key below is BELOW the 90-character bar, carries no JSON quoting and no
 # `--flag`, so the name rule is the only thing in redact() that can reach it: delete the rule and
-# every row here reds. They are the six the two-bundle corpus showed still leaking, one per
-# vocabulary entry that `.env` actually exercises.
-for _key in MONERO_VIEW_KEY WALLET_RPC_USERNAME XVB_DONOR_ID HEALTHCHECKS_PING_URL \
-    TARI_SPEND_PUBLIC_KEY DASHBOARD_ONION_CLIENT_PRIVKEY; do
+# every row reds. ONE key per vocabulary entry that `.env` exercises, deliberately. The corpus
+# showed six keys still leaking, but `TARI_SPEND_PUBLIC_KEY` and `DASHBOARD_ONION_CLIENT_PRIVKEY`
+# both end in `KEY` like `MONERO_VIEW_KEY` — asserting all three is one measurement printed three
+# times, and a single mutation killed all three together. They are named here instead.
+# PASSWORD / TOKEN / SECRET stay covered by selftest.sh:202-210 and are not repeated. PASSWD,
+# LOGIN and the rest have no `.env` field and need no forward-cover row of their own: the
+# vocabulary invariant in selftest-redact.sh asserts this list IS the JSON one, so an entry cannot
+# quietly go missing here without that check failing.
+for _key in MONERO_VIEW_KEY WALLET_RPC_USERNAME XVB_DONOR_ID HEALTHCHECKS_PING_URL; do
     OUT="$(printf '%s=%s\n' "$_key" "$SENTINEL" | redact)"
     case "$OUT" in
     *"$SENTINEL"*) it_fail "$_key is redacted in a KEY=value line" "value survived: $OUT" ;;
@@ -103,7 +108,9 @@ assert_contains "an ordinary setting survives" "$OUT" "STACK_VERSION=v1.20.0"
 
 # Over-redaction that IS chosen, pinned so it cannot be filed later as a bug: any key ending in
 # `KEY` is replaced, `CACHE_KEY` included. That is the JSON rule's documented behaviour (#1590)
-# and narrowing it would mean guessing which `*_KEY` is a secret from its name.
+# and narrowing it would mean guessing which `*_KEY` is a secret from its name. This row shares
+# the `KEY` arm with the loop above and adds no coverage — it records the POLICY, so that a later
+# reader meeting a redacted `CACHE_KEY` finds it chosen rather than filing it.
 OUT="$(printf 'CACHE_KEY=%s\n' "$SENTINEL" | redact)"
 case "$OUT" in
 *"$SENTINEL"*) it_fail "an innocuous *_KEY is redacted too, as in JSON" "value survived: $OUT" ;;
