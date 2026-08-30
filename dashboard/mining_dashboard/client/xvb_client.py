@@ -1,6 +1,7 @@
 import logging
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 import requests
 
@@ -183,7 +184,7 @@ class XvbClient:
         self.REGEX_HR_1H = re.compile(r"1hr avg:\s*([\d\.]+)\s*([kKmMgG]?H/s)?", re.IGNORECASE)
         self.REGEX_HR_24H = re.compile(r"24hr avg:\s*([\d\.]+)\s*([kKmMgG]?H/s)?", re.IGNORECASE)
 
-    def get_stats(self):
+    def get_stats(self) -> dict[str, Any] | None:
         """
         Retrieves bonus history statistics from the XMRvsBeast service.
 
@@ -216,7 +217,7 @@ class XvbClient:
             self.logger.error(f"Unexpected error in XvB client: {e}")
             return None
 
-    def get_reward_estimates(self):
+    def get_reward_estimates(self) -> dict[str, float] | None:
         """Fetch XvB's published per-tier expected rewards (XMR/year) over Tor (#118).
 
         Returns ``{round_type: xmr_per_year}`` for the donor tiers on success, or ``None`` on a
@@ -246,7 +247,7 @@ class XvbClient:
             self.logger.error(f"Unexpected error fetching XvB reward estimates: {e}")
             return None
 
-    def get_recent_wins(self):
+    def get_recent_wins(self) -> dict[str, Any] | None:
         """Fetch XvB's public raffle-winners log over Tor — ONE request, both parses.
 
         Returns ``{"wins": [...], "round_stats": {...}}``: ``wins`` is THIS wallet's wins oldest
@@ -356,7 +357,7 @@ class XvbClient:
             self.logger.error(f"Unexpected error during XvB registration: {e}")
             return REG_ERROR
 
-    def _parse_html(self, html_text):
+    def _parse_html(self, html_text) -> dict[str, Any] | None:
         """
         Parses raw HTML content to extract mining statistics.
         """

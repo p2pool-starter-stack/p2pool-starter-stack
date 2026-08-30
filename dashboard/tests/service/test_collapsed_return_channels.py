@@ -39,9 +39,9 @@ below pins the narrowness so it cannot drift.
 
 Two laws are HARD, and neither needs a baseline of existing instances:
 
-1. **The signed set stays signed** (`_SIGNED`). Five functions already express the three-valued
-   contract, #1409's own fix among them. Dropping the `| None` from one of them would return it to
-   the collapsed class silently — the regression this file exists to make impossible.
+1. **The signed set stays signed** (`_SIGNED`). Five functions are PINNED there, #1409's own fix
+   among them — not every function the classifier scores signed. Dropping the `| None` from a pinned
+   one would return it to the collapsed class silently: the regression this file exists to prevent.
 2. **A signature that promises an out-of-band failure must honour it.** If a function's annotation
    admits `None`, every failure return in it must BE `None`, not an empty container. This is a
    self-consistency law with no baseline at all: it is clean today, it stays clean forever, and it
@@ -60,14 +60,14 @@ about their number. This is deliberate and it is the whole ruling on this file:
 
 So the un-read instances get no row, no ratchet, and no green. They get a count and their names.
 
-## The residual, stated as a measurement
+## The residual, stated as a measurement AT A NAMED SHA
 
-At the tip this shipped against: **11 collapses** flagged (all in the DB read layer —
-`storage_service.py` and `telemetry_store.py`), **5 signed**, **0 half-fixes**, and **57 failure
-returns this gate CANNOT judge because their functions are unannotated.** That 57 is the honest
-limit, not an apology: the mechanism keys on the declared type, so a function that declares nothing
-declares no contract to check. Annotating that layer would bring it into scope and is the obvious
-next move; this file does not pretend to have made it.
+Every figure here is measured over live source, so it drifts under refactors unrelated to
+annotation, in both directions: quote one with the sha you took it at, and never hang an imperative
+on the number (#1556). At `b0a32bd`, the tip this shipped against — **11 collapses** flagged (all in
+the DB read layer), **5 signed**, **0 half-fixes**, **57 blind**. At `a0ddbec` plus this slice
+(`client/xvb_client.py`) — **11**, **10**, **0**, **52**. #1556 annotates the blind layer slice by
+slice; the flagged count is expected to RISE wherever a slice brings a genuine collapse into scope.
 
 `add_payouts` is worth naming out of the 11, because it shows the class is not academic here: a
 failed INSERT returns `[]`, indistinguishable from "every row was already stored", and that value
