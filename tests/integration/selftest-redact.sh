@@ -193,5 +193,40 @@ OUT="$(printf '{"username":"%s","mode":"local","view_key":"%s","port":18081}\n' 
 case "$OUT" in *"$SENTINEL"*) it_fail "compact JSON: both secrets on one line" "value survived: $OUT" ;; *) it_pass "compact JSON: both secrets on one line" ;; esac
 assert_contains "compact JSON: non-secret neighbours survive" "$OUT" '"mode":"local"'
 
+echo "== redact: the JSON name rule is CASE-INSENSITIVE (#1590) =="
+# The suffix alternation shipped lowercase-only, so `apiKey`, `PASSWORD` and `Api_Token` were all
+# unreachable — and redact()'s own comment ("add the spelling you meet") could NOT fix it: the
+# failure is CASE, not spelling, so a contributor following that instruction adds more lowercase
+# entries and still misses every camelCase key. `config.reference.json` is snake_case throughout,
+# so the schema-derived population above cannot exercise this either. Hence explicit cases.
+OUT="$(printf '{"apiKey":"%s","authToken":"%s","viewKey":"%s","PASSWORD":"%s","Api_Token":"%s"}\n' \
+    "$SENTINEL" "$SENTINEL" "$SENTINEL" "$SENTINEL" "$SENTINEL" | redact)"
+case "$OUT" in *"$SENTINEL"*) it_fail "camelCase and UPPERCASE secret keys redact" "value survived: $OUT" ;; *) it_pass "camelCase and UPPERCASE secret keys redact" ;; esac
+
+# The other direction — the one the case widening could break. A non-secret key must not start
+# redacting merely because a service spelled it in a different case. These are the MUST_SURVIVE
+# fields above, in casings a service could plausibly emit; each would be a debugging value lost.
+OUT="$(printf '{"URL":"https://xvb.example","Api_Auth":"token","Chat_Id":"12345","Mode":"local"}\n' | redact)"
+assert_contains "case widening keeps a non-secret URL" "$OUT" '"URL":"https://xvb.example"'
+assert_contains "case widening keeps an auth MODE string" "$OUT" '"Api_Auth":"token"'
+assert_contains "case widening keeps a routing id" "$OUT" '"Chat_Id":"12345"'
+
+echo "== redact: the two JSON shapes #1590 MEASURED and did not close =="
+# Recorded at CURRENT behaviour with a label that cannot be misread as approval — the KNOWN_GAP
+# convention above. Both were measured absent from every artifact `capture_artifacts` puts through
+# redact() before the decision not to build them: ~48,400 JSON keys across the live container-log
+# corpus (48 distinct; a PER-CONTAINER partition puts every one in caddy, the only service here
+# that logs JSON — the other nine contribute exactly zero), 16,107 in a live `api-state.json`, 62
+# in a deployed `config.json`, and two archived bundles. The log corpus is live, so those two
+# counts are a snapshot and moved between captures; the distinct-key set did not. Not
+# one key in any of them carries a secret suffix in ANY casing, escaped or with a non-string value.
+# Fixing an unreachable shape that never occurs is cost with no benefit; if one ever occurs, these
+# two rows fail and say which shape arrived.
+OUT="$(printf '{"msg":"{\\"password\\":\\"%s\\"}"}\n' "$SENTINEL" | redact)"
+assert_contains "KNOWN GAP (#1590) — JSON escaped inside a log string is NOT reached" "$OUT" "$SENTINEL"
+OUT="$(printf '{"api_token":12345678,"password":null}\n' | redact)"
+assert_contains "KNOWN GAP (#1590) — a non-string secret value is NOT reached" "$OUT" "12345678"
+it_warn "KNOWN GAPS (#1590): escaped-JSON and non-string values are unreachable by the name rule — measured absent from every captured artifact, not fixed"
+
 echo "selftest-redact: $IT_PASS passed, $IT_FAIL failed"
 [ "$IT_FAIL" -eq 0 ] || exit 1
