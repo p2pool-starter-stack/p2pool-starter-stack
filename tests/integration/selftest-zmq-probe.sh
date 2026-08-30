@@ -207,6 +207,84 @@ else
     it_fail "a closed port returns well inside the budget" "took ${elapsed}s of 9s"
 fi
 
+echo "== tier B: the peer must actually PUBLISH, not merely hold a socket open (#1497) =="
+
+# The live half of this pair cannot run here (no node, no socket), so it is recorded rather than
+# re-run. MEASURED on the bench 2026-08-30, one host, the SAME probe against both targets:
+#
+#   live monerod ZMQ 18083    tier A: ok … XPUB    tier B: ok, published in ~2s
+#   silent XPUB 28100         tier A: ok … XPUB    tier B: silent, red at the budget
+#
+# The first column is the defect: tier A cannot tell those two apart, and says PASS for both. The
+# silent XPUB is ~30 lines of python3 raw sockets — it completes the greeting and the READY
+# exchange advertising XPUB, then publishes nothing, forever.
+
+# Tier A must not have moved: it never subscribes, so its cost and its wire text are what shipped.
+tier_a_snippet=$(zmq_probe_snippet 127.0.0.1 18083 8)
+assert_eq "tier A sends no subscription" "$(printf '%s' "$tier_a_snippet" | grep -c 'x00.x01.x01')" "0"
+assert_eq "tier A reads no PUBLISH" "$(printf '%s' "$tier_a_snippet" | grep -c 'PUBLISH')" "0"
+# ...and asking for tier B must actually arm it. A budget that silently failed to appear would
+# make every tier-B row pass for the wrong reason — the arming check, not a text preference.
+tier_b_snippet=$(zmq_probe_snippet 127.0.0.1 18083 8 90)
+assert_eq "tier B sends a subscription frame" "$(printf '%s' "$tier_b_snippet" | grep -c 'x00.x01.x01')" "1"
+assert_contains "tier B bounds its wait at the budget it was given" "$tier_b_snippet" "timeout 90 head -c 1"
+
+PUB_LIVE="GREETING $LIVE_GREETING
+READY $LIVE_READY
+PUBLISH 04"
+PUB_SILENT="GREETING $LIVE_GREETING
+READY $LIVE_READY
+PUBLISH "
+PUB_UNASKED="GREETING $LIVE_GREETING
+READY $LIVE_READY"
+
+zmq_publish_verdict "$PUB_LIVE" 127.0.0.1 18083 >/dev/null
+assert_rc "a peer that sent a byte after subscribing is publishing" "$?" "0"
+v=$(zmq_publish_verdict "$PUB_SILENT" 127.0.0.1 18083)
+assert_rc "a peer that sent NOTHING is silent, not healthy" "$?" "1"
+assert_contains "the silent verdict names what it could not see" "$v" "published NOTHING within the budget"
+# Distinct from silence ON PURPOSE. A snippet run without a publish budget never asked the
+# question, and reporting that as a silent node would be a fabricated failure.
+v=$(zmq_publish_verdict "$PUB_UNASKED" 127.0.0.1 18083)
+assert_rc "an un-asked question is not a silent node" "$?" "1"
+assert_contains "the un-asked verdict says so" "$v" "not-probed"
+
+# MUTATION PROOF: the emptiness guard is the whole assertion. Remove it and the silent fixture —
+# the exact shape of an offline node — passes. Without this the cases above could all be green
+# against a verdict that can never fail.
+_mutated=$(
+    zmq_publish_verdict() {
+        local pub
+        pub=$(printf '%s\n' "$1" | sed -n 's/^PUBLISH //p') # the [ -z "$pub" ] test, deliberately gone
+        echo "ok published $pub"
+    }
+    zmq_publish_verdict "$PUB_SILENT" 127.0.0.1 18083 >/dev/null
+    echo "$?"
+)
+assert_eq "without the emptiness guard the SILENT node passes (mutation proof)" "$_mutated" "0"
+
+# A SHORT ZMTP message frame begins with a 0x00 flags byte, so the one byte tier B reads is very
+# often NUL. If the read pipeline collapsed that to the empty string, every publisher whose first
+# frame is short would be reported SILENT — the row would red on healthy nodes and, worse, its
+# passing cases would prove nothing. Assert both directions of the same pipeline the snippet runs.
+assert_eq "a NUL first byte is data, not silence" \
+    "$(printf '\x00\x01\x02' | head -c 1 | od -An -v -tx1 | tr -d ' \n')" "00"
+assert_eq "a genuinely empty stream still reads as silence" \
+    "$(printf '' | head -c 1 | od -An -v -tx1 | tr -d ' \n')" ""
+
+# Behavioural: a publish budget must not become the cost of an unreachable port. The connect
+# fails first, so the 90s wait is never entered — a regression here would add 90s per scenario
+# to a gate that is already failing.
+start=$SECONDS
+snippet_out=$(bash -c "$(zmq_probe_snippet 127.0.0.1 1 9 90)" 2>/dev/null)
+elapsed=$((SECONDS - start))
+assert_contains "a closed port still reports CONNECT-FAIL with tier B armed" "$snippet_out" "CONNECT-FAIL"
+if [ "$elapsed" -lt 3 ]; then
+    it_pass "a closed port with a 90s publish budget returns in ${elapsed}s"
+else
+    it_fail "a closed port does not pay the publish budget" "took ${elapsed}s"
+fi
+
 echo ""
 echo "selftest-zmq-probe: $IT_PASS passed, $IT_FAIL failed"
 [ "$IT_FAIL" -eq 0 ] || exit 1

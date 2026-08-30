@@ -15,10 +15,24 @@
 # An accept() cannot satisfy this probe: it speaks the ZMTP 3.x greeting and the NULL-mechanism
 # READY exchange, and it reads the peer's advertised Socket-Type.
 #
-# Deliberately stops at the handshake (tier A). Asserting an OBSERVED block notification needs a
-# MOVING chain tip, and a height comparison cannot discriminate against a STATIC node — a frozen
-# p2pool view and a frozen monerod agree forever. That tier is not buildable on a static node;
-# see #1497.
+# The handshake alone is tier A, and it is NOT enough: MEASURED on the bench 2026-08-30, a
+# permanently-silent XPUB (a peer that completes the greeting and the READY exchange, then
+# publishes nothing) and a live monerod are INDISTINGUISHABLE to it — both "ok ... XPUB". So this
+# file also carries tier B: SUBSCRIBE, then wait for the peer to actually send something. That
+# separates the two by construction, and the controlled pair is in selftest-zmq-probe.sh.
+#
+# Tier B asserts the publisher is not SILENT, which is the failure class #1497 is about (an
+# offline or ZMQ-dead node starving p2pool). It deliberately does NOT assert that the message was
+# a BLOCK notification — that needs a new block, whose wait is minutes and unbounded, where any
+# published frame arrives in seconds. The remainder stays a counted skip in run.sh, named for
+# what it is rather than left in a comment.
+#
+# THE BUDGET IS 90s, AND THE SAMPLE COUNT IS PART OF THAT FIGURE. Time-to-first-message against
+# the live node, 8 samples, sorted: 0.3 1.5 1.8 3.3 4.5 5.6 16.0 26.5 (seconds). The first three
+# samples all landed under 6s and a 30s budget looked like 5x headroom; the tail arrived only as
+# the sample grew, and 30s would have been a FLAKY RED in the release gate. 90s is ~3.4x the
+# observed max. It is a CEILING, not a cost: the read returns on the first byte, so the happy
+# path pays the median (~4s) and only a genuinely silent node pays the full budget.
 #
 # Split: the socket I/O runs ON THE TARGET through rx (the harness ships shell snippets, never
 # files), and returns hex. Every verdict below it is a PURE function of that hex, so the
@@ -154,7 +168,7 @@ zmq_ready_socket_type() {
 # attribution at all (#1500). A `timeout`-wrapped throwaway connect in a child shell is the one
 # shape that bounds it without re-quoting the whole snippet: the child cannot hand its fd back, so
 # the cost is a second connect on the reachable path, ~2ms against anything that answers.
-zmq_probe_snippet() { # <host> <port> <timeout_s>
+zmq_probe_snippet() { # <host> <port> <timeout_s> [publish_budget_s]
     cat <<EOF
 timeout $3 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null
 case \$? in
@@ -184,7 +198,28 @@ elif [ -n "\$hdr" ]; then
   body=\$(timeout $3 head -c 512 <&3 | od -An -v -tx1 | tr -d ' \n')
 fi
 echo "READY \$hdr\$body"
-exec 3<&-
+EOF
+    # Generated OUTSIDE the heredoc on purpose: an interpolated `$(...)` line leaves a blank line
+    # behind when it expands to nothing, so tier A's snippet text would no longer be what shipped.
+    zmq_subscribe_lines "${4:-}"
+    printf 'exec 3<&-\n'
+}
+
+# The tier-B half of the snippet, kept in its own generator so tier A's text is byte-identical
+# when no publish budget is asked for. Emits nothing at all in that case.
+#
+# The subscription is a ZMTP message frame whose body is 0x01 (subscribe) + topic; an EMPTY topic
+# subscribes to every topic the peer publishes, which is what makes the wait seconds rather than
+# minutes. We then read exactly ONE byte. That is deliberate and not laziness: `timeout` kills
+# `head` mid-buffer, so a larger read can DISCARD bytes that did arrive and report silence — a
+# false red in a release gate. One byte cannot be truncated, and one byte is the whole claim:
+# a peer that already passed the ZMTP handshake and advertised XPUB, and then sends data after a
+# subscription, is publishing. What it published is not asserted here.
+zmq_subscribe_lines() {
+    [ -n "$1" ] || return 0
+    cat <<EOF
+printf '\x00\x01\x01' >&3
+echo "PUBLISH \$(timeout $1 head -c 1 <&3 | od -An -v -tx1 | tr -d ' \n')"
 EOF
 }
 
@@ -237,4 +272,39 @@ zmq_pub_probe() {
     local host="$1" port="$2" to="${3:-5}" out
     out=$(rx "$(zmq_probe_snippet "$host" "$port" "$to")" 2>/dev/null)
     zmq_pub_verdict "$out" "$host" "$port"
+}
+
+# zmq_publish_verdict <target-output> <host> <port> — PURE, over the same text the snippet
+# printed. Tier B only: the caller runs the tier-A verdict first, so a handshake failure is
+# already reported by the time this is reached. Returns 0 only when the peer published.
+zmq_publish_verdict() {
+    local out="$1" host="$2" port="$3" pub
+    # A snippet run WITHOUT a publish budget prints no PUBLISH line at all. That is not silence,
+    # it is an un-asked question, and reporting it as silence would be a fabricated failure.
+    case "$out" in *PUBLISH*) ;;
+    *)
+        echo "not-probed no publish budget was given, so the peer was never asked to publish"
+        return 1
+        ;;
+    esac
+    pub=$(printf '%s\n' "$out" | sed -n 's/^PUBLISH //p')
+    if [ -z "$pub" ]; then
+        echo "silent $host:$port completed the ZMTP handshake and advertised a publisher socket, then published NOTHING within the budget — an offline or ZMQ-dead node looks exactly like this, and the handshake alone cannot see it"
+        return 1
+    fi
+    echo "ok $host:$port published within the budget — the publisher is live, not silent"
+    return 0
+}
+
+# zmq_publishes_probe <host> <port> [handshake_timeout_s] [publish_budget_s] — tier A THEN tier B
+# over ONE connection. Returns tier A's verdict unchanged when the handshake fails, so a dead port
+# is never reported as a silent publisher: those are different defects and want different fixes.
+zmq_publishes_probe() {
+    local host="$1" port="$2" to="${3:-5}" pub="${4:-90}" out v
+    out=$(rx "$(zmq_probe_snippet "$host" "$port" "$to" "$pub")" 2>/dev/null)
+    v=$(zmq_pub_verdict "$out" "$host" "$port") || {
+        printf '%s\n' "$v"
+        return 1
+    }
+    zmq_publish_verdict "$out" "$host" "$port"
 }

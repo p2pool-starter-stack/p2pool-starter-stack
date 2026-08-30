@@ -320,10 +320,19 @@ and `--list` prints it).
 - The Monero node's ZMQ endpoint is a live ZMTP publisher. A ZMTP handshake against the node's ZMQ
   port succeeds and the peer advertises a publisher socket type ([#1497](https://github.com/p2pool-starter-stack/pithead/issues/1497)). The row is
   named for what the handshake proves, which is narrower than "publishes block notifications": a
-  node whose publisher is bound but permanently silent answers it exactly as a live one does. That
-  remaining gap is not left implicit — every run counts it as a missing leg, `monero ZMQ observed
-  block notification`, because a skip announces itself and a false green does not. Closing it needs
-  a moving chain tip, which a static or `--offline` node cannot supply. This is a separate
+  node whose publisher is bound but permanently silent answers it exactly as a live one does. A
+  second row closes that case: it subscribes and waits for the peer to actually send something,
+  which a silent publisher never does. Measured on one host against both targets, the live node
+  passed in about 2 seconds and a permanently silent publisher red at its budget. The budget is
+  90 seconds, and the sample behind that figure is part of it — time-to-first-message against the
+  live node over eight samples ran 0.3, 1.5, 1.8, 3.3, 4.5, 5.6, 16.0 and 26.5 seconds, and the
+  first three would have justified a 30-second budget that the tail turns into a flaky red. It is
+  a ceiling rather than a cost: the read returns on the first byte. What remains unproven is
+  narrower than it was — that the frame carried a block notification rather than a transaction or
+  a miner update — and every run counts it as a missing leg, `monero ZMQ published frame is a
+  BLOCK notification`, because a skip announces itself and a false green does not. Closing that
+  needs a new block, a wait of minutes where any published frame arrives in seconds. This is a
+  separate
   assertion from "Monero is synced" because the sync check cannot fail for a node that can never
   publish: an `--offline` monerod reports `status: OK` with `target_height: 0`, which satisfies
   both halves of the caught-up predicate. Nothing downstream covered the gap either — p2pool's
@@ -333,7 +342,7 @@ and `--list` prints it).
   answers a dial with rc 0. Measured on one host, four targets: the live node and the
   published-but-dead port were indistinguishable to a dial (both rc 0) and separated by the
   handshake; the live node and a permanently silent publisher were indistinguishable to the
-  handshake as well, both answering `ok … XPUB`, which is what the declared skip above records.
+  handshake as well, both answering `ok … XPUB`, which is the pair the subscribe row separates.
   Real nodes advertise `XPUB` rather than `PUB`; both are accepted.
   The probe bounds its own connect ([#1500](https://github.com/p2pool-starter-stack/pithead/issues/1500)). `timeout` cannot wrap a shell
   redirection, so the opening `exec` inherited only the kernel's SYN-retry deadline. A closed port
