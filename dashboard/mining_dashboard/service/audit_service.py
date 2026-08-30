@@ -15,6 +15,7 @@ unfiltered. Growth is bounded by the writers, not here: the audit log is trimmed
 """
 
 import calendar
+import hashlib
 import json
 import os
 import re
@@ -42,6 +43,42 @@ def _clean(value, max_len=200):
     if not isinstance(value, str):
         value = "" if value is None else str(value)
     return _SAFE_CHARS.sub("", value)[:max_len]
+
+
+# The audit row id is the ONE field the #530 writer does not put through ``_clean``, and it is the
+# ``audit_events`` PRIMARY KEY on a table with no retention prune (#1561) — so an oversized id is
+# permanent. Callers build it from their own inputs, and on the rig-edit path that input is an
+# unauthenticated worker's ``change_id``, validated upstream only as a non-empty ``str`` inside a
+# body capped at 1 MiB. The bound has to clear every id this repo legitimately constructs: the
+# longest is ``rig-drift-{worker}-{revision}`` at 10 + 128 (``_WORKER_NAME_RE``) + 1 + 64
+# (``parse_config_meta``) = 203 characters.
+MAX_EVENT_ID_LEN = 256
+
+# Enough digest that distinct inputs stay distinct in practice; a sha256 prefix, not a truncation.
+_EVENT_ID_DIGEST_LEN = 16
+
+
+def clean_event_id(event_id):
+    """``event_id`` as a bounded, charset-restricted, still-DETERMINISTIC audit row id (#1561).
+
+    An id that survives ``_clean`` unchanged is returned verbatim, so every id this repo builds
+    keeps the key it already has and no existing row is orphaned or duplicated. Anything the
+    whitelist or the length cap would alter is replaced by its safe prefix plus a sha256 digest of
+    the ORIGINAL, because bounding this field cannot be a plain truncation: two distinct long ids
+    sharing a prefix would collapse to one row under ``INSERT OR IGNORE`` and LOSE a detection.
+    The digest keeps the mapping one-way-collision-free while staying a pure function of the input,
+    so a rig re-reporting the same change every poll still dedupes to exactly one row.
+
+    Returns "" for a non-str or empty input, which is what the caller's ``or`` fallback to a random
+    id is written against."""
+    if not isinstance(event_id, str) or not event_id:
+        return ""
+    safe = _clean(event_id, MAX_EVENT_ID_LEN)
+    if safe == event_id:
+        return safe
+    digest = hashlib.sha256(event_id.encode("utf-8", "surrogatepass")).hexdigest()
+    keep = MAX_EVENT_ID_LEN - _EVENT_ID_DIGEST_LEN - 1
+    return f"{safe[:keep]}-{digest[:_EVENT_ID_DIGEST_LEN]}"
 
 
 def _tail_json_lines(path):

@@ -1055,7 +1055,10 @@ The last two read off the same unauthenticated worker feed, so they share ONE ra
 a bounded number of rows per hour between them before the rest are dropped behind a single
 `rate-limited` row that names which of the two tipped it. One budget rather than one each, because
 two would double what a single LAN device can make permanent. A real occasional rig change
-still records; only a flood is capped.
+still records; only a flood is capped. The cap bounds how many rows arrive rather than how big they
+are, so each row's identifier is separately length-capped and whitelisted where it is written
+([#1561](https://github.com/p2pool-starter-stack/pithead/issues/1561)): a `rig-edit` id is built from a change id the rig chooses, and `audit_events` is
+never pruned.
 
 Any of the three is worth treating like a rotate-now signal in the same spirit as
 [Operations › Watching for intruders](operations.md#watching-for-intruders): if you didn't make

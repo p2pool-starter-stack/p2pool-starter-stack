@@ -121,11 +121,20 @@ The stack's defaults:
   unauthenticated worker feed, so they SHARE one rate cap per worker (#724): a rig reporting
   distinct change_ids — or a fresh revision — on every poll can add at most a bounded number of
   rows per hour between them before the rest are dropped behind a single `rate-limited` marker that
-  names which of the two tipped it, so one LAN device can't grow the database without limit. One
-  budget rather than one each, because two would double what that device can make permanent. Values
-  from that feed are also validated to a short opaque token before they reach the store, so a rig
-  cannot choose an audit row's own identifier. The `host-edit` and mirrored `control.log` rows are
-  not attacker-controllable and are not capped.
+  names which of the two tipped it. One budget rather than one each, because two would double what
+  that device can make permanent. The cap is keyed on the worker name the device presents, which a
+  device chooses freely, so it bounds a NAME rather than a device: one rotating names draws a fresh
+  budget per name (#1566). And it bounds how many rows arrive, not how large each one is, so the
+  row's own identifier is bounded separately (#1561): every audit row id
+  is length-capped and whitelisted at the writer, the one field the trail's sanitizer used to skip,
+  and `rig-drift`'s revision is validated to a short opaque token at the point it is read as well.
+  A rig does still CHOOSE its own `rig-edit` row's identifier — that id is built from a `change_id`
+  it picks freely — but it can no longer make one arbitrarily large or carry markup into it, which
+  is what matters on a table that is never pruned. What it cannot do is forge a `host-edit` or
+  `control.log` identifier: those are built from hardcoded prefixes a `rig-edit` id can never equal.
+  Inside the `rig-edit-` prefix, though, the ids are a plain concatenation and do not separate one
+  worker from another (#1566), so read that namespace as one shared space rather than as per-worker.
+  The `host-edit` and mirrored `control.log` rows are not attacker-controllable and are not capped.
 
 ### Telegram control commands (#338)
 

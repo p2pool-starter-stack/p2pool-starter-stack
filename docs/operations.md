@@ -315,9 +315,15 @@ kinds above — so the Security panel's range presets, date fields and search lo
 the log's own trimmed window. Because `rig-edit` and `rig-drift` both read off the unauthenticated
 worker feed, they share one rate cap per worker ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a fresh
 change_id, or a fresh revision, every poll can add only a bounded number of rows per hour between
-them before the rest are dropped behind a single `rate-limited` marker, so no one LAN device can
-grow the database without limit. They share one budget rather than holding one each, since two
-would double what that device can make permanent. A genuine occasional rig change still records
+them before the rest are dropped behind a single `rate-limited` marker. They share one budget
+rather than holding one each, since two would double what that device can make permanent. That cap
+bounds how many rows arrive and not how large each one is, so every audit row's own identifier is
+length-capped and whitelisted where it is written ([#1561](https://github.com/p2pool-starter-stack/pithead/issues/1561)) — the one field the trail's
+sanitizer used to skip, and the one a rig picks the input to. Between the two bounds, a rig holding
+one worker name is bounded in both how many rows it adds and how large each one is. The cap is
+keyed on the name the device presents and a device chooses that freely, so one that rotates names
+draws a fresh budget per name ([#1566](https://github.com/p2pool-starter-stack/pithead/issues/1566)):
+read the bound as per name, not per device. A genuine occasional rig change still records
 normally; only a flood is capped, and the cap is visible — the marker names which detection tipped
 it, and the dashboard logs a warning.
 
