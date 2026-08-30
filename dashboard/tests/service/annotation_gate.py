@@ -230,8 +230,11 @@ def classify(source: str, where: str) -> dict[str, list]:
         failures = _failure_returns(function)
         if not failures:
             continue
-        name = f"{where}:{function.name}"
+        # Counted HERE, immediately under the only other early exit, and not one statement lower:
+        # everything below this line is inside the invariant, so an exclusion added where a future
+        # author would naturally add one cannot open a window the assert is blind to.
         walked += 1
+        name = f"{where}:{function.name}"
         # A `-> None` procedure is out of scope entirely, not "signed". It has no success value for
         # a failure to hide inside, so the defect this file describes cannot occur in one. Counting
         # its bare `return` as a signed contract would inflate the cleared set with functions that
