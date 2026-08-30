@@ -41,7 +41,7 @@ moved the data, which is the failure the pin comment below records happening twi
 """
 
 # The modules with ZERO unannotated failure returns, measured over live source. Each slice of #1556
-# adds the module it finished. Measured at this tip: 27 of 33 modules that hold a failure return at
+# adds the module it finished. Measured at this tip: 28 of 33 modules that hold a failure return at
 # all — `client/xvb_client.py` by slice 1, `service/worker_config_store.py` by pre-existing work,
 # the six single-function `client/` modules by slice 2, the four single-function `web/` modules by
 # slice 3, the two single-function `config/` modules by slice 4, the four outbound senders under
@@ -49,8 +49,9 @@ moved the data, which is the failure the pin comment below records happening twi
 # MULTI-function slice — the four parse-or-read pairs under `service/`, each pinned only once BOTH of
 # its failure returns were annotated and read, and the ten handle-guard procedures in
 # `service/storage_service.py` by slice 7, and its three siblings in `service/telemetry_store.py` by
-# slice 8. **12 failure returns are still blind**, in six modules — every one through the `except`
-# door, because slice 8 closed the handle-guard population entirely.
+# slice 8, and the two `except`-door functions in `helper/utils.py` by slice 9. **10 failure
+# returns are still blind**, in five modules — every one through the `except` door, because slice 8
+# closed the handle-guard population entirely.
 #
 # Every figure above is re-derived at the head being shipped, never carried across a slice: 5b moved
 # this tuple from 18 to 21 and left the sentence beside it saying 18. A slice adds rows to a tuple
@@ -103,8 +104,13 @@ moved the data, which is the failure the pin comment below records happening twi
 # three writers are the same closed-handle guard whose whole body is a bare `return`, measured the
 # same way (zero valued returns, zero yields, with `get_xvb_history`'s three valued returns as the
 # control that the walk can see one). Three more `procedure` rows, ZERO to `signed`. It closes the
-# HANDLE-GUARD population — every one of the twelve failure returns still blind now comes through
-# the `except` door.
+# HANDLE-GUARD population — at slice 8's own head every one of the twelve failure returns still
+# blind came through the `except` door. That figure is deliberately left scoped to that head rather
+# than updated in place: slice 9 took two of them and the live count is in the header above. A
+# past-tense sentence about a shipped slice cannot be falsified by a LATER slice — but it can still
+# be wrong at the head it describes, and slice 9 found exactly that in the sibling test file, where
+# "the twelve that score zero" had drifted to thirteen before any slice noticed. Scoping a figure
+# to its head protects it from the future, not from the measurement.
 #
 # One thing here is worth carrying: this module's residue and its blind set were the SAME THREE
 # SITES. The gate saw them through the guard door, and #1604's sweep saw them as falsy returns from
@@ -114,11 +120,49 @@ moved the data, which is the failure the pin comment below records happening twi
 # #1604 prints the clean modules too.
 #
 # That overlap is NOT unique and the first draft of this comment said it was, unmeasured. Measured
-# at this tip: `helper/utils.py` has the same shape — 2 residue functions and the same 2 blind — and
-# it is not pinned yet, so the slice that takes it should expect its residue to go to zero too. In
-# every other module the two sets are DISJOINT (`storage_service.py`'s residue is `add_shares` and
-# `save_snapshot`, neither of them among the ten slice 7 annotated). **Do not infer one set from the
-# other; they answer different questions and only sometimes coincide.**
+# at this tip: `helper/utils.py` had the same shape — 2 residue functions and the same 2 blind —
+# and slice 9 took it, so that prediction is DISCHARGED rather than left standing: re-measured at
+# slice 9's head, the module reports 0 residue sites.
+#
+# The sentence that stood here — "in every other module the two sets are DISJOINT", carrying
+# `storage_service.py`'s `add_shares`/`save_snapshot` as its evidence — is RETRACTED. It was true
+# of the module it named and false as the generalisation it read as, because the two halves were
+# measured over DIFFERENT POPULATIONS: in a PINNED module `blind` is empty by construction, so
+# "disjoint" is vacuous there rather than a finding, and every module it implicitly quantified over
+# was pinned. Re-measured at slice 9's head over the five modules that still hold a blind return,
+# the sets are disjoint in NOT ONE of them — `blind` is a SUBSET of the residue in all five, and in
+# `web/server.py` they are the SAME SET (`_finalize_worker_upgrade` and `_num`), a THIRD module of
+# the shape this paragraph first called unique and then called doubled. The mechanism is that a
+# blind function is unannotated by definition, so a falsy failure return lands it in both
+# instruments at once; only a blind function returning a NON-falsy value can separate them, which
+# is why the coincidence is the common case and not the exception. **Do not infer one set from the
+# other — but do not infer independence either: they answer different questions, they coincide far
+# more often than this file used to say, and which way they fall depends on whether the module has
+# been pinned yet.**
+#
+# Slice 9 is `helper/utils.py`, and slices 7 and 8 transfer NOTHING to it beyond the method. The
+# discriminator is NOT the door — slice 7's `_prune_quarantined` came through the `except` door
+# too — it is that those thirteen were all bare-`return` procedures, measured at zero valued
+# returns and zero yields, where `-> None` is simply honest. BOTH of these return a VALUE, so
+# each had to be read on its own terms and they landed in DIFFERENT verdicts. That split is the point of the slice: one `signed`, one `unjudged`, ZERO
+# `procedure`. `helper/utils.py` is the SECOND module to hold both verdicts at once, not the first
+# — `service/worker_config_store.py` already did. That was measured here rather than asserted,
+# because the first draft of this sentence said "first" and the measurement refuted it.
+#
+#   `detect_host_ipv4` -> `str | None` is a true `signed`, and the annotation invents nothing: the
+#     docstring ALREADY declared the contract in prose — "Returns ``None`` when it can't be
+#     determined (e.g. no default route), so callers fall back to showing the hostname alone" — and
+#     its sole production caller, `web/views.py:host_display_addr`, acts on exactly that. `None` is
+#     the out-of-band answer, distinguishable from every success value, which is what `signed`
+#     means. The annotation moves a promise the code already kept into the signature.
+#
+# `is_ip_address` is the `unjudged` one and its reading is filed with its entry below rather than
+# here, so that the argument travels WITH the value the way every other entry in this file does.
+#
+# Both functions were proven bytecode-identical base-vs-head, with a seeded `return True` ->
+# `return False` inside `is_ip_address` as the positive control: it flipped that function and ONLY
+# that function, which is what makes the clean reading on the other two evidence rather than an
+# empty result.
 #
 # Slice 4 added ZERO to `signed`, which is the CORRECT outcome and was predicted before it was
 # written: `config/` holds one collapse (`load_worker_endpoints` returning `[]`) and one residual
@@ -147,6 +191,7 @@ PINNED = (
     "client/xvb_client.py",
     "config/config.py",
     "config/worker_endpoints.py",
+    "helper/utils.py",
     "service/healthchecks.py",
     "service/notify_sinks.py",
     "service/telegram_notifier.py",
@@ -176,6 +221,12 @@ PINNED = (
 # per-table health channel #1615 is about, so it is the one whose silent exit from the walk would
 # cost most. For `telemetry_store.py` all three writers are equivalent for this purpose and
 # `add_xvb_history` is simply the first declared — recorded so nobody hunts for a reason.
+# `helper/utils.py` names `detect_host_ipv4` on a stronger ground than "either would do": that
+# module's other candidate, `is_ip_address`, is ALREADY held alive by the separate vacuity guard on
+# `_UNJUDGED_AND_READ`, which requires every entry to still exist and still score `unjudged`.
+# Anchoring here on `is_ip_address` would guard one function twice and leave the `signed` one
+# guarded by nothing but law 1's aggregate — which a vanished module satisfies perfectly. The
+# anchor goes where the other guard is not.
 _ANCHORS = {
     "client/docker/docker_control.py": "client/docker/docker_control.py:_post",
     "client/monero/monero_client.py": "client/monero/monero_client.py:get_info",
@@ -188,6 +239,7 @@ _ANCHORS = {
     "client/xvb_client.py": "client/xvb_client.py:get_stats",
     "config/config.py": "config/config.py:local_miner_enabled",
     "config/worker_endpoints.py": "config/worker_endpoints.py:load_worker_endpoints",
+    "helper/utils.py": "helper/utils.py:detect_host_ipv4",
     "service/healthchecks.py": "service/healthchecks.py:ping",
     "service/notify_sinks.py": "service/notify_sinks.py:_post",
     "service/telegram_notifier.py": "service/telegram_notifier.py:send",
@@ -258,6 +310,25 @@ _ANCHORS = {
 #     the hold is a yield optimization, never a safety path, so a read error must not freeze
 #     steering. Collapsing these two readings into one would be the bulk-fill this list refuses:
 #     same shape, opposite safety argument. Neither reaches `signed` without inventing a return.
+#
+# Slice 9 adds `helper/utils.py:is_ip_address`, and it is the first member whose `except` handler
+# is not an ERROR PATH at all — which is the whole reason it is readable rather than a collapse.
+# `ipaddress.ip_address` communicates "this is not an address" by RAISING `ValueError`, so the
+# handler is where the function's negative answer is computed, not where a failure is absorbed.
+# `AttributeError` is the same answer arriving by a second route: `value.strip()` raises it when
+# `value` is not a string, and a non-string is not an IP address either. So both handled cases and
+# the `False` they return mean one thing — "not a literal IP" — and there is no third outcome for
+# an out-of-band value to carry. `-> bool | None` would invent a return the function never makes.
+#
+# The sole production caller agrees, and was read rather than assumed: `web/views.py`'s
+# `host_display_addr` does `if is_ip_address(host): return None`, i.e. "the configured host is
+# already an address, so show it alone". On False it falls through and tries `detect_host_ipv4()`.
+# A malformed or `None` host takes the False branch, which is correct there for the same reason —
+# it is not an address, so there is something worth trying to add beside it. No caller branch
+# exists that a third answer could reach.
+#
+# What this entry does NOT claim: that `False` is the right answer for every future caller. It is
+# a reading of the two paths that exist at this head, which is all any entry in this list is.
 _UNJUDGED_AND_READ = frozenset(
     {
         "client/docker/docker_control.py:_post",
@@ -265,6 +336,7 @@ _UNJUDGED_AND_READ = frozenset(
         "service/healthchecks.py:ping",
         "service/notify_sinks.py:_post",
         "service/telegram_notifier.py:send",
+        "helper/utils.py:is_ip_address",
         "service/egress.py:_sinks_all_private",
         "service/steering_projection.py:won_round_live",
         "service/tor_heal.py:_probe_egress",
