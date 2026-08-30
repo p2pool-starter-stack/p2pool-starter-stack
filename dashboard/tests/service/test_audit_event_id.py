@@ -67,6 +67,19 @@ class TestCleanEventIdContract:
         row only while the id is a pure function of the input."""
         assert audit_service.clean_event_id(HOSTILE) == audit_service.clean_event_id(HOSTILE)
 
+    def test_a_lone_surrogate_does_not_crash_the_poll_loop(self):
+        """A rig's JSON can carry ``\\ud800``, and ``json.loads`` hands it over as a lone
+        surrogate that plain ``str.encode("utf-8")`` refuses — which would raise inside the poll
+        loop rather than record a row. The digest encodes with ``surrogatepass`` for exactly this.
+        The first assertion is the control: it pins that the input really is un-encodable, so this
+        test cannot pass by accident on an ordinary string."""
+        lone = "rig-edit-miner1-" + "\ud800" + "x" * 300
+        with pytest.raises(UnicodeEncodeError):
+            lone.encode("utf-8")
+        out = audit_service.clean_event_id(lone)
+        assert len(out) <= audit_service.MAX_EVENT_ID_LEN
+        assert out == audit_service.clean_event_id(lone)
+
     @pytest.mark.parametrize("empty", [None, "", 42, b"bytes", {"a": 1}])
     def test_absent_or_non_str_is_falsy(self, empty):
         """The caller's ``or f"{source}-{uuid4()}"`` fallback is written against a falsy return —
