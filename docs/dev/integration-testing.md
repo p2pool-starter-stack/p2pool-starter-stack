@@ -68,7 +68,8 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   line whose name ends in `_PASSWORD` / `_TOKEN` / `_SECRET`; a credential given as a flag value;
   a v3 onion; and any opaque run of 90 or more characters, which is what catches wallet addresses
   (and a sha512 with them); and a JSON `"key": "value"` whose key ends in one of a list of secret
-  words — `password`, `token`, `key`, `username`, `wallet` and the rest.
+  words — `password`, `token`, `key`, `username`, `wallet` and the rest, matched without regard to
+  case, so `apiKey` and `PASSWORD` are reached alongside `api_key`.
   [#1582](https://github.com/p2pool-starter-stack/pithead/issues/1582) closed the flag-value and
   address-shape gaps; [#1587](https://github.com/p2pool-starter-stack/pithead/issues/1587) added
   the JSON one. **That last rule is keyed on the field NAME, not the value, and that is forced**:
@@ -76,7 +77,14 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   them. **The name list is open, and one field is still out of reach** — `notifications.ntfy.url`
   is a capability URL whose key is the bare word `url`, which only its nesting separates from the
   public `xvb.url`, and a line-wise filter cannot see nesting. The self-test states that gap
-  rather than hiding it.
+  rather than hiding it. **Two further JSON shapes are stated rather than closed**
+  ([#1590](https://github.com/p2pool-starter-stack/pithead/issues/1590)): a JSON payload logged as
+  an escaped string inside another field (`"msg":"{\"password\":\"…\"}"`), and a secret whose
+  value is not a string (`"api_token":12345678`). Both were measured absent from every artifact
+  the harness captures — the container logs contribute JSON from one service only, Caddy, and not
+  one of its keys is secret-named in any case — and the one-character fix for the second replaces
+  the value's trailing delimiter along with the value, so it corrupts the JSON it is meant to
+  protect. The self-test pins both at today's behaviour, so a row fails if either shape arrives.
 - Continue-on-error. A failing assertion doesn't abort the run. The whole matrix is collected
   and summarized, with per-scenario artifacts for the failures.
 
@@ -683,7 +691,8 @@ Several self-tests sit beside it as standalone files, picked up by the same glob
 the counters and the real `summary()`, it censuses every harness file and fails if a skip leaves
 through a bare `it_warn` — by wording, and by shape for the drops that never say "skipping".
 `selftest-redact.sh` covers the shapes the redactor used to miss — a credential passed as a flag
-value, and secrets in JSON — and asserts in each case that the *raw* value is gone rather than
+value, and secrets in JSON under a key of any case — and asserts in each case that the *raw* value
+is gone rather than
 that a `<redacted>` marker appeared, since a marker can come from some other field on the same
 line. Its JSON population is derived from `config.reference.json` rather than listed in the file,
 under a screen deliberately wider than the redactor's own list, so a sensitive field added to the
