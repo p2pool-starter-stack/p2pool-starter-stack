@@ -1,6 +1,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
 import requests
 
 import mining_dashboard.client.monero.monero_client as monero_mod
@@ -92,6 +93,37 @@ class TestGetInfo:
             monero_mod.requests, "get", return_value=_resp(json_data={"status": "BUSY"})
         ):
             assert client.get_info() is None
+
+    @pytest.mark.parametrize(
+        ("label", "body"),
+        [
+            ("array", b"[1, 2, 3]"),
+            ("number", b"7"),
+            ("string", b'"hello"'),
+            ("null", b"null"),
+        ],
+    )
+    def test_a_json_body_that_is_not_an_object_returns_none(self, label, body):
+        """#1592: valid JSON is not necessarily a JSON OBJECT, and the signature says dict | None.
+
+        Each of these parses cleanly and used to reach ``data.get("status")``, which RAISED —
+        `AttributeError` for an array, string or null, `TypeError` for a number — past a contract
+        that promises None. The bytes go through the real bounded read, so nothing here is
+        satisfied by the size cap: they are four bytes' worth of body, not a megabyte.
+        """
+        client = MoneroClient(username="u", password="p")
+        with patch.object(monero_mod.requests, "get", return_value=_resp(body=body)):
+            assert client.get_info() is None, label
+
+    def test_a_json_object_body_is_still_returned(self):
+        """The control for the guard above: it must refuse non-objects WITHOUT refusing objects.
+
+        Without this, deleting `get_info`'s body and returning None unconditionally would keep
+        every assertion in the parametrized test green.
+        """
+        client = MoneroClient(username="u", password="p")
+        with patch.object(monero_mod.requests, "get", return_value=_resp(body=b'{"height": 5}')):
+            assert client.get_info() == {"height": 5}
 
 
 class TestGetSyncStatus:
