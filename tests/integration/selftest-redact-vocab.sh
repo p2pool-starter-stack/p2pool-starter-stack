@@ -51,7 +51,7 @@ RENDER="$(cd "$HERE/../.." && pwd)/lib/pithead/33-render-env.sh"
 MUST_REDACT="DASHBOARD_AUTH_HASH_B64 DASHBOARD_AUTH_PW_FP DASHBOARD_AUTH_USER
 DASHBOARD_ONION_CLIENT_PRIVKEY DASHBOARD_ONION_CLIENT_PUBKEY HEALTHCHECKS_PING_URL
 MONERO_NODE_PASSWORD MONERO_NODE_USERNAME MONERO_VIEW_KEY MONERO_WALLET_ADDRESS
-NOTIFY_WEBHOOK_URLS NTFY_TOKEN PROXY_AUTH_TOKEN PROXY_STRATUM_PASSWORD TARI_SPEND_PUBLIC_KEY
+NOTIFY_WEBHOOK_URLS NTFY_TOKEN NTFY_URL PROXY_AUTH_TOKEN PROXY_STRATUM_PASSWORD TARI_SPEND_PUBLIC_KEY
 TARI_VIEW_KEY TARI_WALLET_ADDRESS TARI_WALLET_PASSWORD TELEGRAM_BOT_TOKEN WALLET_RPC_PASSWORD
 WALLET_RPC_USERNAME XMRIG_API_TOKEN XVB_DONOR_ID"
 
@@ -73,12 +73,17 @@ WALLET_RPC_USERNAME XMRIG_API_TOKEN XVB_DONOR_ID"
 MUST_SURVIVE="XMRIG_API_AUTH DASHBOARD_ONION_CLIENT_AUTH TELEGRAM_CHAT_ID P2POOL_URL XVB_POOL_URL
 MONERO_WALLET_RPC_URL TARI_GRPC_ADDRESS TARI_WALLET_GRPC_ADDRESS"
 
-# ⛔ NOT a survivor on merit. `NTFY_URL` IS a capability URL and ought to be redacted; the bare
-# word `URL` cannot be added to the vocabulary without taking every public endpoint above with it.
-# This mirrors selftest-redact.sh's `notifications.ntfy.url` gap, which is the SAME value arriving
-# in the other syntax — the two must stay classified together. Asserted at its CURRENT behaviour
-# so the gap is stated rather than hidden: when someone closes it, this row fails and moves up.
-KNOWN_GAP="NTFY_URL"
+# ⛔ `NTFY_URL` WAS pinned here as a known gap, on the reason that the bare word `URL` could not be
+# added without taking every public endpoint above with it. True, and it was never the technique
+# this file uses: a SPECIFIC suffix, measured against the whole rendered population. `NTFY_URL`
+# catches exactly itself across all 129 keys, so it is now a MUST_REDACT row (#1626).
+#
+# ⛔ ITS JSON SIBLING DID NOT MOVE WITH IT, AND THAT IS NOT AN OVERSIGHT. `notifications.ntfy.url`
+# stays a known gap in selftest-redact.sh for a DIFFERENT reason that measurement confirms: that
+# key is the bare word `url`, and only its NESTING separates it from `xvb.url`, which a line-wise
+# filter cannot see. `ntfy_url` is carried in BOTH alternations regardless, because #1611's
+# invariant is that they agree entry-for-entry; on the JSON side it reaches nothing today. The
+# two are the same VALUE and no longer the same GAP.
 
 # Redacted, but by a SHAPE rule rather than the name rule — so a name-shaped sentinel would report
 # them as leaking and be wrong. Listed separately BECAUSE that difference is invisible otherwise:
@@ -138,7 +143,7 @@ else
 fi
 
 for key in $SCREENED; do
-    if ! in_list "$key" "$MUST_REDACT $MUST_SURVIVE $KNOWN_GAP $SHAPE_COVERED"; then
+    if ! in_list "$key" "$MUST_REDACT $MUST_SURVIVE $SHAPE_COVERED"; then
         it_fail ".env key $key is classified" \
             "new credential-shaped key — add it to MUST_REDACT or MUST_SURVIVE with a reason"
         continue
@@ -159,17 +164,6 @@ for key in $SCREENED; do
         esac
         continue
     fi
-    # The gap gets a label that cannot be misread as approval. A green row saying a capability URL
-    # "survives redaction" is exactly the confidence this file exists to refuse.
-    if in_list "$key" "$KNOWN_GAP"; then
-        OUT="$(printf '%s=%s\n' "$key" "$SENTINEL" | redact)"
-        case "$OUT" in
-        *"$SENTINEL"*) it_pass "KNOWN GAP (#1621) — $key is NOT reached" ;;
-        *) it_fail "KNOWN GAP (#1621) — $key is NOT reached" \
-            "it is reached now: move $key to MUST_REDACT and drop it from KNOWN_GAP" ;;
-        esac
-        continue
-    fi
     OUT="$(printf '%s=%s\n' "$key" "$SENTINEL" | redact)"
     case "$OUT" in
     *"$SENTINEL"*) it_pass "$key survives, as a bundle needs it to" ;;
@@ -177,7 +171,7 @@ for key in $SCREENED; do
     esac
 done
 
-it_warn "KNOWN GAP (#1621): NTFY_URL is a capability URL the bare word URL cannot reach without taking every public endpoint with it — the same value is the notifications.ntfy.url gap in selftest-redact.sh"
+it_warn "STILL OPEN (#1626): notifications.ntfy.url is the same capability URL in the other syntax and stays unreached — its key is the bare word url, separated from xvb.url only by NESTING. Pinned in selftest-redact.sh."
 
 echo "selftest-redact-vocab: $IT_PASS passed, $IT_FAIL failed"
 [ "$IT_FAIL" -eq 0 ] || exit 1

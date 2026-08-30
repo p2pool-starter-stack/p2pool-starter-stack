@@ -172,6 +172,13 @@ MUST_SURVIVE="xvb.url xmrig_proxy.url workers.api_auth telegram.chat_id"
 # redacted; a line-wise filter cannot reach it, because the key is the bare word "url" and only
 # its NESTING distinguishes it from xvb.url. Asserted at its CURRENT behaviour so the gap is
 # stated rather than hidden — when someone closes it, this line fails and moves to MUST_REDACT.
+# ⛔ THE .env HALF OF THIS VALUE WAS CLOSED (#1626); THIS ONE IS STILL OPEN. `NTFY_URL` fell to a
+# specific suffix catching exactly itself. That does not transfer, because this key is the bare
+# word `url` and only its nesting separates it from `xvb.url`. `ntfy_url` IS carried in both of
+# redact()'s alternations, because #1611's invariant is that the two agree entry-for-entry — but
+# measured against config.reference.json it reaches nothing, which is why this pin stays. The
+# vocabulary entry is the price of the invariant, not evidence of coverage; this row is the
+# evidence, and it asserts the value is NOT reached.
 KNOWN_GAP="notifications.ntfy.url"
 
 SENTINEL="S3nt1nelVALUE" # short, alphanumeric: reachable by the NAME rule and by no other
