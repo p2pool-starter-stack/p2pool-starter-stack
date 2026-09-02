@@ -1444,8 +1444,10 @@ class DataService:
                     # feed self-throttles (15 min) and keeps the last good prices on failure;
                     # surfaced as state.energy price fields via build_energy.
                     await self._sync_prices()
-
-                    iteration_count += 1
                 except Exception as e:
                     logger.error(f"Data Collection Error: {e}")
+                finally:
+                    # #1637 — the `% 10 == 0` gates above must advance even when the body raised.
+                    # A frozen counter reruns the failing step EVERY poll instead of one in ten.
+                    iteration_count += 1
                 await asyncio.sleep(UPDATE_INTERVAL)
