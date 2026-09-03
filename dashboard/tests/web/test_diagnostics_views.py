@@ -100,6 +100,16 @@ class TestDiagLogs:
         )
         assert resp.status == 400
 
+    @pytest.mark.parametrize("body", [[], "a string", 42, None])
+    async def test_valid_json_that_is_not_an_object_is_a_400_not_a_500(
+        self, diag_client, spool, body
+    ):
+        # These are all valid JSON with no .get — the client's error, so 400. Without the type
+        # check they raise past the handler and aiohttp answers 500.
+        resp = await diag_client.post("/api/control/diag-logs", headers=CONTROL_HEADERS, json=body)
+        assert resp.status == 400
+        assert list((spool / "requests").glob("*.json")) == []
+
     @pytest.mark.parametrize(
         "container",
         [

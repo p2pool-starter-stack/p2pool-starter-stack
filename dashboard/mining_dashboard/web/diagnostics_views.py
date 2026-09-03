@@ -64,6 +64,10 @@ async def handle_diag_logs(request):
         body = await request.json()
     except Exception:
         raise web.HTTPBadRequest(text="Body must be JSON.") from None
+    # `[]` and `"str"` are valid JSON and have no .get — without this they raise past the handler
+    # as a 500. A malformed body is the client's error, so it answers 400 like every other one.
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text="Body must be a JSON object.")
     container = body.get("container")
     if not diagnostics_service.valid_container(container):
         raise web.HTTPBadRequest(text="'container' must be a compose service name.")
