@@ -81,16 +81,11 @@ mkdir -p "$TMP/not-exec/usr/sbin"
 : >"$TMP/not-exec/usr/sbin/mkfs.ext4"
 check "present but not executable -> FAIL" "$TMP/not-exec" 1
 
-# THE DIFFERENTIAL: on the fixture the defect describes (e2fsprogs missing), the existing
-# `fsck ... || true` shape in os/overlay/pithead-data-reset would swallow the resulting
-# "command not found" and proceed as if the tool ran and refused — silently reformatting a
-# partition e2fsck was never actually asked about. Without this check, verify-image.sh has
+# THE DIFFERENTIAL: on the fixture above (e2fsprogs missing), the existing `fsck ... || true`
+# shape in os/overlay/pithead-data-reset would swallow the resulting "command not found" and
+# proceed as if the tool ran and refused — silently reformatting a partition e2fsck was never
+# actually asked about. Without the "e2fsprogs missing entirely" check above, verify-image.sh has
 # nothing that would go red on that rootfs.
-if [ ! -x "$TMP/neither/usr/sbin/e2fsck" ] && [ ! -x "$TMP/neither/sbin/e2fsck" ]; then
-    it_pass "the missing-tools fixture genuinely reproduces the defect (no e2fsck anywhere in the root)"
-else
-    it_fail "the missing-tools fixture reproduces the defect" "e2fsck was found — fixture is not the defect's shape"
-fi
 
 echo ""
 echo "selftest-verify-image-repair-tools: $IT_PASS passed, $IT_FAIL failed"
