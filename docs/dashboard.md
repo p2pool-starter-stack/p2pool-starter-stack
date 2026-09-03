@@ -550,22 +550,25 @@ How it stays safe:
   primary defence, since the editor is expected to have already left it out, but there is no live
   value here to swap it back FOR the way the host does for its own config secrets (#440), only one
   to drop.
-- **The pool password is not kept — and neither editor mode can wipe it by accident (#1548).** A
-  pool entry carries the stratum password one level inside `pools`, not as a writable key of its
-  own, so it is masked to the same `{__secret__: true}` sentinel rather than deleted: leaving it
-  alone keeps it, whether you never open `pools` at all, edit it and leave the password field as
-  the sentinel, or touch an unrelated key in JSON mode while `pools` sits untouched in the
-  textarea. The change record never gets a chance to hold the value in the first place: it strips
-  the password and the TLS fingerprint out before writing, and strips them again out of every read
-  — so a history row an older build wrote stops handing them back the moment you upgrade, without
-  anything having to rewrite the database. Typing a real password *does* still reach the rig; it
-  travels with the change itself. What the dashboard declines to do, at every layer, is keep its
-  own copy.
-  [TODO: verify upstream — whether RigForge's control-apply merges a `pools` write per pool field
-  or replaces the array wholesale. If it merges, an edit that omits the credential key preserves
-  the rig's real password automatically; if it replaces wholesale, the credential key being
-  absent from what's sent may still clear it on the rig even though this dashboard never sent the
-  literal sentinel. That distinction lives in RigForge, not here.]
+- **The pool password is not kept, and leaving `pools` untouched can never wipe it (#1548).**
+  Neither editor mode resends a `pools` you didn't open: JSON mode diffs the whole textarea
+  against its prefill, table mode only ever emits a key you changed. The change record never gets
+  a chance to hold the value either way — it strips the password and the TLS fingerprint out
+  before writing, and strips them again out of every read.
+  **Editing a pool entry is a different story, and it is not fully solved yet.** RigForge deletes
+  `pass` and `tls-fingerprint` before serving its enriched feed (`rigforge.sh`'s
+  `_api_config_json`), so on a stock rig `pools` reaches this dashboard with no password key at
+  all — no `{__secret__: true}` sentinel, nothing for the editor to recognise as "a credential
+  lives here." (The sentinel and the scrub chain that removes a stray one before it reaches the
+  rig do exist and do fire, but only for a rig running an older or patched build that still serves
+  `pass`.) **Edit a pool entry's URL or any other field on a stock rig, in either mode, and the
+  submitted entry carries no password — RigForge accepts it: a missing `pass` defaults to the
+  literal string `x` (`parse_config`), and `_control_commit` replaces the array wholesale, so the
+  rig starts running with password `x`, silently.** Fixing this needs a change on the RigForge
+  side — a marker for "a password is set" that `_control_commit` can honour when an incoming entry
+  omits `pass` — tracked as rigforge#415; this dashboard's sentinel machinery becomes the real
+  defence once that lands. Until then, re-supply a pool's password whenever you edit anything else
+  on that pool.
 
 RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
 recorded with its keys, outcome, and time. The editor prefills from the rig's own current writable

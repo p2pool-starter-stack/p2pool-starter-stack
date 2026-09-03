@@ -171,7 +171,7 @@ def mask_pool_credentials(value, depth=0):
     Inspect editor nothing to recognise as a secret, so an Apply that never touched the credential
     still sent a pool entry with no password -- wiping it. Masking extends the same blank-keeps-it
     contract the Configuration view already has for a top-level secret down to one nested inside
-    ``pools``.
+    ``pools`` -- once the rig actually serves ``pass``; a stock feed never does (rigforge#415).
     """
     return _walk_pool_credentials(value, lambda v: dict(SECRET_SENTINEL) if v else v, depth)
 
