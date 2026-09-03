@@ -254,6 +254,36 @@ restore_data_floor_after_fallback() { # cwd /data/pithead; prints one line when 
     echo "pithead-boot: the data migration never ran — the update fell back before it committed, so the /data floor is back to ${prev/#none/none (no earlier migration)}"
 }
 
+# Post-commit release of the held chain services (#851): the slot is committed, so a fallback can
+# no longer strand migrated data, and the forward migration runs NOW. Marker removal comes first:
+# if the chain start fails, the slot stays committed and the next boot takes the normal path —
+# re-holding would gate on a commit that has already happened.
+# The `up` is RETRIED (#1684). Compose aborts the WHOLE start when one container is mid-transition
+# at that instant — on the bench it was p2pool, started by the held `up` and stopping seconds
+# later — and a single swallowed `up` left every held service down until a reboot a committed
+# appliance has no reason to take, under a dashboard reporting `updated`. A passenger's transition
+# may delay the chain start by seconds; it must never veto it. After the last try the fault is
+# ALERTED, once, by name: a chain service that cannot start is never grounds to fail this boot.
+# A function above the boundary so tier 1 drives the retry, the order and the alert with a
+# stubbed `pithead`; the tier-4 migration leg's "monerod never came back" row is what found it.
+RELEASE_UP_TRIES=${PITHEAD_RELEASE_UP_TRIES:-5}
+RELEASE_UP_PAUSE=${PITHEAD_RELEASE_UP_PAUSE:-10}
+release_held_chain_services() { # cwd /data/pithead -> 0 once `up` succeeds, 1 after the last try
+    rm -f .os-migration-pending .os-data-floor.prev
+    # Logged BEFORE the up: the release line marks the commit boundary for the journal (and the
+    # tier-4 battery), and the up that starts the chain can take minutes.
+    echo "pithead-boot: slot committed — chain services released, the data migration runs now"
+    local try
+    for try in $(seq "$RELEASE_UP_TRIES"); do
+        ./pithead up && return 0
+        [ "$try" -lt "$RELEASE_UP_TRIES" ] || break
+        echo "pithead-boot: the chain services did not all start (try $try of $RELEASE_UP_TRIES) — retrying in ${RELEASE_UP_PAUSE}s"
+        sleep "$RELEASE_UP_PAUSE"
+    done
+    echo "pithead-boot: FAULT — the chain services did not start after $RELEASE_UP_TRIES tries. The slot stays committed and the data migration has NOT run: run './pithead up' from /data/pithead and read 'journalctl -u pithead-boot'." >&2
+    return 1
+}
+
 # Sourceable for the test suite: everything above is definitions, so a `source` stops here and the
 # suite can drive fail_boot in a sandbox. Executed directly — every real boot — this is a no-op.
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
@@ -368,19 +398,9 @@ for _ in $(seq 90); do
             fi
             rm -f "$OS_INFLIGHT"
         fi
-        # Post-commit, the held chain services start and the forward migration runs NOW — the
-        # slot is committed, so a fallback can no longer strand migrated data. Marker removal
-        # comes first: if the chain start fails, the slot stays committed, the next boot takes
-        # the normal path and retries a plain `up` — re-holding would gate on a commit that has
-        # already happened. `|| true` for the same reason: a chain service that cannot start is
-        # a fault to alert on, never grounds to fail a boot the commit already accepted.
-        if [ "$hold_chain" = 1 ]; then
-            rm -f .os-migration-pending .os-data-floor.prev
-            # Logged BEFORE the up: the release line marks the commit boundary for the journal
-            # (and the tier-4 battery), and the up that starts the chain can take minutes.
-            echo "pithead-boot: slot committed — chain services released, the data migration runs now"
-            ./pithead up || true
-        fi
+        # Post-commit, the held chain services start and the forward migration runs NOW. Never
+        # grounds to fail a boot the commit already accepted: the function alerts and returns.
+        [ "$hold_chain" = 1 ] && { release_held_chain_services || true; }
         # The on-box miner comes LAST, after the slot commit: it needs the stack's stratum
         # listening, and a miner that cannot start must never delay or block the commit — the
         # stack serving is the product's health, the miner is a passenger. Idempotent every
