@@ -11,11 +11,10 @@
 # status` (#384).
 #
 # The dashboard-onion cluster (vhost render, client-auth crypto, rotate/upgrade/apply capture
-# flows, status) is its own domain in test-dashboard-onion.sh, stacked on this file: it is sourced
-# immediately after this one in run.sh and reads two globals this file sets ($auth_hb64, the bcrypt
-# hash fixture from the dashboard-auth unit test; $caddy_https, the plain secure-mode Caddyfile
-# render from the scheme unit test) — plain top-level assignments, so they survive the handoff
-# between the two sourced files in the same shell. Do not reorder the two `source` lines in run.sh.
+# flows, status) is its own domain in test-dashboard-onion.sh, conventionally sourced after this
+# one in run.sh. It used to read two globals this file sets ($auth_hb64, $caddy_https) as a
+# cross-file source-order dependency; #1330 re-derives both locally there instead, so this file's
+# source position no longer matters to it.
 # Sourced by tests/stack/run.sh.
 #
 # Re-derivations:
