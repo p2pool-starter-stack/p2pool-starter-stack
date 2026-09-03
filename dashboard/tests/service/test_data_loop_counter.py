@@ -1,4 +1,9 @@
-"""#1637 — the data loop's poll counter must advance even when the poll raised.
+"""Two laws about what one failing poll step may cost: #1637 (cadence) and #1644 (siblings).
+
+#1637 is the counter law below. #1644 is the sibling law: a raise in one step must not skip
+unrelated steps beneath it for the rest of that poll. They meet in one place — the payout sync is
+both the gated step whose cadence #1637 pins and the step #1644 isolates — which is why they are
+tested together here rather than in two files that would each need the same 100-line harness.
 
 `DataService.run()` counts polls in a plain local, `iteration_count`, and three steps are gated on
 it with `iteration_count % 10 == 0`: the XvB stats sync, the Monero payout sync and the Tari payout
@@ -26,12 +31,14 @@ Lives in its own file rather than in `test_data_service.py`, which is at its rec
 `docs/dev/file-budget.tsv` row, because the gate fails a file that is under target AND has a row.
 """
 
+import asyncio
 import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import mining_dashboard.service.data_service as ds_mod
+from mining_dashboard.service.payout_sync import run_isolated
 from tests.service.test_data_service import _FakeClientSession, _make_service
 
 # Every collector `run()` touches before it reaches the gated steps, stubbed to something inert.
@@ -52,7 +59,7 @@ _INERT_COLLECTORS = {
 
 
 @contextlib.contextmanager
-def _driven_loop(sleep):
+def _driven_loop(sleep, enable_xvb=False):
     """Drive `run()` for a fixed number of polls, stopping it through its own `asyncio.sleep`.
 
     `sleep` is the mock installed over `asyncio.sleep`, which is the loop's only suspension point
@@ -78,8 +85,10 @@ def _driven_loop(sleep):
                 AsyncMock(return_value={"is_syncing": False, "percent": 100}),
             )
         )
-        # XvB off, so the ONLY thing standing on the `% 10 == 0` gate is the payout sync under test.
-        stack.enter_context(patch.object(ds_mod, "ENABLE_XVB", False))
+        # XvB off by default, so the ONLY thing standing on the `% 10 == 0` gate is the payout
+        # sync under test. The coupling law below turns it on, because the block it pins is inside
+        # `if ENABLE_XVB and ...` and is unreachable — silently — with the flag off.
+        stack.enter_context(patch.object(ds_mod, "ENABLE_XVB", enable_xvb))
         stack.enter_context(patch("asyncio.sleep", sleep))
         yield
 
@@ -98,10 +107,10 @@ def _service_with_payout_gate_open(payout_side_effect=None):
     return svc
 
 
-async def _run_for_polls(svc, polls):
+async def _run_for_polls(svc, polls, enable_xvb=False):
     """Run `svc` for exactly `polls` polls, then stop it at the sleep that follows the last one."""
     sleep = AsyncMock(side_effect=[None] * (polls - 1) + [StopAsyncIteration])
-    with _driven_loop(sleep):
+    with _driven_loop(sleep, enable_xvb=enable_xvb):
         with pytest.raises(StopAsyncIteration):
             await svc.run()
     assert sleep.await_count == polls, "the loop did not run the number of polls this test assumes"
@@ -130,20 +139,24 @@ class TestTheCounterAdvancesThroughAFailedPoll:
         """VACUITY GUARD for the law above. `await_count == 1` on the payout sync is ALSO what a
         loop that died on the first raise would report, and that would satisfy the law for entirely
         the wrong reason. The witness is `_sync_prices`, which sits BELOW the payout sync in the
-        body: it cannot have run on poll 1, because the raise above it skipped the rest of that
-        poll, so seeing it run at all means poll 2 happened.
+        body, so seeing it run at all means the loop kept going.
 
-        **Exactly once, not twice, and the shortfall is a second defect this issue does not fix.**
-        A raise at the payout sync also skips `_sync_tari_payouts` and `_sync_prices`, which have
-        nothing to do with payouts — #1637's point 2, filed separately because its fix is per-step
-        guards rather than counter placement. Fixing the counter cuts how OFTEN that happens by
-        about ten times and does not stop it. If this ever reads 2, that defect was fixed too and
-        this docstring is the thing that is now wrong."""
+        **Twice, and it used to be once.** The shortfall this docstring recorded as "a second defect
+        this issue does not fix" is #1644, and it is now fixed: the payout sync is wrapped per-step,
+        so its raise no longer skips `_sync_prices` on poll 1. Poll 1 and poll 2 both reach it.
+
+        Two polls are still the right run even though one would now do. The count has to stay a
+        statement about the loop CONTINUING, not about the guard swallowing: if the guard were
+        removed and the counter fix kept, this reads 1 rather than 0, so a single-poll version
+        would go green against a regression this two-poll version catches."""
         svc = _service_with_payout_gate_open(RuntimeError("monerod returned a malformed body"))
 
         await _run_for_polls(svc, 2)
 
-        assert svc._sync_prices.await_count == 1, "the loop did not complete a second poll at all"
+        assert svc._sync_prices.await_count == 2, (
+            "the price sync did not run on both polls — a raise in the payout sync above it is "
+            "skipping the rest of the poll again (#1644), or the loop did not complete poll 2"
+        )
 
 
 class TestTheGateStillFiresOnSchedule:
@@ -198,3 +211,103 @@ class TestTheHarnessCanSeeTheStepAtAll:
         await _run_for_polls(svc, 1)
 
         assert svc._sync_payouts.await_count == 1
+
+
+class TestAFailedStepDoesNotSkipItsIsolatedSibling:
+    """#1644's law, and the narrow half of it. Only the two payout steps are wrapped per-step, so
+    only they are claimed here — the coupling law below pins the other half deliberately."""
+
+    async def test_the_tari_sync_still_runs_on_the_poll_the_monero_sync_raised_on(self):
+        """THE LAW. Both payout gates are open on poll 1. `_sync_payouts` raises; `_sync_tari_payouts`
+        is the very next statement in the body and has nothing to do with Monero — it takes no poll
+        local and writes no `self` attribute, which is the ground the wrap was cleared on.
+
+        Before the wrap this read 0: the raise reached the loop's single `except Exception` at the
+        bottom of the body and everything between was skipped."""
+        svc = _service_with_payout_gate_open(RuntimeError("monerod returned a malformed body"))
+        svc.tari_wallet_client = MagicMock()  # opens the sibling gate this helper normally shuts
+        svc._sync_tari_payouts = AsyncMock()
+
+        await _run_for_polls(svc, 1)
+
+        assert svc._sync_payouts.await_count == 1, (
+            "the step under test never ran, so nothing raised"
+        )
+        assert svc._sync_tari_payouts.await_count == 1, (
+            "the Tari payout sync was skipped by a failure in the Monero one — the per-step wrap "
+            "is not isolating them (#1644)"
+        )
+
+    async def test_a_raising_step_is_logged_rather_than_swallowed(self, caplog):
+        """A guard that continues quietly is worse than the skip it replaces: the loop's own handler
+        logged one line per failed poll, and a step that now fails WITHOUT ending the poll would
+        otherwise disappear. Pins that the step is named, not just that something was logged."""
+        svc = _service_with_payout_gate_open(RuntimeError("monerod returned a malformed body"))
+
+        with caplog.at_level("ERROR"):
+            await _run_for_polls(svc, 1)
+
+        assert "Monero payout sync" in caplog.text, "the guarded failure did not name its step"
+        assert "monerod returned a malformed body" in caplog.text, "the cause was swallowed"
+
+
+class TestTheXvbBlockStillSkipsAsAUnit:
+    """The coupling that was KEPT, pinned so a later widening has to argue with a red test.
+
+    `_maybe_register_xvb(shares_list, p2pool_stats)` reads two poll locals written by collectors
+    near the top of the body. Wrapping the XvB steps individually would let a later one run on a
+    poll where those locals are stale or unset, so the block must keep failing whole.
+    """
+
+    async def test_a_raise_in_the_xvb_stats_sync_skips_the_rest_of_its_block(self):
+        """XvB on, poll 1 gated open, `_sync_xvb_stats` raises. The three steps below it in the same
+        `if ENABLE_XVB` block must not run. This is the assertion that reds if someone extends the
+        per-step wrap past the two cleared steps without doing the clearing work first."""
+        svc = _service_with_payout_gate_open()
+        svc._sync_xvb_stats = AsyncMock(side_effect=RuntimeError("xvb stats endpoint returned 502"))
+        svc._sync_xvb_reward_estimates = AsyncMock()
+        svc._maybe_register_xvb = AsyncMock()
+        svc._sync_xvb_winners = AsyncMock()
+
+        await _run_for_polls(svc, 1, enable_xvb=True)
+
+        assert svc._sync_xvb_stats.await_count == 1, "the XvB block never ran, so nothing raised"
+        assert svc._sync_xvb_reward_estimates.await_count == 0
+        assert svc._maybe_register_xvb.await_count == 0, (
+            "the XvB registration ran after its sibling raised — it reads poll locals and must stay "
+            "coupled; see the ruling on #1644"
+        )
+        assert svc._sync_xvb_winners.await_count == 0
+
+    async def test_the_block_runs_whole_when_nothing_raises(self):
+        """FIRING CONTROL for the law above. Four zeroes are also what an unreachable block reports,
+        and `ENABLE_XVB` plus a `% 10` gate is two ways to be silently unreachable. With no raise all
+        four must run, so the zeroes above are the coupling answering rather than the harness."""
+        svc = _service_with_payout_gate_open()
+        svc._sync_xvb_stats = AsyncMock()
+        svc._sync_xvb_reward_estimates = AsyncMock()
+        svc._maybe_register_xvb = AsyncMock()
+        svc._sync_xvb_winners = AsyncMock()
+
+        await _run_for_polls(svc, 1, enable_xvb=True)
+
+        assert svc._sync_xvb_stats.await_count == 1
+        assert svc._sync_xvb_reward_estimates.await_count == 1
+        assert svc._maybe_register_xvb.await_count == 1
+        assert svc._sync_xvb_winners.await_count == 1
+
+
+class TestTheGuardDoesNotOutrankShutdown:
+    """`run_isolated` catches `Exception`, and the width of that catch is load-bearing."""
+
+    async def test_task_cancellation_is_not_swallowed(self):
+        """A poll step is cancelled when the service shuts down. `CancelledError` derives from
+        `BaseException`, not `Exception`, so the guard lets it through and the task ends — but that
+        is a property of the spelling, not of the intent, and `except BaseException` would read as
+        a harmless widening while hanging shutdown behind an in-flight payout sync."""
+
+        async def cancelled():
+            raise asyncio.CancelledError()
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_isolated("a step being torn down", cancelled)
