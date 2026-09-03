@@ -6,6 +6,7 @@
 import { BackupPanel } from "./backupview.mjs";
 import { ChartCard } from "./chart.mjs";
 import { ConfigView, UpgradeControl } from "./configview.mjs";
+import { DiagnosticsPanel } from "./diagview.mjs";
 import { EstTable } from "./esttable.mjs";
 import {
   coinFiat,
@@ -37,6 +38,7 @@ import { OsUpdateControl, OsVerdictBanner } from "./osupdate.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 import { SecurityPanel } from "./securityview.mjs";
 import { MoreStats, nodeLocation, StatCard, TariStatus } from "./statcards.mjs";
+import { SyncView } from "./syncview.mjs";
 import { StackTopology } from "./topology.mjs";
 import { WorkerInspect } from "./workerview.mjs";
 import { XvbTierBlock } from "./xvbview.mjs";
@@ -205,48 +207,6 @@ const HeroBand = ({ state }) => html`
             </div>`,
         )}
     </div>`;
-
-// --- Sync Mode -----------------------------------------------------------------------
-
-function Gauge({ percent, state }) {
-  const inner =
-    state === "done"
-      ? html`<span class="status-ok check-big">✔</span>`
-      : state === "loading"
-        ? "…"
-        : percent + "%";
-  return html`
-    <div class="loader-container">
-        <div class="progress-wheel" style=${{ "--p": percent + "%" }}></div>
-        <div class="progress-text">${inner}</div>
-    </div>`;
-}
-
-function SyncView({ sync }) {
-  return html`
-    <div id="sync-view">
-        <div class="header-placeholder"><p>System is currently synchronizing with the network.</p></div>
-        <div class="grid">
-            <div class="card">
-                <h2 class="text-accent text-center">Monero Sync</h2>
-                <${Gauge} percent=${sync.monero.percent} state=${sync.monero.state} />
-                <div class="status-text">
-                    Synced: ${sync.monero.current} / ${sync.monero.target}<br/>
-                    <small>(${sync.monero.remaining} blocks left)</small><br/>
-                    <small class="text-muted">${sync.monero.mode} · DB ${sync.monero.db_size}</small>
-                </div>
-            </div>
-            <div class="card">
-                <h2 class="text-accent text-center">Tari Sync</h2>
-                <${Gauge} percent=${sync.tari.percent} state=${sync.tari.state} />
-                <div class="status-text">
-                    Synced: ${sync.tari.current} / ${sync.tari.target}<br/>
-                    <small>(${sync.tari.remaining} blocks left)</small>
-                </div>
-            </div>
-        </div>
-    </div>`;
-}
 
 // --- Operational cards ---------------------------------------------------------------
 
@@ -1081,7 +1041,7 @@ function DashboardView({
         <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />
         ${
           configView
-            ? html`<div class="card-stack"><${ConfigView} /><${BackupPanel} enabled=${state.control_enabled} /><${SecurityPanel} /></div>`
+            ? html`<div class="card-stack"><${ConfigView} /><${BackupPanel} enabled=${state.control_enabled} /><${DiagnosticsPanel} enabled=${state.control_enabled} /><${SecurityPanel} /></div>`
             : null
         }
         ${

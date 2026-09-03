@@ -4,7 +4,6 @@ import math
 import mimetypes
 import os
 import re
-import uuid
 
 from aiohttp import web
 
@@ -13,6 +12,7 @@ from mining_dashboard.config import config
 from mining_dashboard.service import audit_service, control_service, worker_adopt, worker_refresh
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
 from mining_dashboard.service.update_checker import parse_semver
+from mining_dashboard.web import diagnostics_views, download_views
 from mining_dashboard.web.prometheus import CONTENT_TYPE as PROMETHEUS_CONTENT_TYPE
 from mining_dashboard.web.prometheus import render_prometheus
 from mining_dashboard.web.views import (
@@ -269,28 +269,6 @@ async def handle_control_backup(request):
         logger.exception("Error submitting backup request")
         return web.json_response({"error": "Failed to submit the backup request."}, status=500)
     return web.json_response({"id": rid, "status": "pending"}, status=202)
-
-
-async def handle_backup_download(request):
-    """Stream the archive an applied backup produced (#908).
-
-    Read-only, no CSRF header required (matches the other GET routes) — a cross-site GET can
-    trigger this but can't read a cross-origin response, and the archive is useless without the
-    passphrase shown once in the kit. Any id not resolving to an "applied" archive 404s."""
-    try:
-        rid = str(uuid.UUID(request.query.get("id", "")))
-    except ValueError:
-        raise web.HTTPBadRequest(text="'id' must be a UUID.") from None
-    res = control_service.result(rid)
-    archive_name = (res or {}).get("archive")
-    if not res or res.get("status") != "applied" or not archive_name:
-        raise web.HTTPNotFound(text="No completed backup for that id.")
-    # FileResponse stats the path itself and answers 404 if the archive isn't there — no need to
-    # check twice.
-    path = os.path.join(config.CONTROL_RESULTS_DIR, f"{rid}.tar.gz.enc")
-    return web.FileResponse(
-        path, headers={"Content-Disposition": f'attachment; filename="{archive_name}"'}
-    )
 
 
 # Terminal-ish outcomes worth a history row — shared by worker-apply and worker-upgrade (#1014).
@@ -633,9 +611,13 @@ def create_app(state_manager, latest_data_ref):
                 # Encrypted backup + one-time emergency kit (#908): trigger, then stream the
                 # archive the host produced for the id it names in its result.
                 web.post("/api/control/backup", handle_control_backup),
-                web.get("/api/control/backup-download", handle_backup_download),
+                web.get("/api/control/backup-download", download_views.handle_backup_download),
                 # Appliance OS update: one route, a closed action set, every judgment host-side.
                 web.post("/api/control/os-update", handle_control_os_update),
+                # Service Diagnostics (#913/#943): read-only asks answered by a host report. Both
+                # poll /api/control/result above — they add no polling route of their own.
+                web.post("/api/control/diag-doctor", diagnostics_views.handle_diag_doctor),
+                web.post("/api/control/diag-logs", diagnostics_views.handle_diag_logs),
             ]
         )
 
