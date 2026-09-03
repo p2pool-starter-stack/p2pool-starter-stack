@@ -322,7 +322,11 @@ the idle copy, installs it, and then waits for you: **nothing reboots on its own
 reboot is a separately confirmed step, the only one that pauses mining — typically under
 five minutes — and after it the machine runs its normal health checks before keeping the
 new version. A banner reports the outcome, including an automatic return to the previous
-version if the new one failed. The machine refuses images that are unsigned, built for
+version if the new one failed — and, when those health checks were what held it back,
+which check it was, so a return is never mistaken for a bad release. One thing the machine
+repairs on its own during that wait: a network address that arrived after the certificate
+was made gets a fresh certificate minted there and then, instead of failing the checks
+and returning to the previous version. The machine refuses images that are unsigned, built for
 different hardware, or older than what it runs; there is no override. If another operation is changing the stack when you start an
 install, the install is not started at all: nothing is written to the idle copy and the
 dashboard says so rather than reporting a failed install. Start it again once that
