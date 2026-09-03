@@ -31,7 +31,19 @@ rigforge_ref_matches() { # <image-root> <dockerfile> — 0 iff the recorded ref 
     pin=$(sed -n 's/^ARG RIGFORGE_REF=\([^ ]*\).*/\1/p' "$2" 2>/dev/null)
     [ -n "$rec" ] && [ "$rec" = "$pin" ]
 }
-# Sourcing defines the helper and runs nothing, so the self-test drives the REAL comparison.
+
+# #1069 W11: pithead-data-reset's repair chain (`os/overlay/pithead-data-reset`) runs
+# `fsck`/`e2fsck`/`mkfs.ext4` behind `|| true`, so a rootfs missing e2fsprogs doesn't refuse — a
+# transient mount failure reads exactly like a refusal-class corruption and the box proceeds to
+# treat /data as wedged with no tool present to repair it, only to reformat it. The Dockerfile
+# installs e2fsprogs today (os/rootfs/Dockerfile); this is the regression guard, checked on the
+# built artifact rather than the package list so a base-image change can't silently drop it.
+data_reset_repair_tools_present() { # <image-root> — 0 iff both e2fsck and mkfs.ext4 are baked
+    local root="$1"
+    { [ -x "$root/usr/sbin/e2fsck" ] || [ -x "$root/sbin/e2fsck" ]; } &&
+        { [ -x "$root/usr/sbin/mkfs.ext4" ] || [ -x "$root/sbin/mkfs.ext4" ]; }
+}
+# Sourcing defines the helpers and runs nothing, so the self-test drives the REAL comparison.
 if [ "${BASH_SOURCE[0]}" != "${0}" ]; then return 0; fi
 
 IMAGE="${1:-}"
@@ -147,6 +159,8 @@ chk "data-reset unit enabled (local-fs transaction)" 'test -L "$ROOT/etc/systemd
 chk "data-reset script present and executable" 'test -x "$ROOT/usr/local/sbin/pithead-data-reset"'
 chk "data-reset ordered before /data mounts (a mounted partition cannot be reformatted)" \
     'grep -q "^Before=data.mount local-fs.target" "$ROOT/etc/systemd/system/pithead-data-reset.service"'
+chk "data-reset's repair tools are baked (e2fsck + mkfs.ext4, #1069 W11)" \
+    'data_reset_repair_tools_present "$ROOT"'
 # Hugepages: the sysctl the Dockerfile calls load-bearing for the memory caps.
 chk "hugepage reservation baked (RandomX dataset must land in hugetlbfs)" \
     'grep -q "vm.nr_hugepages=3072" "$ROOT/etc/sysctl.d/99-pithead-hugepages.conf"'
