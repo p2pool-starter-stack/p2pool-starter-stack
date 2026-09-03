@@ -244,52 +244,47 @@ check_monotonic() {
     old_lines=$(git show "$base:$BUDGET_FILE" 2>/dev/null | parse_budget || true)
     new_lines=$(parse_budget <"$BUDGET_FILE")
 
-    if [ -n "$old_lines" ]; then
-        while IFS=$'\t' read -r path old_ceiling; do
-            [ -n "$path" ] || continue
-            new_ceiling=$(printf '%s\n' "$new_lines" | awk -F'\t' -v p="$path" '$1==p {print $2; exit}')
-            if [ -n "$new_ceiling" ] && [ "$new_ceiling" -gt "$old_ceiling" ]; then
-                if monotonic_exempt "$path"; then
-                    # A rise must RECORD the artifact, not grant it headroom. Without this the
-                    # exemption would let one PR set the row to any number it liked, and nothing
-                    # mechanical would object again until the file actually reached it — which
-                    # would retire the per-PR measurement while still reading as a ratchet.
-                    actual=$(count_lines "$path")
-                    if [ "$new_ceiling" != "$actual" ]; then
-                        echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling to $new_ceiling," \
-                            "but the file is $actual lines. That row records the un-split remainder, so a" \
-                            "rise must state the real count, not reserve headroom."
-                        fail=1
-                        continue
-                    fi
-                    echo "file-budget: NOTE — $path's ceiling rises from $old_ceiling to $new_ceiling," \
-                        "matching the file. That row records the un-split remainder of the generated" \
-                        "pithead artifact, so it tracks it both ways (#1464). Every Phase 2 cut lowers" \
-                        "it." >&2
-                    continue
-                fi
-                echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling from $old_ceiling to" \
-                    "$new_ceiling. Ceilings only go down."
-                fail=1
-            fi
-        done <<<"$old_lines"
-    fi
-
-    # A path with no row on $base is a first appearance, not a raise, so the loop above never
-    # visits it — that gap is #1470: a new row could reserve any headroom above the file's real
-    # size and nothing would object again until the file actually grew into it. count_lines is
-    # the gate's own counter (not wc -l, which undercounts a file with no trailing newline) and
-    # falls back to 0 when the path can't be read, so a deleted or unreadable path mismatches any
-    # ceiling and fails closed rather than passing.
+    # One pass over the working-tree rows: a path with no row on $base is a first appearance
+    # (#1470), not a raise — it must record the file's real count rather than reserve headroom
+    # above it, or nothing mechanical would object again until the file actually grew into it.
+    # count_lines is the gate's own counter (not wc -l, which undercounts a file with no
+    # trailing newline) and falls back to 0 when the path can't be read, so a deleted or
+    # unreadable path mismatches any ceiling and fails closed rather than passing.
     while IFS=$'\t' read -r path new_ceiling; do
         [ -n "$path" ] || continue
         old_ceiling=$(printf '%s\n' "$old_lines" | awk -F'\t' -v p="$path" '$1==p {print $2; exit}')
-        [ -n "$old_ceiling" ] && continue
-        actual=$(count_lines "$path")
-        if [ "$new_ceiling" != "$actual" ]; then
-            echo "file-budget: FAIL — $BUDGET_FILE adds $path as a new row at ceiling $new_ceiling," \
-                "but the file is $actual lines. A row's first appearance must record the real count," \
-                "not reserve headroom."
+        if [ -z "$old_ceiling" ]; then
+            actual=$(count_lines "$path")
+            if [ "$new_ceiling" != "$actual" ]; then
+                echo "file-budget: FAIL — $BUDGET_FILE adds $path as a new row at ceiling" \
+                    "$new_ceiling, but the file is $actual lines. A row's first appearance must" \
+                    "record the real count, not reserve headroom."
+                fail=1
+            fi
+            continue
+        fi
+        if [ "$new_ceiling" -gt "$old_ceiling" ]; then
+            if monotonic_exempt "$path"; then
+                # A rise must RECORD the artifact, not grant it headroom. Without this the
+                # exemption would let one PR set the row to any number it liked, and nothing
+                # mechanical would object again until the file actually reached it — which
+                # would retire the per-PR measurement while still reading as a ratchet.
+                actual=$(count_lines "$path")
+                if [ "$new_ceiling" != "$actual" ]; then
+                    echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling to $new_ceiling," \
+                        "but the file is $actual lines. That row records the un-split remainder, so a" \
+                        "rise must state the real count, not reserve headroom."
+                    fail=1
+                    continue
+                fi
+                echo "file-budget: NOTE — $path's ceiling rises from $old_ceiling to $new_ceiling," \
+                    "matching the file. That row records the un-split remainder of the generated" \
+                    "pithead artifact, so it tracks it both ways (#1464). Every Phase 2 cut lowers" \
+                    "it." >&2
+                continue
+            fi
+            echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling from $old_ceiling to" \
+                "$new_ceiling. Ceilings only go down."
             fail=1
         fi
     done <<<"$new_lines"
