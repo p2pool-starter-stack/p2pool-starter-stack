@@ -106,6 +106,7 @@ lint-md: ## markdownlint over all Markdown (config: .markdownlint-cli2.jsonc)
 	npx --yes markdownlint-cli2@0.18.1
 
 lint-docs-voice: ## Fail if banned marketing words appear in prose docs (house voice: docs/dev/STYLE.md)
+	bash scripts/lint-docs-voice.sh --self-test
 	bash scripts/lint-docs-voice.sh
 
 lint-operator-strings: ## Fail if a #NNN issue/PR number or a bare docs/ path leaks into pithead or dashboard operator-facing text (#755, #1024)

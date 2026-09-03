@@ -2,6 +2,13 @@
 #
 # Repo-tooling self-tests (#1105 Phase 1 domain: harness core). Sourced by tests/stack/run.sh
 # after lib.sh — the harness (ok/bad/assert_*, SANDBOX) is already loaded.
+echo "== unit: lint-docs-voice self-test (#1441) =="
+# An empty `git ls-files '*.md'` enumeration (broken glob, over-matching filter, run outside a
+# checkout) used to read as a clean scan — rc 0 either way. Its --self-test runs the real script
+# end to end in a throwaway repo with no tracked .md files and fails unless it refuses instead.
+bash "$ROOT/scripts/lint-docs-voice.sh" --self-test >/dev/null 2>&1
+assert_rc "docs-voice guard self-test passes" "$?" "0"
+
 echo "== unit: lint-operator-strings self-test (#755) =="
 # The operator-strings guard's frontend scanner is non-trivial awk (comment-stripping + CSS-hex-colour
 # skip); a silent break would make it stop catching leaks. Its --self-test drives fixtures through the
