@@ -387,7 +387,7 @@ export class WorkerInspect extends Component {
             }
 
             <h4 class="mt-2">History</h4>
-            <${ConfigProvenance} origin=${detail.config_origin} meta=${detail.rig_config_meta} drift=${detail.config_drift} />
+            <${ConfigProvenance} origin=${detail.config_origin} meta=${detail.rig_config_meta} drift=${detail.config_drift} revisionDrift=${detail.config_revision_drift} />
             ${
               (detail.history || []).length
                 ? html`

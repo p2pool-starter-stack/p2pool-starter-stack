@@ -279,6 +279,15 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
         "config_drift": config_drift(
             last_applied, rig_config, unsettled=_has_unsettled_apply(history)
         ),
+        # The unrecorded edit #1551 detects, served here while it is still the config the rig is
+        # running (#1564). It is the case BOTH lines above are structurally blind to: a hand-edit
+        # underneath RigForge stamps no new change id for `config_origin` to see, and a key we
+        # never set has no left-hand side for `config_drift` to compare. Without it an operator
+        # reads "Last changed from this dashboard" over a config the Security panel has flagged.
+        # {worker, before, after} or None — never an all-clear; the store gates on currency.
+        "config_revision_drift": state_mgr.get_worker_revision_drift(
+            name, (rig_meta or {}).get("revision")
+        ),
         "history": history,
         "hashrate_by_config": hashrate_by_config,
         "hashrate_history": build_worker_hashrate_history(state_mgr, name, range_arg, window),

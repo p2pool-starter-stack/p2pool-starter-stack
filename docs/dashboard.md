@@ -467,8 +467,8 @@ running to record it — is not a recorded change, so the line keeps naming what
 On a rig where the dashboard applied the previous change, that reads as "Last changed from this
 dashboard" while the rig runs something else.
 
-**A second check answers that one directly.** Beside the provenance line, the dashboard compares
-what it last applied to this rig against the values the rig reports it is running, key by key, and
+**Two further checks answer that one directly.** The first, beside the provenance line, compares
+what this dashboard last applied to the values the rig reports it is running, key by key, and
 names each key that disagrees — "we applied `max_temp_c` 75, the rig is running 80". It needs
 nothing recorded on the rig, so it sees the hand-edit the provenance line cannot.
 
@@ -476,16 +476,32 @@ Three things bound what the comparison claims, and each bound is deliberate:
 
 - **It judges only keys this dashboard has set.** What it compares against is a record of the
   changes we pushed, not a copy of the rig's config, so a hand-edit to a key we have never applied
-  has nothing to disagree with and stays invisible.
+  has nothing to disagree with. The second check below is what covers that case.
 - **It never compares pool passwords.** RigForge strips the pool password and TLS fingerprint before
   serving its config, so the dashboard strips them from its own side too. A changed pool password
-  would otherwise read as drift on every rig, forever. Nothing on this side can see one either way.
+  would otherwise read as drift on every rig, forever. This comparison cannot see one either way.
 - **It says nothing while a change is in flight.** A change that has been sent and not yet settled
   is not in the applied record, though the rig may already be running it, so the comparison is held
   back until the outcome lands rather than reporting a key we ourselves just set.
 
-Where it is silent, the older reading still holds: treat the provenance line as an alarm that fires,
-not as an all-clear. Its silence is not proof that nothing changed.
+**The second check watches the config as a whole.** RigForge publishes a revision — a digest over
+every writable key, including the ones this dashboard has never set — and the dashboard records the
+one each rig is serving on every poll. When that revision moves with no new change id beside it,
+nothing recorded the change, and a line appears beside the provenance line saying so: *the rig's
+config changed with nothing recording it*. It covers the first bound above, at a coarser
+resolution. A digest cannot be read backwards, so this line can say only **that** the config moved,
+never which key; hover it for the two revisions.
+
+It reports the config the rig is running **now**. The moment the rig serves a revision this
+dashboard can account for — because someone applied a change through it, or the rig recorded one of
+its own — the line goes quiet, even though the earlier move stands. The durable record is the
+`rig-drift` row in the Security panel, which is written once and never withdrawn; this line is a
+statement about the config in front of you.
+
+Neither check has an all-clear. Both either report a disagreement or say nothing at all, and their
+silence is not evidence: a clear line would be a reassurance bounded by everything listed above,
+which is the reading the whole section exists to prevent. Where they are silent the older reading
+still holds — treat the provenance line as an alarm that fires, not as an all-clear.
 
 Everything behind it is the rig's own account, so a rig that has been taken over can also say
 whatever it likes, including replaying a change id you really did send it. Within what the rig does
@@ -1091,7 +1107,9 @@ appends them to the SAME audit trail:
   against and no per-key diff to take. The row names the worker and the revision either side of the
   move. It cannot say which setting moved either: the revision is a digest over the rig's whole
   writable config, so it says THAT the config changed and never what to. A rig seen for the first
-  time records nothing — there is no earlier revision to compare it against.
+  time records nothing — there is no earlier revision to compare it against. The same detection
+  also qualifies that rig's [provenance line](#worker-inspect) while the config it moved to is the
+  one the rig is still serving; this row is the durable half and is never withdrawn.
 
 The last two read off the same unauthenticated worker feed, so they share ONE rate cap per worker
 ([#724](https://github.com/p2pool-starter-stack/pithead/issues/724)): a rig reporting a fresh change id — or a fresh revision — every poll can add only

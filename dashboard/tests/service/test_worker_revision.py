@@ -129,3 +129,116 @@ class TestFailsClosed:
             "before": "aaa",
             "after": "bbb",
         }
+
+
+class TestDriftFromIsMaintained:
+    """``drift_from`` (#1564): the column that lets Worker Inspect keep reporting the edit.
+
+    Driven through the real store rather than by calling ``_next_drift_from`` with stand-in rows.
+    The rule's whole subject is what gets STORED and read back across polls, and a dict stand-in
+    would be a different object from the ``sqlite3.Row`` production subscripts — the tier that
+    proves this honestly is the one that writes and re-reads.
+    """
+
+    def test_the_poll_that_reports_a_drift_records_where_it_came_from(self, state_manager):
+        state_manager.note_worker_revision("rig1", _meta("aaa"))
+        state_manager.note_worker_revision("rig1", _meta("bbb"))
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") == {
+            "worker": "rig1",
+            "before": "aaa",
+            "after": "bbb",
+        }
+
+    def test_the_note_survives_the_polls_after_the_one_that_raised_it(self, state_manager):
+        # The reason the column exists at all. ``note_worker_revision`` reports a drift ONCE, so
+        # a line reading its return value would flash for a single poll and then reassure again
+        # while the rig is still running the unrecorded config.
+        state_manager.note_worker_revision("rig1", _meta("aaa"))
+        state_manager.note_worker_revision("rig1", _meta("bbb"))
+        for _ in range(3):
+            state_manager.note_worker_revision("rig1", _meta("bbb"))
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") is not None
+
+    def test_a_move_with_a_new_change_id_clears_it(self, state_manager):
+        # The resolved case: we applied over the drift, or the rig recorded its own change. The
+        # audit row stays in the Security panel; the Inspect line has nothing left to contradict.
+        state_manager.note_worker_revision("rig1", _meta("aaa"))
+        state_manager.note_worker_revision("rig1", _meta("bbb"))
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") is not None  # armed
+        state_manager.note_worker_revision("rig1", _meta("ccc", "c1"))
+        assert state_manager.get_worker_revision_drift("rig1", "ccc") is None
+
+    def test_a_second_drift_names_the_revision_it_moved_from(self, state_manager):
+        # Not the original one. "before" is the config the rig was last seen running, which is
+        # what an operator comparing against the rig in front of them can act on.
+        state_manager.note_worker_revision("rig1", _meta("aaa"))
+        state_manager.note_worker_revision("rig1", _meta("bbb"))
+        state_manager.note_worker_revision("rig1", _meta("ccc"))
+        assert state_manager.get_worker_revision_drift("rig1", "ccc")["before"] == "bbb"
+
+    def test_a_first_sighting_records_no_drift(self, state_manager):
+        state_manager.note_worker_revision("rig1", _meta("aaa"))
+        assert state_manager.get_worker_revision_drift("rig1", "aaa") is None
+
+    def test_a_rig_that_never_moved_records_no_drift(self, state_manager):
+        state_manager.note_worker_revision("rig1", _meta("aaa", "c1"))
+        state_manager.note_worker_revision("rig1", _meta("aaa", "c1"))
+        assert state_manager.get_worker_revision_drift("rig1", "aaa") is None
+
+
+class TestTheReadIsGatedOnCurrency:
+    """The note describes the config the rig is serving NOW, never its history."""
+
+    def test_it_is_silent_once_the_rig_serves_a_different_revision(self, state_manager):
+        state_manager.note_worker_revision("rig1", _meta("aaa"))
+        state_manager.note_worker_revision("rig1", _meta("bbb"))
+        # The positive control for the assertion below: at the revision the drift produced, this
+        # same stored row DOES answer. So the silence that follows is the gate, not an empty row.
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") is not None
+        assert state_manager.get_worker_revision_drift("rig1", "zzz") is None
+
+    def test_it_says_nothing_when_the_rig_reports_no_revision(self, state_manager):
+        state_manager.note_worker_revision("rig1", _meta("aaa"))
+        state_manager.note_worker_revision("rig1", _meta("bbb"))
+        assert state_manager.get_worker_revision_drift("rig1", None) is None
+
+    def test_it_says_nothing_for_an_unnamed_worker(self, state_manager):
+        assert state_manager.get_worker_revision_drift("", "bbb") is None
+
+    def test_workers_do_not_share_a_drift(self, state_manager):
+        # rig2 has drifted and rig1 has not. A read keyed on anything but the worker would print
+        # rig2's accusation over rig1's Inspect line.
+        state_manager.note_worker_revision("rig2", _meta("aaa"))
+        state_manager.note_worker_revision("rig2", _meta("bbb"))
+        state_manager.note_worker_revision("rig1", _meta("bbb"))
+        assert state_manager.get_worker_revision_drift("rig2", "bbb") is not None
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") is None
+
+
+class TestTheReadFailsClosed:
+    """A store that cannot answer renders no note, rather than one it cannot stand behind."""
+
+    def test_closed_connection(self, state_manager):
+        state_manager.note_worker_revision("rig1", _meta("aaa"))
+        state_manager.note_worker_revision("rig1", _meta("bbb"))
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") is not None  # armed
+        state_manager._conn = None
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") is None
+
+    def test_read_error(self, state_manager):
+        import sqlite3
+        from unittest.mock import MagicMock
+
+        state_manager.note_worker_revision("rig1", _meta("aaa"))
+        state_manager.note_worker_revision("rig1", _meta("bbb"))
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") is not None  # armed
+
+        real_conn = state_manager._conn
+        broken = MagicMock()
+        broken.cursor.side_effect = sqlite3.OperationalError("database is locked")
+        state_manager._conn = broken
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") is None
+        state_manager._conn = real_conn
+
+        # The failed read changed nothing: the row is still there for the next poll to serve.
+        assert state_manager.get_worker_revision_drift("rig1", "bbb") is not None
