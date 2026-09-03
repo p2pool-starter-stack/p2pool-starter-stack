@@ -1008,9 +1008,9 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
         return
     fi
 
-    # Refusal 1 — the /data migration floor: a valid signature is not permission to install below
-    # it. This drives the SAME shared guard the CLI enforces (downgrade family), via the dashboard
-    # door, with a floor planted above the bundle's version.
+    # Refusal 1 — the /data floor, via the dashboard door onto the SAME guard the CLI enforces. A
+    # floor above this (newer) bundle is above the running version too: since #1393 that is the
+    # failed-migration state, refused FIRST with its premise; the plain door is tier 1's (#1694).
     _ssh "printf '99.0.0\n' > /data/pithead/.os-data-floor"
     out=$(_os_step "{\"action\":\"download\",\"version\":\"$tag\"}" 900)
     if [ "$(printf '%s' "$out" | jq -r '.status')" = "downloaded" ]; then
@@ -1020,10 +1020,10 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     fi
     out=$(_os_step '{"action":"verify"}' 120)
     st=$(printf '%s' "$out" | jq -r '.status')
-    if [ "$st" = "rejected" ] && printf '%s' "$out" | jq -r '.error' | grep -q "strand the chain data"; then
-        ok "leg 4: DOWNGRADE/FLOOR REFUSED — verify rejects below the /data floor with the honest error"
+    if [ "$st" = "rejected" ] && printf '%s' "$out" | jq -r '.error' | grep -q "failed its gate.*the floor version or newer installs"; then
+        ok "leg 4: FLOOR ABOVE THE RUNNING VERSION REFUSED — verify refuses with the failed-migration premise and the open route"
     else
-        bad "leg 4: verify below the floor did not refuse honestly (got: $(printf '%s' "$out" | cut -c1-200))"
+        bad "leg 4: verify under a floor above the running version did not refuse with the true premise (got: $(printf '%s' "$out" | cut -c1-200))"
     fi
     if ! _ssh "test -f /data/pithead/data/os-update/pithead-os-$tag.raucb"; then
         ok "leg 4: the floor-refused bundle was deleted"
