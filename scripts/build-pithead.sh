@@ -15,7 +15,7 @@
 #
 #   scripts/build-pithead.sh              rebuild `pithead` in place (preserves its mode)
 #   scripts/build-pithead.sh --check      fail if the committed artifact is not what the sources build
-#   scripts/build-pithead.sh --self-test  run this script's own fixtures, in a throwaway directory
+#   scripts/build-pithead.sh --self-test  run the fixtures in scripts/build-pithead-selftest.sh
 #
 # Concatenation order is the whole contract: the artifact's ordering constraints (`set -Eeuo
 # pipefail` before any code, `on_err` defined before `trap on_err ERR`, the `_STACK_SOURCED`
@@ -87,17 +87,21 @@ list_slices() {
 #     opaque string, so the identical ordering mistake routed through `trap` is invisible to it at
 #     any severity.
 #
-# Caught here by one forward scan over the slices IN BUILD ORDER, tracking every `readonly` name
+# Caught here by one forward scan over the slices IN BUILD ORDER, tracking every readonly name
 # declared OUTSIDE a function body (at any indentation — `00-prelude.sh` declares one inside an
 # `if`) and every top-level function name as each is DEFINED: a re-declared readonly name, or a
-# bare trap target not yet in that set, refuses the build with the offending file:line. A
-# `readonly` inside a function body is skipped: `local x; readonly x=…` in two functions is two
-# independent names, not a collision, and recording it refused a build that runs fine. Function
-# bodies are delimited the way shfmt writes them — `name() {` at column 0 opens one, `}` at column
-# 0 closes it, and a `name() { …; }` one-liner opens nothing. Scoped to top-level slice order
-# deliberately, matching what the build script's own header promises — it does not attempt general
-# control-flow analysis (a function only ever called from inside a conditional that happens not to
-# run first is out of scope, same as it is for shellcheck).
+# bare trap target not yet in that set, refuses the build with the offending file:line. "Readonly"
+# is by spelling, not by the bare word: `readonly NAME`, `readonly -a NAME=(…)`, `declare -r` and
+# `typeset -r` all declare one, so leading flags are stripped before the name is recorded rather
+# than letting a flag-carrying line drop out of the net silently. A bare trap is one identifier
+# followed by any number of signal specs, so `trap f EXIT INT` is seen too. A `readonly` inside a
+# function body is skipped: `local x; readonly x=…` in two functions is two independent names, not
+# a collision, and recording it refused a build that runs fine. Function bodies are delimited the
+# way shfmt writes them — `name() {` at column 0 opens one, `}` at column 0 closes it, and a
+# `name() { …; }` one-liner opens nothing. Scoped to top-level slice order deliberately, matching
+# what the build script's own header promises — it does not attempt general control-flow analysis
+# (a function only ever called from inside a conditional that happens not to run first is out of
+# scope, same as it is for shellcheck).
 validate_ordering() {
     LC_ALL=C awk '
     function record(name) {
@@ -109,17 +113,24 @@ validate_ordering() {
             seen_readonly[name] = FILENAME ":" FNR
         }
     }
-    /^[[:space:]]*readonly[[:space:]]/ && !in_fn {
+    /^[[:space:]]*(readonly|declare|typeset)[[:space:]]/ && !in_fn {
         line = $0
-        sub(/^[[:space:]]*readonly[[:space:]]+/, "", line)
+        sub(/^[[:space:]]+/, "", line)
         sub(/[[:space:]]+#.*/, "", line)
-        if (line ~ /=/) {
-            name = line
-            sub(/=.*/, "", name)
-            record(name)
-        } else {
-            n = split(line, toks, /[[:space:]]+/)
-            for (i = 1; i <= n; i++) record(toks[i])
+        n = split(line, toks, /[[:space:]]+/)
+        # toks[1] is the builtin, then its -flags, then the names (or ONE NAME=value, which may
+        # carry spaces). `readonly` is readonly by definition; `declare`/`typeset` only with -r.
+        # -f marks a FUNCTION readonly and -p only prints: neither declares a variable.
+        flags = (toks[1] == "readonly") ? "r" : ""
+        for (i = 2; i <= n && toks[i] ~ /^-/; i++) flags = flags toks[i]
+        if (flags ~ /r/ && flags !~ /[fp]/) {
+            if (line ~ /=/) {
+                name = toks[i]
+                sub(/=.*/, "", name)
+                record(name)
+            } else {
+                for (; i <= n; i++) record(toks[i])
+            }
         }
     }
     /^[A-Za-z_][A-Za-z0-9_]*\(\)/ {
@@ -129,9 +140,13 @@ validate_ordering() {
         in_fn = ($0 ~ /\{[[:space:]]*(#.*)?$/)
     }
     /^\}/ { in_fn = 0 }
-    /^[[:space:]]*trap[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[A-Z][A-Z0-9]*[[:space:]]*$/ {
+    /^[[:space:]]*trap[[:space:]]/ {
         line = $0
+        sub(/[[:space:]]+#.*/, "", line)
         sub(/^[[:space:]]*trap[[:space:]]+/, "", line)
+        # A bare target is one identifier followed by one OR MORE signal specs (`trap f EXIT INT`
+        # is one trap line); a quoted command, `-`, or a `-l`/`-p` flag is not a bare target.
+        if (line !~ /^[A-Za-z_][A-Za-z0-9_]*([[:space:]]+[A-Za-z0-9]+)+[[:space:]]*$/) next
         split(line, parts, /[[:space:]]+/)
         target = parts[1]
         if (!(target in defined_fns)) {
@@ -265,304 +280,15 @@ check_artifact() {
     return "$rc"
 }
 
-# --- self-test: every failure mode against fixtures, in a throwaway directory -------------------
-#
-# Each case states what it proves. The two that matter most are the FIRING controls: a gate that
-# only ever passes is indistinguishable from no gate at all, so the mutation cases assert both
-# that the mutation actually landed in the file AND that --check went red because of it.
-self_test() {
-    local tmp fail=0
-
-    _case() { # name, expected-rc, actual-rc
-        if [ "$2" = "$3" ]; then
-            echo "  ok   — $1"
-        else
-            echo "  FAIL — $1 (expected rc=$2, got rc=$3)"
-            fail=1
-        fi
-    }
-
-    tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' RETURN
-    mkdir -p "$tmp/lib/pithead"
-
-    # A miniature of the real thing: a prelude that carries the shebang, a middle slice, and a
-    # tail, named the way the real slices are named (zero-padded, so lexical order IS the intended
-    # order). This fixture deliberately does NOT discriminate lexical from numeric sorting — 00, 10
-    # and 99 order identically under both — so it cannot stand as evidence for the sort algorithm.
-    # Case 9 exists for that, on a fixture built to tell them apart.
-    printf '#!/usr/bin/env bash\nset -Eeuo pipefail\n' >"$tmp/lib/pithead/00-prelude.sh"
-    printf 'middle() { :; }\n' >"$tmp/lib/pithead/10-middle.sh"
-    printf 'main "$@"\n' >"$tmp/lib/pithead/99-tail.sh"
-
-    local rc
-
-    # 1. The build is the join, in sort order, with exactly one blank line between each pair.
-    #    Compared with `cmp` on real files, NOT via `$(...)`: command substitution strips trailing
-    #    newlines from both operands, which would make this case blind to any defect at the
-    #    artifact's tail — a stray or missing final newline is exactly a join defect.
-    printf '#!/usr/bin/env bash\nset -Eeuo pipefail\n\nmiddle() { :; }\n\nmain "$@"\n' >"$tmp/expected"
-    PITHEAD_BUILD_ROOT="$tmp" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1 || true
-    if cmp -s "$tmp/pithead" "$tmp/expected"; then
-        echo "  ok   — build joins the slices in sort order, one blank line between each pair"
-    else
-        echo "  FAIL — build did not join the slices in sort order with single blank separators"
-        fail=1
-    fi
-
-    # 2. --check passes on a freshly built artifact.
-    rc=0
-    PITHEAD_BUILD_ROOT="$tmp" bash "${BASH_SOURCE[0]}" --check >/dev/null 2>&1 || rc=$?
-    _case "--check passes when artifact and sources agree" 0 "$rc"
-
-    # 3. FIRING CONTROL, source side: mutate a slice; assert the mutation applied, then that
-    #    --check goes red. Without the "applied" half a mutant that failed to write reads exactly
-    #    like a gate that held.
-    local before after
-    before=$(cat "$tmp/lib/pithead/10-middle.sh")
-    printf 'middle() { echo mutated; }\n' >"$tmp/lib/pithead/10-middle.sh"
-    after=$(cat "$tmp/lib/pithead/10-middle.sh")
-    if [ "$before" = "$after" ]; then
-        echo "  FAIL — the source-side mutation did not change the file; its control proves nothing"
-        fail=1
-    fi
-    rc=0
-    PITHEAD_BUILD_ROOT="$tmp" bash "${BASH_SOURCE[0]}" --check >/dev/null 2>&1 || rc=$?
-    _case "--check FAILS when a source slice is edited without rebuilding" 1 "$rc"
-    printf '%s\n' "$before" >"$tmp/lib/pithead/10-middle.sh"
-
-    # 4. FIRING CONTROL, artifact side: the drift the gate exists to catch is someone hand-editing
-    #    the shipped file, which is exactly how it was edited before Phase 2.
-    before=$(cat "$tmp/pithead")
-    printf 'hand_edited() { :; }\n' >>"$tmp/pithead"
-    after=$(cat "$tmp/pithead")
-    if [ "$before" = "$after" ]; then
-        echo "  FAIL — the artifact-side mutation did not change the file; its control proves nothing"
-        fail=1
-    fi
-    rc=0
-    PITHEAD_BUILD_ROOT="$tmp" bash "${BASH_SOURCE[0]}" --check >/dev/null 2>&1 || rc=$?
-    _case "--check FAILS when the artifact is hand-edited" 1 "$rc"
-    printf '%s\n' "$before" >"$tmp/pithead"
-
-    # 5. An empty enumeration is refused rather than building an empty artifact.
-    local empty
-    empty=$(mktemp -d)
-    mkdir -p "$empty/lib/pithead"
-    touch "$empty/pithead"
-    rc=0
-    PITHEAD_BUILD_ROOT="$empty" bash "${BASH_SOURCE[0]}" --check >/dev/null 2>&1 || rc=$?
-    _case "--check REFUSES an empty lib/pithead (no vacuous pass)" 1 "$rc"
-    rm -rf "$empty"
-
-    # 6. A first slice without the shebang is refused: sort order and file order have diverged.
-    local noshebang
-    noshebang=$(mktemp -d)
-    mkdir -p "$noshebang/lib/pithead"
-    printf 'middle() { :; }\n' >"$noshebang/lib/pithead/00-not-the-prelude.sh"
-    touch "$noshebang/pithead"
-    rc=0
-    PITHEAD_BUILD_ROOT="$noshebang" bash "${BASH_SOURCE[0]}" --check >/dev/null 2>&1 || rc=$?
-    _case "--check REFUSES when the first slice does not carry the shebang" 1 "$rc"
-    rm -rf "$noshebang"
-
-    # 7. A slice carrying the separator at either edge is refused BY NAME. This is the failure a
-    #    future Phase-2 cut will actually hit: shfmt strips those blank lines, so a slice cut that
-    #    way silently stops matching the artifact. Both edges, because they fail for one reason.
-    local edge
-    for edge in leading trailing; do
-        local blank
-        blank=$(mktemp -d)
-        mkdir -p "$blank/lib/pithead"
-        cp "$tmp/lib/pithead/00-prelude.sh" "$blank/lib/pithead/00-prelude.sh"
-        if [ "$edge" = leading ]; then
-            printf '\nmiddle() { :; }\n' >"$blank/lib/pithead/10-middle.sh"
-        else
-            printf 'middle() { :; }\n\n' >"$blank/lib/pithead/10-middle.sh"
-        fi
-        touch "$blank/pithead"
-        rc=0
-        PITHEAD_BUILD_ROOT="$blank" bash "${BASH_SOURCE[0]}" --check >/dev/null 2>&1 || rc=$?
-        _case "--check REFUSES a slice with a $edge blank line (the separator is the build's)" 1 "$rc"
-        rm -rf "$blank"
-    done
-
-    # 8. A rebuild is idempotent and keeps the artifact's mode — an operator runs ./pithead.
-    chmod 0755 "$tmp/pithead"
-    PITHEAD_BUILD_ROOT="$tmp" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1
-    if [ -x "$tmp/pithead" ]; then
-        echo "  ok   — a rebuild preserves the artifact's executable bit"
-    else
-        echo "  FAIL — a rebuild dropped the artifact's executable bit"
-        fail=1
-    fi
-
-    # 9. The slice order is LC_ALL=C LEXICAL, not numeric or version ordering. NO case above can
-    #    see this: 00/10/99 sort identically under `sort` and `sort -V`, so a mutant that swapped
-    #    the algorithm passes every one of them. A single-digit prefix beside a double-digit one is
-    #    the smallest input that tells them apart — lexically `10-` sorts BEFORE `2-`, numerically
-    #    it sorts after. That is also why the real slices are zero-padded: lexical order has to be
-    #    the intended order, because lexical order is what the build uses.
-    local order
-    order=$(mktemp -d)
-    mkdir -p "$order/lib/pithead"
-    printf '#!/usr/bin/env bash\nfirst\n' >"$order/lib/pithead/00-prelude.sh"
-    printf 'ten\n' >"$order/lib/pithead/10-ten.sh"
-    printf 'two\n' >"$order/lib/pithead/2-two.sh"
-    printf '#!/usr/bin/env bash\nfirst\n\nten\n\ntwo\n' >"$order/expected"
-    PITHEAD_BUILD_ROOT="$order" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1 || true
-    if cmp -s "$order/pithead" "$order/expected"; then
-        echo "  ok   — slices are ordered by LC_ALL=C lexical sort, not a numeric or version sort"
-    else
-        echo "  FAIL — slice order is not LC_ALL=C lexical; a numeric/version or locale sort crept in"
-        fail=1
-    fi
-    rm -rf "$order"
-
-    # 10-15. The six refusals that guard a silently MALFORMED join, or a misleading diagnosis.
-    #
-    # Driven on the BUILD path rather than through `--check`, and each asserts THREE things: the
-    # rc, the stated REASON, and that the previous artifact survived. All three are needed, because
-    # **rc does not discriminate on two of the three fixtures** — which is the trap this block is
-    # shaped to avoid rather than a belt-and-braces flourish:
-    #
-    #   - truncated (no trailing newline): rc IS the discriminating half. Delete that check and the
-    #     build SUCCEEDS, rc=0, having silently lost the separator — so the case goes red.
-    #   - empty, and a directory named `*.sh`: rc is VACUOUS. Delete either check and the build
-    #     still fails, because `head -n 1` yields nothing for both and the leading-blank-line test
-    #     trips instead. A case asserting only rc=1 would stay GREEN with the guard deleted. What
-    #     those two guards actually buy is an accurate reason, so the reason is what gets asserted.
-    #
-    # Driving any of them through `--check` would make ALL THREE vacuous: the fixture artifact
-    # cannot equal what the malformed sources build, so `--check` returns 1 on the parity
-    # comparison whether or not a refusal exists.
-    #
-    # The artifact-survived half catches a build that writes DIRECTLY into the artifact: `>` opens
-    # and truncates before the refusal is ever reached, so the operator loses `./pithead` to a
-    # source typo. Stated narrowly on purpose — it does NOT discriminate rename-into-place from
-    # the earlier `build >"$tmp"` + `cat "$tmp" >"$ARTIFACT"`, because under that shape `set -Eeuo
-    # pipefail` aborts on the failed build before the copy runs, leaving the artifact intact too.
-    #
-    # NOT COVERED BY ANY CASE, and named rather than implied: the atomicity that rename actually
-    # buys — an interruption (SIGKILL, full disk) part-way through writing the real artifact. That
-    # needs a race to reproduce deterministically and no case here attempts it.
-    #
-    # dup-readonly and trap-before-def are #1463's two: both reproduce faithfully from source to
-    # artifact (so a `--check`-driven case would prove nothing here either, same reasoning as
-    # above), and neither is a structural defect in any ONE slice — each needs two, so both
-    # override the shared 00-prelude/99-tail fixture instead of adding a lone 10-bad.sh. Case B
-    # is written to fail for the right reason and not by coincidence: on_err genuinely exists in
-    # the build (in 99-tail, textually AFTER the trap that targets it), so a check that merely
-    # asked "does a function named on_err exist anywhere" would stay green on this fixture — only
-    # a check of what is defined so far AT the trap line catches it.
-    local bad desc want out
-    for bad in empty truncated directory dup-readonly dup-readonly-indented trap-before-def; do
-        local badroot
-        badroot=$(mktemp -d)
-        mkdir -p "$badroot/lib/pithead"
-        printf '#!/usr/bin/env bash\nfirst\n' >"$badroot/lib/pithead/00-prelude.sh"
-        printf 'last\n' >"$badroot/lib/pithead/99-tail.sh"
-        case "$bad" in
-        empty)
-            : >"$badroot/lib/pithead/10-bad.sh"
-            desc="an empty slice"
-            want="is empty"
-            ;;
-        truncated)
-            # `tail -n 1` returns this line's content, so neither blank-line edge check fires.
-            printf 'no_final_newline' >"$badroot/lib/pithead/10-bad.sh"
-            desc="a slice with no trailing newline"
-            want="does not end with a newline"
-            ;;
-        directory)
-            mkdir -p "$badroot/lib/pithead/10-bad.sh"
-            desc="a directory named *.sh"
-            want="is not a regular file"
-            ;;
-        dup-readonly)
-            # The shape a careless re-cut produces when a line is copied to both sides of a
-            # boundary instead of moved (#1463 attack A).
-            printf '#!/usr/bin/env bash\nreadonly SAME="bar"\n' >"$badroot/lib/pithead/00-prelude.sh"
-            printf 'readonly SAME="baz"\n' >"$badroot/lib/pithead/10-bad.sh"
-            desc="the same readonly name declared in two slices"
-            want="is declared more than once"
-            ;;
-        dup-readonly-indented)
-            # Indentation is not scope: a top-level `readonly` inside an `if` (the shape
-            # 00-prelude.sh really has) collides with a column-0 one just the same. This is what
-            # keeps the function-scope fix below from degrading into a column-0-only match.
-            printf '#!/usr/bin/env bash\nif true; then\n    readonly SAME="bar"\nfi\n' >"$badroot/lib/pithead/00-prelude.sh"
-            printf 'readonly SAME="baz"\n' >"$badroot/lib/pithead/10-bad.sh"
-            desc="the same readonly name declared in two slices, one of them indented under an if"
-            want="is declared more than once"
-            ;;
-        trap-before-def)
-            # A trap installed in an earlier slice than the function it names (#1463 attack B) —
-            # on_err DOES exist in this fixture, just too late to help the trap that names it.
-            printf '#!/usr/bin/env bash\ntrap on_err ERR\n' >"$badroot/lib/pithead/00-prelude.sh"
-            printf 'middle\n' >"$badroot/lib/pithead/10-bad.sh"
-            printf 'on_err() { :; }\n' >"$badroot/lib/pithead/99-tail.sh"
-            desc="a bare trap target defined only in a LATER slice"
-            want="is not defined anywhere earlier"
-            ;;
-        esac
-        printf 'PREVIOUS-ARTIFACT\n' >"$badroot/pithead"
-        rc=0
-        out=$(PITHEAD_BUILD_ROOT="$badroot" bash "${BASH_SOURCE[0]}" 2>&1) || rc=$?
-        _case "a build REFUSES $desc" 1 "$rc"
-        case "$out" in
-        *"$want"*)
-            echo "  ok   — and states the reason ('$want'), not a misleading one"
-            ;;
-        *)
-            echo "  FAIL — refused $desc for the WRONG stated reason: wanted '$want', got: $out"
-            fail=1
-            ;;
-        esac
-        if [ "$(cat "$badroot/pithead")" = "PREVIOUS-ARTIFACT" ]; then
-            echo "  ok   — and left the existing artifact intact"
-        else
-            echo "  FAIL — a refused build ($desc) overwrote or truncated the existing artifact"
-            fail=1
-        fi
-        # The refused build must not leave its scratch file behind: it is untracked, it is not in
-        # .gitignore, and `git add -A` would stage it into someone's commit.
-        if [ -z "$(echo "$badroot"/.pithead.build.* 2>/dev/null | grep -v '\*')" ]; then
-            echo "  ok   — and cleaned up its build temp file"
-        else
-            echo "  FAIL — a refused build ($desc) left $badroot/.pithead.build.* behind"
-            fail=1
-        fi
-        rm -rf "$badroot"
-    done
-
-    # 16. The counter-example to dup-readonly: `local x; readonly x=…` in two functions across two
-    #     slices is two independent, function-scoped names — the artifact runs fine — and the scan
-    #     must ACCEPT it. A readonly arm that keys on the name alone refuses this build (found in
-    #     review of #1463), so this case is red without function-scope tracking. No previous
-    #     artifact in the fixture on purpose: a fresh build is the whole assertion.
-    local scoped
-    scoped=$(mktemp -d)
-    mkdir -p "$scoped/lib/pithead"
-    printf '#!/usr/bin/env bash\nfoo() {\n    local x\n    readonly x=1\n    echo "$x"\n}\n' >"$scoped/lib/pithead/00-a.sh"
-    printf 'bar() {\n    local x\n    readonly x=2\n    echo "$x"\n}\n' >"$scoped/lib/pithead/10-b.sh"
-    rc=0
-    PITHEAD_BUILD_ROOT="$scoped" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1 || rc=$?
-    _case "a build ACCEPTS the same function-local readonly name in two slices (scope, not name)" 0 "$rc"
-    rm -rf "$scoped"
-
-    if [ "$fail" -ne 0 ]; then
-        echo "build-pithead --self-test: FAILED"
-        return 1
-    fi
-    echo "build-pithead --self-test: all cases passed"
-    return 0
-}
-
 case "${1:-}" in
 "") write_artifact ;;
 --check) check_artifact ;;
---self-test) self_test ;;
+--self-test)
+    # The fixtures live in build-pithead-selftest.sh, which runs THIS script against them (#1463
+    # split, see that file's header). readlink -f first: through a symlink, `dirname "$0"` is the
+    # LINK's directory and the exec would miss.
+    exec bash "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/build-pithead-selftest.sh"
+    ;;
 *)
     echo "usage: ${BASH_SOURCE[0]##*/} [--check | --self-test]" >&2
     exit 2

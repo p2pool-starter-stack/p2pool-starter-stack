@@ -55,7 +55,6 @@ lib/pithead/28-parse-and-validate-config.sh	485
 lib/pithead/33-render-env.sh	494
 lib/pithead/39-describe-change.sh	428
 os/rootfs/Dockerfile	406
-scripts/build-pithead.sh	437
 scripts/release.sh	851
 scripts/shipped-image-sweep-report.sh	429
 scripts/trivyignore-watch.sh	599
