@@ -103,3 +103,46 @@ echo "== unit: tor healthcheck command-dependency self-test (#1372) =="
 # a leaking PATH would pass every case on the host's own commands and prove nothing.
 bash "$ROOT/build/tor/healthcheck-selftest.sh" --self-test >/dev/null 2>&1
 assert_rc "tor healthcheck runs on the commands its own image ships (#1372)" "$?" "0"
+
+echo "== unit: wait_while_alive polls on liveness, not a tick count (#1495) =="
+# The #1342 stanza's OLD shape -- a fixed tick*interval budget -- is reproduced here at a scale
+# that proves the point in under a second: a holder delayed past a budget it does not owe read as
+# a false "the lock is free" under load. Shown against the very shape it replaced, side by side,
+# rather than asserted from a description of it.
+whwa_flag="$SANDBOX/whwa-ready"
+whwa_ready() { [ -e "$whwa_flag" ]; }
+whwa_old_wait() { # <pid> <check-fn> <ticks> -- the fixed-budget shape #1495 removed
+    local i=0
+    while [ "$i" -lt "$3" ]; do
+        "$2" && return 0
+        sleep 0.05
+        i=$((i + 1))
+    done
+    return 1
+}
+rm -f "$whwa_flag"
+(
+    sleep 0.4
+    : >"$whwa_flag"
+    sleep 2
+) &
+whwa_pid=$!
+whwa_old_wait "$whwa_pid" whwa_ready 4 # ~0.2s budget: exhausts before the 0.4s delay lands
+assert_rc "the fixed-budget shape this replaced gives up on a delayed-but-live holder" "$?" "1"
+wait_while_alive "$whwa_pid" whwa_ready
+assert_rc "wait_while_alive rides out the same delay because the holder is still alive" "$?" "0"
+kill "$whwa_pid" 2>/dev/null
+wait "$whwa_pid" 2>/dev/null
+
+# The other half: a holder that exits WITHOUT ever satisfying CHECK must be reported as gone
+# immediately, not waited out to whatever budget happens to be generous enough to cover it.
+rm -f "$whwa_flag" # the first case's holder left this behind; a stale flag would satisfy CHECK for free
+whwa_start="$SECONDS"
+(exit 1) &
+whwa_pid=$!
+wait_while_alive "$whwa_pid" whwa_ready
+assert_rc "gives up the moment a holder that never checks in has already died" "$?" "1"
+assert_rc "and does so in under a second, not a fixed wait" \
+    "$([ "$((SECONDS - whwa_start))" -lt 2 ] && echo 0 || echo 1)" "0"
+unset -f whwa_ready whwa_old_wait
+rm -f "$whwa_flag"

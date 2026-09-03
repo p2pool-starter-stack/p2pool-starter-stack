@@ -475,12 +475,8 @@ assert_eq "while the kernel has already given the window itself back" "$(lock_st
     exec sleep 60
 ) &
 LKEXT=$!
-i=0
-while [ "$i" -lt 200 ]; do
-    [ "$(lock_state)" = "held" ] && break
-    sleep 0.05
-    i=$((i + 1))
-done
+lock_held() { [ "$(lock_state)" = "held" ]; } # #1495: see wait_while_alive in lib.sh
+wait_while_alive "$LKEXT" lock_held
 # A poll that gives up must say so. If this one exhausts, the external holder never took the
 # window: the two rc/message cases below would be reporting on an uncontended run, and the third
 # passes for the worst reason available — nothing was reported under ANY name, so "never under
@@ -952,7 +948,7 @@ assert_eq "a backup that stops a running stack holds one window across the archi
     "$(lock_backup_running_probe)" "running|held"
 unset -f lock_backup_running_probe
 
-unset -f lock_hold_bg lock_await_record lock_state lock_reinvoke_probe lock_nest_probe
+unset -f lock_hold_bg lock_await_record lock_state lock_held lock_reinvoke_probe lock_nest_probe
 unset -f lock_sibling_probe lock_wiring_fixture lock_wiring_probe lock_wiring_pair lock_wiring_balance
 
 echo "== unit: the appliance boot leg tells lock contention from a bad slot (#1342) =="

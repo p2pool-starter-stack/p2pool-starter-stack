@@ -75,6 +75,18 @@ run_sourced() {
     )
 }
 
+# Poll CHECK (a predicate function name) until it succeeds, but never past the point where PID
+# has already exited -- callers learn "the process gave up trying" rather than counting ticks
+# that a loaded box may not owe it (#1495: a fixed 200x0.05s budget reddened the #1342 mutation-
+# lock test under concurrent runs). `kill -0` reads bash's own job table, so it flips the instant
+# the backgrounded job dies, no explicit reap needed. Returns 1 if PID dies before CHECK succeeds.
+wait_while_alive() { # <pid> <check-fn-name>
+    while ! "$2"; do
+        kill -0 "$1" 2>/dev/null || return 1
+        sleep 0.05
+    done
+}
+
 # A throwaway sandbox dir, cleaned on exit. Physical path (#695): pithead canonicalizes its
 # own directory with pwd -P, so a sandbox spelled through a symlink (macOS /var -> /private/var)
 # would render .env paths that no longer string-match the $SANDBOX-based assertions.
