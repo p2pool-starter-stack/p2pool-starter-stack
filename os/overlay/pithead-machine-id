@@ -46,7 +46,9 @@ fi
 # /etc overlay, the same one provision_console_login() otherwise mounts, and write the id into
 # the overlay upper where the rest of this boot will read it. Off the appliance (a writable
 # /etc, the test sandbox) there is no mountpoint and the plain write is the whole job.
+transient=0
 if mountpoint -q "$ETC_ID" 2>/dev/null; then
+    transient=1
     if ! findmnt -no FSTYPE /etc 2>/dev/null | grep -qx overlay; then
         mkdir -p /run/pithead-etc/upper /run/pithead-etc/work
         mount -t overlay overlay \
@@ -54,4 +56,22 @@ if mountpoint -q "$ETC_ID" 2>/dev/null; then
     fi
 fi
 printf '%s\n' "$want" >"$ETC_ID"
+
+# journald read the machine-id ONCE, at its own start — the transient one PID 1 bound for this
+# boot — and keeps writing under it for the whole boot whatever /etc/machine-id says later
+# (#1659). The flush unit ordered after this script only moves the runtime journal to where
+# journald already THINKS it belongs, so from the second boot on the persistent journal gained a
+# directory named for a throwaway id every boot and `journalctl -b` read a stale one. A restart
+# makes journald re-read the id: its stream fds ride the restart in systemd's fd store and
+# /dev/log is socket-activated, so nothing logged meanwhile is dropped. On a first boot the
+# adopted id IS the one journald started on — nothing to re-read — and with no transient bind
+# (off the appliance) there is no daemon on the wrong id to move. A restart that fails is warned
+# about and nothing more: a stale journal is not a reason to leave the machine a stranger.
+if [ "$transient" = 1 ] && [ "$want" != "$boot_id" ]; then
+    if systemctl restart systemd-journald.service; then
+        note="$note; journald restarted onto it"
+    else
+        echo "pithead-machine-id: journald restart failed — this boot's journal stays under the transient id (#1659)" >&2
+    fi
+fi
 echo "$note"

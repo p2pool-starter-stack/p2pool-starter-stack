@@ -15,6 +15,10 @@ Description=Restore or persist machine-id on /data, before networkd/journald obs
 # Deliberately NOT Before=systemd-journald.service itself: journald starts far earlier than
 # /data can be mounted, and ordering ahead of the daemon (rather than just its later flush unit)
 # would stall the service half of early boot logs through.
+# What the script does instead (#1659): journald reads the machine-id once, at its own start, so
+# once the restore has landed the script RESTARTS journald and it re-reads the id. Ordering ahead
+# of the daemon would have been the wrong fix, and the flush unit alone only moves the runtime
+# journal to where journald already thinks it belongs.
 DefaultDependencies=no
 RequiresMountsFor=/data
 Before=sysinit.target systemd-networkd.service systemd-journal-flush.service
