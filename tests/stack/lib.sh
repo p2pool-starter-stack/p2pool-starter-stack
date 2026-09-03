@@ -19,9 +19,9 @@
 # would silently disarm all 55 fragments at once; test-harness-tooling.sh's #1657 rows say so.
 # The five standalone test_*.sh files are NOT fragments (the Makefile runs each one directly, and
 # tests/inventory.sh lists them as UNSOURCED) — they carry no marker check and must not gain one.
+# shellcheck disable=SC2034  # sourced library: this marker and the fixtures are read by run.sh
 STACK_SUITE=1
 
-# shellcheck disable=SC2034  # sourced library: fixture constants are consumed by run.sh
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STACK="$ROOT/pithead"
 PASS=0
