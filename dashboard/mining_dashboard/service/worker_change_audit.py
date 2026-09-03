@@ -17,6 +17,7 @@ import logging
 import time
 
 from mining_dashboard.client.rig_config_meta import parse_config_meta
+from mining_dashboard.service import audit_service
 
 logger = logging.getLogger("WorkerChangeAudit")
 
@@ -51,7 +52,7 @@ async def record_cap_marker(svc, worker, cap, tipped_by):
         "rate-limited",
         "dropped",
         f"rig-edit + revision-drift rows capped at {cap}/hour (tipped by {tipped_by})",
-        event_id=f"rig-edit-ratelimited-{worker}-{int(window_start)}",
+        event_id=audit_service.build_event_id("rig-edit-ratelimited", worker, int(window_start)),
     )
 
 
@@ -72,8 +73,11 @@ async def note_revision_drift(svc, worker_row, extra_stats, cap):
     body, straight off ``get_stats``, and nothing has parsed it yet — the merge that calls
     ``parse_rigforge`` runs later in the poll and on a different object. So the block goes through
     ``parse_config_meta`` before the store sees it, which is the store's own stated precondition.
-    Without it a rig chooses its own primary key: ``revision`` reaches ``event_id``, and ``event_id``
-    is the ONE field ``_record_audit_event`` does not put through ``audit_service._clean``.
+    Without it a rig chooses its own primary key: ``revision`` reaches ``event_id``. The sink bounds
+    and whitelists that field (#1561) and escapes it into its own slot before the join (#1566), so
+    neither an oversized value nor a collision survives it — but both of those are salvage. What
+    validating here buys is that a ``rig-drift`` row's id is a SHORT OPAQUE TOKEN rather than
+    whatever the rig sent, which is the difference between a readable key and a digest.
 
     Bounded by the shared #724 cap, because ``revision`` rides the same unauthenticated feed as
     ``change_id`` and has the same property: the store's dedup collapses a revision that has NOT
@@ -104,5 +108,5 @@ async def note_revision_drift(svc, worker_row, extra_stats, cap):
         "rig-drift",
         "detected",
         f"revision {drift['before']} -> {drift['after']} with no new change_id",
-        event_id=f"rig-drift-{worker}-{drift['after']}",
+        event_id=audit_service.build_event_id("rig-drift", worker, drift["after"]),
     )

@@ -128,12 +128,16 @@ The stack's defaults:
   row's own identifier is bounded separately (#1561): every audit row id
   is length-capped and whitelisted at the writer, the one field the trail's sanitizer used to skip,
   and `rig-drift`'s revision is validated to a short opaque token at the point it is read as well.
-  A rig does still CHOOSE its own `rig-edit` row's identifier — that id is built from a `change_id`
-  it picks freely — but it can no longer make one arbitrarily large or carry markup into it, which
-  is what matters on a table that is never pruned. What it cannot do is forge a `host-edit` or
-  `control.log` identifier: those are built from hardcoded prefixes a `rig-edit` id can never equal.
-  Inside the `rig-edit-` prefix, though, the ids are a plain concatenation and do not separate one
-  worker from another (#1566), so read that namespace as one shared space rather than as per-worker.
+  A rig does still CHOOSE the contents of its own `rig-edit` row's identifier — that id is built
+  from a `change_id` it picks freely — but it can no longer make one arbitrarily large or carry
+  markup into it, which is what matters on a table that is never pruned. Nor can it steer that id
+  onto a row that is not its own: each rig-chosen part is escaped before the parts are joined
+  (#1566), so an id is a one-to-one function of the worker name and the change id it was built
+  from. That is the property this table needs rather than a tidier one, because rows are written
+  with `INSERT OR IGNORE`: two detections that minted the same id produced no error and no second
+  row, and the later detection was DROPPED. The same escaping settles the `host-edit` and
+  `control.log` identifiers by construction instead of by reading the call sites — those carry no
+  `:` and every out-of-band id does, so a rig cannot mint one however it names itself.
   The `host-edit` and mirrored `control.log` rows are not attacker-controllable and are not capped.
 
 ### Telegram control commands (#338)

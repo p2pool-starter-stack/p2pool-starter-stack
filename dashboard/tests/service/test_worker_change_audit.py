@@ -1,4 +1,4 @@
-"""Revision-drift detection and the flood cap it shares with rig-edit (#1551, #724).
+"""Revision-drift, the flood cap it shares with rig-edit, and row-id separation (#1551, #724, #1566).
 
 Tier 1, against a real in-memory ``StateManager`` — a drift row has to be provable in the durable
 table, not merely "the mock was called", because the whole feature is a permanent audit row.
@@ -24,6 +24,13 @@ def _body(revision, change_id=None):
 def _poll(svc, worker, revision, change_id=None):
     """One poll of one worker through the real caller, so the wiring is what is under test."""
     asyncio.run(svc._reconcile_worker_config([{"name": worker}], [_body(revision, change_id)]))
+
+
+def _rig_edit(svc, worker, change_id):
+    """One poll of one worker down the RIG-EDIT branch: a terminal outcome this dashboard never
+    spooled, which is a change the rig applied on its own."""
+    ctrl = {"rigforge": {"control": {"change_id": change_id, "status": "applied"}}}
+    asyncio.run(svc._reconcile_worker_config([{"name": worker}], [ctrl]))
 
 
 def _rows(sm, action):
@@ -199,7 +206,7 @@ class TestTheFeedIsValidatedBeforeTheStoreSeesIt:
             _poll(svc, "rig1", "b" * 16)
             drift = _rows(sm, "rig-drift")
             assert len(drift) == 1
-            assert drift[0]["id"] == "rig-drift-rig1-" + "b" * 16
+            assert drift[0]["id"] == "rig-drift:rig1:" + "b" * 16
         finally:
             sm.close()
 
@@ -211,5 +218,113 @@ class TestTheFeedIsValidatedBeforeTheStoreSeesIt:
             for junk in (12345, {"nested": "dict"}, ["list"], True):
                 _poll(svc, "rig1", junk)
             assert _rows(sm, "rig-drift") == []
+        finally:
+            sm.close()
+
+
+class TestRowIdsSeparateOneDetectionFromAnother:
+    """#1566, proved against the real table because the failure mode is SILENT.
+
+    The row id is the ``audit_events`` PRIMARY KEY and the writer uses ``INSERT OR IGNORE``, so two
+    detections that mint one id neither raise nor land as two rows — the second is DROPPED. Under
+    the old bare-"-" join both components were rig-chosen, so a device could pick them.
+    """
+
+    def test_the_table_really_does_drop_a_second_row_on_a_repeated_id(self):
+        """The mechanism control, first on purpose. Every test below asserts that two detections
+        become two rows, and that claim is worth nothing until this table has been SHOWN to
+        collapse them when the ids do match."""
+        svc, sm = _svc()
+        try:
+            for keys in ("first", "second"):
+                asyncio.run(
+                    svc._record_audit_event(
+                        "rig-edit", "w", "rig-edit", "applied", keys, event_id="fixed-id"
+                    )
+                )
+            rows = sm.get_audit_events()
+            assert len(rows) == 1
+            assert rows[0]["keys"] == "first"  # the SECOND write is the one lost, silently
+        finally:
+            sm.close()
+
+    def test_two_rig_edits_that_used_to_share_an_id_land_as_two_rows(self):
+        svc, sm = _svc()
+        try:
+            # Measured against this same caller in the issue: ("victim-chg1", "extra") and
+            # ("victim", "chg1-extra") both minted "rig-edit-victim-chg1-extra".
+            assert "victim-chg1-extra" == "-".join(("victim-chg1", "extra"))
+            assert "victim-chg1-extra" == "-".join(("victim", "chg1-extra"))
+            _rig_edit(svc, "victim-chg1", "extra")
+            _rig_edit(svc, "victim", "chg1-extra")
+            rows = _rows(sm, "rig-edit")
+            assert len(rows) == 2
+            assert len({r["id"] for r in rows}) == 2
+        finally:
+            sm.close()
+
+    def test_two_drift_rows_that_used_to_share_an_id_land_as_two_rows(self):
+        """The same ambiguity on the sibling detection. Both halves of ``rig-drift-{worker}-
+        {revision}`` are rig-chosen too, so fixing only the rig-edit id would leave this open."""
+        svc, sm = _svc()
+        try:
+            assert "rig-1-2" == "-".join(("rig-1", "2")) == "-".join(("rig", "1-2"))
+            _poll(svc, "rig-1", "aaa")  # first sighting: baselines, writes nothing
+            _poll(svc, "rig-1", "2")
+            _poll(svc, "rig", "aaa")
+            _poll(svc, "rig", "1-2")
+            rows = _rows(sm, "rig-drift")
+            assert len(rows) == 2
+            assert len({r["id"] for r in rows}) == 2
+        finally:
+            sm.close()
+
+    def test_a_rig_edit_row_can_no_longer_suppress_another_workers_cap_marker(self):
+        """Shape 1 of the issue, end to end. A device presenting as ``ratelimited-{victim}`` and
+        reporting the victim's window start minted EXACTLY the victim's own marker id; landing
+        first, it made ``INSERT OR IGNORE`` drop the marker and the flood lost its Security-panel
+        row. The warning still logs either way, so the panel row is the whole loss."""
+        svc, sm = _svc()
+        try:
+            _poll(svc, "victim", "rev-0")  # first sighting — no row, no budget, no window
+            _poll(svc, "victim", "rev-1")  # first real drift — this is what opens the window
+            window = int(svc._rig_edit_window["victim"][0])
+
+            _rig_edit(svc, "ratelimited-victim", str(window))
+            forged = [e for e in sm.get_audit_events() if e["actor"] == "ratelimited-victim"]
+            # Two fixture controls, because the test below could otherwise go green from the
+            # attack never arming rather than from the fix working: the forged row LANDED, and the
+            # third assertion shows the two ids really were the same string under the old join —
+            # so the second assertion is the fix, not an arbitrary inequality.
+            assert len(forged) == 1
+            assert forged[0]["id"] != f"rig-edit-ratelimited-victim-{window}"
+            assert "-".join(("rig-edit-ratelimited", "victim", str(window))) == "-".join(
+                ("rig-edit", "ratelimited-victim", str(window))
+            )
+
+            for i in range(2, _RIG_EDIT_CAP_PER_HOUR + 8):
+                _poll(svc, "victim", f"rev-{i}")
+            markers = _rows(sm, "rate-limited")
+            assert len(markers) == 1
+            assert markers[0]["actor"] == "victim"
+        finally:
+            sm.close()
+
+    def test_a_lone_surrogate_worker_name_records_a_row_instead_of_raising(self):
+        """The id is now BUILT in the poll loop rather than only cleaned at the sink, which puts an
+        encode where there was none, and nothing upstream rejects a lone surrogate in a worker name.
+
+        The WORKER NAME is the position deliberately: measured per position, a surrogate
+        ``change_id`` never reaches the escape at all — ``worker_config_change_known`` hands it to
+        sqlite first and sqlite refuses it, which is a separate pre-existing raise on this path and
+        not what this test is about. Written against the reachable half, this goes RED without
+        ``errors="surrogatepass"``; written against the other it would have gone red for sqlite's
+        reason and proved nothing about the escape."""
+        svc, sm = _svc()
+        try:
+            _rig_edit(svc, "\ud800", "chg1")
+            rows = _rows(sm, "rig-edit")
+            assert len(rows) == 1
+            assert rows[0]["id"] == "rig-edit:%ED%A0%80:chg1"
         finally:
             sm.close()

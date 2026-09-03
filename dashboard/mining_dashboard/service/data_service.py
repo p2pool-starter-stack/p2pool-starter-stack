@@ -868,7 +868,7 @@ class DataService:
                     "rig-edit",
                     ctrl["status"],
                     f"change_id={ctrl['change_id']}",
-                    event_id=f"rig-edit-{worker}-{ctrl['change_id']}",
+                    event_id=audit_service.build_event_id("rig-edit", worker, ctrl["change_id"]),
                 )
 
     def _on_clearnet_transition(self, name, ok):
