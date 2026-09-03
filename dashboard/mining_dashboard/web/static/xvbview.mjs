@@ -48,6 +48,24 @@ function XvbDecisionTable({ calc, coeffDay, hr, energy }) {
   // Fiat mirror (#520) for the best sustainable net only — one line, never a fiat number whose
   // XMR figure is hidden.
   const best = rows.filter((r) => r.sustainable && r.net).sort((a, b) => b.net[1] - a.net[1])[0];
+  // #1231: the Odds cell rendered a bare "—" on a box that has never enabled XvB, which reads as
+  // "the odds are zero" rather than "nothing has been read yet". The winners feed that fills the
+  // round-stats cache is ENABLE_XVB-gated (build_xvb_calc's own fallback keys on the same flag),
+  // so a disabled box structurally has nothing to show and an enabled one is merely waiting. Name
+  // which of the two it is, off the `calc.enabled` every other live-donation surface already uses.
+  // #1214's constraint holds: nothing here is derived or estimated, only named.
+  //
+  // "awaiting sync" rather than the issue's suggested "computed after first sync": build_xvb_calc
+  // empties round_types when the cache is STALE as well as when it was never filled, so an
+  // enabled box reaching this branch may well have synced before. The payload publishes staleness
+  // for the reward-estimates cache only — a different cache — so the two cannot be told apart
+  // here, and wording that claims no sync has ever happened would be false for half of them.
+  const oddsPending = calc.enabled ? "awaiting sync" : "needs XvB enabled";
+  const oddsTitle =
+    "How often this tier's rounds pay out, and among how many qualifiers — from XvB's public winners feed.";
+  const oddsPendingTitle = calc.enabled
+    ? "No round statistics are cached right now — XvB's winners feed fills this in at the next sync."
+    : "XvB is off, so its winners feed is never read — and that feed is the only source for draw frequency and qualifier counts. Enable XvB to compute this.";
   return html`
         <div class="xvb-comparison">
             <label class="xvb-compare-label">Should I donate? — per-tier verdict (per year)</label>
@@ -79,7 +97,7 @@ function XvbDecisionTable({ calc, coeffDay, hr, energy }) {
                     <span title="P2Pool earnings forgone by donating the tier threshold for a year, at your current rate.">Cost ${r.cost !== null ? formatXmr(r.cost) : "—"}</span> ·
                     <span title="XvB's own published expected reward — face value: prices every bonus hash at full block reward.">XvB says ${r.xvbSays !== null ? formatXmr(r.xvbSays) : "—"}</span> ·
                     <span title=${`${estTitle} ${bandNote(est)}`}>${estLabel} ${fmtMid(est)}</span> ·
-                    <span title="How often this tier's rounds pay out, and among how many qualifiers — from XvB's public winners feed.">Odds / 30d ${r.oddsPer30d ? `≈ ${Number(r.oddsPer30d.toPrecision(2))} wins · ${Number((r.players || 0).toPrecision(2))} players` : "—"}</span>
+                    <span title=${r.oddsPer30d ? oddsTitle : oddsPendingTitle}>Odds / 30d ${r.oddsPer30d ? `≈ ${Number(r.oddsPer30d.toPrecision(2))} wins · ${Number((r.players || 0).toPrecision(2))} players` : oddsPending}</span>
                 </p>
               </div>`;
             })}
@@ -128,8 +146,8 @@ export function XvbTierBlock({ calc, hr, coeffDay, energy, est }) {
                     : calc.estimates_source === "live"
                       ? ", so the reward columns run from the last live read"
                       : ""
-                }. The odds column needs the live winners feed, so it stays empty until
-                XvB runs again.</p>`
+                }. The odds column needs the live winners feed, so each row names what it
+                is waiting for instead of a figure until XvB runs again.</p>`
         }
         <div class="stat-grid">
             <${StatCard} label="Sustainable Tier" value=${t ? t.tier : "None"} cls="c-purple"
