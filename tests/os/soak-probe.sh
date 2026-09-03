@@ -48,8 +48,13 @@
 #                       read 0 with 22 logins in the journal) — the journal count is the one that
 #                       fires.
 #   5 chain recorded  — monerod height / synchronized / peers are RECORDED (a stall is visible)
-#                       and never gate. Tari is recorded by container state only: the box has no
-#                       gRPC client, so its height is not read — stated, not skipped silently.
+#                       and never gate. The appliance's monerod RPC is RESTRICTED (measured
+#                       2026-09-03: `get_info` answers `restricted:true`, `get_connections` is
+#                       "Method not found"), and a restricted `get_info` zeroes the peer counts
+#                       and peer lists by design — so peers reads `restricted` there rather than
+#                       a 0/0 that is the instrument, not the node; height moving between days is
+#                       the stall signal. Tari is recorded by container state only: the box has
+#                       no gRPC client, so its height is not read — stated, not skipped silently.
 # A day whose line is missing, or whose SSH read failed, is a FAIL by the ruling's own terms; a
 # failed read keeps the previous cursor, so the next good day also counts the failed day's login.
 # The session skips host-key checking on purpose: the box regenerates its host key on every
@@ -87,7 +92,7 @@ printf 'last_sessions=%s\n' "$(last -F 2>/dev/null | grep -v -c -E '^(reboot|wtm
 env_get() { sed -n "s/^$1=//p" /data/pithead/.env 2>/dev/null | head -1 | tr -d '"'; }
 mu=$(env_get MONERO_NODE_USERNAME); mp=$(env_get MONERO_NODE_PASSWORD); murl=$(env_get MONERO_RPC_URL); [ -n "$murl" ] || murl=http://127.0.0.1:18081
 if [ -n "$mu" ]; then body=$(curl -fsS --max-time 8 --digest -u "$mu:$mp" "$murl/get_info" 2>/dev/null); else body=$(curl -fsS --max-time 8 "$murl/get_info" 2>/dev/null); fi
-printf 'monero=%s\n' "$(printf '%s' "${body:-null}" | jq -r '"h:\(.height // "?") sync:\(.synchronized // "?") peers:\(.incoming_connections_count // "?")/\(.outgoing_connections_count // "?")"' 2>/dev/null || echo 'h:? sync:? peers:?/?')"
+printf 'monero=%s\n' "$(printf '%s' "${body:-null}" | jq -r '"h:\(.height // "?") sync:\(.synchronized // "?") peers:\(if .restricted == true then "restricted" else "\(.incoming_connections_count // "?")/\(.outgoing_connections_count // "?")" end)"' 2>/dev/null || echo 'h:? sync:? peers:?/?')"
 REMOTE
 }
 
