@@ -8,3 +8,7 @@ https?://example\.(com|org).*
 # gitlab.torproject.org returns 403 to non-browser clients (the link is valid — verified by hand
 # 2026-07). Ignore the host, not a global --accept 403 that would mask real dead links. #415.
 https://gitlab\.torproject\.org.*
+# The appliance's own mDNS hostname, used in docs as the address you browse to after flashing.
+# Resolvable only on the appliance's LAN, never from CI — same class as the localhost entries
+# above, not a dead link. #1419.
+https?://pithead\.local.*
