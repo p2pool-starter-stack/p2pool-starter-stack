@@ -87,12 +87,17 @@ list_slices() {
 #     opaque string, so the identical ordering mistake routed through `trap` is invisible to it at
 #     any severity.
 #
-# Caught here by one forward scan over the slices IN BUILD ORDER, tracking every top-level
-# `readonly` name and top-level function name as each is DEFINED: a re-declared readonly name, or
-# a bare trap target not yet in that set, refuses the build with the offending file:line. Scoped to
-# top-level slice order deliberately, matching what the build script's own header promises — it
-# does not attempt general control-flow or scope analysis (a function only ever called from inside
-# a conditional that happens not to run first is out of scope, same as it is for shellcheck).
+# Caught here by one forward scan over the slices IN BUILD ORDER, tracking every `readonly` name
+# declared OUTSIDE a function body (at any indentation — `00-prelude.sh` declares one inside an
+# `if`) and every top-level function name as each is DEFINED: a re-declared readonly name, or a
+# bare trap target not yet in that set, refuses the build with the offending file:line. A
+# `readonly` inside a function body is skipped: `local x; readonly x=…` in two functions is two
+# independent names, not a collision, and recording it refused a build that runs fine. Function
+# bodies are delimited the way shfmt writes them — `name() {` at column 0 opens one, `}` at column
+# 0 closes it, and a `name() { …; }` one-liner opens nothing. Scoped to top-level slice order
+# deliberately, matching what the build script's own header promises — it does not attempt general
+# control-flow analysis (a function only ever called from inside a conditional that happens not to
+# run first is out of scope, same as it is for shellcheck).
 validate_ordering() {
     LC_ALL=C awk '
     function record(name) {
@@ -104,7 +109,7 @@ validate_ordering() {
             seen_readonly[name] = FILENAME ":" FNR
         }
     }
-    /^[[:space:]]*readonly[[:space:]]/ {
+    /^[[:space:]]*readonly[[:space:]]/ && !in_fn {
         line = $0
         sub(/^[[:space:]]*readonly[[:space:]]+/, "", line)
         sub(/[[:space:]]+#.*/, "", line)
@@ -121,7 +126,9 @@ validate_ordering() {
         name = $0
         sub(/\(\).*/, "", name)
         defined_fns[name] = 1
+        in_fn = ($0 ~ /\{[[:space:]]*(#.*)?$/)
     }
+    /^\}/ { in_fn = 0 }
     /^[[:space:]]*trap[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[A-Z][A-Z0-9]*[[:space:]]*$/ {
         line = $0
         sub(/^[[:space:]]*trap[[:space:]]+/, "", line)
@@ -412,7 +419,7 @@ self_test() {
     fi
     rm -rf "$order"
 
-    # 10-14. The five refusals that guard a silently MALFORMED join, or a misleading diagnosis.
+    # 10-15. The six refusals that guard a silently MALFORMED join, or a misleading diagnosis.
     #
     # Driven on the BUILD path rather than through `--check`, and each asserts THREE things: the
     # rc, the stated REASON, and that the previous artifact survived. All three are needed, because
@@ -449,7 +456,7 @@ self_test() {
     # asked "does a function named on_err exist anywhere" would stay green on this fixture — only
     # a check of what is defined so far AT the trap line catches it.
     local bad desc want out
-    for bad in empty truncated directory dup-readonly trap-before-def; do
+    for bad in empty truncated directory dup-readonly dup-readonly-indented trap-before-def; do
         local badroot
         badroot=$(mktemp -d)
         mkdir -p "$badroot/lib/pithead"
@@ -478,6 +485,15 @@ self_test() {
             printf '#!/usr/bin/env bash\nreadonly SAME="bar"\n' >"$badroot/lib/pithead/00-prelude.sh"
             printf 'readonly SAME="baz"\n' >"$badroot/lib/pithead/10-bad.sh"
             desc="the same readonly name declared in two slices"
+            want="is declared more than once"
+            ;;
+        dup-readonly-indented)
+            # Indentation is not scope: a top-level `readonly` inside an `if` (the shape
+            # 00-prelude.sh really has) collides with a column-0 one just the same. This is what
+            # keeps the function-scope fix below from degrading into a column-0-only match.
+            printf '#!/usr/bin/env bash\nif true; then\n    readonly SAME="bar"\nfi\n' >"$badroot/lib/pithead/00-prelude.sh"
+            printf 'readonly SAME="baz"\n' >"$badroot/lib/pithead/10-bad.sh"
+            desc="the same readonly name declared in two slices, one of them indented under an if"
             want="is declared more than once"
             ;;
         trap-before-def)
@@ -519,6 +535,21 @@ self_test() {
         fi
         rm -rf "$badroot"
     done
+
+    # 16. The counter-example to dup-readonly: `local x; readonly x=…` in two functions across two
+    #     slices is two independent, function-scoped names — the artifact runs fine — and the scan
+    #     must ACCEPT it. A readonly arm that keys on the name alone refuses this build (found in
+    #     review of #1463), so this case is red without function-scope tracking. No previous
+    #     artifact in the fixture on purpose: a fresh build is the whole assertion.
+    local scoped
+    scoped=$(mktemp -d)
+    mkdir -p "$scoped/lib/pithead"
+    printf '#!/usr/bin/env bash\nfoo() {\n    local x\n    readonly x=1\n    echo "$x"\n}\n' >"$scoped/lib/pithead/00-a.sh"
+    printf 'bar() {\n    local x\n    readonly x=2\n    echo "$x"\n}\n' >"$scoped/lib/pithead/10-b.sh"
+    rc=0
+    PITHEAD_BUILD_ROOT="$scoped" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1 || rc=$?
+    _case "a build ACCEPTS the same function-local readonly name in two slices (scope, not name)" 0 "$rc"
+    rm -rf "$scoped"
 
     if [ "$fail" -ne 0 ]; then
         echo "build-pithead --self-test: FAILED"
