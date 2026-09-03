@@ -11038,74 +11038,109 @@ control_upgrade() { # <request-file> <id> <actor> <control-dir>
         rm -f "$logf"
         return 0
     fi
-    # #637: unlike the fresh-dir path, this one has no surviving previous dir — and the new
-    # release's `upgrade` below re-renders .env (and may migrate config.json). Keep a timestamped
-    # pre-upgrade copy of both next to the originals before a byte changes (cp -p keeps .env's
-    # 0600; a fresh stamp per attempt so a failed try never overwrites the good copy) and refuse
-    # to overwrite the install without one. The destination name is predictable, so root must
-    # never write through a symlink a co-tenant planted there (the #629 mkdir guard's attack
-    # class): copy to an unpredictable mktemp name first, then rename onto the final name —
-    # rename(2) replaces a planted entry without following it.
-    _upg_snapshot() { # <src> <dst>
-        local tmp
-        tmp=$(mktemp "$PWD/.bak-upgrade.XXXXXX") || return 1
-        if ! cp -p "$1" "$tmp"; then
-            rm -f "$tmp"
-            return 1
+    # #1482: everything below overwrites the RUNNING install — the two tar passes replace the whole
+    # tree, this script included — and it does so BEFORE the re-invocation, so the lock the
+    # re-invoked `pithead upgrade` takes cannot cover the overwrite. The window is held from the
+    # first snapshot write to the end of that re-invocation. The fresh-dir path above needs none of
+    # it: everything it writes is a sibling directory it created itself, and the `./pithead upgrade`
+    # it runs there takes its own window.
+    #
+    # Run in a subshell, and that is the design rather than a style choice. `mutation_lock_acquire`
+    # EXITS on timeout (PITHEAD_EX_LOCK_TIMEOUT) instead of returning, and this code runs inside the
+    # long-lived control runner: an exit here would kill the runner mid-request, leaving this result
+    # stuck at "running" and the claim never released. The subshell absorbs that exit so the status
+    # can be ROUTED — contention is "rejected", never a failed upgrade, for the same reason
+    # wizard_setup_failed refuses to call a timeout a bad config (#1391 F3). Its exit also closes
+    # fd 9, which IS the release: the `(setup)` idiom, one caller over. The re-invoked child
+    # inherits the exported PITHEAD_LOCK_HELD marker, so it does not block on its parent's hold.
+    _upg_in_place() {
+        # #637: unlike the fresh-dir path, this one has no surviving previous dir — and the new
+        # release's `upgrade` below re-renders .env (and may migrate config.json). Keep a timestamped
+        # pre-upgrade copy of both next to the originals before a byte changes (cp -p keeps .env's
+        # 0600; a fresh stamp per attempt so a failed try never overwrites the good copy) and refuse
+        # to overwrite the install without one. The destination name is predictable, so root must
+        # never write through a symlink a co-tenant planted there (the #629 mkdir guard's attack
+        # class): copy to an unpredictable mktemp name first, then rename onto the final name —
+        # rename(2) replaces a planted entry without following it.
+        _upg_snapshot() { # <src> <dst>
+            local tmp
+            tmp=$(mktemp "$PWD/.bak-upgrade.XXXXXX") || return 1
+            if ! cp -p "$1" "$tmp"; then
+                rm -f "$tmp"
+                return 1
+            fi
+            mv -f "$tmp" "$2"
+        }
+        local bak
+        bak="bak-upgrade-$(date +%Y%m%d-%H%M%S)"
+        if ! _upg_snapshot "$CONFIG_FILE" "$CONFIG_FILE.$bak" 2>"$logf" ||
+            ! _upg_snapshot "$ENV_FILE" "$ENV_FILE.$bak" 2>>"$logf"; then
+            rm -f "$bundle"
+            _upg_fail "could not keep a pre-upgrade copy of config.json/.env: $(tail -c 500 "$logf") — refusing to overwrite the install without a restore point; the stack keeps running v$PITHEAD_VERSION."
+            rm -f "$logf"
+            return 0
         fi
-        mv -f "$tmp" "$2"
+        # Older snapshots hold yesterday's secrets: keep the newest three pairs, prune the rest.
+        # Lexical order IS chronological for this stamp format; `|| true` — an empty glob under
+        # pipefail must not kill the runner.
+        ls -1r "$CONFIG_FILE".bak-upgrade-* 2>/dev/null | tail -n +4 | while IFS= read -r f; do rm -f "$f"; done || true
+        ls -1r "$ENV_FILE".bak-upgrade-* 2>/dev/null | tail -n +4 | while IFS= read -r f; do rm -f "$f"; done || true
+        # The reported paths: CONFIG_FILE is cwd-relative unless the (test-only) override made it
+        # absolute — don't prepend $PWD onto an already-absolute path.
+        local bak_paths
+        case "$CONFIG_FILE" in
+        /*) bak_paths="$CONFIG_FILE.$bak" ;;
+        *) bak_paths="$PWD/$CONFIG_FILE.$bak" ;;
+        esac
+        bak_paths="$bak_paths $PWD/$ENV_FILE.$bak"
+        # In-place extraction over the running install, in two passes. Pass 1 lays down everything
+        # EXCEPT the running script with plain tar, which MERGES existing directories — a release
+        # install already carries the non-empty build/* config-template mounts — and overwrites files.
+        # A single `-U` (unlink-first) pass over the whole tree instead tries to unlink those non-empty
+        # build/* dirs first and aborts ("Cannot unlink: Directory not empty"), leaving the install
+        # half-written. Pass 2 is the ONE file that needs -U: the pithead script, unlinked-first so it
+        # lands on a NEW inode and the copy executing this very function keeps running from the old one
+        # (an in-place overwrite would corrupt it mid-run).
+        if ! tar -xzf "$bundle" --strip-components=1 -C "$PWD" --exclude='pithead/pithead' 2>"$logf" ||
+            ! tar -xzUf "$bundle" --strip-components=1 -C "$PWD" pithead/pithead 2>>"$logf"; then
+            rm -f "$bundle"
+            _upg_fail "the $tag release bundle failed to extract: $(tail -c 500 "$logf") — the stack keeps running v$PITHEAD_VERSION."
+            rm -f "$logf"
+            return 0
+        fi
+        rm -f "$bundle"
+        # The extraction replaced this script on disk (the running copy keeps executing from its old
+        # inode); run the NEW pithead's `upgrade`, which re-renders the generated config and pulls the
+        # $tag images — exactly what the manual bundle update does.
+        if "$PWD/pithead" upgrade >"$logf" 2>&1; then
+            control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"upgraded",version:$v,ts:(now|floor)}')"
+            control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
+        else
+            control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" \
+                --arg b "$bak_paths" \
+                '{status:"failed",version:$v,backup:$b,error:($e + " — finish the upgrade from the host with ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
+            control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
+        fi
+        rm -f "$logf"
     }
-    local bak
-    bak="bak-upgrade-$(date +%Y%m%d-%H%M%S)"
-    if ! _upg_snapshot "$CONFIG_FILE" "$CONFIG_FILE.$bak" 2>"$logf" ||
-        ! _upg_snapshot "$ENV_FILE" "$ENV_FILE.$bak" 2>>"$logf"; then
-        rm -f "$bundle"
-        _upg_fail "could not keep a pre-upgrade copy of config.json/.env: $(tail -c 500 "$logf") — refusing to overwrite the install without a restore point; the stack keeps running v$PITHEAD_VERSION."
-        rm -f "$logf"
+    local iprc=0
+    (
+        mutation_lock_acquire upgrade
+        _upg_in_place
+    ) || iprc=$?
+    if [ "$iprc" -eq "$PITHEAD_EX_LOCK_TIMEOUT" ]; then
+        rm -f "$bundle" "$logf"
+        _upg_reject "another pithead operation was already running, so the upgrade to $tag was never started — nothing was changed. This attempt still counts against the ten-minute upgrade throttle; retry once both have cleared."
         return 0
     fi
-    # Older snapshots hold yesterday's secrets: keep the newest three pairs, prune the rest.
-    # Lexical order IS chronological for this stamp format; `|| true` — an empty glob under
-    # pipefail must not kill the runner.
-    ls -1r "$CONFIG_FILE".bak-upgrade-* 2>/dev/null | tail -n +4 | while IFS= read -r f; do rm -f "$f"; done || true
-    ls -1r "$ENV_FILE".bak-upgrade-* 2>/dev/null | tail -n +4 | while IFS= read -r f; do rm -f "$f"; done || true
-    # The reported paths: CONFIG_FILE is cwd-relative unless the (test-only) override made it
-    # absolute — don't prepend $PWD onto an already-absolute path.
-    local bak_paths
-    case "$CONFIG_FILE" in
-    /*) bak_paths="$CONFIG_FILE.$bak" ;;
-    *) bak_paths="$PWD/$CONFIG_FILE.$bak" ;;
-    esac
-    bak_paths="$bak_paths $PWD/$ENV_FILE.$bak"
-    # In-place extraction over the running install, in two passes. Pass 1 lays down everything
-    # EXCEPT the running script with plain tar, which MERGES existing directories — a release
-    # install already carries the non-empty build/* config-template mounts — and overwrites files.
-    # A single `-U` (unlink-first) pass over the whole tree instead tries to unlink those non-empty
-    # build/* dirs first and aborts ("Cannot unlink: Directory not empty"), leaving the install
-    # half-written. Pass 2 is the ONE file that needs -U: the pithead script, unlinked-first so it
-    # lands on a NEW inode and the copy executing this very function keeps running from the old one
-    # (an in-place overwrite would corrupt it mid-run).
-    if ! tar -xzf "$bundle" --strip-components=1 -C "$PWD" --exclude='pithead/pithead' 2>"$logf" ||
-        ! tar -xzUf "$bundle" --strip-components=1 -C "$PWD" pithead/pithead 2>>"$logf"; then
+    # Anything else non-zero is the subshell dying on errexit part-way through the overwrite. Before
+    # the subshell that killed the whole runner; now it is reportable, so report it rather than
+    # letting the result sit at "running" until the claim expires.
+    if [ "$iprc" -ne 0 ]; then
         rm -f "$bundle"
-        _upg_fail "the $tag release bundle failed to extract: $(tail -c 500 "$logf") — the stack keeps running v$PITHEAD_VERSION."
+        _upg_fail "the in-place upgrade to $tag stopped unexpectedly (status $iprc): $(tail -c 500 "$logf" 2>/dev/null) — check the host journal; the install may be partly written."
         rm -f "$logf"
-        return 0
     fi
-    rm -f "$bundle"
-    # The extraction replaced this script on disk (the running copy keeps executing from its old
-    # inode); run the NEW pithead's `upgrade`, which re-renders the generated config and pulls the
-    # $tag images — exactly what the manual bundle update does.
-    if "$PWD/pithead" upgrade >"$logf" 2>&1; then
-        control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" '{status:"upgraded",version:$v,ts:(now|floor)}')"
-        control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "upgraded"
-    else
-        control_write_result "$cdir/results" "$id" "$(jq -n --arg v "$tag" --arg e "$(tail -c 2000 "$logf")" \
-            --arg b "$bak_paths" \
-            '{status:"failed",version:$v,backup:$b,error:($e + " — finish the upgrade from the host with ./pithead upgrade; containers not yet recreated keep running the previous images."),ts:(now|floor)}')"
-        control_audit "$cdir/audit/control.log" "$id" "$actor" "upgrade" "failed"
-    fi
-    rm -f "$logf"
 }
 
 # Validate + dispatch one CLAIMED request file. Trusts no byte of it: must be JSON, only the keys

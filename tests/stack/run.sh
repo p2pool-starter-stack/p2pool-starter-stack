@@ -22,6 +22,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-doctor.sh" && domain_ran test-doctor.
 # shellcheck source=tests/stack/test-control-upgrade.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-control-upgrade.sh" && domain_ran test-control-upgrade.sh "$_d0" "$?" || domain_ran test-control-upgrade.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-control-upgrade-lock.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-control-upgrade-lock.sh" && domain_ran test-control-upgrade-lock.sh "$_d0" "$?" || domain_ran test-control-upgrade-lock.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-release-signing.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-release-signing.sh" && domain_ran test-release-signing.sh "$_d0" "$?" || domain_ran test-release-signing.sh "$_d0" "$?"
 
