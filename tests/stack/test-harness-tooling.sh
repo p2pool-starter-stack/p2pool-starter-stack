@@ -93,6 +93,16 @@ echo "== unit: #1059 watch-report discrimination =="
 bash "$ROOT/tests/os/failure-evidence.sh" --self-test >/dev/null 2>&1
 assert_rc "#1059 watch-report self-test passes" "$?" "0"
 
+echo "== unit: #1676 version-aging helper self-test =="
+# tests/os/run.sh's leg 4 must make the guest claim a version OLDER than the bundle it is about to
+# install, and every minor release-prep tip is x.y.0 — the shape the helper used to refuse, which
+# reddened the release gate with seven reds for one cause. Its --self-test drives the three
+# step-down shapes, the one version with nothing below it, and the malformed inputs it must refuse,
+# each aged value checked against an independent ordering. Lives in tests/os/ (appliance lane);
+# driven here because tier 1 is the lowest tier that proves it and it needs no KVM.
+bash "$ROOT/tests/os/aged-version.sh" --self-test >/dev/null 2>&1
+assert_rc "#1676 aged-version self-test passes" "$?" "0"
+
 echo "== unit: tor healthcheck command-dependency self-test (#1372) =="
 # The #1098 pair above asks whether a healthcheck script EXISTS where its Dockerfile promises. This
 # asks the other half of the same contract: whether build/tor/healthcheck.sh can still RUN on
