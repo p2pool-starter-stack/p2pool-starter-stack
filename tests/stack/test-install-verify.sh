@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # install.sh verification domain (#1105 Phase 1, develop-v2 lane): everything the installer does
 # before it will put a bundle on a box. The host gate that hard-fails on a platform the stack
 # cannot run on, before any download at all (#77 phase 1), and the download-verification path that
@@ -49,7 +49,7 @@ echo "== unit: install.sh download verification fails CLOSED (#868) =="
 # extracted has already won — so a mismatch must install NOTHING. The stubs model each remote
 # artifact as a file served by basename; absent file = curl -f failure, exactly the shape the
 # script distinguishes (absent degrades politely, present-but-wrong is fatal).
-ISB=$(mktemp -d)
+mk_tmpdir ISB
 mkdir -p "$ISB/bin" "$ISB/srv" "$ISB/work"
 printf '#!/bin/bash\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n' >"$ISB/bin/uname"
 cat >"$ISB/bin/curl" <<'EOF'

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Control-channel confirm-gate domain (#1105 Phase 1, develop-v2 lane): the sections that prove an
 # in-scope disruptive change cannot land on a plain commit, and that the typed APPLY token which
 # unlocks it is scoped to the change itself rather than to the perimeter. A disruptive edit staged

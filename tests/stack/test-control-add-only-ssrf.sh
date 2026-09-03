@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # The approval gate (#33): the control channel's default-deny on security-sensitive changes,
 # reunited into one file (#1105 R13), together with workers.list[]'s add-only exception (#893's
 # click-to-adopt) and the #122 SSRF floor on what a newly-appended entry may point at

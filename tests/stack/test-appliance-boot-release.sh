@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # The post-commit release of the held chain services retries, keeps its order, and alerts (#1684).
 # A data_migration update boots with the chain services held; once the slot commits, pithead-boot
 # releases them with `./pithead up`. On the bench that `up` landed while p2pool — started by the

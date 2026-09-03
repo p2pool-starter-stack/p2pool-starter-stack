@@ -67,7 +67,7 @@ tests/integration/run.sh	2551
 tests/integration/selftest-e2e-phases.sh	507
 tests/integration/selftest.sh	686
 tests/os/failure-evidence.sh	567
-tests/os/run.sh	3437
+tests/os/run.sh	3423
 tests/stack/test-appliance-boot.sh	641
 tests/stack/test-appliance-identity-boot.sh	465
 tests/stack/test-appliance-identity.sh	483

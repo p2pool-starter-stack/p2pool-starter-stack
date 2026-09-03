@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Optional .env keys under `set -u` (#1246): generate_caddyfile must DEGRADE when an optional key
 # is absent from the sourced .env, not abort the command that sourced it. Sourced by run.sh.
 #

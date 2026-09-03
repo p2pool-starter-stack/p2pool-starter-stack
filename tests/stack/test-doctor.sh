@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Doctor domain (#1105 Phase 1, module 7): the doctor/status/exposure checks that run against a
 # throwaway sandbox with no shared control/config state — is_public_ip and check_stratum_exposure
 # (the classifier feeds doctor's own exposure warning, same dual setup/doctor reasoning module 6

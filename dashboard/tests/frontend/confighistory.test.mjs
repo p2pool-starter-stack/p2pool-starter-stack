@@ -189,3 +189,30 @@ test("HistoryRow lists a config diff by its keys and an upgrade by its version",
   assert.match(up, /upgrade → 1\.10\.0/);
   assert.match(up, /Already up to date/);
 });
+
+// #1564 — the third line ConfigProvenance can carry.
+test("ConfigProvenance reports an unrecorded config change beside the origin line", () => {
+  // The defect this closes: `here` is the calmest verdict the origin line has, and it is exactly
+  // the one a hand-edit underneath RigForge leaves standing. Both lines must render together —
+  // replacing the origin line would hide which change the dashboard did make.
+  const out = renderToString(
+    ConfigProvenance({
+      origin: "here",
+      meta: META,
+      revisionDrift: { worker: "rig1", before: "aaa", after: "bbb" },
+    }),
+  );
+  assert.match(out, /Last changed from this dashboard/);
+  assert.match(out, /nothing recording it/);
+});
+
+test("ConfigProvenance renders the unrecorded-change line with no origin line at all", () => {
+  // A rig serving a config but no config_meta has no origin line, and can still have drifted.
+  const out = renderToString(ConfigProvenance({ origin: null, meta: null,
+    revisionDrift: { worker: "rig1", before: "aaa", after: "bbb" } }));
+  assert.match(out, /nothing recording it/);
+});
+
+test("ConfigProvenance stays silent when nothing at all has anything to say", () => {
+  assert.equal(renderToString(ConfigProvenance({ origin: null, meta: null, revisionDrift: null })), "");
+});

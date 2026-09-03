@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Appliance identity and boot-provisioning domain (#1105 Phase 1, develop-v2 lane): the overlay
 # units that give a freshly imaged machine an identity of its own, and the boot-time work whose
 # success a later boot has to be able to prove. pithead-machine-id restores THROUGH
@@ -390,10 +390,6 @@ out=$(shk_run)
 assert_rc "first run on an empty /data generates the key" "$?" "0"
 assert_contains "generation is announced (a silent identity change is the bug class)" "$out" "generated a new host key"
 shk_fp1=$(ssh-keygen -lf "$shk_key" 2>/dev/null | awk '{print $2}')
-# The verdict text below prints presence, not the fingerprint bytes: a fresh random ed25519
-# fingerprint on every run would make this PASS line differ run to run, weakening the domain-split
-# multiset diff that proves a move changed nothing (#1325). $shk_fp1 itself is still kept for the
-# byte-identity assertions below.
 [ -n "$shk_fp1" ] && ok "the generated key is a loadable ed25519 key" ||
     bad "the generated key is a loadable ed25519 key" "ssh-keygen -lf failed on $shk_key"
 assert_eq "key dir is owner-only (700)" "$(stat -c '%a' "$SHK/data-ssh" 2>/dev/null || stat -f '%Lp' "$SHK/data-ssh")" "700"

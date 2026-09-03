@@ -55,6 +55,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/reinstall-prefill-verdict.sh"
 # shellcheck source=tests/os/data-floor-fallback-leg.sh
 . "$SCRIPT_DIR/data-floor-fallback-leg.sh"
+# shellcheck source=tests/os/aged-version.sh
+. "$SCRIPT_DIR/aged-version.sh"
 
 IMAGE=""
 KEEP=0
@@ -252,30 +254,6 @@ _build_image() {
         return 1
     }
     printf 'os/rauc/build/system.img'
-}
-
-# The checkout's VERSION with the patch component DECREMENTED — the version leg 4 makes the guest
-# claim to be running, so that the bundle (stamped with the real VERSION) is a genuine update.
-#
-# It has to be done on this side. The obvious move — stamp the BUNDLE one patch newer — produces a
-# bundle whose manifest and payload disagree, and that breaks two things at once. pithead-boot
-# writes the `rolled_back` verdict purely by comparing the in-flight target to the booted slot's
-# VERSION, before the health gate runs at all, so a mismatch reports a rollback that never
-# happened. And STACK_VERSION is derived from that same VERSION file and tags all five first-party
-# images, so a payload rewritten to match would send the post-update boot hunting image tags that
-# were never published — turning the fake rollback into a real one.
-_prev_patch_version() {
-    local v major minor patch
-    v=$(tr -d ' \t\r\n' <VERSION)
-    major=${v%%.*}
-    patch=${v##*.}
-    minor=${v#*.}
-    minor=${minor%%.*}
-    [ "$patch" -gt 0 ] 2>/dev/null || {
-        printf '%s' "$v"
-        return 1
-    }
-    printf '%s.%s.%s' "$major" "$minor" "$((patch - 1))"
 }
 
 # Build an update bundle carrying $1 as its marker.
@@ -995,18 +973,26 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     # for a compromised container. Both images here are built from the one checkout, so without
     # this the guest is already running the version the bundle carries and leg 4 could never get
     # past its first download — it reported #976's path as broken while never offering it anything
-    # to install. Age the RUNNING side, never the bundle's stamp (see _prev_patch_version).
+    # to install. Age the RUNNING side, never the bundle's stamp (see tests/os/aged-version.sh).
     #
     # Safe here specifically: nothing renders .env or runs compose between this write and the
     # reboot — `pithead os-update` is a rauc install — and pithead-sync restores the slot's real
     # VERSION on the next boot, before pithead-boot reads it to judge the update. So the guest
     # claims the older version exactly for the length of the check/download/install window.
+    # #1676: a failed precondition here used to cost SEVEN reds — every later step fails on the
+    # same un-aged guest — so both failure shapes return after their one red.
     local aged
-    if aged=$(_prev_patch_version); then
-        _ssh "printf '%s\n' '$aged' > /data/pithead/VERSION" ||
-            bad "leg 4: could not age the guest's running version to $aged"
-    else
-        bad "leg 4: VERSION patch component is 0 — cannot age the running version below it"
+    if ! aged=$(aged_version "${tag#v}"); then
+        bad "leg 4: cannot age the running version ${tag#v} — nothing sorts below it (tests/os/aged-version.sh)"
+        kill "$srv_pid" 2>/dev/null
+        rm -rf "$srv"
+        return
+    fi
+    if ! _ssh "printf '%s\n' '$aged' > /data/pithead/VERSION"; then
+        bad "leg 4: could not age the guest's running version to $aged"
+        kill "$srv_pid" 2>/dev/null
+        rm -rf "$srv"
+        return
     fi
 
     local out st
@@ -1022,9 +1008,9 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
         return
     fi
 
-    # Refusal 1 — the /data migration floor: a valid signature is not permission to install below
-    # it. This drives the SAME shared guard the CLI enforces (downgrade family), via the dashboard
-    # door, with a floor planted above the bundle's version.
+    # Refusal 1 — the /data floor, via the dashboard door onto the SAME guard the CLI enforces. A
+    # floor above this (newer) bundle is above the running version too: since #1393 that is the
+    # failed-migration state, refused FIRST with its premise; the plain door is tier 1's (#1694).
     _ssh "printf '99.0.0\n' > /data/pithead/.os-data-floor"
     out=$(_os_step "{\"action\":\"download\",\"version\":\"$tag\"}" 900)
     if [ "$(printf '%s' "$out" | jq -r '.status')" = "downloaded" ]; then
@@ -1034,10 +1020,10 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     fi
     out=$(_os_step '{"action":"verify"}' 120)
     st=$(printf '%s' "$out" | jq -r '.status')
-    if [ "$st" = "rejected" ] && printf '%s' "$out" | jq -r '.error' | grep -q "strand the chain data"; then
-        ok "leg 4: DOWNGRADE/FLOOR REFUSED — verify rejects below the /data floor with the honest error"
+    if [ "$st" = "rejected" ] && printf '%s' "$out" | jq -r '.error' | grep -q "failed its gate.*the floor version or newer installs"; then
+        ok "leg 4: FLOOR ABOVE THE RUNNING VERSION REFUSED — verify refuses with the failed-migration premise and the open route"
     else
-        bad "leg 4: verify below the floor did not refuse honestly (got: $(printf '%s' "$out" | cut -c1-200))"
+        bad "leg 4: verify under a floor above the running version did not refuse with the true premise (got: $(printf '%s' "$out" | cut -c1-200))"
     fi
     if ! _ssh "test -f /data/pithead/data/os-update/pithead-os-$tag.raucb"; then
         ok "leg 4: the floor-refused bundle was deleted"
