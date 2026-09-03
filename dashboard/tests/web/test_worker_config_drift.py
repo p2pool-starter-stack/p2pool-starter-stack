@@ -236,3 +236,74 @@ class TestThroughTheWholePayload:
     ):
         d = self._detail(monkeypatch, {"max_temp_c": 80})
         assert "config_drift" in d
+
+
+class TestRevisionDriftReachesThePayload:
+    """#1564: the store's unrecorded-edit finding, served on the line it contradicts.
+
+    The store already owns the currency rule and its own tests. What can only be proven here is
+    the WIRING — that the payload asks with the revision the rig is serving on THIS poll, and not
+    with some other field of the same meta block. Passing ``last_change_id`` instead would make
+    every read miss and the note would vanish with nothing going red.
+    """
+
+    @staticmethod
+    def _detail(monkeypatch, revisions, current):
+        """Poll the store once per entry in ``revisions``, then build the payload at ``current``."""
+        from mining_dashboard.service.storage_service import StateManager
+        from mining_dashboard.web import views
+        from mining_dashboard.web.worker_detail import build_worker_detail
+
+        monkeypatch.setattr(
+            views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "10.0.0.9"}]
+        )
+        monkeypatch.setattr(views.config, "DASHBOARD_CONTROL_ENABLED", True)
+        sm = StateManager(db_path=":memory:")
+        try:
+            for rev, cid in revisions:
+                sm.note_worker_revision("rig1", {"revision": rev, "last_change_id": cid})
+            meta = {"revision": current, "changed_at": None, "source": "control"}
+            workers = [
+                {"name": "rig1", "status": "online", "h60": 1, "rigforge": {"config_meta": meta}}
+            ]
+            return build_worker_detail("rig1", {"workers": workers}, sm)
+        finally:
+            sm.close()
+
+    def test_an_unrecorded_edit_reaches_the_payload(self, monkeypatch):
+        d = self._detail(monkeypatch, [("aaa", None), ("bbb", None)], "bbb")
+        assert d["config_revision_drift"] == {"worker": "rig1", "before": "aaa", "after": "bbb"}
+
+    def test_the_lookup_uses_the_revision_the_rig_serves_now(self, monkeypatch):
+        # The rig moved on after the drift was recorded. The audit row stays in the Security
+        # panel; this line describes the config in front of the operator, so it goes quiet.
+        d = self._detail(monkeypatch, [("aaa", None), ("bbb", None)], "ccc")
+        assert d["config_revision_drift"] is None
+
+    def test_a_rig_that_has_not_drifted_publishes_silence(self, monkeypatch):
+        d = self._detail(monkeypatch, [("aaa", None)], "aaa")
+        assert d["config_revision_drift"] is None
+
+    def test_a_rig_with_no_config_meta_publishes_silence(self, monkeypatch):
+        from mining_dashboard.service.storage_service import StateManager
+        from mining_dashboard.web import views
+        from mining_dashboard.web.worker_detail import build_worker_detail
+
+        monkeypatch.setattr(
+            views.config, "DASHBOARD_WORKERS", [{"name": "rig1", "host": "10.0.0.9"}]
+        )
+        sm = StateManager(db_path=":memory:")
+        try:
+            sm.note_worker_revision("rig1", {"revision": "aaa"})
+            sm.note_worker_revision("rig1", {"revision": "bbb"})
+            workers = [{"name": "rig1", "status": "online", "h60": 1, "rigforge": {}}]
+            d = build_worker_detail("rig1", {"workers": workers}, sm)
+        finally:
+            sm.close()
+        # A plain-xmrig rig cannot say what it is running, so nothing here may accuse it — even
+        # though the row from its RigForge days is still in the table.
+        assert d["config_revision_drift"] is None
+
+    def test_the_key_is_always_present(self, monkeypatch):
+        d = self._detail(monkeypatch, [("aaa", None)], "aaa")
+        assert "config_revision_drift" in d

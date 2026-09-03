@@ -12,6 +12,7 @@ import {
   buildFields,
   buildTableChanges,
   configDriftNote,
+  configRevisionDriftNote,
   fieldNote,
   jsonSyntaxError,
   markerLabel,
@@ -367,4 +368,28 @@ test("configDriftNote renders an absent rig value as 'not set', never as empty",
 test("configDriftNote renders an object value readably", () => {
   const note = configDriftNote([{ key: "pools", applied: [{ url: "a" }], rig: [{ url: "b" }] }]);
   assert.match(note.title, /\{"url":"a"\}/);
+});
+
+// #1564 — the unrecorded-edit note, beside the other two on the provenance line.
+test("configRevisionDriftNote says nothing unless the server sent a drift", () => {
+  // There is no third state to render: the server sends this key only while the drift it
+  // recorded is the one that produced the revision the rig is serving now. Nothing here may
+  // invent an all-clear out of a shape it does not recognise.
+  for (const v of [null, undefined, {}, { before: "aaa" }, "nonsense", []]) {
+    assert.equal(configRevisionDriftNote(v), null);
+  }
+});
+
+test("configRevisionDriftNote names both revisions and says nothing recorded the change", () => {
+  const note = configRevisionDriftNote({ worker: "rig1", before: "aaa", after: "bbb" });
+  assert.match(note.label, /nothing recording it/);
+  assert.match(note.title, /aaa/);
+  assert.match(note.title, /bbb/);
+  // It may never name a key: the revision is a digest over the whole writable config.
+  assert.doesNotMatch(note.title, /max_temp_c|DONATION/);
+});
+
+test("configRevisionDriftNote renders an absent 'before' as unknown, never as blank", () => {
+  const note = configRevisionDriftNote({ worker: "rig1", after: "bbb" });
+  assert.match(note.title, /unknown/);
 });

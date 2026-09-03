@@ -319,6 +319,39 @@ class TestSchemaMigration:
         finally:
             sm.close()
 
+    def test_worker_config_revision_drift_from_added_on_upgrade(self, tmp_path):
+        # Intent (#1564): worker_config_revision is CREATE TABLE IF NOT EXISTS, so an install that
+        # has been running since #1551 keeps its pre-drift_from table forever and the Inspect note
+        # would be silently absent on exactly the rigs with the most history to have drifted.
+        db = str(tmp_path / "pre_1564.db")
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE worker_config_revision "
+            "(worker TEXT PRIMARY KEY, revision TEXT, last_change_id TEXT, ts REAL)"
+        )
+        conn.execute(
+            "INSERT INTO worker_config_revision (worker, revision, last_change_id, ts) "
+            "VALUES ('rig1', 'aaa', NULL, 100.0)"
+        )
+        conn.commit()
+        conn.close()
+
+        sm = StateManager(db_path=db)
+        try:
+            info = sm._conn.execute("PRAGMA table_info(worker_config_revision)").fetchall()
+            assert "drift_from" in {c[1] for c in info}
+            # The backfilled NULL accuses nobody, and the row it carried is still the one the next
+            # poll compares against — an upgrade must not read as a first sighting.
+            assert sm.get_worker_revision_drift("rig1", "aaa") is None
+            assert sm.note_worker_revision("rig1", {"revision": "bbb"}) == {
+                "worker": "rig1",
+                "before": "aaa",
+                "after": "bbb",
+            }
+            assert sm.get_worker_revision_drift("rig1", "bbb") is not None
+        finally:
+            sm.close()
+
 
 class TestRetention:
     """Long-running behavior: history/workers must not grow unbounded. Tests are white-box

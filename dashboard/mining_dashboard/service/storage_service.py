@@ -417,14 +417,14 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
             "(id TEXT PRIMARY KEY, ts TEXT, source TEXT, actor TEXT, action TEXT, status TEXT, "
             "keys TEXT)"
         )
-        # The config revision each rig was last OBSERVED serving (#1551), one row per worker.
-        # Additive, mirroring events / share_stats: no _migrate_db change, and the PRIMARY KEY is
-        # the only index it wants. Holding the rig's opaque `revision` NEXT TO the `last_change_id`
-        # beside it is the point: a later poll tells a recorded change (both moved) from an edit
-        # underneath RigForge (only the revision moved) — the door #1542 leaves open.
+        # The config revision each rig was last OBSERVED serving (#1551), one row per worker, plus
+        # the revision it drifted FROM while that drift is still current (#1564, migrated below).
+        # The PRIMARY KEY is the only index it wants. Holding the rig's opaque `revision` NEXT TO
+        # the `last_change_id` beside it is the point: a later poll tells a recorded change (both
+        # moved) from an edit underneath RigForge (only the revision moved) — #1542's open door.
         self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS worker_config_revision "
-            "(worker TEXT PRIMARY KEY, revision TEXT, last_change_id TEXT, ts REAL)"
+            "CREATE TABLE IF NOT EXISTS worker_config_revision (worker TEXT PRIMARY KEY, "
+            "revision TEXT, last_change_id TEXT, ts REAL, drift_from TEXT)"
         )
 
     def _create_indexes(self):
@@ -488,6 +488,7 @@ class StateManager(TelemetryStoreMixin, WorkerConfigStoreMixin):
         if "type" not in {info[1] for info in cursor.fetchall()}:
             self.logger.info("Migrating DB: Adding type column to worker_config")
             self._conn.execute("ALTER TABLE worker_config ADD COLUMN type TEXT DEFAULT 'apply'")
+        self._migrate_worker_config_revision(cursor)
 
     def load(self) -> None:
         """

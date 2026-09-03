@@ -74,6 +74,27 @@ def _shaped(row: sqlite3.Row) -> dict:
     return d
 
 
+def _next_drift_from(
+    row: sqlite3.Row | None, revision: str, last_change_id: str | None
+) -> str | None:
+    """The ``drift_from`` to store on this poll (#1564), given the row read on the same poll.
+
+    Split out of ``note_worker_revision`` because it IS the currency rule and is worth settling
+    without a database: the Inspect note must survive the polls AFTER the one that raised it — a
+    drift the operator has not resolved is still true — and go quiet once the config is
+    accounted for again. ``None`` means say nothing, for two reasons: a first sighting has
+    nothing to compare, and a revision that moved WITH a new ``last_change_id`` is the RESOLVED
+    case — something recorded that change, so the line has nothing left to contradict.
+    """
+    if row is None:
+        return None
+    if row["revision"] == revision:
+        # The rig has not moved, so a drift already recorded against this revision is still the
+        # current one. INSERT OR REPLACE rewrites every column, so carrying it is not a no-op.
+        return row["drift_from"]
+    return row["revision"] if row["last_change_id"] == last_change_id else None
+
+
 class WorkerConfigStoreMixin:
     """The `worker_config` accessors of `StateManager`. Never instantiated on its own."""
 
@@ -265,6 +286,10 @@ class WorkerConfigStoreMixin:
         ``last_change_id`` beside it: a hand-edit underneath RigForge, which moves the revision and
         stamps nothing, so neither #1345's provenance line nor #1367's ``config_drift`` can see it.
 
+        The same write maintains ``drift_from`` for ``get_worker_revision_drift`` (#1564) — the
+        read and the comparison are already here, so the Inspect line costs no second query and no
+        second lock scope. ``_next_drift_from`` carries that rule.
+
         It fails CLOSED like ``get_worker_config_change``: any read/write error returns ``None`` and
         accuses nobody. A missed detection is a poll's delay — the next poll compares against the
         same stored row, because a failed write leaves it unchanged — whereas a false accusation is
@@ -280,14 +305,16 @@ class WorkerConfigStoreMixin:
                     return None
                 cursor = self._conn.cursor()
                 cursor.execute(
-                    "SELECT revision, last_change_id FROM worker_config_revision WHERE worker = ?",
+                    "SELECT revision, last_change_id, drift_from FROM worker_config_revision "
+                    "WHERE worker = ?",
                     (worker,),
                 )
                 row = cursor.fetchone()
+                drift_from = _next_drift_from(row, revision, last_change_id)
                 self._conn.execute(
                     "INSERT OR REPLACE INTO worker_config_revision "
-                    "(worker, revision, last_change_id, ts) VALUES (?, ?, ?, ?)",
-                    (worker, revision, last_change_id, time.time()),
+                    "(worker, revision, last_change_id, ts, drift_from) VALUES (?, ?, ?, ?, ?)",
+                    (worker, revision, last_change_id, time.time(), drift_from),
                 )
                 self._conn.commit()
         except sqlite3.Error as e:
@@ -301,6 +328,59 @@ class WorkerConfigStoreMixin:
         if row["last_change_id"] != last_change_id:
             return None
         return {"worker": worker, "before": row["revision"], "after": revision}
+
+    def _migrate_worker_config_revision(self, cursor: sqlite3.Cursor) -> None:
+        """Adds ``worker_config_revision.drift_from`` to a database created before #1564.
+
+        Called by ``storage_service._migrate_db`` (#1369). ``CREATE TABLE IF NOT EXISTS`` means
+        an existing install never gains the column from the create path — the feature would be
+        silently absent on exactly the installs that have run long enough to drift. Pre-existing
+        rows get NULL: "no drift recorded", the same thing a first sighting says.
+        """
+        cursor.execute("PRAGMA table_info(worker_config_revision)")
+        if "drift_from" not in {info[1] for info in cursor.fetchall()}:
+            self.logger.info("Migrating DB: Adding drift_from column to worker_config_revision")
+            self._conn.execute("ALTER TABLE worker_config_revision ADD COLUMN drift_from TEXT")
+
+    def get_worker_revision_drift(self, worker: str, revision: str | None) -> dict | None:
+        """The unrecorded config edit the Inspect provenance line should still be reporting for
+        ``worker`` (#1564), as ``{worker, before, after}`` — or ``None``, meaning say nothing.
+
+        Gated on CURRENCY, never on existence. The ``rig-drift`` audit row is permanent and that
+        durable record is the Security panel's job; this line describes the config the rig is
+        serving NOW, so it answers only while the drift we stored produced ``revision`` — what
+        the rig reports on THIS poll. "Ever drifted?" would accuse a rig forever, long after the
+        operator adopted the change.
+
+        Two states by construction, never three: no "checked and agrees" verdict, for the reason
+        ``config_drift`` withholds its ``[]`` — an all-clear here would be a reassurance bounded
+        by narrowings the operator cannot see from a badge, this feature's own defect inverted.
+
+        Deliberately NOT a lookup of the ``rig-drift`` audit row by its ``event_id``: that id is
+        deterministic and the join is cheaper, but its format is not a contract, and a lookup
+        built on one would fail SILENTLY when the format moved — the note would stop rendering
+        and every test written against the old shape would stay green.
+
+        Fails CLOSED: a read error or a closed handle returns ``None`` and the line says nothing.
+        """
+        if not worker or not revision:
+            return None
+        try:
+            with self._db_lock:
+                if not self._conn:
+                    return None
+                cursor = self._conn.cursor()
+                cursor.execute(
+                    "SELECT revision, drift_from FROM worker_config_revision WHERE worker = ?",
+                    (worker,),
+                )
+                row = cursor.fetchone()
+        except sqlite3.Error as e:
+            self._db_error("Worker Revision Read Error", e)
+            return None
+        if row is None or not row["drift_from"] or row["revision"] != revision:
+            return None
+        return {"worker": worker, "before": row["drift_from"], "after": revision}
 
     def get_last_applied_worker_config(self, worker: str) -> dict[str, Any]:
         """The merged writable config the dashboard last successfully applied to ``worker`` — the

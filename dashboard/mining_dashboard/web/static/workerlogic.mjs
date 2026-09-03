@@ -329,3 +329,25 @@ export function configDriftNote(drift) {
       .join(" · "),
   };
 }
+
+// #1564: the config edit nothing recorded — #1551's detection, surfaced on the one line it
+// contradicts. configOriginNote structurally cannot see it (a hand-edit underneath RigForge
+// stamps no new change id) and neither can configDriftNote (a key we never set has no left-hand
+// side to compare), so without this an operator reads a calm "Last changed from this dashboard"
+// over a config the Security panel has already flagged.
+//
+// Two states, never three. The server sends this key only while the drift it recorded is the one
+// that produced the revision the rig is serving NOW, so there is no "checked and agrees" object
+// to render and no bounded all-clear to leak through — the rule configDriftNote keeps by
+// withholding `[]`, kept here by having no third state to withhold in the first place.
+//
+// The revision is a digest over the whole writable config, so this can say only THAT the config
+// moved with nothing recording it, never which key — the same limit the audit row already states.
+export function configRevisionDriftNote(drift) {
+  if (!drift || !drift.after) return null;
+  return {
+    cls: "text-warn",
+    label: "The rig's config changed with nothing recording it",
+    title: `config revision ${drift.before || "unknown"} → ${drift.after}, with no new change id`,
+  };
+}
