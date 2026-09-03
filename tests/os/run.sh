@@ -434,6 +434,7 @@ phase_boot() {
     qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
     # UEFI (OVMF), serial to a file we tail, import the raw appliance disk as-is.
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -557,6 +558,7 @@ _vm_boot_disk() {
     # /data around 24 GiB, which the update phase asserts.
     qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1190,6 +1192,7 @@ phase_install() {
     # The image rides a USB bus with removable=on — that is what makes the guest a faithful
     # analog of a user's stick: the host-side gate (installer_mode_available) keys on
     # /sys/block/*/removable, which virtio never sets.
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1299,6 +1302,7 @@ phase_install() {
     vm_destroy
     # Boot from the TARGET alone — the stick is gone, exactly as the instructions tell the user.
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1383,6 +1387,7 @@ phase_install() {
     sleep 8
     vm_destroy
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1531,6 +1536,7 @@ phase_install() {
     cp "$img" "$DISK"
     qemu-img resize "$DISK" 16G >/dev/null 2>&1 || true
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1606,6 +1612,7 @@ phase_install() {
     fi
     vm_destroy
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1769,6 +1776,7 @@ phase_install() {
     cp "$img" "$DISK"
     qemu-img resize "$DISK" 16G >/dev/null 2>&1 || true
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1863,6 +1871,7 @@ phase_install() {
     fi
     vm_destroy
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
