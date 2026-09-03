@@ -26,16 +26,14 @@
 #   rig     answer "RigForge" on the same page and prove the OTHER machine this image installs:
 #           mines from the baked binary with no compile and no stack at all, and takes an A/B
 #           update — install, uncommitted rollback, self-commit — exactly like a coordinator.
-#   media   physical-presence config channel (#786 sub-issue D): a removable stick applied at
-#           boot shows its exact diff on the console, counts down, applies, and consumes itself —
-#           and pulling the stick mid-countdown cancels the change. A minimal stick changes only
-#           what it names (#965): the dashboard login, appliance defaults and node credentials
-#           all survive, and the old login still opens the served dashboard. Opt-in, like fault.
+#   media   physical-presence config channel (#786 sub-issue D): a removable stick applied at boot
+#           shows its exact diff on the console, counts down, applies, and consumes itself; pulling
+#           it mid-countdown cancels the change. A minimal stick (#965) changes only what it names;
+#           dashboard login, appliance defaults and node credentials survive, old login still works.
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
-#   reset   factory-reset's ESP marker (the real `pithead factory-reset`) wipes /data and returns
-#           a FRESH machine to the wizard; a corrupt data-partition superblock drives the same
-#           wedged-/data recovery instead of bricking. Opt-in: destructive, not in `all`.
-#   all     boot, update, install, provision and rig (default) — media, fault and reset are opt-in
+#   reset   factory-reset's ESP marker (the real `pithead factory-reset`) wipes /data and returns a
+#           FRESH machine to the wizard; a corrupt /data superblock drives wedged-/data recovery.
+#   all     every phase above, in that order — media, fault and reset included since #1064
 #
 # A failed assertion is recorded and the run continues, so one bench boot collects the whole
 # battery rather than stopping at the first fault; the run exits non-zero if any assertion failed.
@@ -55,6 +53,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/restore-live-state-verdict.sh"
 # shellcheck source=tests/os/reinstall-prefill-verdict.sh
 . "$SCRIPT_DIR/reinstall-prefill-verdict.sh"
+# shellcheck source=tests/os/data-floor-fallback-leg.sh
+. "$SCRIPT_DIR/data-floor-fallback-leg.sh"
 
 IMAGE=""
 KEEP=0
@@ -2501,6 +2501,7 @@ phase_provision() {
     else
         ok "the migration-pending marker was consumed"
     fi
+    phase_provision_floor_fallback_leg "$mig_bundle"
 }
 
 # Build a small raw disk with one FAT partition carrying $2 as pithead-config.json at its root —
@@ -3414,10 +3415,9 @@ media) phase_media ;;
 fault) phase_fault ;;
 reset) phase_reset ;;
 all)
-    # ALL of them. This arm used to run five of eight, while the release checklist told a
-    # maintainer that step 1 covered everything — so the three mid-write power cuts, the
-    # mid-commit cut, the corrupt-bundle refusal, the factory reset, the wedged-/data recovery
-    # and the whole media channel were silently omitted from every cut (#1064).
+    # ALL of them. This arm once ran five of eight while the release checklist told a maintainer
+    # that step 1 covered everything — the mid-write and mid-commit power cuts, the corrupt-bundle
+    # refusal, the factory reset, the wedged-/data recovery and the media channel omitted (#1064).
     phase_boot
     phase_update
     phase_install
