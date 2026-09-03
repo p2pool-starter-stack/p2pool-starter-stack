@@ -32,7 +32,6 @@ build_val_sandbox
 DOCKER_LOG="$V/docker.log"
 
 echo "== unit: p2pool_outbound_flags — Tor-by-default for outbound P2P (#165) =="
-# Default (clearnet absent/false) routes outbound sidechain dials through the bundled Tor SOCKS proxy.
 assert_eq "default → Tor SOCKS flags" "$(run_sourced "$SANDBOX" p2pool_outbound_flags false 172.28.0)" "--socks5 172.28.0.25:9050 --socks5-proxy-type tor"
 assert_eq "empty arg → Tor (default off)" "$(run_sourced "$SANDBOX" p2pool_outbound_flags '' 172.28.0)" "--socks5 172.28.0.25:9050 --socks5-proxy-type tor"
 # clearnet opt-out → no SOCKS flags (p2pool dials peers directly, IP exposed).
@@ -84,6 +83,14 @@ mm_clear=$(PATH="$PE:$SE:$PATH" P2POOL_FLAGS="--mini" \
     bash "$ROOT/build/p2pool/entrypoint.sh" --merge-mine tari://172.28.0.27:18142 WALLET --stratum 0.0.0.0:3333 2>&1)
 assert_contains "no --socks5 → merge-mine URL untouched" "$mm_clear" "ARG=[tari://172.28.0.27:18142]"
 assert_eq "no --socks5 → no Tari bridge spawned" "$(cat "$SANDBOX/socat.log")" ""
+
+echo "== p2pool entrypoint masks secret VALUES on the #273 launch line, keeps every flag NAME (#1586) =="
+# `docker logs p2pool` keeps this line for the container's life, so its VALUES are the leak (#1582
+# and #1585 both grew up cleaning after it). Masked values and kept flag names are ONE property.
+ml_out=$(PATH="$PE:$SE:$PATH" P2POOL_FLAGS="--mini --socks5 172.28.0.25:9050 --socks5-proxy-type tor" bash "$ROOT/build/p2pool/entrypoint.sh" --host 172.28.0.26 --rpc-login nodeuser:nodepass --wallet 4MoneroPayout --merge-mine tari://172.28.0.27:18142 12TariPayout --onion-address examplep2pool.onion --stratum 0.0.0.0:3333 2>&1)
+assert_eq "launch line masks all four secrets, keeps every flag name and --socks5" "$(printf '%s\n' "$ml_out" | sed -n 's/^\[p2pool-entrypoint\] launching: //p')" "p2pool --host 127.0.0.1 --rpc-login [redacted] --wallet [redacted] --merge-mine tari://127.0.0.1:18142 [redacted] --onion-address [redacted] --stratum 0.0.0.0:3333 --mini --socks5 172.28.0.25:9050 --socks5-proxy-type tor"
+assert_contains "p2pool is still exec'd with the RAW bare tari address" "$ml_out" "ARG=[12TariPayout]"
+assert_eq "--flag=VALUE masked, and --merge-mine= still masks the address AFTER it" "$(PATH="$PE:$PATH" bash "$ROOT/build/p2pool/entrypoint.sh" --wallet=4MoneroPayout --merge-mine=tari://172.28.0.27:18142 12TariPayout 2>&1 | sed -n 's/^\[p2pool-entrypoint\] launching: //p')" "p2pool --wallet=[redacted] --merge-mine=tari://172.28.0.27:18142 [redacted]"
 
 echo "== unit: monero_prune_flag maps prune bool -> 1/0, honouring explicit false (#294) =="
 # render_env + preflight both size disk off this flag; an explicit prune:false must yield 0, not the
@@ -157,7 +164,6 @@ assert_eq "healthcheck: RPC down after scan done -> unhealthy (#718)" "$(run_hc)
 assert_contains "wallet-entrypoint touches the scan marker on create (#718)" "$(cat "$ROOT/build/monero/wallet-entrypoint.sh")" 'touch "$SCAN_MARKER"'
 
 echo "== unit: monero_address_type — p2pool needs a PRIMARY address, and a REAL one (#250, #829) =="
-_a94="$(printf 'a%.0s' $(seq 94))"
 _a93="$(printf 'a%.0s' $(seq 93))"
 assert_eq "monero_address_type: real 4…/95  => primary" "$(run_sourced "$SANDBOX" monero_address_type "$VALID_PRIMARY")" "primary"
 assert_eq "monero_address_type: real 8…/95  => subaddress" "$(run_sourced "$SANDBOX" monero_address_type "$VALID_SUBADDR")" "subaddress"
@@ -187,7 +193,6 @@ echo "== unit: tari_address_type — DammSum over both address forms (#845) =="
 assert_eq "tari_address_type: reference dual base58 => ok" "$(run_sourced "$SANDBOX" tari_address_type "$VALID_TARI")" "ok"
 assert_eq "tari_address_type: same address, emoji form => ok" "$(run_sourced "$SANDBOX" tari_address_type "$VALID_TARI_EMOJI")" "ok"
 assert_eq "tari_address_type: single form => ok" "$(run_sourced "$SANDBOX" tari_address_type "$VALID_TARI_SINGLE")" "ok"
-# One flipped character in each form must fail as "checksum", not pass — the whole point.
 assert_eq "tari_address_type: one flipped base58 char => checksum" "$(run_sourced "$SANDBOX" tari_address_type "${VALID_TARI:0:90}B")" "checksum"
 _TARI_66="🍗🌊🦂🍎🐛🔱🍟🚦🦆👃🐛🎼🛵🔮💋👙💦🍷👠🦀🐺🍪🚀🎮🎩👅🐔🐉🍍🥑💔📌🚧🐊💄🎥🎓🚗🎳🐛🚿💉🌴🧢🐵🎩👾👽🎃🤡👍🔮👒👽🎵👀🚨😷🎒👂👶🍄🏰🚑🌸🍁"
 assert_eq "tari_address_type: tari's invalid-checksum emoji vector => checksum" "$(run_sourced "$SANDBOX" tari_address_type "${_TARI_66}🎒")" "checksum"
@@ -245,7 +250,6 @@ case "$out" in
 *"$VIEWKEY"*) bad "view key never printed by apply" "the view key leaked into apply stdout" ;;
 *) ok "view key never printed by apply" ;;
 esac
-# The wallet-rpc password stays off the .env command line too — it's in .env but never on stdout.
 case "$out" in
 *"$(run_sourced "$V" env_get_file "$V/.env" WALLET_RPC_PASSWORD)"*) bad "wallet-rpc password not printed" "leaked into apply stdout" ;;
 *) ok "wallet-rpc password not printed" ;;
@@ -427,7 +431,6 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "tari.remote.host with a comma rejected" "$?" "1"
 assert_contains "comma-host message names the field" "$out" "tari.remote.host"
 
-# (6c) A non-numeric tari.remote.grpc_port is rejected.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'","mode":"remote","remote":{"host":"tari.example.com","grpc_port":"18142; rm -rf"}}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
@@ -551,7 +554,6 @@ assert_eq "blank username -> admin in .env" "$(run_sourced "$V" env_get_file "$V
 assert_eq "generated password is 32 chars" "${#env_pass}" "32"
 assert_eq "username persisted to config.json" "$(jq -r '.monero.node_username' "$V/config.json")" "admin"
 assert_eq "password persisted to config.json" "$(jq -r '.monero.node_password' "$V/config.json")" "$env_pass"
-# Second apply must not rotate the now-populated creds.
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "password stable across apply" "$(jq -r '.monero.node_password' "$V/config.json")" "$env_pass"
 
@@ -569,13 +571,11 @@ printf '{ "monero": {"mode":"remote","wallet_address":"%s","node_username":"","n
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "remote rpc_port propagated" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_RPC_PORT)" "28081"
 assert_eq "remote zmq_port propagated" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_PORT)" "28083"
-# And the defaults apply when omitted (local node).
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"mini"}, "dashboard":{"secure":false,"host":"box.lan"} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_eq "zmq_port defaults to 18083" "$(run_sourced "$V" env_get_file "$V/.env" MONERO_ZMQ_PORT)" "18083"
 
-# `logs` forwards its service argument to `docker compose logs -f` (read-only follow).
 seed_env
 : >"$DOCKER_LOG"
 out="$(cd "$V" && DOCKER_LOG="$DOCKER_LOG" PATH="$V/bin:$PATH" ./pithead logs monerod 2>&1)"

@@ -85,10 +85,60 @@ if printf '%s' "${P2POOL_FLAGS:-}" | grep -q -- '--socks5'; then
     esac
 fi
 
+# Mask the secret VALUES on the launch line while keeping every flag NAME (#1586). #273 needs the
+# applied flags to be VISIBLE — notably the #165 `--socks5` — and never needed their values, but the
+# line printed both: the RPC login, both wallet addresses and the service onion. Two redactors
+# downstream grew up cleaning after it (#1582 in the test harness, #1585 in `support-bundle`), which
+# is the shape worth fixing at the source rather than a third time.
+#
+# Positional, and it has to be: the Tari address is a BARE argument after `--merge-mine <url>` (in
+# EITHER spelling), so a name-keyed scrubber misses it by construction — how #1585 happened. Here the
+# entrypoint knows which argument is which, so nothing has to guess. A token starting with `-` is
+# passed through even in a value position: on a malformed argv that would otherwise swallow the next
+# flag NAME, and a flag silently missing from this line is the one failure it exists to prevent.
+_redact_argv() {
+    local a out="" next=none
+    for a in "$@"; do
+        case "$next" in
+        mask)
+            next=none
+            case "$a" in -*) : ;; *)
+                out="$out [redacted]"
+                continue
+                ;;
+            esac
+            ;;
+        mmurl) # the tari://host:port URL is routing, not a secret; the address AFTER it is
+            out="$out $a"
+            next=mask
+            continue
+            ;;
+        esac
+        case "$a" in
+        --rpc-login | --wallet | --onion-address | --merge-mine=*)
+            out="$out $a"
+            next=mask
+            ;;
+        --rpc-login=* | --wallet=* | --onion-address=*) out="$out ${a%%=*}=[redacted]" ;;
+        --merge-mine)
+            out="$out $a"
+            next=mmurl
+            ;;
+        *) out="$out $a" ;;
+        esac
+    done
+    printf '%s' "${out# }"
+}
+
 # Log the FINAL launch command (#273): makes the applied flags — notably the #165 `--socks5` Tor
-# routing — auditable in `docker logs p2pool`, so a stale image silently dropping P2POOL_FLAGS shows
-# up here (and `pithead doctor` fails on it) rather than leaking quietly. After the #278 block above so
-# it reflects the rewritten --host.
-echo "[p2pool-entrypoint] launching: p2pool $* ${P2POOL_FLAGS:-}"
+# routing — auditable in `docker logs p2pool`, so a stale image silently dropping P2POOL_FLAGS is
+# visible here rather than leaking quietly. (`pithead doctor` catches the same staleness on its own,
+# by reading the container's /proc/1/cmdline — `06-doctor.sh`; this line is the human-readable trail,
+# not doctor's input.) After the #278 block above so it reflects the rewritten --host.
+#
+# Fold P2POOL_FLAGS in BEFORE both, so the line printed is provably the argv exec'd — one word-split,
+# read twice — instead of a space-joined `$*` that only resembles it.
 # shellcheck disable=SC2086  # intentional word-splitting of the space-separated flag string
-exec p2pool "$@" ${P2POOL_FLAGS:-}
+set -- "$@" ${P2POOL_FLAGS:-}
+echo "[p2pool-entrypoint] launching: p2pool $(_redact_argv "$@")"
+exec p2pool "$@"
