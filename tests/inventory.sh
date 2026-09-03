@@ -195,21 +195,32 @@ while IFS= read -r base; do
 done <<<"$EXPECTED"
 n_missing=$(printf '%s' "$MISSING" | count)
 n_expected=$(printf '%s' "$EXPECTED" | count)
-# Nothing to compare is itself drift, and it is the ONE case the set difference above cannot see. If
-# every expected domain file and every stanza disappear TOGETHER — a botched revert of the #1105
-# split — then SOURCED and EXPECTED empty at the same time, MISSING is empty, and the comparison is
-# vacuously satisfied. The emptiness test this replaced DID catch that, so it is asserted explicitly
-# rather than quietly lost with it. Its own sentence, not a share of the one below: two guards on
-# one string means either can silently cover for the other's deletion.
+# Collapsing together is itself drift, and it is the ONE case the set difference above cannot see.
+# If every expected domain file and every stanza disappear TOGETHER — a botched revert of the #1105
+# split — then SOURCED and EXPECTED shrink at the same time, MISSING stays empty, and the comparison
+# is vacuously satisfied no matter how far they fall. The floor is not just an emptiness test: #1429
+# showed that landing on 1-and-1 rather than 0-and-0 is exactly as vacuous, because lib.sh's bare
+# stanza (it is not in UNSOURCED, so it counts as expected, and it IS sourced) survives every
+# deletion and keeps satisfying both directions at that single entry. A set-difference guard cannot
+# tell "everything agrees because nothing is missing" from "everything agrees because there is
+# nothing left to disagree about" — the fallback has to come from outside the two sets it compares.
+# MIN_EXPECTED is deliberately generous — comfortably below today's count (54 at the time of #1429)
+# so an ordinary rename, split, or retirement of a file or two never needs to touch it — precisely so
+# that when it DOES fire, it means the domain layer collapsed, not that someone forgot to bump a
+# number. Raise it when the true count grows enough to make that margin thin; never lower it to make
+# a real drop pass, and give a reason in the commit if you do either.
+MIN_EXPECTED=20
 # Scope, stated because a comment that names a case this guard never sees is worse than no comment:
 # dropping the WHOLE directory does not reach here — `n_stack` counts 0 and the aggregate gate above
 # exits first, with byte-identical output whether this guard is alive or dead. What is unique to
 # this check is the narrower case where run.sh and the sectioned UNSOURCED files survive, keeping
-# `n_stack` non-zero, while the expected domain files and their stanzas both go.
-if [ "$n_expected" -eq 0 ]; then
-    echo "inventory drift: no domain files are expected to be sourced — every tests/stack file is" \
-        "run.sh, UNSOURCED, or gone, so there is nothing to check run.sh's stanzas against;" \
-        "restore the domain files, or update the pattern in tests/inventory.sh" >&2
+# `n_stack` non-zero, while the expected domain files and their stanzas collapse toward a shared
+# handful of survivors (as few as one) that satisfy the comparison above.
+if [ "$n_expected" -lt "$MIN_EXPECTED" ]; then
+    echo "inventory drift: only $n_expected domain files are expected to be sourced (floor is" \
+        "$MIN_EXPECTED) — the domain layer may have collapsed while a shared survivor (e.g." \
+        "lib.sh) kept run.sh's stanzas and the files on disk agreeing with each other; restore" \
+        "the missing files and stanzas, or lower MIN_EXPECTED in tests/inventory.sh with a reason" >&2
     exit 1
 fi
 if [ "$n_missing" -gt 0 ]; then
