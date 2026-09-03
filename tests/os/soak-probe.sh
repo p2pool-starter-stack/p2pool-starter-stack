@@ -212,7 +212,12 @@ self_test() {
 # the same day=0, which is the shape the label and the write-once baseline exist for.
 self_test_driver() { # $1 = a canned reading that passes against itself
     local tmp out
-    tmp=$(mktemp -d) || return 1
+    # A scratch dir that cannot be made is a FAILED row, never a skipped set: bare `return` here
+    # dropped the nine driver rows and the summary still read `0 failed`, rc 0 (#1670).
+    tmp=$(mktemp -d) || {
+        chk "driver: mktemp -d" 1 0
+        return
+    }
     mkdir -p "$tmp/bin"
     printf '%s\n' '#!/usr/bin/env bash' 'cat >/dev/null' 'printf "%s\n" "${@: -1}" >>"$SOAK_STUB_ARGS"' 'cat "$SOAK_STUB_READING"' >"$tmp/bin/ssh"
     chmod +x "$tmp/bin/ssh"
