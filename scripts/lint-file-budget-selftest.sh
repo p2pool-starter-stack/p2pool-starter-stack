@@ -86,6 +86,20 @@ self_test() {
     rm -f "$tmp/new.sh"
     git -C "$tmp" rm -q --cached new.sh >/dev/null 2>&1 || true
 
+    # #1486 — `git ls-files` alone only sees the INDEX; an untracked new file must be a
+    # candidate too, or the gate reads a skip as a pass on exactly the file it exists to catch.
+    seq 1 500 >"$tmp/untracked.sh"
+    rc=0
+    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
+    expect "an over-target file that is untracked (never git add'ed) still FAILS (#1486)" 1 "$rc"
+    if grep -q "untracked.sh is 500 lines (> 400 target) but has no" "$out"; then
+        echo "  self-test ok: names the untracked file, not a vacuous pass"
+    else
+        echo "  self-test FAIL: did not name the untracked file"
+        st_fail=1
+    fi
+    rm -f "$tmp/untracked.sh"
+
     printf '# test budget\nbudgeted.sh\t400\n' >"$tmp/$BUDGET_FILE"
     rc=0
     (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?

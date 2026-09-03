@@ -2,8 +2,9 @@
 # The file-budget ratchet gate (#1105 Phase 0): stop the biggest files in the repo from getting
 # any bigger, without demanding anyone rewrite them today. Two rules:
 #
-#   1. A tracked file over the 400-line target must record a ceiling in
-#      docs/dev/file-budget.tsv; over 800 the refusal names the hard ceiling instead.
+#   1. A candidate file (tracked, or untracked and not gitignored — #1486) over the 400-line
+#      target must record a ceiling in docs/dev/file-budget.tsv; over 800 the refusal names the
+#      hard ceiling instead.
 #   2. An existing offender (already over 400 when this gate landed, or added to the budget
 #      since) gets its CURRENT line count recorded in docs/dev/file-budget.tsv as a personal
 #      ceiling. A PR may not grow that file past its recorded ceiling. Ceilings only ever go
@@ -121,10 +122,18 @@ count_lines() {
     awk 'END { print NR + 0 }' "$1" 2>/dev/null || echo 0
 }
 
-# Every tracked, non-exempt, non-binary file: "path<TAB>lines", one per line.
+# Every tracked OR untracked-but-not-gitignored, non-exempt, non-binary file: "path<TAB>lines",
+# one per line. `git ls-files` alone only lists the INDEX — a new file sits invisible right up
+# until `git add`, which is exactly the moment a budget gate exists to catch it (#1486). Union in
+# `--others --exclude-standard` (untracked, honoring .gitignore) so the working tree, not the
+# index, is what gets measured; the two lists are disjoint (`--others` never repeats a tracked
+# path) so no dedup is needed.
 list_candidates() {
     local f
-    git ls-files | while IFS= read -r f; do
+    {
+        git ls-files
+        git ls-files --others --exclude-standard
+    } | while IFS= read -r f; do
         [ -f "$f" ] || continue
         is_exempt "$f" && continue
         is_binary_or_empty "$f" && continue
