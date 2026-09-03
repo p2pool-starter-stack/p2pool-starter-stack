@@ -59,8 +59,12 @@ test("blocking is host JSON, so every garbled shape degrades to no clause", () =
     assert.equal(blockingCause({ blocking: bad }), "");
   }
   assert.equal(blockingCause({ blocking: [null, 3, "", "   "] }), "");
+  // Punctuation-only is junk too: it survives a raw truthiness check but names nothing once the
+  // trailing period is stripped, so it must not reach the sentence as an empty cause.
+  assert.equal(blockingCause({ blocking: ["..."] }), "");
   // A usable message beside the junk still gets named — degrading is not the same as giving up.
   assert.equal(blockingCause({ blocking: [null, CERT] }), ` Blocked by: ${CERT}.`);
+  assert.equal(blockingCause({ blocking: ["...", CERT] }), ` Blocked by: ${CERT}.`);
 });
 
 test("one long message cannot become the whole banner", () => {

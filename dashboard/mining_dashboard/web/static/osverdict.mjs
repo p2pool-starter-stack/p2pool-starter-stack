@@ -20,9 +20,13 @@ export const MAX_BLOCKING_LEN = 120;
 // image older than #1671 omits `blocking` altogether, so the caller's sentence has to read
 // correctly without it — absence here is "we were not told", never "nothing was wrong".
 export function blockingCause(verdict) {
+  // Judge emptiness AFTER normalising, not before: a punctuation-only message like "..." is
+  // truthy on the way in and empty on the way out, and filtering first let it take the named
+  // slot and hide the real cause behind " Blocked by:  (+1 more).".
   const held = (verdict && Array.isArray(verdict.blocking) ? verdict.blocking : [])
-    .filter((m) => typeof m === "string" && m.trim())
-    .map((m) => m.trim().replace(/\.+$/, "").slice(0, MAX_BLOCKING_LEN));
+    .filter((m) => typeof m === "string")
+    .map((m) => m.trim().replace(/\.+$/, "").slice(0, MAX_BLOCKING_LEN))
+    .filter((m) => m);
   if (!held.length) return "";
   // Name the first and count the rest: the gate stops at the first failing check, and one named
   // cause an operator can act on beats a wall of them.
