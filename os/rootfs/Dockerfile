@@ -48,29 +48,15 @@ ARG COSIGN_COMMIT=11926fa5bbbbde47e88fc006b625a17769b743b2
 #   golang.org/x/mod       v0.40.0   CVE-2026-56864 / CVE-2026-56865. Indirect in both: cosign
 #                                    v3.1.3 pins v0.37.0; compose v5.4.0 and v5.5.0 both pin
 #                                    v0.38.0; cosign's own main is still v0.38.0.
-#   golang.org/x/crypto    v0.55.0   CVE-2026-56854 (CRITICAL), x/crypto/ssh source-address
-#                                    restrictions unenforced. COMPOSE ONLY: compose reaches
-#                                    v0.54.0 indirectly (x/mod -> x/tools -> x/net -> x/crypto),
-#                                    below the fix. cosign deliberately gets NO entry — the x/mod
-#                                    raise alone already seats it at v0.55.0 there, measured by
-#                                    reading the built binary rather than assumed (#1649).
-#   google.golang.org/grpc v1.83.1   CVE-2026-84304 (HIGH), in BOTH binaries. Held v1.82.1 here
-#                                    for GHSA-hrxh-6v49-42gf (#1153) until that raise aged into a
-#                                    finding of its own. THE GENERAL PROPERTY, not a mistake in
-#                                    that entry: an exact-version raise IS a pin, and a pin goes
-#                                    stale — and nothing watches these, because
-#                                    scripts/trivyignore-watch.sh watches the .trivyignore MUTES
-#                                    and a raise by design leaves no mute to watch (#1649).
+#   golang.org/x/crypto    v0.55.0   CVE-2026-56854 (CRITICAL). COMPOSE ONLY: compose reaches v0.54.0
+#                                    indirectly; cosign's x/mod raise already seats v0.55.0 (#1649).
+#   google.golang.org/grpc v1.83.1   CVE-2026-84304 (HIGH), both binaries. The #1153 raise to
+#                                    v1.82.1 (GHSA-hrxh-6v49-42gf) aged into it: a raise is an
+#                                    unwatched pin — #1655.
 #
 # WHAT A RAISE ACTUALLY MOVES: `go get X@v Y@v` upgrades the whole closure minimum-version
-# selection needs to satisfy X and Y, not just X and Y. Measured on these exact entries, from Go's
-# own upgrade list: compose moves 4 (x/crypto, x/mod, x/text, grpc), cosign 9 (x/crypto, x/mod,
-# x/net, x/sync, x/sys, x/term, x/text, x/tools, grpc) — x/mod pulls x/tools, which pulls x/net,
-# x/sync and x/sys, and x/net pulls x/crypto, x/term and x/text. compose read 1 before #1649 added
-# two entries: the count MOVES when the entries do, so re-measure it rather than quoting this line.
-# No formulation avoids that; it is what raising a module
-# in a Go build means. So read a line here as "this module and whatever MVS needs to seat it", and
-# when you add one, run the command and read Go's own upgrade list rather than assuming it is one.
+# selection needs to satisfy X and Y, not just X and Y — here compose moves 4 modules and cosign 9
+# (x/mod pulls x/tools, x/net, x/crypto...). When you add one, read Go's own upgrade list, not this.
 #
 # Every entry here is debt, not a feature: drop it the moment an upstream release makes it a no-op,
 # and delete its .trivyignore mute in the SAME change — a mute left over a finding you have just
