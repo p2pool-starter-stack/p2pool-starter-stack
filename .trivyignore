@@ -50,9 +50,8 @@ CVE-2026-24049
 # pinned bases took the fix): `--ignore-unfixed` hid these until Debian published a fix, at
 # which point they reddened every branch at once with no change on our side. 53615 arrived that way
 # on 2026-08-17 and the other three on 2026-08-20, between one CI run and the next on a branch
-# nobody had touched. Each date is the day that ID's mute landed here, which is also how to check
-# one: `git log -S CVE-2026-53615 -- .trivyignore` names e0e4655 (2026-08-17). 53615 read 2026-08-19
-# here until that check was run against it; the other three are unchanged and match 4c42787.
+# nobody had touched. Each date is the day that ID's mute landed here, so
+# `git log -S <the ID> -- .trivyignore` re-derives one rather than trusting this line.
 #
 # Cleared when a base bump brings 2.41.5-0+deb13u1 in — `docker run --rm python:3.11-slim
 # dpkg-query -W util-linux` is the one-line check, and all four go together. Nothing re-surfaces
