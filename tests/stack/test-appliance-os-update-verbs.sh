@@ -298,15 +298,15 @@ assert_eq "a variant-flipping bundle is rejected" "$(jq -r '.status' "$OSRES/$UO
 assert_contains "the refusal names the variant consent" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "variant"
 os_reset
 
-# The /data migration floor refuses through the dashboard door exactly as it does at the CLI —
-# a valid signature is not permission to replay below the floor (shared os_update_version_guard).
+# The /data floor refuses through the dashboard door exactly as at the CLI — a valid signature is
+# not permission to replay below the floor (shared guard; VERSION swap as at the equality rows).
 os_restage
-printf '99.0.0\n' >"$OSC/floor"
+printf '10.0.0\n' >"$OSC/floor" && printf '10.0.0' >"$OSC/VERSION"
 os_intent "$UOS" os-verify
 osrun >/dev/null
 assert_eq "a bundle below the /data floor is rejected" "$(jq -r '.status' "$OSRES/$UOS.json" 2>/dev/null)" "rejected"
 assert_contains "the floor refusal warns about the chain data" "$(jq -r '.error' "$OSRES/$UOS.json" 2>/dev/null)" "strand the chain data"
-rm -f "$OSC/floor"
+rm -f "$OSC/floor" && printf '1.3.1' >"$OSC/VERSION"
 os_reset
 
 # A stamp that isn't the published tag is a possible replay — refused.

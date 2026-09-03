@@ -306,7 +306,7 @@ assert_contains "rauc install ran for the same-version bundle" "$(cat "$RAUC_LOG
 # #851: below the /data migration floor is refused OUTRIGHT — --allow-downgrade does not override it.
 printf '2.0.0\n' >"$OUSB/floor-2"
 : >"$RAUC_LOG"
-out=$(ourun_v "1.17.0" "$OUSB/floor-2" "$OUSB/info-1170.txt" bundle.raucb --allow-downgrade 2>&1)
+out=$(ourun_v "2.1.0" "$OUSB/floor-2" "$OUSB/info-1170.txt" bundle.raucb --allow-downgrade 2>&1)
 assert_rc "a bundle below the /data floor is refused even with --allow-downgrade" "$?" "1"
 assert_contains "the floor refusal warns about the chain data" "$out" "strand the chain data"
 assert_not_contains "rauc install was NOT reached below the floor" "$(cat "$RAUC_LOG")" "install"
