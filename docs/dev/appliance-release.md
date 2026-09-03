@@ -138,7 +138,13 @@ else first. `doctor` reads the same marker and judges the deliberately-held chai
 containers by the sync-hold rule, so the commit gate gates on what is running instead of
 deadlocking on the hold. Only after `mark-good` does the boot path remove the marker and
 run a plain `up` — the chain services start, and the migration runs on a slot a fallback
-can no longer leave. If health fails instead, the slot stays uncommitted, the machine
+can no longer leave. That `up` is retried, five times ten seconds apart by default: compose
+aborts the whole start when one container is mid-transition at that instant, and a
+passenger container's restart must delay the chain start by seconds, never veto it until
+the next reboot. If every try fails the boot still finishes — the slot is committed and
+nothing can undo that — and the journal carries one `FAULT` line saying the chain services
+did not start and the migration has not run, with the recovery: `./pithead up` from
+`/data/pithead`. If health fails instead, the slot stays uncommitted, the machine
 falls back, and the old OS boots normally — its data was never touched (the old boot path
 ignores a marker for a version it isn't). A non-migrating install clears any stale marker.
 The `db_schema` field the plan also lists stays out until something reads it — an

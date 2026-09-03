@@ -202,6 +202,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-boot.sh" && domain_ran test
 # shellcheck source=tests/stack/test-appliance-boot-remint.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-boot-remint.sh" && domain_ran test-appliance-boot-remint.sh "$_d0" "$?" || domain_ran test-appliance-boot-remint.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-appliance-boot-release.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-boot-release.sh" && domain_ran test-appliance-boot-release.sh "$_d0" "$?" || domain_ran test-appliance-boot-release.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-appliance-os-update.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-os-update.sh" && domain_ran test-appliance-os-update.sh "$_d0" "$?" || domain_ran test-appliance-os-update.sh "$_d0" "$?"
 
