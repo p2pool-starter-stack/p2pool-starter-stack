@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Control-deploy domain (#1105 Phase 1, module 9): the bundle-deploy layout mechanics —
 # update_current_symlink's `current ->` pointer, migrate_dashboard_data's move/warn/conflict
 # rules for the pre-#455 in-install-dir default, and their end-to-end wiring through a real

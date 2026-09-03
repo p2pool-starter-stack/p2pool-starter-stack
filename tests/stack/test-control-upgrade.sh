@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Control-upgrade domain (#1105 Phase 1, module 8): the one-click upgrade verb end to end —
 # ordering safety (a failed upgrade never repoints the control-runner units, #1070), the shared
 # GitHub release-fetch helper (a spent rate limit read honestly instead of blamed on Tor, #1081/

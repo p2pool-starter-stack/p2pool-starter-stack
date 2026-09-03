@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Quadlet-render parity domain (#1105 Phase 1, develop-v2 lane): the one section that pins
 # render_quadlet_units against the os/quadlet fixtures committed from the #78 spike. It renders
 # each of its three modes off that mode's fixture env file — the default remote-node set, the

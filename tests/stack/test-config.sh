@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Config domain (#1105 Phase 1, develop-v2 lane): what decides whether a config.json is admissible
 # and what it renders into — the multi-field validator that refuses a bad config before anything is
 # written (wallet address forms and their checksums, the two worker shapes, energy, the /24 subnet

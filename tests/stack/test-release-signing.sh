@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Release-signing domain (#1105 Phase 1): verify_release_images' fail-closed image-verification
 # gate, cosign_container_path's host-to-container path mapping, and release.sh's signing/refusal/
 # pinned-verifier-image checks (sign the promoted digests, refuse to publish unsigned, validate

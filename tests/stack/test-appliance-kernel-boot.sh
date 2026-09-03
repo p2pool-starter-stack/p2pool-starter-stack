@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Appliance kernel and OS-image build domain (#1105 Phase 1, develop-v2 lane): the guards that
 # stand between a build host and a slot the fleet would be wrong to trust. optimize_kernel's
 # HugePages write is grow-only, because with a co-located miner the pool has a single writer that

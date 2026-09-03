@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # CLI domain (#1105 Phase 1): dispatch, subcommand chaining, completion, guards, the small input
 # validators, host/deps detection, version, and the first-run epilogue. Sourced by
 # tests/stack/run.sh after lib.sh. (The apply --dry-run and symlink-invocation sections stay

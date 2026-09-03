@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Unit-helper domain (#1105 Phase 1, develop-v2 lane): the cluster of small helper tests that sat
 # at the head of run.sh. Four of them drive a pithead function through run_sourced and assert its
 # return code or its stdout — docker_boot_enabled (a systemctl stub on PATH decides which unit

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # The boot gate's certificate re-mint and the rollback verdict that names its cause (#1265).
 # render mints the dashboard certificate BEFORE `up`, from the box's address list as it stands
 # then; doctor re-checks coverage inside the gate loop AFTER `up`, when the list has settled. An

@@ -9,7 +9,19 @@
 # Mechanical move only: this is the SAME code that used to sit at the top of run.sh, moved
 # here verbatim so run.sh can source it. No behaviour changed.
 
-# shellcheck disable=SC2034  # sourced library: fixture constants are consumed by run.sh
+# Every test-*.sh domain file is a FRAGMENT: run.sh sources it after this file, and it carries no
+# assertion primitives of its own. Run one directly and all 60-odd assert_* calls are "command not
+# found" while the file still exits 0 — a domain reporting success having executed nothing (#1657).
+# So each fragment opens by dereferencing this marker with :?, which is set only on the sourced
+# path; bash then refuses the direct run with a message naming run.sh, and exits non-zero.
+# ⛔ NEVER export this. A plain assignment is what makes the marker work: a child bash cannot
+# inherit it, so `bash tests/stack/test-cli.sh` refuses even from inside a suite run. Exporting it
+# would silently disarm all 55 fragments at once; test-harness-tooling.sh's #1657 rows say so.
+# The five standalone test_*.sh files are NOT fragments (the Makefile runs each one directly, and
+# tests/inventory.sh lists them as UNSOURCED) — they carry no marker check and must not gain one.
+# shellcheck disable=SC2034  # sourced library: this marker and the fixtures are read by run.sh
+STACK_SUITE=1
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STACK="$ROOT/pithead"
 PASS=0

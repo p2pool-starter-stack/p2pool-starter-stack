@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Appliance identity domain (#1105 Phase 1, develop-v2 lane): who the appliance says it is, and
 # everything the machine derives from that answer. The browsable name a headless setup resolves —
 # never the bare hostname, which served a name no LAN client could look up; the ssh access derived
