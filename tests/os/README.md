@@ -84,3 +84,22 @@ that the boot path's files sit where the firmware and GRUB will look.
 sudo tests/os/verify-image.sh os/rauc/build/system.img          # release: test artifacts REFUSED
 sudo tests/os/verify-image.sh os/rauc/build/system.img --test   # harness build: SSH key expected
 ```
+
+## Soak probe
+
+`tests/os/soak-probe.sh HOST LOGDIR [--start]` is the 7-day unattended soak's daily reader
+(#1652): one non-interactive, read-only SSH session whose remote command is fixed in the script,
+one line per day appended to `LOGDIR/soak.log`, scored against the pass condition ruled on the
+issue (one boot, restart counts and start times flat, every container running and — except
+`xmrig-proxy`, #1098 — healthy, exactly the probe's own login since the previous read). Each
+read records the journal cursor it reached in `LOGDIR/ssh.cursor`, and the next read counts logins
+from there, so nothing falls between two days and nothing is counted twice; a count of 0 fails
+naming the instrument, since the probe's own login must be there. `--start` writes the day-0
+baseline — its own line reads `window=25h` and carries a rule-4 FAIL from the setup logins, so day
+0 is the baseline, not a soak day. Only `--start` writes `day0.env`; a cron read never does, so a
+restart in the window's first hours can never be absorbed into the baseline it is scored against.
+Every line carries `read=N`, its `soak.log` line number, because the first cron read lands under
+24 h after `--start` and shares `day=0` with the baseline line; each run's raw readings are kept as
+`LOGDIR/readN.env`. `--self-test` proves the verdict over canned readings, then drives the script
+three times through a stubbed `ssh` to prove the baseline survives a cron read, without a box. Run
+it from a cron line on the build host, never from a resident session.
