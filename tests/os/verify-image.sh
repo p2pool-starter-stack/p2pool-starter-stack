@@ -19,6 +19,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=os/rauc/loop-wait.sh
 . "$SCRIPT_DIR/../../os/rauc/loop-wait.sh"
 
+# #1414: the baked ref must EQUAL the pin, not merely exist. `grep -q "^ref="` passed for any
+# value — including one two rigforge releases stale, which is the state this gate shipped in.
+# Two values from two places, the shape the prebuilt-commit check below already uses. The
+# Dockerfile is READ, never written, and resolved from SCRIPT_DIR rather than cwd; an unreadable
+# one SKIPS, and exit refuses a skip (#1064), so this cannot go quiet the way its predecessor did.
+DOCKERFILE="$SCRIPT_DIR/../../os/rootfs/Dockerfile"
+rigforge_ref_matches() { # <image-root> <dockerfile> — 0 iff the recorded ref IS the pinned one
+    local rec pin
+    rec=$(sed -n 's/^ref=\([^ ]*\).*/\1/p' "$1/opt/rigforge/RIGFORGE_REF" 2>/dev/null)
+    pin=$(sed -n 's/^ARG RIGFORGE_REF=\([^ ]*\).*/\1/p' "$2" 2>/dev/null)
+    [ -n "$rec" ] && [ "$rec" = "$pin" ]
+}
+# Sourcing defines the helper and runs nothing, so the self-test drives the REAL comparison.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then return 0; fi
+
 IMAGE="${1:-}"
 MODE="${2:-}"
 [ -f "$IMAGE" ] || {
@@ -186,7 +201,11 @@ echo "==> the built-in miner (local_miner on the appliance)"
 # The whole point of baking: nothing here can be installed after the image ships. A missing
 # piece surfaces as a miner that silently never starts — on a machine with no shell.
 chk "rigforge tree baked" '[ -x "$ROOT/opt/rigforge/rigforge.sh" ]'
-chk "rigforge ref recorded" 'grep -q "^ref=" "$ROOT/opt/rigforge/RIGFORGE_REF"'
+if [ -r "$DOCKERFILE" ]; then
+    chk "rigforge ref recorded AND equal to the pin" 'rigforge_ref_matches "$ROOT" "$DOCKERFILE"'
+else
+    skip "rigforge ref recorded AND equal to the pin" "os/rootfs/Dockerfile not readable"
+fi
 chk "prebuilt xmrig baked (Tor-only box cannot clone)" '[ -x "$ROOT/opt/rigforge/prebuilt/xmrig/build/xmrig" ]'
 chk "prebuilt commit marker matches rigforge's pin" '[ "$(cat "$ROOT/opt/rigforge/prebuilt/xmrig/.rigforge-commit")" = "$(sed -n "s/^XMRIG_COMMIT=\"\${XMRIG_COMMIT:-\(.*\)}\"$/\1/p" "$ROOT/opt/rigforge/rigforge.sh")" ]'
 chk "prebuilt sha record present (integrity check input)" '[ -s "$ROOT/opt/rigforge/prebuilt/xmrig/.rigforge-sha256" ]'
