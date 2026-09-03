@@ -12,6 +12,7 @@
 // dashboard answers again; the post-reboot verdict (updated / rolled back) arrives via the
 // host-persisted state in state.os_update and renders as a banner.
 
+import { verdictText } from "./osverdict.mjs";
 import { Component, html } from "./preact.mjs";
 
 const CONTROL_HEADERS = { "Content-Type": "application/json", "X-Pithead-Control": "1" };
@@ -89,15 +90,6 @@ export async function runOsDownload(
 // Pin it client-side: only the public GitHub release page ever renders as a link.
 export const releaseNotesHref = (u) =>
   typeof u === "string" && u.startsWith("https://github.com/") ? u : null;
-
-// One verdict line for the banner. Pure — the render just wraps it.
-export function verdictText(verdict) {
-  if (!verdict || !verdict.outcome) return null;
-  if (verdict.outcome === "updated") return `System updated to v${verdict.to}.`;
-  if (verdict.outcome === "rolled_back")
-    return `The update to v${verdict.to} failed its health checks and was rolled back automatically — still on v${verdict.from}.`;
-  return null;
-}
 
 // Post-reboot verdict banner, rendered by App beside the disconnected banner. Dismiss hides it
 // for this browser session (keyed on the verdict's timestamp); the host clears the verdict
