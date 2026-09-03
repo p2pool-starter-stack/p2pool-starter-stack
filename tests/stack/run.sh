@@ -70,6 +70,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-secrets.sh" && domain_ran test-secret
 # shellcheck source=tests/stack/test-rig-worker.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-rig-worker.sh" && domain_ran test-rig-worker.sh "$_d0" "$?" || domain_ran test-rig-worker.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-control-status-vocabulary.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-control-status-vocabulary.sh" && domain_ran test-control-status-vocabulary.sh "$_d0" "$?" || domain_ran test-control-status-vocabulary.sh "$_d0" "$?"
+
 # ---------------------------------------------------------------------------
 # shellcheck source=tests/stack/test-monero-tari.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-monero-tari.sh" && domain_ran test-monero-tari.sh "$_d0" "$?" || domain_ran test-monero-tari.sh "$_d0" "$?"
