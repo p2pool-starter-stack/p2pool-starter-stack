@@ -47,6 +47,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/hugepages-boot-verdict.sh"
 # shellcheck source=tests/os/failure-evidence.sh
 . "$SCRIPT_DIR/failure-evidence.sh"
+# shellcheck source=tests/os/kvm-preflight.sh
+. "$SCRIPT_DIR/kvm-preflight.sh"
 # shellcheck source=tests/os/restore-live-state-verdict.sh
 . "$SCRIPT_DIR/restore-live-state-verdict.sh"
 # shellcheck source=tests/os/reinstall-prefill-verdict.sh
@@ -327,7 +329,6 @@ require_host() {
         echo "/dev/kvm absent — this harness needs hardware virtualization" >&2
         exit 2
     }
-    # --image is the boot phase's input; the update phase builds its own v1/v2 images.
     # --image is the boot phase's input; update and fault build their own v1/v2 images.
     if [ "$PHASE" = "boot" ] || [ "$PHASE" = "all" ]; then
         [ -n "$IMAGE" ] && [ -f "$IMAGE" ] || {
@@ -434,6 +435,7 @@ phase_boot() {
     qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
     # UEFI (OVMF), serial to a file we tail, import the raw appliance disk as-is.
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -478,13 +480,8 @@ phase_boot() {
     }
     ok "wizard serves the token gate ($ip)"
 
-    # SSH is a host service that finishes starting after the wizard container's HTTP gate answers,
-    # so the first _ssh here must wait it out — a single-shot probe raced ssh.service and misread a
-    # healthy boot as "SSH unreachable". The budget is the update phase's own first-boot figure
-    # (_vm_boot_disk + _wait_ssh 240): this is the VERY FIRST cold-host VM of the run — 6 GiB of
-    # hugepages reserved, systemd-repart growing /data to ~24 GiB, the wizard image loading, the
-    # host key generating — and 120 s clipped it (SSH came up just after, per the failed-run
-    # forensics). An equally unprovisioned update-phase guest reaches SSH within 240 s.
+    # SSH is a host service that starts after the wizard's HTTP gate answers, so the first _ssh here
+    # must wait it out — a single-shot probe raced ssh.service and misread a healthy boot as dead.
     # 900, not the update phase's 240: this is the run's very FIRST cold boot — 6 GiB of
     # hugepages, systemd-repart growing /data, the wizard image unpacking, host-key generation —
     # and it starts while the image build's export I/O is still settling. 420 s passed idle but
@@ -550,13 +547,9 @@ phase_boot() {
 _vm_boot_disk() {
     vm_destroy
     cp "$1" "$DISK"
-    # 16 GiB guest: the appliance reserves 6 GiB of hugepages at boot (RandomX), so a smaller VM
-    # leaves too little for the stack — and the plan sizes appliance RAM to the compose caps anyway.
-    # Grow the scratch disk before first boot: the image ships only the ESP and slot A, and
-    # systemd-repart creates slot B and /data on whatever disk it finds. A 40 GiB disk leaves
-    # /data around 24 GiB, which the update phase asserts.
     qemu-img resize "$DISK" 40G >/dev/null 2>&1 || true
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1190,6 +1183,7 @@ phase_install() {
     # The image rides a USB bus with removable=on — that is what makes the guest a faithful
     # analog of a user's stick: the host-side gate (installer_mode_available) keys on
     # /sys/block/*/removable, which virtio never sets.
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1299,6 +1293,7 @@ phase_install() {
     vm_destroy
     # Boot from the TARGET alone — the stick is gone, exactly as the instructions tell the user.
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1383,6 +1378,7 @@ phase_install() {
     sleep 8
     vm_destroy
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1531,6 +1527,7 @@ phase_install() {
     cp "$img" "$DISK"
     qemu-img resize "$DISK" 16G >/dev/null 2>&1 || true
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1606,6 +1603,7 @@ phase_install() {
     fi
     vm_destroy
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1769,6 +1767,7 @@ phase_install() {
     cp "$img" "$DISK"
     qemu-img resize "$DISK" 16G >/dev/null 2>&1 || true
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \
@@ -1863,6 +1862,7 @@ phase_install() {
     fi
     vm_destroy
     : >"$SERIAL"
+    kvm_preflight || exit 1 # #1059: never boot a 16 GiB guest the host cannot back
     virt-install --name "$VM" --memory 16384 --vcpus 4 --cpu host-passthrough \
         --osinfo debian12 \
         --boot uefi,firmware.feature0.name=secure-boot,firmware.feature0.enabled=no \

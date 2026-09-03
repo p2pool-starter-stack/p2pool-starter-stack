@@ -14,6 +14,10 @@ os/rauc/mkimage.sh --dev                      # bootable image -> os/rauc/build/
 sudo tests/os/run.sh --image os/rauc/build/system.img
 ```
 
+Every guest boot is preceded by a host pre-flight (`tests/os/kvm-preflight.sh`): under 20 GiB of
+`MemAvailable` the battery refuses to boot the 16 GiB guest rather than risk hanging the host that
+runs it (`PITHEAD_KVM_MIN_AVAIL_MB` sets the bar; the reading is printed at every boot either way).
+
 The harness builds its own update bundles from the same tarball (`os/rauc/mkbundle.sh --dev`),
 signed with a throwaway development key. A release build names its key instead — see the custody
 runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
