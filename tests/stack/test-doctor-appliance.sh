@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Doctor domain, appliance half (#1105 Phase 1, module 7): engine-aware checks (container_engine /
 # docker_boot_enabled), `doctor --json` + support-bundle, the wipe-note surfaced through doctor,
 # and the appliance-only control-unit-location and certificate SAN/expiry checks. Sourced by

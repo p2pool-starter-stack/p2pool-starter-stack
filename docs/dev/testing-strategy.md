@@ -40,6 +40,14 @@ assertions; `tests/stack/run.sh` itself is the tier-1 shell **suite** — it sou
 file rather than holding assertions of its own (see the test-inventory note under
 [Production-readiness posture](#production-readiness-posture) for how that sourcing is checked).
 
+A domain file is a fragment, not a script. It holds no assertion primitives of its own, so running
+one directly printed every `assert_*` call as `command not found` and still exited 0 for 21 of the
+55 — a domain reporting success having executed nothing, and building its fixtures in the caller's
+working directory on the way past. Each fragment now opens by dereferencing a marker `lib.sh` sets
+on the sourced path, so a direct run is refused with a message naming `run.sh` (#1657). The five
+`tests/stack/test_*.sh` files are the deliberate exception: the Makefile runs each of those
+directly, so they carry no marker check and must not gain one.
+
 ### A. Configuration permutations
 
 The deploy-time axes — each changes a real runtime path. Full table and assertions in

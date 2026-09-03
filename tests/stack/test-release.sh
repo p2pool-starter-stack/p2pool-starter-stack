@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Release domain (#1105 Phase 1): release.sh's side-effect-free logic (semver/image-name helpers,
 # the ingredient manifest, bundle-contents/build-mounts checks), the GHCR read-after-push retry,
 # the release-toolchain preflight, release-smoke's upgraded-install resolution, pull-vs-build mode

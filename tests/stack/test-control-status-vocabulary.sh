@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # #1422: the control-status vocabulary lives in three places — xmrig_client._CONTROL_TERMINAL,
 # worker_config_store._RECONCILE_TERMINAL (guarded against each other by
 # dashboard/tests/service/test_storage_service.py, which asserts them equal verbatim) and this

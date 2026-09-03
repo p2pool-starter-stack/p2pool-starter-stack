@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Every key on CONTROL_DASHBOARD_EDITABLE_KEYS must actually round-trip a real preview->commit
 # through the approval gate and land in config.json (#522) — not just pass a describe_change unit
 # check. Split out of run.sh by #1105 R14; the section's own contract is stated at its header below.

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Appliance defaults domain (#1105 Phase 1, develop-v2 lane): two sections covering what a first
 # boot writes into a config the operator did not finish. apply_appliance_defaults fills tor
 # .auto_heal only where the key is ABSENT — an operator who wrote false meant it — and turns the

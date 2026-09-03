@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # pithead-machine-id's journald hand-off (#1659). Sourced by tests/stack/run.sh.
 #
 # SCOPE. test-appliance-identity-boot.sh proves the RESTORE — the persisted id lands in

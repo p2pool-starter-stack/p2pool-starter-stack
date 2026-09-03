@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Control-runner provisioning domain (#1105 Phase 1, develop-v2 lane): the two sections that prove
 # provision_control_runner only ever touches the systemd units belonging to the checkout invoking
 # it. The unit names pithead-control.{path,service} are box-global, but a release bench holds

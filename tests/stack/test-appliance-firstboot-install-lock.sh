@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # firstboot install-path lock wiring (#1482): the wizard's install paths take the mutation lock, and
 # take it in the one place that is correct. Sourced by tests/stack/run.sh.
 #

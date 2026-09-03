@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Repo-tooling self-tests (#1105 Phase 1 domain: harness core). Sourced by tests/stack/run.sh
 # after lib.sh — the harness (ok/bad/assert_*, SANDBOX) is already loaded.
 echo "== unit: lint-docs-voice self-test (#1441) =="
@@ -156,3 +156,30 @@ assert_rc "and does so in under a second, not a fixed wait" \
     "$([ "$((SECONDS - whwa_start))" -lt 2 ] && echo 0 || echo 1)" "0"
 unset -f whwa_ready whwa_old_wait
 rm -f "$whwa_flag"
+
+echo "== unit: every run.sh fragment refuses a direct run (#1657) =="
+# A test-*.sh domain file carries no assertion primitives of its own: run one directly and its
+# assert_* calls are "command not found" while the file still exits 0 for 21 of the 55 — a domain
+# reporting success having executed nothing. test-backup.sh goes further and builds its fixture
+# roots in the caller's working tree on the way past, because `cd "" && pwd -P` returns the cwd.
+# Enumerating every fragment rather than sampling one is the whole point: the regression this
+# guards against is a NEW fragment added without the marker check, and a fixed list would never
+# see it. STACK_SUITE is deliberately NOT unset here — lib.sh sets it as a plain assignment and
+# never exports it, so a child bash cannot inherit it; if someone ever exports it, every fragment
+# stops refusing at once and this row is what says so.
+frag_probe="$SANDBOX/fragment-refusal"
+mkdir -p "$frag_probe"
+frag_bad=""
+for frag in "$ROOT"/tests/stack/test-*.sh; do
+    frag_out=$(cd "$frag_probe" && bash "$frag" 2>&1) &&
+        frag_bad="$frag_bad $(basename "$frag"):exited-0"
+    case "$frag_out" in
+    *"tests/stack/run.sh"*) ;;
+    *) frag_bad="$frag_bad $(basename "$frag"):refusal-does-not-name-run.sh" ;;
+    esac
+done
+assert_eq "every tests/stack/test-*.sh refuses a direct run, naming run.sh" "$frag_bad" ""
+# The row above asserts the exit status; this one asserts the consequence that status exists to
+# prevent. They are not the same arm: a guard moved below a fixture-building line would still
+# refuse, and only this row would notice the files it wrote on the way there.
+assert_eq "no fragment writes into the caller's directory before refusing" "$(ls -A "$frag_probe")" ""

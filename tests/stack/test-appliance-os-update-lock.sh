@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # OS-update lock contention (#1482): the appliance's `os-install` verb takes the mutation lock, so
 # an install that arrives while another pithead operation holds the machine must come back as
 # `rejected` — never as a `failed` install. The distinction is the whole point: "failed" tells an
