@@ -103,3 +103,20 @@ echo "== unit: tor healthcheck command-dependency self-test (#1372) =="
 # a leaking PATH would pass every case on the host's own commands and prove nothing.
 bash "$ROOT/build/tor/healthcheck-selftest.sh" --self-test >/dev/null 2>&1
 assert_rc "tor healthcheck runs on the commands its own image ships (#1372)" "$?" "0"
+
+echo "== unit: verdict-line determinism — no random/measured value in a PASS line (#1325) =="
+# The domain-split multiset proof diffs the sorted verdict lines of two suite runs to show a move
+# changed nothing; that proof only holds if a PASSING line reads the same every run. Two did not:
+# the ssh-host-keys PASS line embedded ssh-keygen's own random ed25519 fingerprint, and the
+# load_baked_images heartbeat PASS line embedded a $(date +%s) measurement (seen as (1s) vs (2s)
+# across two runs, same PASS both times). Each domain file runs for real below — a fresh key, a
+# fresh timing — and the captured PASS text is asserted to carry neither value.
+vd_id_out=$(bash -c 'set -uo pipefail; source "'"$HERE"'/lib.sh" >/dev/null 2>&1; source "'"$HERE"'/test-appliance-identity-boot.sh" 2>&1' | grep "loadable ed25519 key" | head -1)
+assert_not_contains "the ed25519-key PASS line carries no fingerprint bytes" "$vd_id_out" "SHA256:"
+
+vd_hb_out=$(bash -c 'set -uo pipefail; source "'"$HERE"'/lib.sh" >/dev/null 2>&1; source "'"$HERE"'/test-appliance-boot.sh" 2>&1' | grep "does not wait on the heartbeat interval")
+case "$vd_hb_out" in
+*[0-9]s\)*) bad "the heartbeat PASS line carries no measured elapsed value" "$vd_hb_out" ;;
+*) ok "the heartbeat PASS line carries no measured elapsed value" ;;
+esac
+unset vd_id_out vd_hb_out

@@ -203,8 +203,12 @@ hlen=$(($(date +%s) - hstart))
 grep -q "still loading" <<<"$hout" &&
     bad "a fast load stays quiet" "heartbeat fired anyway" ||
     ok "a fast load stays quiet — no heartbeat for work already done"
+# Assert the bound rather than printing the $(date +%s) measurement in the PASS text: a real
+# elapsed reading varies run to run (seen as (1s) vs (2s), same PASS both times), which weakens the
+# domain-split multiset diff that proves a move changed nothing (#1325). The measured value still
+# reaches the failure detail line below, where it isn't part of that proof.
 [ "$hlen" -lt 3 ] &&
-    ok "a fast load does not wait on the heartbeat interval (${hlen}s)" ||
+    ok "a fast load does not wait on the heartbeat interval" ||
     bad "a fast load returns promptly" "took ${hlen}s"
 unset PITHEAD_IMAGES_DIR FAKE_GRAPHROOT PITHEAD_LOAD_HEARTBEAT_SECS FAKE_LOAD_SECS
 unset -f hbl
