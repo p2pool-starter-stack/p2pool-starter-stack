@@ -15,7 +15,6 @@ import {
   pollOsResult,
   releaseNotesHref,
   runOsDownload,
-  verdictText,
 } from "../../mining_dashboard/web/static/osupdate.mjs";
 import { renderToString } from "./helpers/render.mjs";
 
@@ -132,16 +131,6 @@ test("runOsDownload passes a rejection through as the outcome", async () => {
   );
   assert.equal(out.status, "rejected");
   assert.match(out.error, /free space/);
-});
-
-test("verdictText covers both outcomes and stays quiet otherwise", () => {
-  assert.equal(verdictText({ outcome: "updated", to: "1.19.0" }), "System updated to v1.19.0.");
-  assert.match(
-    verdictText({ outcome: "rolled_back", from: "1.18.1", to: "1.19.0" }),
-    /v1\.19\.0 failed .* rolled back automatically — still on v1\.18\.1/,
-  );
-  assert.equal(verdictText(null), null);
-  assert.equal(verdictText({ outcome: "weird" }), null);
 });
 
 test("fmtMiB rounds to MiB and stays empty for the unknowable", () => {
@@ -374,4 +363,21 @@ test("OsVerdictBanner renders the outcome and nothing without one", () => {
   );
   assert.match(out, /rolled back automatically/);
   assert.match(out, /Dismiss/);
+  // #1265: when the host names what held the boot gate, the banner says so rather than leaving
+  // "failed its health checks" to read as a bad release.
+  const named = renderToString(
+    OsVerdictBanner({
+      os: {
+        step: "idle",
+        verdict: {
+          outcome: "rolled_back",
+          from: "1.18.1",
+          to: "1.19.0",
+          ts: 5,
+          blocking: ["the dashboard certificate does not cover an IPv6 address of the box"],
+        },
+      },
+    }),
+  );
+  assert.match(named, /Blocked by: the dashboard certificate does not cover an IPv6 address/);
 });

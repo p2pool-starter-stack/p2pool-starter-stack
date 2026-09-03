@@ -1218,9 +1218,12 @@ re-derives and re-verifies every step itself.
 
 After the reboot the machine health-checks itself before committing the new version — the same
 gate every appliance boot runs. A banner reports the outcome: updated to the new version, or
-rolled back to the previous one automatically because the new version failed its checks. Either
-way the machine ends on a working system; wallets, settings, and chain data live on the data
-partition and are never part of an update.
+rolled back to the previous one automatically because a check did not pass inside the window.
+When the host records which check held the gate, the banner names it. A rollback on its own is
+not evidence that the release was faulty: a check can fail for a reason the update did not cause,
+and the named cause is what tells the two apart before you retry. Either way the machine ends on
+a working system; wallets, settings, and chain data live on the data partition and are never part
+of an update.
 
 ## Tips
 
