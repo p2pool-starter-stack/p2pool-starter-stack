@@ -1142,6 +1142,12 @@ checks the CLI prints, failures first, with the host's summary counts above them
 that matters on a [Pithead OS appliance](appliance.md), where there is no shell to run `doctor`
 from: before it, the dashboard could tell you *that* a service was unhealthy and never *why*.
 
+One thing reads differently here than at a terminal: the report is redacted on its way to the
+browser, so where `pithead doctor` prints your dashboard onion address in full, this panel shows
+it struck out. The CLI prints it because you asked for it at your own terminal; this copy crosses
+into the dashboard container, and the address is worth keeping out of there. Run `pithead doctor`
+on the host, or check the emergency kit, when you need the address itself.
+
 **Show recent log** returns the last 200 lines from one service, redacted on the host by the same
 redactor the [support bundle](operations.md) uses — so a credential a service echoed on its
 launch line does not reach the browser. Pick the service from the list; the host caps the line

@@ -11613,10 +11613,11 @@ control_worker_upgrade() { # <claimed-file> <id> <actor> <control-dir>
 # WHY THE APPLIANCE NEEDS THIS: an appliance operator has no shell. Today they can see THAT a
 # service is unhealthy and never WHY, and their only recourse is the support bundle or the console.
 #
-# REDACTION: bundle_redact_log (07-support-bundle.sh) is the ONLY redactor on this path. It is
-# reused rather than reimplemented on purpose — that function's own header records the ruling that
-# a second list is how the two drift apart, and it carries #1585's per-form address rows. Anything
-# this tail must newly redact belongs in bundle_redact_log, where the support bundle gets it too.
+# REDACTION: bundle_redact_log (07-support-bundle.sh) is the ONLY redactor on this slice, and it
+# guards BOTH verbs — the log tail and the doctor document. It is reused rather than reimplemented
+# on purpose: that function's own header records the ruling that a second list is how the two
+# drift apart, and it carries #1585's per-form address rows. Anything either verb must newly
+# redact belongs in bundle_redact_log, where the support bundle gets it too.
 #
 # THE ALLOWLIST IS NARROWER THAN THE COMPOSE SET, AND THAT IS THE POINT. `wallet-rpc` and
 # `tari-wallet` are compose services this verb deliberately REFUSES. bundle_redact_log is keyed to
@@ -11639,12 +11640,27 @@ readonly PITHEAD_DIAG_MAX_BYTES=65536
 # control_backup does: doctor's own error paths exit the process, and that must not take the
 # single-threaded drain loop's other queued requests down with it. doctor's rc is the failure
 # COUNT, not a run failure, so a non-zero rc still carries a valid document.
+#
+# THE DOCTOR DOCUMENT IS REDACTED TOO, and it is not obvious that it must be. doctor writes its
+# report for the CLI, where the reader is the operator: `Dashboard onion:` prints the address in
+# full on purpose (06-doctor.sh), because someone at a terminal needs it. That is the right call
+# there and the wrong one here — this document crosses into the container, which is the party the
+# whole channel is built not to trust, and the hidden-service address is the one value whose only
+# security property is that nobody has it. The support bundle carries the same document unredacted
+# because it lands as a chmod-600 file the operator reviews before sharing; same bytes, different
+# trust context, same distinction the log tail already makes.
+#
+# It goes through bundle_redact_log — the same and only redactor the log tail uses — rather than a
+# rule of its own, so a value added there is covered on both paths. Redacting JSON as text is safe
+# for the onion rule (a fixed-shape match that cannot touch a quote), and the `jq -e .` check below
+# is the backstop if any other rule ever did break structure: the result would be a refusal, not a
+# leak.
 control_diag_doctor() { # <id> <actor> <control-dir>
     local id="$1" actor="$2" cdir="$3"
     local results="$cdir/results" auditf="$cdir/audit/control.log"
     local self="${PITHEAD_SELF:-$0}" out
     control_audit "$auditf" "$id" "$actor" "diag-doctor" "started"
-    out=$("$self" doctor --json 2>/dev/null | head -c "$PITHEAD_DIAG_MAX_BYTES")
+    out=$("$self" doctor --json 2>/dev/null | bundle_redact_log | head -c "$PITHEAD_DIAG_MAX_BYTES")
     # A truncated document is not a document: report the failure rather than shipping half an
     # object the dashboard would fail to parse and render as "no data".
     if [ -z "$out" ] || ! printf '%s' "$out" | jq -e . >/dev/null 2>&1; then
@@ -11679,6 +11695,11 @@ control_diag_logs() { # <request-file> <id> <actor> <control-dir>
     case "$lines" in
     '' | *[!0-9]*) lines="$PITHEAD_DIAG_MAX_LINES" ;;
     esac
+    # Bound the WIDTH before comparing values. `[ N -gt M ]` does not compare a digit string past
+    # 64 bits — it errors, and as the left operand of `&&` that error is swallowed, so the clamp
+    # below silently no-ops and the request reaches `--tail` uncapped. A digit string longer than
+    # the cap's own width cannot be within the cap, so this decides those cases without arithmetic.
+    [ "${#lines}" -gt "${#PITHEAD_DIAG_MAX_LINES}" ] && lines="$PITHEAD_DIAG_MAX_LINES"
     [ "$lines" -lt 1 ] && lines=1
     [ "$lines" -gt "$PITHEAD_DIAG_MAX_LINES" ] && lines="$PITHEAD_DIAG_MAX_LINES"
     # Redact BEFORE the byte cap, never after: truncating first would leave the tail of a redacted
