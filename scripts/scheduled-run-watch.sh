@@ -79,12 +79,17 @@ usage() {
 
 # A conclusion as a table cell. `cancelled` and `timed_out` are NOT folded into failure: they mean
 # the sweep did not run to completion, which is a different thing from the sweep finding something,
-# and a reader deciding whether to cut a patch release needs to tell them apart.
+# and a reader deciding whether to cut a patch release needs to tell them apart — so the conclusion
+# is printed verbatim rather than bucketed.
+#
+# THE SAME RULE IS SPELLED TWICE: here, and in `render_history`'s jq, because one table is built in
+# bash and the other in jq. They had already drifted once (this said `**FAILED**` where jq said
+# `**failure**` for the same run), so the self-test below renders one run through BOTH and asserts
+# the cells are identical. Change one spelling and that assertion fails.
 conclusion_cell() {
     case "$1" in
     success) printf 'ok' ;;
-    failure) printf '**FAILED**' ;;
-    "") printf '**UNCHECKED** (no conclusion)' ;;
+    "") printf '**UNCHECKED**' ;;
     *) printf '**%s**' "$1" ;;
     esac
 }
@@ -174,7 +179,7 @@ render_history() {
     printf '## Recent scheduled runs\n\n'
     printf '| Run | Started | Result |\n|---|---|---|\n'
     printf '%s' "$1" | jq -r --argjson n "$HISTORY_ROWS" \
-        '.[:$n][] | "| [\(.databaseId)](\(.url)) | \(.createdAt) | \(if .conclusion == "success" then "ok" elif .conclusion == null or .conclusion == "" then "(no conclusion)" else "**" + .conclusion + "**" end) |"'
+        '.[:$n][] | "| [\(.databaseId)](\(.url)) | \(.createdAt) | \(if .conclusion == "success" then "ok" elif .conclusion == null or .conclusion == "" then "**UNCHECKED**" else "**" + .conclusion + "**" end) |"'
     printf '\n'
 }
 
@@ -247,7 +252,10 @@ if [ "${1:-}" = "--self-test" ]; then
     st "the failing job is named" "$(printf '%s' "$out" | grep -cF 'Build image (dashboard)')" "1"
     st "a passing job is not listed as failing" "$(printf '%s' "$out" | grep -cF '| `Shell tests` |')" "0"
     st "a SKIPPED job is not listed as failing" "$(printf '%s' "$out" | grep -cF '| `Lint` |')" "0"
-    st "the newest row is marked FAILED" "$(printf '%s' "$out" | grep -c '\*\*FAILED\*\*')" "1"
+    # The SAME run renders in both tables, one built in bash and one in jq. Asserting the count is
+    # 2 is what pins the two spellings together — it fails if either side drifts.
+    st "the failed run is marked in both tables, identically" \
+        "$(printf '%s' "$out" | grep -c '| \*\*failure\*\* |')" "2"
 
     # --- the refusals. Each is pinned on the ONE input only it rejects. ---
 
