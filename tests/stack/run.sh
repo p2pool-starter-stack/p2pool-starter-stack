@@ -32,6 +32,18 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-dashboard.sh" && domain_ran test-dash
 # shellcheck source=tests/stack/test-dashboard-onion.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-dashboard-onion.sh" && domain_ran test-dashboard-onion.sh "$_d0" "$?" || domain_ran test-dashboard-onion.sh "$_d0" "$?"
 
+# Regression (#1330): test-dashboard-onion.sh must not depend on running after test-dashboard.sh —
+# source it alone, in a subshell so PASS/FAIL here are untouched, and require every assertion in
+# it to still pass with no global left behind by another file's source order.
+# shellcheck disable=SC1090,SC2015  # STACK/HERE paths are dynamic by design
+(
+    set -uo pipefail
+    source "$HERE/lib.sh"
+    source "$HERE/test-dashboard-onion.sh" >/dev/null 2>&1
+    [ "$FAIL" -eq 0 ] && [ "$PASS" -gt 0 ]
+)
+assert_rc "test-dashboard-onion.sh does not depend on run.sh's source order (#1330)" "$?" "0"
+
 # shellcheck source=tests/stack/test-release.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-release.sh" && domain_ran test-release.sh "$_d0" "$?" || domain_ran test-release.sh "$_d0" "$?"
 

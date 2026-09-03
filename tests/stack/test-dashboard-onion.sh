@@ -12,23 +12,20 @@
 # Caddyfile in the SAME run rather than waiting on a later, possibly-no-op apply (#356/#546), and
 # dashboard_onion_status's status/doctor resolver (the onion URL + reach-it hint, never the client
 # private key, #343).
-# Sourced by tests/stack/run.sh, immediately after test-dashboard.sh — REQUIRED order: this file
-# reads two globals set there and never redefined here: $auth_hb64 (the bcrypt hash fixture, used
-# throughout the onion vhost renders below) and $caddy_https (the plain secure-mode Caddyfile
-# render, read by the access-log section's "every vhost shares the log" count together with this
-# file's own $caddy_onion_https). Both are plain top-level assignments in test-dashboard.sh, so
-# they are still live globals when this file runs next in the same shell — do not source this file
-# before test-dashboard.sh, and do not run either file in a subshell.
+# Sourced by tests/stack/run.sh, conventionally after test-dashboard.sh — but not required (#1330):
+# $auth_hb64 and $caddy_https used to be globals left behind there, so a reordered/inserted source
+# line broke this file with a confusing empty-string mismatch. Both are re-derived locally below.
 #
-# Re-derivations: none. Everything below sources the real $STACK fresh per subshell against a
-# throwaway dir under $SANDBOX (or a dedicated dir under it, e.g. the rotate-Caddyfile-seed
-# fixtures), and touches neither $C nor its control-sandbox children ($REQS/$RESULTS/$STAGED/
-# $AUDIT/$MASKED) — several of the black-box flows here explicitly stub provision_control_runner
-# (and the rest of apply's/upgrade's heavy machinery) to a no-op precisely to keep this file's
-# proof self-contained; the real control-channel/control-runner build lives in the "dashboard
-# control channel" section, moved to test-control-core.sh by #1105 R12 and sourced well after.
+# Everything else below sources the real $STACK fresh per subshell against a throwaway dir under
+# $SANDBOX (or a dedicated dir under it, e.g. the rotate-Caddyfile-seed fixtures), and touches
+# neither $C nor its control-sandbox children ($REQS/$RESULTS/$STAGED/$AUDIT/$MASKED) — several of
+# the black-box flows here explicitly stub provision_control_runner (and the rest of apply's/
+# upgrade's heavy machinery) to a no-op precisely to keep this file's proof self-contained; the real
+# control-channel/control-runner build lives in the "dashboard control channel" section, moved to
+# test-control-core.sh by #1105 R12 and sourced well after.
 
 echo "== unit: generate_caddyfile onion vhost (#343) =="
+auth_hb64="$(printf '%s' '$2y$14$UNITTESTbcrypthashvalue000000000000000000000000000000' | openssl base64 -A)" # re-derivation (#1330), see header
 # With the dashboard onion enabled, generate_caddyfile appends a SECOND site bound to the bridge
 # gateway (NETWORK_PREFIX.1) — reachable only from the tor container, never the LAN — serving plain
 # HTTP (Tor is the transport) and carrying the SAME basic_auth block as the LAN site.
@@ -36,8 +33,6 @@ echo "== unit: generate_caddyfile onion vhost (#343) =="
 caddy_onion="$(
     cd "$SANDBOX" && source "$STACK" 2>/dev/null
     set +e
-    # shellcheck disable=SC2154  # auth_hb64 is set in test-dashboard.sh, sourced immediately
-    # before this file in run.sh — see this file's header.
     DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_USER=admin DASHBOARD_AUTH_HASH_B64="$auth_hb64" \
         DASHBOARD_ONION_ENABLED=true NETWORK_PREFIX=172.28.0 generate_caddyfile >/dev/null 2>&1
     cat Caddyfile
@@ -101,11 +96,16 @@ assert_contains "onion HTTP vhost renders even before the address is captured (#
 assert_not_contains "no HTTPS onion vhost until the .onion address is provisioned (#343)" "$caddy_onion_ph" "https://placeholder"
 
 echo "== unit: generate_caddyfile access log (#349) =="
+# shellcheck disable=SC1090  # STACK path is dynamic by design; re-derivation (#1330), see header
+caddy_https="$(
+    cd "$SANDBOX" && source "$STACK" 2>/dev/null
+    set +e
+    DASHBOARD_SECURE=true HOST_IP=box.lan DASHBOARD_AUTH_HASH_B64="" generate_caddyfile >/dev/null 2>&1
+    cat Caddyfile
+)"
 # Every vhost logs each request as one JSON line to a shared file. Growth is bounded by Caddy's
 # native rolling (4 MiB per file, current + 2 rolled); mode 0644 lets the non-root dashboard
 # read what root-run Caddy writes (Caddy's own default is 0600, unreadable across the mount).
-# shellcheck disable=SC2154  # caddy_https is set in test-dashboard.sh's scheme unit test,
-# sourced immediately before this file in run.sh — see this file's header.
 assert_contains "access log block rendered" "$caddy_https" "output file /var/log/caddy/access.log"
 assert_contains "access log is JSON" "$caddy_https" "format json"
 assert_contains "access log growth is bounded (roll_size)" "$caddy_https" "roll_size 4MiB"
