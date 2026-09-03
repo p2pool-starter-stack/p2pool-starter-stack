@@ -84,3 +84,13 @@ that the boot path's files sit where the firmware and GRUB will look.
 sudo tests/os/verify-image.sh os/rauc/build/system.img          # release: test artifacts REFUSED
 sudo tests/os/verify-image.sh os/rauc/build/system.img --test   # harness build: SSH key expected
 ```
+
+## Soak probe
+
+`tests/os/soak-probe.sh HOST LOGDIR [--start]` is the 7-day unattended soak's daily reader
+(#1652): one non-interactive, read-only SSH session whose remote command is fixed in the script,
+one line per day appended to `LOGDIR/soak.log`, scored against the pass condition ruled on the
+issue (one boot, restart counts and start times flat, every container running and — except
+`xmrig-proxy`, #1098 — healthy, at most the probe's own login). `--start` writes the day-0
+baseline; `--self-test` proves the verdict over canned readings without a box. Run it from a
+cron line on the build host, never from a resident session.
