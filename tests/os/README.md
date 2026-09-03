@@ -91,6 +91,10 @@ sudo tests/os/verify-image.sh os/rauc/build/system.img --test   # harness build:
 (#1652): one non-interactive, read-only SSH session whose remote command is fixed in the script,
 one line per day appended to `LOGDIR/soak.log`, scored against the pass condition ruled on the
 issue (one boot, restart counts and start times flat, every container running and — except
-`xmrig-proxy`, #1098 — healthy, at most the probe's own login). `--start` writes the day-0
-baseline; `--self-test` proves the verdict over canned readings without a box. Run it from a
-cron line on the build host, never from a resident session.
+`xmrig-proxy`, #1098 — healthy, exactly the probe's own login since the previous read). Each
+read records the journal cursor it reached in `LOGDIR/ssh.cursor`, and the next read counts logins
+from there, so nothing falls between two days and nothing is counted twice; a count of 0 fails
+naming the instrument, since the probe's own login must be there. `--start` writes the day-0
+baseline — its own line reads `window=25h` and carries a rule-4 FAIL from the setup logins, so day
+0 is the baseline, not a soak day. `--self-test` proves the verdict over canned readings without a
+box. Run it from a cron line on the build host, never from a resident session.
