@@ -426,3 +426,64 @@ tier 3/4:
   and/or a mini-stack scenario (tier 3).
 
 Keep each situation at the lowest honest tier; don't re-prove logic with a heavier harness.
+
+## Framework choice: hand-rolled, not bats/ShellSpec (#1338)
+
+`tests/stack/run.sh` line 3 says the suite is dependency-free — "no bats required". That traces to
+PR #37 and was never revisited until the question came up again, so it was measured instead of
+argued.
+
+**Decision: keep the hand-rolled suite.** Do not adopt bats-core, ShellSpec, shUnit2, or bashunit —
+not wholesale, not per-tier, not for new tests only.
+
+### What was measured
+
+Both leading candidates were installed and run against the real `pithead` binary. Three
+representative tests were ported — one pure-bash assertion, one config-render inspection, one
+touching the shared control sandbox — and mutation-tested to confirm the ports still failed on the
+defect they guard.
+
+| Framework | Original | Ported | Change |
+|---|---|---|---|
+| bats-core | 159 lines | 378 | 2.4x more |
+| ShellSpec | 74 lines | 197 | 2.7x more |
+| ShellSpec, control-sandbox slice alone | 41 | 140 | 3.4x more |
+
+Verbosity was the premise of the question. It runs the other way, and it grows worst exactly where
+the suite is hardest. shUnit2 and bashunit were not port-tested: both share the function-per-test
+shape that produced the blowup twice, so the remaining uncertainty didn't justify two more spikes —
+a judgement, not a measurement.
+
+### Why it does not fit, structurally
+
+- **`set -e`.** bats wraps every `@test` in `set -e`. The suite runs `set -uo pipefail` without
+  `-e`, because a large share of `run.sh` tests rejection paths shaped `out=$(cmd); rc=$?`. Under
+  bats those abort before the assertion runs — hit in 3 of 3 ports.
+- **One `When` per Example.** ShellSpec's rule splits a continuous scenario into separate Examples.
+  That doesn't remove the shared-sandbox order dependency, it hides it — and `shellspec --random
+  examples`, an ordinary flake-hunting flag, would corrupt the run silently.
+- **Gates that would break on day one.** [`tests/inventory.sh`](../../tests/inventory.sh) parses
+  `== section ==` headers; the `Makefile`'s `lint-sh` target globs `git ls-files '*.sh'` for shfmt,
+  which never matches `.bats` — test code would silently lose shfmt coverage. ShellSpec files fail
+  `shellcheck --severity=warning` outright (SC2148/SC2286/SC2016/SC2034), making a standing lint
+  exemption part of the deal.
+- **It does not address the lint-sh ceiling.** That failure is size-correlated on one large file
+  (#1206/#1333). Splitting the file is the fix; a framework does not split the file.
+
+### What to do instead
+
+- **Finish #1105.** Per-domain files under the file budget, invoked as their own process (the
+  `test_compose.sh` pattern) rather than sourced, gives the per-test isolation a framework was
+  going to sell, with no dependency.
+- **A section filter for local iteration** — a `PITHEAD_TEST_FILTER` env var, checked wherever a
+  section header prints, skipping the block unless the name matches — is the one capability worth
+  taking from the framework pitch, at a fraction of the cost. Noted here as the next step, not yet
+  built: today a single test can't run in isolation, so iterating on one function means replaying
+  both sandboxes from the top.
+
+Not recommended: a framework "for new tests only" (two assertion dialects, two lint
+configurations, two inventory parsers, and a standing question at every new test, in exchange for
+a filter flag); migrating `test_compose.sh` as a pilot (it's already process-isolated, so it's the
+one file that gains nothing while paying the full dependency and lint cost); splitting `run.sh`
+directly into `.bats` files (`.bats` never matches the shfmt glob, and the `set -e` problem would
+land across every rejection-path assertion at once).
