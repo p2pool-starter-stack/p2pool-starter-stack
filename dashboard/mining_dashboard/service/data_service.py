@@ -71,7 +71,7 @@ from mining_dashboard.helper.utils import (
     pplns_block_time,
     shares_in_pplns_window,
 )
-from mining_dashboard.service import audit_service, worker_change_audit
+from mining_dashboard.service import audit_service, payout_sync, worker_change_audit
 from mining_dashboard.service.alert_service import AlertService
 from mining_dashboard.service.clearnet_sync import ClearnetSyncSupervisor
 from mining_dashboard.service.control_service import (
@@ -655,52 +655,14 @@ class DataService:
             )
 
     async def _sync_payouts(self):
-        """Confirm on-chain payouts from the view-only wallet-rpc (#381), throttled by the caller.
-
-        Seeds the query from the highest stored Monero payout height, so a restart re-scans only
-        the tip; ``add_payouts`` is idempotent on ``(chain, txid)``, so the overlap is dropped and
-        nothing replays. Every genuinely-new confirmed payout fires exactly one ``payout_confirmed``
-        alert. A wallet still doing its first-run scan (or briefly unreachable) returns ``[]`` — a
-        quiet no-op, no error. chain="monero" here; the Tari sibling (#462) reuses the same table."""
-        chain = "monero"
-        min_height = await asyncio.to_thread(self.state_manager.get_payout_max_height, chain)
-        payouts = await asyncio.to_thread(self.wallet_client.get_confirmed_payouts, min_height)
-        if not payouts:
-            return
-        new_rows = await asyncio.to_thread(self.state_manager.add_payouts, chain, payouts)
-        for r in new_rows:
-            logger.info(
-                "Payout confirmed on-chain: %.6f XMR (tx %s…) at height %d (#381)",
-                r["amount_atomic"] / 1e12,
-                r["txid"][:8],
-                r["height"],
-            )
-            await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
+        """Monero on-chain payout confirmation (#381). The body moved to ``payout_sync`` for #1644;
+        this stays as the poll body's call seam, and as the name the tests already reach for."""
+        await payout_sync.sync_monero(self.state_manager, self.wallet_client, self.alert_service)
 
     async def _sync_tari_payouts(self):
-        """Confirm Tari on-chain payouts from the view-only console wallet (#462), throttled by the
-        caller — the Tari sibling of ``_sync_payouts``.
-
-        Identical shape: seed from the highest stored Tari payout height, stream new confirmed
-        payouts, persist to the shared ``payouts`` table with chain="tari" (idempotent on
-        ``(chain, txid)`` so a restart replays nothing), and fire one ``payout_confirmed`` alert per
-        genuinely-new payout. ``amount_atomic`` is microTari here; the shared alert divides by the
-        Tari divisor. The Tari client is async (grpc.aio), so it's awaited directly rather than via
-        ``asyncio.to_thread``. An empty/unreachable scan is a quiet no-op."""
-        chain = "tari"
-        min_height = await asyncio.to_thread(self.state_manager.get_payout_max_height, chain)
-        payouts = await self.tari_wallet_client.get_confirmed_payouts(min_height)
-        if not payouts:
-            return
-        new_rows = await asyncio.to_thread(self.state_manager.add_payouts, chain, payouts)
-        for r in new_rows:
-            logger.info(
-                "Tari payout confirmed on-chain: %.6f XTM (tx %s…) at height %d (#462)",
-                r["amount_atomic"] / 1e6,
-                r["txid"][:8],
-                r["height"],
-            )
-            await self.alert_service.payout_confirmed_alert(chain, r["amount_atomic"], r["txid"])
+        """Tari on-chain payout confirmation (#462) — the sibling of ``_sync_payouts``, same shape
+        and same reason for staying here while its body lives in ``payout_sync``."""
+        await payout_sync.sync_tari(self.state_manager, self.tari_wallet_client, self.alert_service)
 
     async def _record_audit_event(self, source, actor, action, status, keys, event_id=None):
         """Write one out-of-band audit row (#530), through the SAME sanitizer #33's own audit
@@ -1416,13 +1378,18 @@ class DataService:
                     # 7d. On-chain payout confirmation (#381), every 10th poll (~5 min). Independent
                     # of XvB — gated on the view-only wallet-rpc being configured (local node + view
                     # key). Polls get_transfers, persists new confirmed payouts, fires one alert each.
+                    #
+                    # 7d/7e are the only steps in this body wrapped per-step (#1644): both take no
+                    # poll local and write no `self` attribute, so a failure in one cannot leave a
+                    # later step reading half-written state. Everything above stays under the single
+                    # handler below — see `payout_sync` for why widening this is its own change.
                     if self.wallet_client is not None and iteration_count % 10 == 0:
-                        await self._sync_payouts()
+                        await payout_sync.run_isolated("Monero payout sync", self._sync_payouts)
 
                     # 7e. Tari on-chain payout confirmation (#462), same cadence — gated on the
                     # view-only Tari console wallet being configured (local node + tari view key).
                     if self.tari_wallet_client is not None and iteration_count % 10 == 0:
-                        await self._sync_tari_payouts()
+                        await payout_sync.run_isolated("Tari payout sync", self._sync_tari_payouts)
 
                     # 8. New-release check over Tor (#224) — ONLY when explicitly enabled (default off,
                     # so the appliance never phones GitHub unbidden). The checker self-throttles to
