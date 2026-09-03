@@ -319,8 +319,11 @@ them before the rest are dropped behind a single `rate-limited` marker. They sha
 rather than holding one each, since two would double what that device can make permanent. That cap
 bounds how many rows arrive and not how large each one is, so every audit row's own identifier is
 length-capped and whitelisted where it is written ([#1561](https://github.com/p2pool-starter-stack/pithead/issues/1561)) — the one field the trail's
-sanitizer used to skip, and the one a rig picks the input to. Between the two bounds, a rig holding
-one worker name is bounded in both how many rows it adds and how large each one is. The cap is
+sanitizer used to skip, and the one a rig picks the input to. The parts a rig chooses are escaped
+before that identifier is assembled ([#1566](https://github.com/p2pool-starter-stack/pithead/issues/1566)),
+so no rig can land a row on another rig's identifier — which used to drop the second detection
+rather than record it. Between these bounds, a rig holding one worker name is bounded in how many
+rows it adds, how large each one is, and whose rows it can displace. The cap is
 keyed on the name the device presents and a device chooses that freely, so one that rotates names
 draws a fresh budget per name ([#1566](https://github.com/p2pool-starter-stack/pithead/issues/1566)):
 read the bound as per name, not per device. A genuine occasional rig change still records
