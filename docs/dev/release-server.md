@@ -106,14 +106,16 @@ owner-only, the dashboard is bound to localhost, and the backup/rollback net is 
 missing tool rather than dying mid-gate. Restore them with the same pinned versions CI uses
 ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) — apt's `shellcheck`/`shfmt` are older
 and reformat differently, so a version skew would fail `make lint` on the box for diffs the merge
-gate never saw:
+gate never saw. `shellcheck`'s pin lives in the `Makefile` as `SHELLCHECK_VERSION`, which is what
+`ci.yml` installs and what `make lint-sh` refuses to run without; `make -s print-shellcheck-version`
+prints it, so the version below is a copy and that command is the source:
 
 ```bash
 # node 20 (brings npx) + the basics the harness also needs
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs jq curl git tar
 
-# shellcheck 0.11.0 + shfmt 3.13.1 (pinned, not apt's)
+# shellcheck 0.11.0 (= make -s print-shellcheck-version) + shfmt 3.13.1 (pinned, not apt's)
 curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ -C /tmp
 sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
 sudo curl -fsSL -o /usr/local/bin/shfmt https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
