@@ -20,7 +20,9 @@
 # Concatenation order is the whole contract: the artifact's ordering constraints (`set -Eeuo
 # pipefail` before any code, `on_err` defined before `trap on_err ERR`, the `_STACK_SOURCED`
 # guard, `cd "$SCRIPT_DIR"`, `main "$@"` last) are preserved by keeping the slices in file order
-# and naming them so that order is their sort order. Hence the numeric prefixes.
+# and naming them so that order is their sort order. Hence the numeric prefixes. `validate_ordering`
+# below checks two of those invariants mechanically rather than trusting the numbering (#1463): a
+# name `readonly` in two slices, and a bare `trap` target defined later than where it is installed.
 set -euo pipefail
 
 ROOT="${PITHEAD_BUILD_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -69,6 +71,71 @@ list_slices() {
 #     that simply stops without a newline, so neither of them fires. The join then runs that
 #     slice's last line straight into the next slice's first with NO separator at all — and once
 #     that state is committed, `--check` compares the build against itself and blesses it forever.
+# Cross-slice semantic ordering (#1463): concatenation preserves BYTE order (proven above, and by
+# `--check`), but nothing before this proved it preserves the ordering INVARIANTS the header above
+# names. Two shapes reproduce faithfully from source to artifact — they build, `--check` passes
+# (source and artifact agree, because the defect is IN the source), and shellcheck is silent at
+# both `--severity=warning` and `-S info` — and break only when the artifact RUNS:
+#
+#   - the same `readonly` name declared in two slices (a line copied to both sides of a boundary
+#     instead of moved, e.g. two adjacent slices each declaring `readonly FOO="bar"`): a second
+#     `readonly` on an already-readonly name is a fatal bash error the instant the artifact runs
+#     ("FOO: readonly variable"), invisible to any check that never runs it.
+#   - a bare `trap NAME SIG` installed before NAME is defined (a re-cut that leaves the trap's own
+#     target sorting into a later slice): shellcheck resolves a direct call ahead of its
+#     definition (SC2218 "This function is only defined later") but treats a trap target as an
+#     opaque string, so the identical ordering mistake routed through `trap` is invisible to it at
+#     any severity.
+#
+# Caught here by one forward scan over the slices IN BUILD ORDER, tracking every top-level
+# `readonly` name and top-level function name as each is DEFINED: a re-declared readonly name, or
+# a bare trap target not yet in that set, refuses the build with the offending file:line. Scoped to
+# top-level slice order deliberately, matching what the build script's own header promises — it
+# does not attempt general control-flow or scope analysis (a function only ever called from inside
+# a conditional that happens not to run first is out of scope, same as it is for shellcheck).
+validate_ordering() {
+    LC_ALL=C awk '
+    function record(name) {
+        if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) return
+        if (name in seen_readonly) {
+            printf "build-pithead: FATAL — readonly %s is declared more than once (first %s, again %s:%d). A second `readonly` on an already-readonly name is a fatal error when the artifact RUNS, though it builds, passes --check, and is silent under shellcheck at both severities.\n", name, seen_readonly[name], FILENAME, FNR > "/dev/stderr"
+            bad = 1
+        } else {
+            seen_readonly[name] = FILENAME ":" FNR
+        }
+    }
+    /^[[:space:]]*readonly[[:space:]]/ {
+        line = $0
+        sub(/^[[:space:]]*readonly[[:space:]]+/, "", line)
+        sub(/[[:space:]]+#.*/, "", line)
+        if (line ~ /=/) {
+            name = line
+            sub(/=.*/, "", name)
+            record(name)
+        } else {
+            n = split(line, toks, /[[:space:]]+/)
+            for (i = 1; i <= n; i++) record(toks[i])
+        }
+    }
+    /^[A-Za-z_][A-Za-z0-9_]*\(\)/ {
+        name = $0
+        sub(/\(\).*/, "", name)
+        defined_fns[name] = 1
+    }
+    /^[[:space:]]*trap[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[A-Z][A-Z0-9]*[[:space:]]*$/ {
+        line = $0
+        sub(/^[[:space:]]*trap[[:space:]]+/, "", line)
+        split(line, parts, /[[:space:]]+/)
+        target = parts[1]
+        if (!(target in defined_fns)) {
+            printf "build-pithead: FATAL — trap installs %s as an ERR/EXIT/signal handler, but %s is not defined anywhere earlier in the build (at %s:%d). A trap firing before its target exists is `command not found` at RUN time, and shellcheck treats a trap target as an opaque string rather than catching it.\n", target, target, FILENAME, FNR > "/dev/stderr"
+            bad = 1
+        }
+    }
+    END { exit bad }
+    ' "$@"
+}
+
 build() {
     local slices first f last_line
     slices=$(list_slices)
@@ -116,6 +183,15 @@ build() {
             "Sort order and file order have diverged; the built artifact would not be executable." >&2
         return 1
     fi
+
+    # #1463: the byte-level checks above are satisfied by a build that is still semantically
+    # broken (see the comment on validate_ordering). This runs on the slices IN BUILD ORDER, not
+    # on the joined artifact, so it sees the same order the join below produces.
+    local -a ordered_files=()
+    while IFS= read -r f; do
+        ordered_files+=("$f")
+    done <<<"$slices"
+    validate_ordering "${ordered_files[@]}" || return 1
 
     local i=0
     while IFS= read -r f; do
@@ -336,7 +412,7 @@ self_test() {
     fi
     rm -rf "$order"
 
-    # 10-12. The three refusals that guard a silently MALFORMED join, or a misleading diagnosis.
+    # 10-14. The five refusals that guard a silently MALFORMED join, or a misleading diagnosis.
     #
     # Driven on the BUILD path rather than through `--check`, and each asserts THREE things: the
     # rc, the stated REASON, and that the previous artifact survived. All three are needed, because
@@ -363,8 +439,17 @@ self_test() {
     # NOT COVERED BY ANY CASE, and named rather than implied: the atomicity that rename actually
     # buys — an interruption (SIGKILL, full disk) part-way through writing the real artifact. That
     # needs a race to reproduce deterministically and no case here attempts it.
+    #
+    # dup-readonly and trap-before-def are #1463's two: both reproduce faithfully from source to
+    # artifact (so a `--check`-driven case would prove nothing here either, same reasoning as
+    # above), and neither is a structural defect in any ONE slice — each needs two, so both
+    # override the shared 00-prelude/99-tail fixture instead of adding a lone 10-bad.sh. Case B
+    # is written to fail for the right reason and not by coincidence: on_err genuinely exists in
+    # the build (in 99-tail, textually AFTER the trap that targets it), so a check that merely
+    # asked "does a function named on_err exist anywhere" would stay green on this fixture — only
+    # a check of what is defined so far AT the trap line catches it.
     local bad desc want out
-    for bad in empty truncated directory; do
+    for bad in empty truncated directory dup-readonly trap-before-def; do
         local badroot
         badroot=$(mktemp -d)
         mkdir -p "$badroot/lib/pithead"
@@ -386,6 +471,23 @@ self_test() {
             mkdir -p "$badroot/lib/pithead/10-bad.sh"
             desc="a directory named *.sh"
             want="is not a regular file"
+            ;;
+        dup-readonly)
+            # The shape a careless re-cut produces when a line is copied to both sides of a
+            # boundary instead of moved (#1463 attack A).
+            printf '#!/usr/bin/env bash\nreadonly SAME="bar"\n' >"$badroot/lib/pithead/00-prelude.sh"
+            printf 'readonly SAME="baz"\n' >"$badroot/lib/pithead/10-bad.sh"
+            desc="the same readonly name declared in two slices"
+            want="is declared more than once"
+            ;;
+        trap-before-def)
+            # A trap installed in an earlier slice than the function it names (#1463 attack B) —
+            # on_err DOES exist in this fixture, just too late to help the trap that names it.
+            printf '#!/usr/bin/env bash\ntrap on_err ERR\n' >"$badroot/lib/pithead/00-prelude.sh"
+            printf 'middle\n' >"$badroot/lib/pithead/10-bad.sh"
+            printf 'on_err() { :; }\n' >"$badroot/lib/pithead/99-tail.sh"
+            desc="a bare trap target defined only in a LATER slice"
+            want="is not defined anywhere earlier"
             ;;
         esac
         printf 'PREVIOUS-ARTIFACT\n' >"$badroot/pithead"
