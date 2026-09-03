@@ -16,9 +16,10 @@ from mining_dashboard.config.config import (
 # The writable-key allowlist lives with the WRITE path (control_service) and is imported here
 # rather than restated: a second literal would be a third copy of the same list, and the existing
 # drift guard only compares the dashboard's copy against pithead's. control_service imports only
-# `config`, so this does not close an import cycle.
+# `config`, so this does not close an import cycle. SECRET_SENTINEL is the same reuse: one literal
+# shape for "masked" shared by the host-config path and this one (#1548).
 from mining_dashboard.helper.http import ResponseTooLarge, bounded_read
-from mining_dashboard.service.control_service import WORKER_WRITABLE_KEYS
+from mining_dashboard.service.control_service import SECRET_SENTINEL, WORKER_WRITABLE_KEYS
 
 # Per-worker endpoint descriptors (#172): the validated dashboard.workers[] list from config.json.
 # Module-level (not from-import at call sites) so tests can swap it per case. Fleets are small, so
@@ -121,26 +122,80 @@ _POOL_CREDENTIAL_KEYS = ("pass", "tls-fingerprint")
 _MAX_CONFIG_DEPTH = 6
 
 
-def strip_credentials(value, depth=0):
-    """Drop the credential keys from ``value`` at ANY depth and in ANY container shape.
+_DROP = object()  # sentinel meaning "leave this key out entirely" -- see _walk_pool_credentials
 
-    Shape-agnostic deliberately. Stripping only ``pools`` when it arrived as a list of dicts was a
+
+def _walk_pool_credentials(value, leaf, depth=0):
+    """Recurse ``value`` at ANY depth and in ANY container shape, applying ``leaf`` to whatever
+    sits behind a credential key (``leaf`` returns ``_DROP`` to omit the key outright).
+
+    Shape-agnostic deliberately. Walking only ``pools`` when it arrived as a list of dicts was a
     filter that assumed the shape of the very input it was defending against: a rig serving
     ``pools`` as a dict, or nesting the credential one level deeper, walked straight past it with
     the credential intact. A hostile or patched rig picks its own response shape, so the only
-    assumption safe to make here is none.
+    assumption safe to make here is none. Shared core for the two passes below -- what happens to
+    a credential value differs between them; the shape-agnostic walk itself must not.
     """
     if depth > _MAX_CONFIG_DEPTH:
         return None
     if isinstance(value, dict):
-        return {
-            k: strip_credentials(v, depth + 1)
-            for k, v in value.items()
-            if k not in _POOL_CREDENTIAL_KEYS
-        }
+        out = {}
+        for k, v in value.items():
+            if k in _POOL_CREDENTIAL_KEYS:
+                replacement = leaf(v)
+                if replacement is not _DROP:
+                    out[k] = replacement
+            else:
+                out[k] = _walk_pool_credentials(v, leaf, depth + 1)
+        return out
     if isinstance(value, list):
-        return [strip_credentials(v, depth + 1) for v in value]
+        return [_walk_pool_credentials(v, leaf, depth + 1) for v in value]
     return value
+
+
+def strip_credentials(value, depth=0):
+    """Drop the credential keys from ``value`` at ANY depth and in ANY container shape.
+
+    Used for surfaces that never round-trip back into an editable form -- the change-history
+    store and the worker-detail page -- so there is nothing a placeholder would need to preserve
+    a slot for; dropping the key is simplest and safest.
+    """
+    return _walk_pool_credentials(value, lambda v: _DROP, depth)
+
+
+def mask_pool_credentials(value, depth=0):
+    """Replace a SET credential leaf with ``SECRET_SENTINEL`` at ANY depth/shape; leave an
+    empty/falsy one alone (mirrors ``control_service.mask_secrets`` -- "not set" must stay
+    distinguishable from "set but hidden"). Used for the round-trip EDITABLE prefill (#1548):
+    ``strip_credentials`` used to run here too, but deleting the key outright gives the Worker
+    Inspect editor nothing to recognise as a secret, so an Apply that never touched the credential
+    still sent a pool entry with no password -- wiping it. Masking extends the same blank-keeps-it
+    contract the Configuration view already has for a top-level secret down to one nested inside
+    ``pools``.
+    """
+    return _walk_pool_credentials(value, lambda v: dict(SECRET_SENTINEL) if v else v, depth)
+
+
+def _is_secret_sentinel(v):
+    """Structural check mirroring ``configlogic.isSecretSentinel`` -- a marker, not a value the
+    dashboard ever wrote."""
+    return isinstance(v, dict) and v.get("__secret__") is True
+
+
+def strip_sentinel_credentials(value, depth=0):
+    """Drop a pool-credential key wherever its incoming value is literally ``SECRET_SENTINEL``,
+    leaving a real typed value untouched. Server-side backstop for a worker-apply request (#1548):
+    the browser is expected to have already scrubbed a leftover sentinel out of what it sends
+    (``workerlogic.mjs``'s ``stripNestedSecrets``), but this dashboard never held a real value to
+    substitute back in for one -- unlike the host config's top-level secrets, which the HOST swaps
+    for their live value on commit (#440), nothing here retains a pool password to swap in. So a
+    sentinel that reaches this point has no honest destination but the one ``mask_pool_credentials``
+    already gives every OTHER untouched credential: absent from what gets sent, never forwarded to
+    the rig as if it were a real password. This is what keeps ``mask_pool_credentials`` safe to use
+    for the editable prefill at all -- without it, a client bug, a stale cached page, or a hand-built
+    request could write the literal marker over the rig's real credential.
+    """
+    return _walk_pool_credentials(value, lambda v: _DROP if _is_secret_sentinel(v) else v, depth)
 
 
 def _rig_writable_config(cfg):
@@ -155,7 +210,7 @@ def _rig_writable_config(cfg):
     if not isinstance(cfg, dict):
         return None
     out = {k: v for k, v in cfg.items() if k in WORKER_WRITABLE_KEYS}
-    return strip_credentials(out) or None
+    return mask_pool_credentials(out) or None
 
 
 # Terminal control outcomes the rig may mirror: applied/rejected/rolled_back/failed from a

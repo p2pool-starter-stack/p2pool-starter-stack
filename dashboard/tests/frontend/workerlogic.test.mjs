@@ -16,6 +16,7 @@ import {
   jsonSyntaxError,
   markerLabel,
   parseJsonChanges,
+  writableSnapshot,
 } from "../../mining_dashboard/web/static/workerlogic.mjs";
 
 const KEYS = ["DONATION", "max_temp_c", "watchdog", "pools", "token"];
@@ -95,10 +96,28 @@ test("parseJsonChanges: valid JSON builds the same shape of changes object as th
   assert.deepEqual(out, { changes: { DONATION: 6 } });
 });
 
-test("parseJsonChanges: a masked token round-trips verbatim unless the operator replaces it (#508)", () => {
+test("parseJsonChanges: a bare sentinel never forwards as a literal value, with or without a baseline (#1548)", () => {
+  // The old contract ("round trips verbatim") let a literal {__secret__:true} travel to the rig
+  // as if it were a real value — safe only by accident, since nothing WROTE that value there. The
+  // nested-secret scrub applies regardless of whether a baseline is available, so this holds even
+  // for a caller (like this bare 2-arg call) that has none.
   const text = JSON.stringify({ token: { __secret__: true } });
   const out = parseJsonChanges(text, KEYS);
-  assert.deepEqual(out.changes, { token: { __secret__: true } }); // untouched — passes through as-is
+  assert.deepEqual(out.changes, {});
+});
+
+test("parseJsonChanges: an untouched sentinel is dropped from the diff against its baseline (#1548)", () => {
+  const baseline = { token: { __secret__: true } };
+  const text = JSON.stringify(baseline);
+  const out = parseJsonChanges(text, KEYS, baseline);
+  assert.deepEqual(out.changes, {}); // matches the baseline -> not a change at all
+});
+
+test("parseJsonChanges: a real replacement value for a secret field still comes through (#508)", () => {
+  const baseline = { token: { __secret__: true } };
+  const text = JSON.stringify({ token: "new-token-value" });
+  const out = parseJsonChanges(text, KEYS, baseline);
+  assert.deepEqual(out.changes, { token: "new-token-value" });
 });
 
 test("parseJsonChanges: malformed JSON surfaces a parse error", () => {
@@ -108,6 +127,67 @@ test("parseJsonChanges: malformed JSON surfaces a parse error", () => {
 test("parseJsonChanges: empty object and non-writable keys are rejected", () => {
   assert.match(parseJsonChanges("{}", KEYS).error, /non-empty/);
   assert.match(parseJsonChanges('{"nope": 1}', KEYS).error, /Not writable: nope/);
+});
+
+// --- Pool credential round-trip (#1548) ------------------------------------------------------
+//
+// The bug: a pool's `pass` is masked server-side (xmrig_client.mask_pool_credentials), not
+// deleted, so the prefill carries a nested {__secret__: true} the operator never sees as plain
+// JSON. Nothing before this fix stopped that literal marker from being resent as if it were the
+// real password once the operator touched anything nearby.
+
+const POOL_KEYS = ["DONATION", "pools"];
+const POOL_SENTINEL = { __secret__: true };
+const POOLS_BASELINE = {
+  DONATION: 5,
+  pools: [{ url: "pool.example:3333", user: "wallet.rig1", pass: POOL_SENTINEL }],
+};
+
+test("writableSnapshot: rig wins over applied, per writable key (#1235)", () => {
+  const snap = writableSnapshot(POOL_KEYS, { DONATION: 1 }, { DONATION: 9 });
+  assert.deepEqual(snap, { DONATION: 9 });
+});
+
+test("writableSnapshot: a key neither source knows is simply absent, not null/empty", () => {
+  const snap = writableSnapshot(POOL_KEYS, {}, {});
+  assert.deepEqual(snap, {});
+});
+
+test("parseJsonChanges: touching an unrelated key does not resend an untouched pools credential (#1548)", () => {
+  // The issue's exact scenario: open Inspect, switch to JSON mode, change one unrelated key,
+  // Apply — without the baseline diff this used to resend the whole prefilled object, `pools`
+  // (and its masked credential) included.
+  const text = JSON.stringify({ ...POOLS_BASELINE, DONATION: 6 });
+  const out = parseJsonChanges(text, POOL_KEYS, POOLS_BASELINE);
+  assert.deepEqual(out.changes, { DONATION: 6 });
+});
+
+test("parseJsonChanges: editing pools while leaving its credential as the sentinel never sends the literal marker (#1548)", () => {
+  const edited = {
+    DONATION: 5,
+    pools: [
+      { url: "pool.example:3333", user: "wallet.rig1", pass: POOL_SENTINEL },
+      { url: "backup.example:3333", user: "wallet.rig1" }, // operator added a second pool
+    ],
+  };
+  const out = parseJsonChanges(JSON.stringify(edited), POOL_KEYS, POOLS_BASELINE);
+  assert.deepEqual(out.changes, {
+    pools: [
+      { url: "pool.example:3333", user: "wallet.rig1" }, // credential key gone, not the sentinel
+      { url: "backup.example:3333", user: "wallet.rig1" },
+    ],
+  });
+});
+
+test("buildTableChanges: editing the pools JSON row without a real password strips the sentinel, not the pool (#1548)", () => {
+  const fields = buildFields(POOL_KEYS, {}, POOLS_BASELINE);
+  const edited = JSON.stringify([
+    { url: "pool.example:3333", user: "wallet.rig1", pass: POOL_SENTINEL, keepalive: true },
+  ]);
+  const changes = buildTableChanges(fields, { pools: edited });
+  assert.deepEqual(changes, {
+    pools: [{ url: "pool.example:3333", user: "wallet.rig1", keepalive: true }],
+  });
 });
 
 test("jsonSyntaxError: live check used for inline feedback while typing", () => {

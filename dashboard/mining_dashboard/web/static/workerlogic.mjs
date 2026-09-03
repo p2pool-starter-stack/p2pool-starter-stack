@@ -8,6 +8,14 @@
 // shape the Configuration view already masks. buildFields turns that into a "secret" row so the
 // table editor never hands the operator raw sentinel JSON to mangle; a blank secret row keeps it,
 // a typed one replaces it, exactly like configlogic's secret fields.
+//
+// A sentinel can also sit NESTED inside a writable value — a pool's `pass` inside `pools` (#1548).
+// buildFields' check above only ever sees the whole value, so a nested one is invisible to it;
+// stripNestedSecrets (below) is the other half, scrubbing one out of whatever's about to be sent
+// so the literal marker never travels as if it were a real credential. JSON mode diffs the whole
+// textarea against `writableSnapshot`'s baseline for the same reason table mode already only
+// diffs touched rows: without it, editing one unrelated key resends every prefilled value verbatim
+// — including a credential this dashboard never held a plaintext copy of.
 
 import { isSecretSentinel } from "./configlogic.mjs";
 
@@ -48,6 +56,50 @@ export function buildFields(writableKeys, lastApplied, rigConfig) {
   });
 }
 
+// The raw per-key value buildFields renders from (rig > applied > absent, #1235), exposed
+// separately: JSON mode needs the plain merged object itself, not buildFields' typed/secret-masked
+// table rows — both as its textarea prefill and as the baseline parseJsonChanges diffs against
+// (#1548). Kept as its own three-line walk rather than threaded through buildFields, which also
+// tracks `source` for the "unknown" case this doesn't need.
+export function writableSnapshot(writableKeys, lastApplied, rigConfig) {
+  const applied = lastApplied || {};
+  const rig = rigConfig || {};
+  const out = {};
+  for (const key of writableKeys || []) {
+    if (key in rig) out[key] = rig[key];
+    else if (key in applied) out[key] = applied[key];
+  }
+  return out;
+}
+
+// workerview.mjs's own two call sites (the JSON textarea prefill, and apply()'s diff baseline)
+// always pull the same three fields off the same `detail` payload — one place to say so.
+export function detailSnapshot(detail) {
+  return writableSnapshot(detail.writable_keys, detail.last_applied, detail.rig_config);
+}
+
+// A secret sentinel found anywhere BELOW the top level of a value about to be sent as a change is
+// a credential this dashboard masked on the way OUT (server-side, #1548) and never held a real
+// value for — forwarding the literal marker would write it over whatever the rig actually has.
+// Recurses through arrays/objects and drops just the credential KEY, leaving the rest of its
+// container (a pool entry's url/user/keepalive) untouched. Returns `undefined` when the value
+// passed in is itself nothing but a bare sentinel, so the caller can drop the whole key/entry.
+function stripNestedSecrets(value) {
+  if (isSecretSentinel(value)) return undefined;
+  if (Array.isArray(value)) {
+    return value.map(stripNestedSecrets).filter((v) => v !== undefined);
+  }
+  if (value !== null && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (isSecretSentinel(v)) continue; // drop the credential key, keep its siblings
+      out[k] = stripNestedSecrets(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 // Table edits -> the diff `changes` object. `edits` holds only the rows the operator touched
 // (component state, keyed like ConfigView's); a row typed back to its original value is dropped
 // so untouched rows never enter the diff, matching the JSON textarea's "record only what changed"
@@ -74,12 +126,30 @@ export function buildTableChanges(fields, edits) {
       changes[f.key] = raw;
     }
   }
+  // A "json" row (pools/autotune/watchdog) can carry a nested secret sentinel the operator never
+  // touched — buildFields only recognises a WHOLE-value sentinel as a "secret" row (#508); one
+  // nested inside pools is invisible to that check (#1548) and would otherwise be resent as the
+  // literal masked marker. An edited row that turns out to be nothing but a bare sentinel (the
+  // whole entry, not just a field of it) is dropped from the diff entirely.
+  for (const [k, v] of Object.entries(changes)) {
+    const scrubbed = stripNestedSecrets(v);
+    if (scrubbed === undefined) delete changes[k];
+    else changes[k] = scrubbed;
+  }
   return changes;
 }
 
-// The JSON mode's own path: parse, then the same non-empty/object/allowlist checks the table
-// mode gets for free from only ever rendering allowlisted rows. Returns { changes } or { error }.
-export function parseJsonChanges(text, writableKeys) {
+// The JSON mode's own path: parse, validate against the writable allowlist, then DIFF against
+// `baseline` (#1548) — the textarea holds the WHOLE prefilled object, not a diff like the table
+// gives for free, so touching one key and leaving the rest exactly as prefilled must not resend
+// them. A `pools` entry the operator never opened can carry a credential this dashboard never held
+// a plaintext copy of (masked at the source, #1543/#1548); resending it verbatim is what wiped the
+// rig's password. `baseline` (typically `writableSnapshot`'s output) defaults to `{}` for a caller
+// that has none, which keeps every key — the pre-#1548 behaviour — rather than silently dropping
+// changes it has nothing to compare against. Returns { changes } or { error }; `changes` can come
+// back empty when everything typed matched the baseline — the caller decides whether that's an
+// error, same as it already does for an empty table diff.
+export function parseJsonChanges(text, writableKeys, baseline) {
   let changes;
   try {
     changes = JSON.parse(text);
@@ -97,7 +167,14 @@ export function parseJsonChanges(text, writableKeys) {
   const allowed = new Set(writableKeys || []);
   const bad = Object.keys(changes).filter((k) => !allowed.has(k));
   if (bad.length) return { error: `Not writable: ${bad.join(", ")}` };
-  return { changes };
+  const base = baseline || {};
+  const diffed = {};
+  for (const [k, v] of Object.entries(changes)) {
+    if (JSON.stringify(v) === JSON.stringify(base[k])) continue; // unchanged from the prefill
+    const scrubbed = stripNestedSecrets(v);
+    if (scrubbed !== undefined) diffed[k] = scrubbed;
+  }
+  return { changes: diffed };
 }
 
 // Where a field's value came from (#1235). An unlabelled empty box reads as "0"/"none" and
