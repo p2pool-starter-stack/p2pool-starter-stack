@@ -32,7 +32,7 @@
 #           dashboard login, appliance defaults and node credentials survive, old login still works.
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
 #   reset   factory-reset's ESP marker (the real `pithead factory-reset`) wipes /data and returns a
-#           FRESH machine to the wizard; a corrupt /data superblock drives the wedged-/data recovery.
+#           FRESH machine to the wizard; a corrupt /data superblock drives wedged-/data recovery.
 #   all     every phase above, in that order — media, fault and reset included since #1064
 #
 # A failed assertion is recorded and the run continues, so one bench boot collects the whole
