@@ -96,5 +96,10 @@ read records the journal cursor it reached in `LOGDIR/ssh.cursor`, and the next 
 from there, so nothing falls between two days and nothing is counted twice; a count of 0 fails
 naming the instrument, since the probe's own login must be there. `--start` writes the day-0
 baseline — its own line reads `window=25h` and carries a rule-4 FAIL from the setup logins, so day
-0 is the baseline, not a soak day. `--self-test` proves the verdict over canned readings without a
-box. Run it from a cron line on the build host, never from a resident session.
+0 is the baseline, not a soak day. Only `--start` writes `day0.env`; a cron read never does, so a
+restart in the window's first hours can never be absorbed into the baseline it is scored against.
+Every line carries `read=N`, its `soak.log` line number, because the first cron read lands under
+24 h after `--start` and shares `day=0` with the baseline line; each run's raw readings are kept as
+`LOGDIR/readN.env`. `--self-test` proves the verdict over canned readings, then drives the script
+three times through a stubbed `ssh` to prove the baseline survives a cron read, without a box. Run
+it from a cron line on the build host, never from a resident session.

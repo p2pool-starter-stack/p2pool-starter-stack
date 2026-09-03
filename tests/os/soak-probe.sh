@@ -2,8 +2,13 @@
 # The 7-day unattended soak's daily probe (#1652). Runs on the build host, never on the box, and
 # reads the box over ONE non-interactive SSH session whose remote command is fixed below, so a
 # reader can audit exactly what the only permitted login did. It appends one line per run to
-# LOGDIR/soak.log, keeps the day-0 baseline in LOGDIR/day0.env, and scores the day against the
-# pass condition ruled on #1652 — a missing measurement is a FAIL, never a skip.
+# LOGDIR/soak.log, labelled `read=N` by the line number it lands on (the one label no two reads
+# can share; `day=` is information, and the first cron read lands under 24 h after --start, so it
+# shares day=0 with the baseline line), keeps each run's raw readings in LOGDIR/readN.env, and
+# scores the run against the day-0 baseline in LOGDIR/day0.env, which ONLY --start writes: a
+# cron read never touches it, so a restart in the window's first hours can never be absorbed
+# into the baseline it is scored against. The pass condition is the one ruled on #1652 — a
+# missing measurement is a FAIL, never a skip.
 #
 #   tests/os/soak-probe.sh HOST LOGDIR --start     # day 0: write the baseline, open the window
 #   tests/os/soak-probe.sh HOST LOGDIR             # every later day (a cron line on the build host)
@@ -196,8 +201,40 @@ self_test() {
     chk "an interactive session fails rule 4" "$?" 1
     out=$(soak_day_verdict "$base" "")
     chk "an empty reading FAILS every rule, never passes" "$?" 1
+    self_test_driver "$base"
     echo "soak-probe self-test: $n ok, $f failed"
     [ "$f" -eq 0 ]
+}
+
+# The driver, through a stubbed `ssh` that prints a canned reading: the pure verdict above cannot
+# see what the driver does with LOGDIR, and that is where the first cron read used to overwrite
+# day0.env and every later day passed against the moved baseline (#1667 F1). Three runs land in
+# the same day=0, which is the shape the label and the write-once baseline exist for.
+self_test_driver() { # $1 = a canned reading that passes against itself
+    local tmp out
+    tmp=$(mktemp -d) || return 1
+    mkdir -p "$tmp/bin"
+    printf '%s\n' '#!/usr/bin/env bash' 'cat >/dev/null' 'printf "%s\n" "${@: -1}" >>"$SOAK_STUB_ARGS"' 'cat "$SOAK_STUB_READING"' >"$tmp/bin/ssh"
+    chmod +x "$tmp/bin/ssh"
+    printf '%s\nssh_cursor=s=1;i=1\n' "$1" >"$tmp/a"
+    printf '%s\nssh_cursor=s=2;i=2\n' "${1/monerod|running|0|healthy/monerod|running|1|healthy}" >"$tmp/b"
+    drv() { PATH="$tmp/bin:$PATH" SOAK_STUB_READING="$tmp/$1" SOAK_STUB_ARGS="$tmp/args" bash "$0" stub-host "$tmp/log" ${2:-}; }
+    drv a --start >/dev/null
+    chk "driver: --start passes against its own reading" "$?" 0
+    cmp -s "$tmp/a" "$tmp/log/day0.env"
+    chk "driver: day0.env is the --start reading" "$?" 0
+    drv b >/dev/null
+    chk "driver: a restart on the first cron read (still day=0) fails rule 2" "$?" 1
+    cmp -s "$tmp/a" "$tmp/log/day0.env"
+    chk "driver: day0.env is byte-identical after that read (write-once)" "$?" 0
+    out=$(drv b)
+    chk "driver: the same reading again STILL fails — the baseline never absorbed the restart" "$?" 1
+    chk "  …named" "${out##*fails=}" "2:monerod-restarts(0->1)"
+    chk "driver: three lines, three distinct read= labels" "$(sed -n 's/^[^ ]* read=\([0-9]*\) .*/\1/p' "$tmp/log/soak.log" | sort -u | tr '\n' ' ')" "1 2 3 "
+    cmp -s "$tmp/b" "$tmp/log/read3.env"
+    chk "driver: read3.env holds the third read's raw readings" "$?" 0
+    chk "driver: the second read was handed the first read's cursor" "$(sed -n 2p "$tmp/args")" "SOAK_CURSOR='s=1;i=1' bash -s"
+    rm -rf "$tmp"
 }
 
 case "${1:-}" in
@@ -220,6 +257,8 @@ MODE="${3:-}"
 mkdir -p "$LOGDIR"
 chmod 700 "$LOGDIR"
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# This run's label is the soak.log line number it lands on — day= is information, not identity.
+line=$(($([ -f "$LOGDIR/soak.log" ] && wc -l <"$LOGDIR/soak.log" || echo 0) + 1))
 # The previous read's journal cursor is the one input the fixed remote command takes. --start
 # opens a new window and ignores any cursor a previous window left behind.
 cursor=""
@@ -230,15 +269,15 @@ fi
 today=$(read_box "$HOST" "$cursor")
 rc=$?
 if [ "$rc" -ne 0 ] || [ -z "$today" ]; then
-    printf '%s day=? READ-FAILED ssh rc=%s VERDICT=FAIL fails=read\n' "$now" "$rc" | tee -a "$LOGDIR/soak.log"
+    printf '%s read=%s day=? READ-FAILED ssh rc=%s VERDICT=FAIL fails=read\n' "$now" "$line" "$rc" | tee -a "$LOGDIR/soak.log"
     exit 1
 fi
-if [ "$MODE" = "--start" ]; then
+if [ "$MODE" = "--start" ]; then # the ONLY writer of day0.env
     printf '%s\n' "$today" >"$LOGDIR/day0.env"
     printf '%s\n' "$now" >"$LOGDIR/started"
 fi
 [ -s "$LOGDIR/day0.env" ] || {
-    printf '%s day=? NO-BASELINE VERDICT=FAIL fails=baseline (run with --start first)\n' "$now" | tee -a "$LOGDIR/soak.log"
+    printf '%s read=%s day=? NO-BASELINE VERDICT=FAIL fails=baseline (run with --start first)\n' "$now" "$line" | tee -a "$LOGDIR/soak.log"
     exit 1
 }
 day=$((($(date -u +%s) - $(date -u -d "$(cat "$LOGDIR/started")" +%s)) / 86400))
@@ -247,9 +286,9 @@ running=$(printf '%s\n' "$today" | grep -c '^container=.*|running|')
 total=$(printf '%s\n' "$today" | grep -c '^container=')
 unhealthy=$(printf '%s\n' "$today" | sed -n 's/^container=\([^|]*\)|[^|]*|[^|]*|unhealthy|.*/\1/p' | tr '\n' ',' | sed 's/,$//')
 verdict=$(soak_day_verdict "$(cat "$LOGDIR/day0.env")" "$today")
-printf '%s day=%s btime=%s jdirs=%s up=%ss running=%s/%s unhealthy=%s ssh_accepted=%s window=%s last=%s monero=%s rauc=%s data_free_mb=%s load=%s %s\n' \
-    "$now" "$day" "$(kv btime)" "$(kv jdirs)" "$(kv uptime_s)" "$running" "$total" "${unhealthy:-none}" "$(kv ssh_accepted)" "$(kv ssh_window)" "$(kv last_sessions)" "$(kv monero)" "$(kv rauc)" "$(kv data_free_mb)" "$(kv load)" "$verdict" |
+printf '%s read=%s day=%s btime=%s jdirs=%s up=%ss running=%s/%s unhealthy=%s ssh_accepted=%s window=%s last=%s monero=%s rauc=%s data_free_mb=%s load=%s %s\n' \
+    "$now" "$line" "$day" "$(kv btime)" "$(kv jdirs)" "$(kv uptime_s)" "$running" "$total" "${unhealthy:-none}" "$(kv ssh_accepted)" "$(kv ssh_window)" "$(kv last_sessions)" "$(kv monero)" "$(kv rauc)" "$(kv data_free_mb)" "$(kv load)" "$verdict" |
     tee -a "$LOGDIR/soak.log"
-printf '%s\n' "$today" >"$LOGDIR/day$day.env"
+printf '%s\n' "$today" >"$LOGDIR/read$line.env"
 [ -n "$(kv ssh_cursor)" ] && printf '%s\n' "$(kv ssh_cursor)" >"$LOGDIR/ssh.cursor"
 case "$verdict" in VERDICT=PASS*) exit 0 ;; *) exit 1 ;; esac
