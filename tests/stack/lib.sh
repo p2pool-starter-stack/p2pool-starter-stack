@@ -99,19 +99,35 @@ wait_while_alive() { # <pid> <check-fn-name>
     done
 }
 
+# mk_tmpdir <varname> — create a throwaway directory and ASSIGN IT BY NAME, or refuse the run.
+#
+# Assigning by name rather than printing is the whole point (#1705). The obvious constructor,
+# called as `X=$(mk_tmpdir)`, cannot fail closed: its `exit` ends only the command substitution's
+# subshell, the assignment still succeeds with X empty, and tests/stack/run.sh sets no `-e`, so
+# the run carries on. `set -u` does not fire either — the variable IS set, it is empty. A later
+# `rm -rf "$X/store"` then targets /store. Assigning through the caller's own shell is what puts
+# the refusal somewhere it can stop the run.
+mk_tmpdir() {
+    local _mk_d
+    _mk_d="$(mktemp -d)" && [ -d "$_mk_d" ] || {
+        printf 'lib.sh: mktemp -d did not create a directory for %s — refusing to run (#1705)\n' "$1" >&2
+        exit 1
+    }
+    printf -v "$1" '%s' "$_mk_d"
+}
+
 # A throwaway sandbox dir, cleaned on exit. Physical path (#695): pithead canonicalizes its
 # own directory with pwd -P, so a sandbox spelled through a symlink (macOS /var -> /private/var)
 # would render .env paths that no longer string-match the $SANDBOX-based assertions.
-# Fail closed if mktemp -d fails (#1661). It writes its diagnostic to stderr and prints NOTHING
-# on stdout, so the old one-liner collapsed to `cd "" && pwd -P` — and `cd ""` returns 0 without
-# moving, so SANDBOX became the directory the suite was invoked from (the repo root, per
-# tests/stack/run.sh's documented invocation) and the trap below armed rm -rf on the working tree.
-# Every downstream "$SANDBOX/..." still resolved, so nothing downstream could notice.
-_sbx="$(mktemp -d)"
-if [ ! -d "$_sbx" ]; then
-    printf 'lib.sh: mktemp -d did not create a sandbox — refusing to run (#1661)\n' >&2
-    exit 1
-fi
+# The refusal is mk_tmpdir's. #1661 built it inline here, against the one-liner that collapsed to
+# `cd "" && pwd -P` and armed the trap below on the working tree; #1705 made it the single
+# constructor so that recipe cannot drift between this file and the domain files.
+mk_tmpdir _sbx
+# mk_tmpdir assigns through `printf -v`, which shellcheck cannot follow, so it reads _sbx as
+# never assigned. The 38 call sites in the domain files are not flagged only because their names
+# are uppercase and shellcheck assumes those may come from the environment — so this directive
+# is narrower than it looks, and a lowercase name added later will need its own.
+# shellcheck disable=SC2154
 SANDBOX="$(cd "$_sbx" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 

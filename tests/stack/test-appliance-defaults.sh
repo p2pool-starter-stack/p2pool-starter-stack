@@ -32,7 +32,7 @@
 # reads either way.
 
 echo "== unit: preflight_remote_nodes dials before provisioning commits =="
-PFSB=$(mktemp -d)
+mk_tmpdir PFSB
 printf '{"monero":{"mode":"local"},"tari":{"mode":"local"}}' >"$PFSB/local.json"
 run_sourced "$PFSB" preflight_remote_nodes "$PFSB/local.json" >/dev/null 2>&1
 assert_rc "all-local config -> nothing to dial, rc 0" "$?" "0"
@@ -98,7 +98,7 @@ unset PFSB out PFZ_LIVE PFZ_HTTP PFZ_ZMTP2
 
 echo "== unit: appliance defaults (tor.auto_heal) =="
 # Applied only where ABSENT: an operator who wrote false meant it.
-ADSB=$(mktemp -d)
+mk_tmpdir ADSB
 printf '{"monero":{"wallet_address":"x"}}' >"$ADSB/config.json"
 PITHEAD_CONFIG_FILE="$ADSB/config.json" run_sourced "$ADSB" apply_appliance_defaults >/dev/null 2>&1
 assert_eq "absent auto_heal -> enabled" "$(jq -r '.tor.auto_heal' "$ADSB/config.json")" "true"

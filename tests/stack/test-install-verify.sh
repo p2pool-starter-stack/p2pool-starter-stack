@@ -49,7 +49,7 @@ echo "== unit: install.sh download verification fails CLOSED (#868) =="
 # extracted has already won — so a mismatch must install NOTHING. The stubs model each remote
 # artifact as a file served by basename; absent file = curl -f failure, exactly the shape the
 # script distinguishes (absent degrades politely, present-but-wrong is fatal).
-ISB=$(mktemp -d)
+mk_tmpdir ISB
 mkdir -p "$ISB/bin" "$ISB/srv" "$ISB/work"
 printf '#!/bin/bash\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n' >"$ISB/bin/uname"
 cat >"$ISB/bin/curl" <<'EOF'

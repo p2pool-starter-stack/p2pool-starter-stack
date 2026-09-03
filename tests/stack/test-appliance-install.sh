@@ -49,7 +49,7 @@ echo "== unit: the installer gate outlasts a slow device probe =="
 # An empty FIRST inventory put a reinstall boot into setup mode (KVM keep leg): the gate runs
 # ~18s into boot and races udev settling the target's partitions. It now retries before giving
 # up — a probe that answers on the third try still opens the installer.
-IGSB=$(mktemp -d)
+mk_tmpdir IGSB
 cat >"$IGSB/fake-install" <<'FAKE'
 #!/usr/bin/env bash
 [ "$1" = "--list" ] || exit 0
@@ -76,7 +76,7 @@ unset IGSB igout
 
 echo "== unit: pre-seeding from the installation medium =="
 # The ESP is FAT and anyone can write it, so both readers treat its contents as input, not truth.
-PSD=$(mktemp -d)
+mk_tmpdir PSD
 export PITHEAD_PRESEED_DIR="$PSD"
 
 run_sourced "$SANDBOX" preseed_token >/dev/null 2>&1
@@ -122,7 +122,7 @@ echo "== unit: data_wipe_note / publish_data_wipe_note — the wipe note reader 
 # discriminates a deliberate factory-reset (the operator asked for it, nothing to warn about)
 # from the wedged-/data case, where the wizard's next-move advice differs: restore a backup,
 # don't set up as if this were a fresh machine.
-DWN=$(mktemp -d)
+mk_tmpdir DWN
 mkdir -p "$DWN/esp" "$DWN/spool"
 export PITHEAD_PRESEED_DIR="$DWN/esp"
 
@@ -199,7 +199,7 @@ echo "== unit: consume_install_request (disk installer host side) =="
 # The request file is operator input arriving through a web form; the host must validate it
 # against its own inventory and never trust a browser-supplied target. Driven against a fake
 # pithead-install via PITHEAD_INSTALL_BIN — the real one partitions disks.
-INSTSB=$(mktemp -d)
+mk_tmpdir INSTSB
 cat >"$INSTSB/fake-install" <<'FAKE'
 #!/usr/bin/env bash
 case "$1" in
@@ -264,7 +264,7 @@ echo "== unit: strip_config_secrets — no secret class survives the reinstall p
 # The strip runs before a previous install's config may be SHOWN on the setup page. Every
 # secret carries the same marker value, so one grep proves the whole list at once; the
 # non-secret answers (the point of the pre-fill) must all survive.
-SCS=$(mktemp -d)
+mk_tmpdir SCS
 cat >"$SCS/prev.json" <<'PREV'
 {
   "monero": {"wallet_address": "4KEEP-WALLET", "mode": "remote",
@@ -314,7 +314,7 @@ echo "== unit: prefill_from_previous_install — fail open, publish only the str
 # The orchestration around the strip: exactly one disk with an install, a read-only mount, and
 # every failure degrading to "no pre-fill" — never to a blocked install. mount/umount/lsblk are
 # PATH stubs; the fake mount copies a fixture tree under the mountpoint.
-PFSB=$(mktemp -d)
+mk_tmpdir PFSB
 mkdir -p "$PFSB/bin" "$PFSB/spool" "$PFSB/prev/pithead"
 printf '#!/bin/bash\necho "/dev/fake2 data"\n' >"$PFSB/bin/lsblk"
 cat >"$PFSB/bin/mount" <<'MNT'

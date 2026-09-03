@@ -490,7 +490,7 @@ assert_contains "release.sh guards the bundle against xattr pax headers" \
 # Tar a file that carries an xattr where we can set one (macOS: xattr -w / Linux: setfattr; a
 # no-op elsewhere), and assert no LIBARCHIVE.xattr/SCHILY.xattr pax header survives — the exact
 # check release.sh runs. Reproduces #252 on macOS; a clean no-op on GNU tar.
-RELTMP="$(mktemp -d)"
+mk_tmpdir RELTMP
 mkdir -p "$RELTMP/pithead"
 echo hi >"$RELTMP/pithead/f"
 xattr -w com.test val "$RELTMP/pithead/f" 2>/dev/null ||

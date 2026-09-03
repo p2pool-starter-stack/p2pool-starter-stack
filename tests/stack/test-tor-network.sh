@@ -645,7 +645,7 @@ assert_contains "doctor OK when p2pool IS routed over Tor (#273)" \
 TOR_ENTRY="$ROOT/build/tor/entrypoint.sh"
 tor_torrc() { # <DASHBOARD_ONION_ENABLED> [COMPOSE_PROFILES] -> the torrc the entrypoint would hand to `tor -f`
     local d
-    d="$(mktemp -d)"
+    mk_tmpdir d
     # The stub cats the SANDBOX path, not /tmp/torrc (#1104). That is what makes the TORRC_OUT seam
     # load-bearing: if the entrypoint ignored it and wrote the host-global file, this prints nothing
     # and every assertion below goes red. Catting /tmp/torrc instead would keep passing off a stale

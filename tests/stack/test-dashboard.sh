@@ -509,7 +509,7 @@ echo "== unit: dashboard_sync_progress re-renders per-chain sync from /api/state
 # The one-curl re-render behind `pithead status`: read the dashboard's own /api/state (host-local,
 # no auth) and print per-chain progress, skipping synced chains and degrading quietly when the app
 # isn't up. Stub curl to serve a canned body — real jq parses it, matching the dashboard's shape.
-SP="$(mktemp -d)"
+mk_tmpdir SP
 mkdir -p "$SP/bin"
 cat >"$SP/bin/curl" <<'EOF'
 #!/usr/bin/env bash
