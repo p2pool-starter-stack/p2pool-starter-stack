@@ -1896,12 +1896,12 @@ phase_install() {
     fi
     # THE assertion this leg exists for (#1091): config.json landing on disk proves the archive
     # was UNPACKED — it is a grep of a file the restore itself just wrote, so it is true even if
-    # the stack never came back up on the restored config. The DIY channel already proves the
-    # stronger claim (tests/integration/run.sh reads .pool.type out of LIVE state after
-    # restore+up); mirror it here — wait for the stack to actually come up, then require a value
-    # sourced from the restored config to appear in LIVE state. The verdict itself
-    # (restore_live_state_verdict) is fixture-tested at tier 1 (tests/stack/run.sh) the same way
-    # #1212's hugepages_boot_verdict is — only the polling against the real guest lives here.
+    # the stack never came back up on the restored config. So wait for the stack to actually come
+    # up, then require a value sourced from the restored config to appear in LIVE state: the
+    # --wallet argument the stack's own start path rendered into the p2pool container, read off
+    # the container as created (#1662: p2pool's stratum stats, the earlier source, exist only once
+    # a SYNCED monerod hands it a block template, which a restored guest never has in this window).
+    # The verdict (restore_live_state_verdict) is fixture-tested at tier 1 (tests/stack/run.sh).
     local rsnames="" live_wallet="" verdict
     local rsdeadline
     rsdeadline=$(($(date +%s) + 900))
@@ -1915,7 +1915,7 @@ phase_install() {
         local lwdeadline
         lwdeadline=$(($(date +%s) + 180))
         while [ "$(date +%s)" -lt "$lwdeadline" ]; do
-            live_wallet=$(curl -sSk -u "$DASH_USER:$DASH_PASS" "https://$ip/api/state" 2>/dev/null | jq -r '.stratum.wallet // ""')
+            live_wallet=$(_ssh "podman inspect p2pool --format '{{json .Config.Cmd}}'" 2>/dev/null | jq -r 'index("--wallet") as $i | if $i == null then "" else .[$i+1] // "" end')
             [ -n "$live_wallet" ] && [ "$live_wallet" != "Unknown" ] && [ "$live_wallet" != "null" ] && break
             sleep 10
         done
