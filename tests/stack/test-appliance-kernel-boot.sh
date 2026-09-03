@@ -56,7 +56,7 @@ echo "== unit: optimize_kernel's HugePages write is grow-only =="
 # With a co-located miner the pool is shared and RigForge (grow-only by design) sizes it as the
 # single writer — pithead writing its absolute 3072 on top would shrink a grown pool to the
 # in-use floor and starve whichever side restarts next.
-OKSB=$(mktemp -d)
+mk_tmpdir OKSB
 mkdir -p "$OKSB/bin"
 printf '#!/usr/bin/env bash\necho "sudo:$*" >>"${OKLOG:?}"\n' >"$OKSB/bin/sudo"
 # OS_TYPE is readonly once sourced, so the Linux arm is selected the way pcr791 does it: a
@@ -114,7 +114,7 @@ unset OKSB
 # the old code running. The guard extracts the tarball's own opt/pithead/BUILD_COMMIT stamp and
 # compares it to the working tree, proven here with a fabricated fixture tarball (no image build).
 echo "== unit: os/rauc stale-tarball guard =="
-VTC_TMP=$(mktemp -d)
+mk_tmpdir VTC_TMP
 # The same commit+dirty-suffix computation verify_tarball_commit does, so the "match" fixture is
 # honest about the state of THIS working tree (it may itself be dirty mid-change).
 VTC_HEAD_SHA=$(cd "$ROOT" && git rev-parse HEAD)
@@ -125,7 +125,7 @@ VTC_HEAD="$VTC_HEAD_SHA"
 # $2=NONE fabricates a tarball with the directory but no stamp file (an old/broken build).
 mk_vtc_fixture() { # $1=out-path $2=stamp-content|NONE
     local d
-    d=$(mktemp -d)
+    mk_tmpdir d
     mkdir -p "$d/opt/pithead"
     [ "$2" = NONE ] || printf '%s\n' "$2" >"$d/opt/pithead/BUILD_COMMIT"
     tar -cf "$1" -C "$d" opt
@@ -203,12 +203,12 @@ assert_contains "the message names the floor field" "$out" "PITHEAD_MIN_OS_VERSI
 # image build. The guard is the safety fix: a dev cert must never become the fleet's update trust
 # root because a build host happened to have one lying around.
 RSM="$ROOT/os/rauc/populate-slot.sh"
-RSMTMP=$(mktemp -d)
+mk_tmpdir RSMTMP
 # Run the resolver in an isolated cwd (it writes os/rauc/certs/ relative to $PWD). $1=dev(0/1),
 # $2=where to send stderr. Prints: rc=<n> cert=<..> key=<..> keyring=<..>
 rsm() {
     local dev="$1" errto="$2" d
-    d=$(mktemp -d)
+    mk_tmpdir d
     (
         cd "$d" || exit
         # shellcheck disable=SC1090

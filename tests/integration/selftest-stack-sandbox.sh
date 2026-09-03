@@ -136,5 +136,38 @@ else
 fi
 
 echo ""
+echo "== every tests/stack sandbox is built through mk_tmpdir, not a bare assignment (#1705) =="
+
+# The constructor is only half the fix. The other half is that the call sites in the domain files
+# actually reach it, and a list of the converted names would rot on the next file added. So this
+# is the invariant instead: in the files #1705 covered, `mktemp -d` may appear only inside a
+# guarded expression, never as a bare `VAR=$(mktemp -d)` whose failure leaves VAR set-but-empty
+# for a later `rm -rf "$VAR/store"` to expand against /store.
+#
+# tests/stack/run.sh and the standalone tests/stack/test_*.sh are NOT covered and still carry the
+# old form. They belong to other lanes, so #1705's conversion stopped at the grant boundary. They
+# are excluded by name rather than by silence, so that this row says what it does not check.
+BARE='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\(mktemp -d\)"?[[:space:]]*$'
+STACK_DIR="$HERE/../stack"
+
+# The pattern must be shown able to match before its absence anywhere means anything.
+CTRL="$TMP/bare-control.sh"
+printf 'RSB=$(mktemp -d)\nrm -rf "$RSB/store"\n' >"$CTRL"
+if grep -Eq "$BARE" "$CTRL"; then
+    it_pass "the bare-assignment pattern matches the pre-fix form (control arms)"
+else
+    it_fail "the bare-assignment pattern matches the pre-fix form" \
+        "it matched nothing, so the absence checked below proves nothing"
+fi
+
+found=$(grep -El "$BARE" "$STACK_DIR/lib.sh" "$STACK_DIR"/test-*.sh 2>/dev/null | tr '\n' ' ')
+if [ -z "$found" ]; then
+    it_pass "no bare mktemp -d assignment survives in lib.sh or the test-*.sh domain files"
+else
+    it_fail "no bare mktemp -d assignment survives in lib.sh or the test-*.sh domain files" \
+        "still bare in: $found"
+fi
+
+echo ""
 echo "selftest-stack-sandbox: $IT_PASS passed, $IT_FAIL failed"
 [ "$IT_FAIL" -eq 0 ] || exit 1

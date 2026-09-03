@@ -143,7 +143,7 @@ echo "== unit: the dashboard certificate exists whenever the Caddyfile names it 
 # already held config.json) still gets a certificate: the Caddyfile named a file only the wizard
 # used to create, so Caddy answered :443 with no usable cert and the dashboard failed the TLS
 # handshake outright — a bench machine looked hung while serving a broken listener.
-TLSSB=$(mktemp -d)
+mk_tmpdir TLSSB
 export PITHEAD_TLS_DIR="$TLSSB/tls"
 fp1=$(run_sourced "$SANDBOX" appliance_mint_cert 2>/dev/null)
 [ -s "$TLSSB/tls/wizard.crt" ] && ok "mints a certificate on demand" || bad "mints a certificate on demand" "no crt"
@@ -165,7 +165,7 @@ echo "== unit: the certificate SAN list and Caddy's site list agree, for a given
 # different name lists any more.
 # MUTATION PROOF: hardcode site_hosts back to "$HOST_IP" in generate_caddyfile, or the old
 # unconditional alt= string back into appliance_mint_cert, and every scenario below goes red.
-NL=$(mktemp -d)
+mk_tmpdir NL
 export PITHEAD_TLS_DIR="$NL/tls"
 nl_render() { # sets $NL/Caddyfile and mints $NL/tls/wizard.crt for the given identity; prints the
     # canonical name list both consumers should agree on.
@@ -413,7 +413,7 @@ echo "== unit: the certificate re-mints when the served name list changes, not o
 # fingerprint loses that trust on every unnecessary replacement, so a re-mint must be conservative.
 # MUTATION PROOF: drop the comparison (always re-mint) -> "an unchanged list does not re-mint"
 # goes red. Drop the re-mint branch (never re-mint) -> "a changed list re-mints" goes red.
-RM=$(mktemp -d)
+mk_tmpdir RM
 export PITHEAD_TLS_DIR="$RM/tls"
 RM_IPS="192.168.1.20"
 rm_run() {
@@ -452,7 +452,7 @@ echo "== unit: stage_wizard_spool re-arms a wiped spool, so a retry keeps its TL
 # setup page (payout address, dashboard password, node secrets) in CLEARTEXT while the console
 # still advertised HTTPS and a fingerprint. MUTATION PROOF: stage once before the loop again and
 # "a wiped spool is fully re-armed" + "the retry can still serve TLS" go red.
-SWS=$(mktemp -d)
+mk_tmpdir SWS
 export PITHEAD_TLS_DIR="$SWS/tls"
 sws_fp=$(run_sourced "$ROOT" stage_wizard_spool "$SWS/spool" 2>/dev/null)
 assert_contains "staging prints the certificate fingerprint the console advertises" "$sws_fp" ":"

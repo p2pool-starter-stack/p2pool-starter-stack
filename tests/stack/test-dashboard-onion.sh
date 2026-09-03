@@ -394,7 +394,7 @@ echo "== unit: dashboard_onion_status surfaces the onion URL for status/doctor (
 # reach-it hint ONLY when the onion is enabled AND provisioned, and NEVER the client private key.
 onion_env_dir() { # <enabled> <address> <client_auth> -> a dir whose .env carries those keys
     local d
-    d="$(mktemp -d)"
+    mk_tmpdir d
     {
         echo "DASHBOARD_ONION_ENABLED=$1"
         echo "DASHBOARD_ONION_ADDRESS=$2"

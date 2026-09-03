@@ -60,7 +60,7 @@ assert_rc "release -> release passes (the fleet's normal update)" "$?" "1"
 run_sourced "$SANDBOX" os_update_needs_confirmation unknown release
 assert_rc "unstamped system + release bundle passes — stays shell-less, no channel flips" "$?" "1"
 
-OUSB=$(mktemp -d)
+mk_tmpdir OUSB
 mkdir -p "$OUSB/bin"
 # A fake rauc: logs every call, answers `info` with a canned shell-format body —
 # the format the real os_bundle_meta parses (RAUC 1.11's JSON output omits [meta.*]). Two escape
@@ -193,7 +193,7 @@ echo "== integration: os-update surfaces rauc's own diagnosis instead of a bare 
 # tripped the ERR trap with nothing to show for it — three bare "aborted unexpectedly" lines and
 # no clue rauc had already diagnosed it precisely on its own stderr. Runs the REAL script as a
 # subprocess (not sourced) so the ERR trap this bug lives in is actually armed.
-OUB=$(mktemp -d)
+mk_tmpdir OUB
 mkdir -p "$OUB/bin"
 cp "$STACK" "$OUB/pithead"
 chmod +x "$OUB/pithead"

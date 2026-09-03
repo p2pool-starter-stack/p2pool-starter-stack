@@ -42,7 +42,7 @@ echo "== unit: publish_rig_defaults — host-side pool discovery, fail open (#79
 # The rig role's pre-fill: the HOST dials for a Pithead and publishes the finding to the spool
 # like the disk inventory. The dial is 'timeout N bash -c </dev/tcp/...' — timeout is a PATH
 # stub here (like mount in the pre-fill tests), so the probe answers deterministically.
-RDSB=$(mktemp -d)
+mk_tmpdir RDSB
 mkdir -p "$RDSB/bin" "$RDSB/spool"
 printf '#!/bin/bash\nexit 0\n' >"$RDSB/bin/timeout"
 chmod +x "$RDSB/bin/timeout"
@@ -59,7 +59,7 @@ rm -rf "$RDSB"
 unset RDSB
 
 echo "== unit: firstboot_consume_rig — the pool is dialed BEFORE anything irreversible (#797 R3) =="
-RCSB=$(mktemp -d)
+mk_tmpdir RCSB
 mkdir -p "$RCSB/bin" "$RCSB/spool"
 printf '#!/bin/bash\nexit 0\n' >"$RCSB/bin/timeout"
 chmod +x "$RCSB/bin/timeout"
@@ -95,7 +95,7 @@ rm -rf "$RCSB"
 unset RCSB
 
 echo "== unit: the machine-role marker, written and read back (#797 R3/R4) =="
-MRSB=$(mktemp -d)
+mk_tmpdir MRSB
 printf '{"local_miner":{"enabled":true}}' >"$MRSB/config.json"
 assert_eq "local_miner on -> both (the role IS the switch)" "$(run_sourced "$MRSB" machine_role_from_config "$MRSB/config.json")" "both"
 printf '{}' >"$MRSB/config.json"
@@ -115,7 +115,7 @@ echo "== unit: the rig boot leg — a role=rig machine mines instead of coordina
 # contract. Driven against a fake rigforge.sh, like the Both role's leg — the real one compiles
 # miners and tunes kernels. What this owns: the derived config (pool + worker + password), the
 # invocation contract, and the refusals.
-RIGL=$(mktemp -d)
+mk_tmpdir RIGL
 mkdir -p "$RIGL/rigforge" "$RIGL/bin" "$RIGL/run" "$RIGL/journal"
 cat >"$RIGL/rigforge/rigforge.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -199,8 +199,8 @@ echo "== unit: a rig's first boot mines — wizard side and staged-install side 
 # Both boots that ACCEPT a role end mining on that same boot: no second wizard, no reboot to
 # wait for. Every LATER boot skips this unit entirely (its condition now excludes rig.json) and
 # goes through pithead-boot instead.
-RPSB=$(mktemp -d)
-RPESP=$(mktemp -d)
+mk_tmpdir RPSB
+mk_tmpdir RPESP
 mkdir -p "$RPSB/rigforge"
 cat >"$RPSB/rigforge/rigforge.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -234,7 +234,7 @@ echo "== unit: render_local_miner_config — the built-in miner's config is DERI
 # rebuilt on every render like the Caddyfile: the stack's own stratum over loopback, the stratum
 # password when one is set, and the stack's HugePages budget declared as headroom — the hand-off
 # that makes RigForge the pool's single (grow-only) writer.
-LMR=$(mktemp -d)
+mk_tmpdir LMR
 mkdir -p "$LMR/rigforge"
 printf '{"local_miner":{"enabled":true}}' >"$LMR/config.json"
 printf 'STRATUM_PORT=3333\n' >"$LMR/.env"
@@ -285,7 +285,7 @@ echo "== unit: provision_local_miner — the boot leg converges the miner (#796)
 # Driven against a fake rigforge.sh: the real one compiles miners and tunes kernels. What this
 # owns: the invocation contract (appliance flag set, run from the tree on /data, config rendered
 # first) and both convergence directions (enabled -> setup, disabled -> stop).
-LMP=$(mktemp -d)
+mk_tmpdir LMP
 mkdir -p "$LMP/rigforge" "$LMP/bin"
 cat >"$LMP/rigforge/rigforge.sh" <<'EOF'
 #!/usr/bin/env bash

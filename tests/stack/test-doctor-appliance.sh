@@ -76,7 +76,7 @@ echo "== unit: check_data_wipe_note — doctor surfaces the wipe note, a support
 # Same shape as the pre-seeding block: PITHEAD_PRESEED_DIR stands in for the ESP. Appliance-only
 # (the note only ever exists on that channel), so PITHEAD_APPLIANCE has to be forced on here —
 # tests run off the appliance.
-CDW=$(mktemp -d)
+mk_tmpdir CDW
 mkdir -p "$CDW/esp"
 export PITHEAD_PRESEED_DIR="$CDW/esp"
 

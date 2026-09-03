@@ -62,7 +62,7 @@ echo "== unit: load_baked_images — the archive digest, not the tag, decides a 
 # image it ever loaded. Both boot owners (pithead-boot and the first-boot wizard) run this ONE
 # loader; the digest record beside the store is what makes a keep-reinstall or A/B update
 # converge on the shipped containers.
-WSB=$(mktemp -d)
+mk_tmpdir WSB
 mkdir -p "$WSB/images" "$WSB/bin"
 printf 'v1-archive' >"$WSB/images/dashboard.tar.gz"
 cat >"$WSB/bin/podman" <<'EOF'
@@ -120,7 +120,7 @@ echo "== unit: load_baked_images — a store damaged by an interrupted write is 
 # guards above both pass and the reload was skipped — which is what made the damage permanent and
 # left an appliance unable to install from its own stick. A base layer carries no `lower` file at
 # all, so a zero-length one is damage, never a legitimate state.
-RSB=$(mktemp -d)
+mk_tmpdir RSB
 mkdir -p "$RSB/images" "$RSB/bin" "$RSB/data"
 printf 'archive' >"$RSB/images/dashboard.tar.gz"
 cat >"$RSB/bin/podman" <<'EOF'
@@ -174,7 +174,7 @@ echo "== unit: load_baked_images — a slow load narrates itself, a fast one sta
 # A rising elapsed count is what tells slow apart from stuck. The load stays in the FOREGROUND
 # and the heartbeat is the background job: polling a backgrounded load with `kill -0` would make
 # a fast load pay a full sleep, because a finished-but-unwaited child still answers.
-HSB=$(mktemp -d)
+mk_tmpdir HSB
 mkdir -p "$HSB/images" "$HSB/bin" "$HSB/data"
 printf 'archive' >"$HSB/images/dashboard.tar.gz"
 cat >"$HSB/bin/podman" <<'EOF'
@@ -489,7 +489,7 @@ echo "== unit: pithead-sync's rigforge leg — program replaced, state preserved
 # build cache) are state. The prebuilt binary seeds the workspace so the appliance never needs
 # RigForge's clone path — github over clearnet, unreachable from a Tor-only box.
 SYNCSCRIPT="$ROOT/os/overlay/pithead-sync"
-SSB=$(mktemp -d)
+mk_tmpdir SSB
 mkdir -p "$SSB/opt-pithead" "$SSB/opt-rigforge/util" "$SSB/opt-rigforge/prebuilt/xmrig/build"
 for f in pithead pithead-completion.bash VERSION docker-compose.yml \
     config.reference.json config.core-keys.json config.minimal.json cosign.pub; do

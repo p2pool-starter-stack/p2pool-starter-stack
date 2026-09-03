@@ -134,7 +134,7 @@ assert_rc "rejects 254 chars, past the bound (#558)" "$?" "1"
 echo "== unit: first-run epilogue shows once after up (#384) =="
 # The "what happens next" onboarding note: prints on the first up in a fresh deploy dir, drops a
 # marker beside .env, and stays silent on every later restart.
-FR="$(mktemp -d)"
+mk_tmpdir FR
 out="$(run_sourced "$FR" print_first_run_epilogue 2>&1)"
 assert_contains "first-run: epilogue explains the sync-then-mine hold" "$out" "held until Monero and Tari finish their first sync"
 assert_eq "first-run: silent on the second up (marker respected)" \
