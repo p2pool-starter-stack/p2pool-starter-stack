@@ -851,8 +851,9 @@ xmrvsbeast.com — the reward columns run from the last cached read when one exi
 from a bundled snapshot of XvB's own published table, labelled with the date it was captured so
 you can see how old it is; either way nothing is fetched to produce it. The odds column has no
 such stand-in — draw frequency and qualifier counts are live numbers XvB's winners feed alone
-carries, so it stays empty on a box that has never enabled XvB, filling in once XvB runs and that
-feed is read for the first time. The raffle winner is drawn at random among everyone above
+carries. Rather than a bare dash, which reads as odds of zero, each row says what it is waiting
+for: `needs XvB enabled` on a box that has never turned XvB on, and `awaiting sync` on one that
+has, until that feed is read again. The raffle winner is drawn at random among everyone above
 the threshold, so donating more than the threshold buys zero extra win chance — but the odds
 themselves are knowable: XvB's winners file publishes the qualifier count for every round, and
 the comparison below shows them.
@@ -869,7 +870,7 @@ the whole choice is visible at once:
 
 | Column | Meaning |
 |---|---|
-| **Odds / 30d** | How often this tier's rounds pay out and among how many qualifiers, computed from XvB's public winners feed. The draw is random among qualifiers — donating above a threshold buys no extra odds. |
+| **Odds / 30d** | How often this tier's rounds pay out and among how many qualifiers, computed from XvB's public winners feed. The draw is random among qualifiers — donating above a threshold buys no extra odds. With no round statistics cached the cell names what it needs — `needs XvB enabled`, or `awaiting sync` once XvB is on — never a dash, which would read as odds of zero. |
 | **Cost / yr** | The P2Pool earnings given up by donating the tier threshold for a year, at your current rate. |
 | **XvB says / yr** | XvB's own published expected reward — **face value**: it prices every bonus hash at full block reward. Shown as their number, never blended. |
 | **Study est. / yr** | The same figure scaled by the **measured delivery band**: across 25 audited won rounds, verified on-chain across all three P2Pool sidechains (June–August 2026), winners received 33% of the advertised prize work (95% CI 28–39%; single-wallet on-chain audit, corroborated by a 14-winner public crawl), with at most a small margin effect. Once this box has enough measured wins of its own, the column becomes **Yours (N% × M wins)** and uses your wallet's measured figure instead. The full record — method, data, and scripts — is the [XvB delivery study](research/xvb-delivery-study/PAPER.md). |

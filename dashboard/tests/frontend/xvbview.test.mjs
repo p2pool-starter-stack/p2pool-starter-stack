@@ -342,8 +342,8 @@ test('XvB decision table: the vendored-fallback reward columns render values and
     assert.match(up, /Range: 0\.226800 XMR … 0\.315900 XMR/);
     assert.doesNotMatch(up, /tier costs only/);
     assert.match(up, /last published table \(2026-08-10\)/);
-    // Odds have no such fallback — same root cause, still honestly empty (#1214).
-    assert.match(up, /Odds \/ 30d —/);
+    // Odds have no such fallback — same root cause; the cell names what it waits for (#1231).
+    assert.match(up, /Odds \/ 30d needs XvB enabled/);
 });
 
 test('XvB decision block: in the operator\'s render state (XvB OFF) no figure is a sideways-panning range (#1316)', () => {
@@ -391,8 +391,8 @@ test('XvB decision block: in the operator\'s render state (XvB OFF) no figure is
     assert.doesNotMatch(block, /table-scroll/);
     assert.doesNotMatch(block, /<table/);
 
-    // Odds have no fallback while XvB is off, so they stay honestly empty — once per tier.
-    assert.equal(block.match(/Odds \/ 30d —/g).length, 4);
+    // Odds have no fallback while XvB is off; each tier names what it waits for (#1231).
+    assert.equal(block.match(/Odds \/ 30d needs XvB enabled/g).length, 4);
 
     // Every visible XMR figure is a single number, and none of them is an 8-dp negative.
     const figures = visible.match(/-?\d+\.\d+ XMR/g) || [];
