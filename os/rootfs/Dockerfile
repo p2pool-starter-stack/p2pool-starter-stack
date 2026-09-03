@@ -64,8 +64,8 @@ ARG COSIGN_COMMIT=11926fa5bbbbde47e88fc006b625a17769b743b2
 # survived in that file until #1153. Verify by re-running the scan against the built binaries with
 # NO ignore file, never by reading release notes: the first version of this change fixed x/mod and
 # left two other HIGH findings standing.
-ARG COMPOSE_GO_RAISES="golang.org/x/mod@v0.40.0"
-ARG COSIGN_GO_RAISES="golang.org/x/mod@v0.40.0 google.golang.org/grpc@v1.82.1"
+ARG COMPOSE_GO_RAISES="golang.org/x/mod@v0.40.0 golang.org/x/crypto@v0.55.0 google.golang.org/grpc@v1.83.1"
+ARG COSIGN_GO_RAISES="golang.org/x/mod@v0.40.0 google.golang.org/grpc@v1.83.1"
 ENV CGO_ENABLED=0
 
 # Blobless clone then detach to the commit: the tag is only a convenience for the version string.
