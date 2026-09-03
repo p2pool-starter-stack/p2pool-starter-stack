@@ -78,7 +78,17 @@ run_sourced() {
 # A throwaway sandbox dir, cleaned on exit. Physical path (#695): pithead canonicalizes its
 # own directory with pwd -P, so a sandbox spelled through a symlink (macOS /var -> /private/var)
 # would render .env paths that no longer string-match the $SANDBOX-based assertions.
-SANDBOX="$(cd "$(mktemp -d)" && pwd -P)"
+# Fail closed if mktemp -d fails (#1661). It writes its diagnostic to stderr and prints NOTHING
+# on stdout, so the old one-liner collapsed to `cd "" && pwd -P` — and `cd ""` returns 0 without
+# moving, so SANDBOX became the directory the suite was invoked from (the repo root, per
+# tests/stack/run.sh's documented invocation) and the trap below armed rm -rf on the working tree.
+# Every downstream "$SANDBOX/..." still resolved, so nothing downstream could notice.
+_sbx="$(mktemp -d)"
+if [ ! -d "$_sbx" ]; then
+    printf 'lib.sh: mktemp -d did not create a sandbox — refusing to run (#1661)\n' >&2
+    exit 1
+fi
+SANDBOX="$(cd "$_sbx" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 # A fake docker that records calls and answers the few queries setup/apply make.
