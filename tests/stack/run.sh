@@ -228,6 +228,8 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-firstboot-install-lock.sh" 
 
 # shellcheck source=tests/stack/test-appliance-identity-boot.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-identity-boot.sh" && domain_ran test-appliance-identity-boot.sh "$_d0" "$?" || domain_ran test-appliance-identity-boot.sh "$_d0" "$?"
+# shellcheck source=tests/stack/test-appliance-machine-id-journal.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-machine-id-journal.sh" && domain_ran test-appliance-machine-id-journal.sh "$_d0" "$?" || domain_ran test-appliance-machine-id-journal.sh "$_d0" "$?"
 
 # shellcheck source=tests/stack/test-appliance-media.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-media.sh" && domain_ran test-appliance-media.sh "$_d0" "$?" || domain_ran test-appliance-media.sh "$_d0" "$?"

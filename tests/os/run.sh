@@ -49,6 +49,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/failure-evidence.sh"
 # shellcheck source=tests/os/kvm-preflight.sh
 . "$SCRIPT_DIR/kvm-preflight.sh"
+# shellcheck source=tests/os/journal-boot-verdict.sh
+. "$SCRIPT_DIR/journal-boot-verdict.sh"
 # shellcheck source=tests/os/restore-live-state-verdict.sh
 . "$SCRIPT_DIR/restore-live-state-verdict.sh"
 # shellcheck source=tests/os/reinstall-prefill-verdict.sh
@@ -487,15 +489,10 @@ phase_boot() {
     # and it starts while the image build's export I/O is still settling. 420 s passed idle but
     # clipped under full-battery load (proven both ways on the bench, 2026-08-15); the budget is
     # sized for the loaded case because a deadline that only holds on an idle host is a flake.
-    #
-    # NOT raised again here even though 900 s has since been seen to time out too: that number was
-    # only just proven sufficient on the bench the same day, on the same class of run, so a bigger
-    # arbitrary guess would repeat the exact mistake this file's own history warns about (raising
-    # the ceiling instead of finding out why it was hit) rather than fix anything. What changed
-    # instead is the failure message below — it tells the NEXT run which of three things happened
-    # (guest never running at all, guest rebooted onto a different lease mid-boot, or guest is up
-    # and simply refusing port 22) instead of one flat "never came up", so the next bench timeout
-    # carries the evidence a budget change would need.
+    # NOT raised again even though 900 s has since timed out too: it was proven sufficient on the
+    # bench the same day on the same class of run, and a bigger arbitrary guess repeats the mistake
+    # this file's history warns about (raising the ceiling instead of finding out why it was hit).
+    # What changed instead is the failure message below: it names which of three things happened.
     _wait_ssh 900 || {
         bad "host SSH never came up after the wizard gate — cannot read hugepages/machine-id ($(_ssh_unreachable_reason "$ip"))"
         return
@@ -520,21 +517,24 @@ phase_boot() {
         bad "$verdict"
     fi
 
-    # #895: machine-id must be assigned once and then STAY. An empty-baked image with no
-    # restore-from-/data unit regenerates a new transient id on EVERY boot (systemd's own
-    # first-boot semantics on a permanently read-only /etc) — worse than the bug being fixed.
-    local id_before id_after
+    # #895: machine-id must be assigned once and then STAY — an empty-baked image with no restore
+    # unit regenerates a transient id on EVERY boot. #1659 rides the same reboot: journald starts on
+    # the transient id and, before the fix, kept it all boot — a new journal directory per boot and
+    # `journalctl -b` empty on every boot but the first. journal_boot_verdict is fixture-tested (tier 1).
+    local id_before id_after jd_before jd_after jb
     id_before=$(_ssh cat /etc/machine-id)
+    jd_before=$(_ssh 'ls /var/log/journal | wc -l' | tr -d '\r\n ')
     if [ -n "$id_before" ]; then
         _ssh reboot >/dev/null 2>&1 || true
         sleep 10
         if _wait_ssh 240; then
             id_after=$(_ssh cat /etc/machine-id)
-            if [ -n "$id_after" ] && [ "$id_before" = "$id_after" ]; then
-                ok "machine-id stable across a reboot ($id_before)"
-            else
+            [ -n "$id_after" ] && [ "$id_before" = "$id_after" ] && ok "machine-id stable across a reboot ($id_before)" ||
                 bad "machine-id changed across a reboot (before: $id_before, after: ${id_after:-none})"
-            fi
+            jd_after=$(_ssh 'ls /var/log/journal | wc -l' | tr -d '\r\n ')
+            jb=$(_ssh 'journalctl -b -q --no-pager -u pithead-machine-id 2>/dev/null | wc -l' | tr -d '\r\n ')
+            printf '     · journal dirs %s -> %s; journalctl -b: %s kernel lines, %s from pithead-machine-id\n' "$jd_before" "$jd_after" "$(_ssh 'journalctl -b -k -q --no-pager 2>/dev/null | wc -l' | tr -d '\r\n ')" "$jb"
+            verdict=$(journal_boot_verdict "$jd_before" "$jd_after" "$jb") && ok "$verdict" || bad "$verdict"
         else
             bad "guest never returned after the machine-id reboot check"
         fi

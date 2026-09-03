@@ -307,6 +307,8 @@ chk "machine-id restore unit enabled" \
 chk "machine-id restore orders before networkd (DHCP DUID) and the journal flush" \
     'grep -q "systemd-networkd.service" "$ROOT/etc/systemd/system/pithead-machine-id.service" &&
      grep -q "systemd-journal-flush.service" "$ROOT/etc/systemd/system/pithead-machine-id.service"'
+chk "machine-id restore re-points journald at the restored id (#1659)" \
+    'grep -q "systemctl restart systemd-journald.service" "$ROOT/usr/local/sbin/pithead-machine-id"'
 # First-boot interrupt record (#1030): Storage=persistent (journald.conf.d/pithead.conf) has
 # nowhere real to write without this bind mount — /var/log/journal otherwise sits on the same
 # read-only root as /etc, so a hard reset mid-first-boot left no journal to diagnose it from.
