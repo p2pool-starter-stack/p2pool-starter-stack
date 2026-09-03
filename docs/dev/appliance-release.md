@@ -340,7 +340,10 @@ runs from the release-prep commit on `develop`, and `main` fast-forwards to the 
 one version and one GitHub Release.
 
 1. The release commit is green: `make lint && make test`, and `tests/os/run.sh --phase all`
-   on the bench.
+   on the bench. `make lint-sh` refuses to run on any shellcheck but the pinned one and names the
+   version it found alongside the one it wants; `make -s print-shellcheck-version` prints the pin.
+   A distro build reports different findings over the same files, so a skew reds the cut for
+   nothing — install the pin from [`release-server.md`](release-server.md#the-lintrelease-toolchain).
 2. Bump `VERSION`. The tag is `v<VERSION>` and every artifact derives from it —
    `STACK_VERSION` is the single place the registry tag comes from.
 3. Build the image and bundle with the **release key**, never the throwaway `--dev` chain. Point
