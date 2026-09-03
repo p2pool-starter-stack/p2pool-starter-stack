@@ -9,40 +9,29 @@
 CVE-2026-23949
 CVE-2026-24049
 
-# Appliance rootfs Go binaries. THIS BLOCK IS DELIBERATELY EMPTY — it stays here so that nobody
-# re-adds a line to it without reading why the last one went. It used to hold three findings on
-# the grounds that the modules were VENDORED inside downloaded release binaries, so "no pin bump
-# can clear them until upstream cuts releases on the fixed modules". That premise is gone: the
-# rootfs COMPILES docker-compose and cosign itself, so the module graph is ours and a finding in it
-# is fixable whether or not upstream has moved. Two of the three were fixed at the source by the
-# COMPOSE_GO_RAISES / COSIGN_GO_RAISES entries in os/rootfs/Dockerfile — golang.org/x/text
-# (CVE-2026-56852) and google.golang.org/grpc (GHSA-hrxh-6v49-42gf). Deleting a mute is not
-# cosmetic: while a mute is present the scan cannot tell "fixed" from "hidden", so leaving one for
-# a finding you have just fixed destroys the only evidence that the fix landed.
+# Appliance rootfs Go binaries. THIS BLOCK IS DELIBERATELY EMPTY — it stays so nobody re-adds a
+# line to it without reading why the last one went. It once held three findings on the grounds that
+# the modules were VENDORED inside downloaded release binaries, so no pin bump could clear them.
+# That premise is gone: the rootfs COMPILES docker-compose and cosign itself, so the module graph is
+# ours and a finding in it is fixable whether or not upstream has moved. Two were then fixed at the
+# source by the COMPOSE_GO_RAISES / COSIGN_GO_RAISES entries in os/rootfs/Dockerfile —
+# golang.org/x/text (CVE-2026-56852) and google.golang.org/grpc (GHSA-hrxh-6v49-42gf). Deleting a
+# mute is not cosmetic: while one is present the scan cannot tell "fixed" from "hidden", so leaving
+# one for a finding you have just fixed destroys the only evidence that the fix landed.
 #
-# The third was CVE-2026-34040 on github.com/docker/docker, reached as an indirect dependency of
-# the compiled docker-compose. It is now gone and has been dropped (#1656). Two routes agree:
-# scripts/trivyignore-watch.sh's scheduled run of 2026-08-31 reported it OBSOLETE — no covered
-# image reports it — and an isolated probe on the pinned engine (a go.mod requiring
-# github.com/docker/docker v28.5.2+incompatible) does not match the ID at all. The advisory now
-# names github.com/moby/moby rather than github.com/docker/docker; that is the likely mechanism,
-# but it is inferred from the advisory's affected-package list and was not proven against trivy's
-# own matcher.
+# The third was CVE-2026-34040 on github.com/docker/docker, an indirect dependency of the compiled
+# docker-compose. Dropped as obsolete (#1656): trivyignore-watch.sh's scheduled run of 2026-08-31
+# reported it seen in no covered image, and on the pinned engine the ID no longer matches
+# github.com/docker/docker v28.5.2+incompatible at all.
 #
-# NOTHING REPLACES IT, and that is a decision rather than an oversight (#1656). The same module
-# today reports CVE-2026-41567 and CVE-2026-42306 (HIGH, both fixed=NONE), CVE-2026-33997 (fixable
-# at 29.3.1 but MEDIUM) and CVE-2026-41568 (MEDIUM, unfixed). At the gate's own scope — --severity
-# HIGH,CRITICAL --ignore-unfixed, which ci.yml, os-rootfs.yml and scripts/trivyignore-watch.sh all
-# share — that module yields ZERO findings: both HIGHs are unfixed, and the one fixable finding is
-# below the severity floor. Measured as a controlled pair on the pinned engine, same probe with one
-# variable changed: wide scope 4 findings, gate scope 0.
-#
-# So there is nothing here to mute, and an entry would be worse than absent. It would suppress
-# nothing the gate ever reports, and because trivyignore-watch.sh scans with --ignore-unfixed too,
-# it would be flagged OBSOLETE on the very next weekly run — a mute that exists only to be
-# reported as dead. What would change this: compose moving to the docker 29 module path, which is
-# what makes a finding here fixable and therefore gating. `go list -m -versions
-# github.com/docker/docker` is the one-line check.
+# NOTHING REPLACES IT, and that is a decision (#1656). That module still reports CVE-2026-41567 and
+# CVE-2026-42306, both HIGH — but both are fixed=NONE, and the only fixable finding on it is MEDIUM.
+# At the scope this file is written for, and which ci.yml, os-rootfs.yml and trivyignore-watch.sh
+# all share (--severity HIGH,CRITICAL --ignore-unfixed), that module yields ZERO findings. An entry
+# would suppress nothing the gate reports, and since the watch script also scans --ignore-unfixed it
+# would be flagged OBSOLETE on the next weekly run — a mute existing only to be reported dead.
+# What would change that: compose moving to the docker 29 module path, which is what makes a finding
+# here fixable and therefore gating. `go list -m -versions github.com/docker/docker` is the check.
 # NOTE ON GO STDLIB FINDINGS — there are none listed here on purpose. The appliance rootfs used
 # to download upstream release binaries and inherit whichever Go toolchain built them, so every Go
 # stdlib CVE became an accepted finding we could not clear (nine of them by 2026-08). It now
