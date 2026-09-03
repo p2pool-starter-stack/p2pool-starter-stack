@@ -98,9 +98,15 @@ The test box holds real synced nodes and real keys. Treat it as production-sensi
   reaches the 48-character form, and no bound reaches the emoji form at all.
   **The JSON rule is keyed on the field NAME, not the value, and that is forced**:
   a view key and a container digest are both 64 hex characters, so nothing in the value separates
-  them. **The name list is open, and one field is out of the FILTER's reach** — `notifications.ntfy.url`
+  them. **The name list is open, and three fields are out of the FILTER's reach** — `notifications.ntfy.url`
   is a capability URL whose key is the bare word `url`, which only its nesting separates from the
-  public `xvb.url`, and a line-wise filter cannot see nesting. That is a limit of the filter, not
+  public `xvb.url`, and a line-wise filter cannot see nesting. `notifications.webhooks[]` is the
+  same kind of URL one shape over: the rule needs the key's colon to be followed by the value's own
+  quote, and a JSON list puts a bracket in between. The list shape alone is enough to defeat it —
+  `webhook_urls` sits in the redactor's vocabulary, and a value written as `["…"]` under that very
+  key still comes through raw. `xvb.standby.source` is the third, and it is a plain name gap: the
+  masked-config pass treats it as a secret, and no suffix in either vocabulary carries the bare
+  word `source`. That is a limit of the filter, not
   of the bundle: since [#1630](https://github.com/p2pool-starter-stack/pithead/issues/1630) the
   `config.json` artifact is masked BY PATH before it reaches the filter (*Artifacts & triage*
   below), so the topic does not survive a capture. The self-test states the filter's gap rather
@@ -755,7 +761,13 @@ than that a `<redacted>` marker appeared, since a marker can come from some othe
 same line. Its JSON population is derived from `config.reference.json` rather than
 listed in the file, under a screen deliberately wider than the redactor's own list, so a sensitive
 field added to the schema fails the test by name until someone classifies it as redacted or as a
-stated survivor. It also guards the other direction: a sha256 digest, a non-secret flag value, the
+stated survivor. Arrays are classified on their own account rather than by name
+([#1723](https://github.com/p2pool-starter-stack/pithead/issues/1723)): an empty list yields no
+element for the screen to read, and a list element's path ends in `[]`, which no suffix rule can
+match, so all four of the schema's arrays sat outside that guarantee — three of them carrying
+secrets the masked-config pass covers by path. Checking that pass's own path list against this
+file's classification is what turned up `xvb.standby.source`, which the screen now reaches; the
+check itself is not yet mechanical here. It also guards the other direction: a sha256 digest, a non-secret flag value, the
 reserved IP ranges and a HAProxy timestamp must survive, because an artifact with its image pins or
 its port map stripped is useless for the triage it exists for. That timestamp is not a hypothetical
 near-miss: HAProxy's `DD/Mon/YYYY:HH:MM:SS` reads as an IPv6 address, because a four-digit year
