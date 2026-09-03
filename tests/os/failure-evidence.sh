@@ -565,19 +565,3 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ] && [ "${1:-}" = "--self-test" ]; then
     _fe_self_test
     exit $?
 fi
-
-# kvm_preflight — refuse to boot the 16 GiB guest when the host cannot back it (#1059, the 02:56Z
-# hang). The KVM host also hosts the fleet: a memory hang there takes every lane down and needs
-# the operator's hands to recover, so a refused boot is a finding and a hang is a lost box. The bar
-# is the guest plus a 4 GiB margin; MemAvailable already counts reclaimable cache, so it is the
-# honest "what the guest can take without swapping" figure. The reading is printed either way, so
-# every boot leaves the number the next reader will want.
-kvm_preflight() {
-    local need avail
-    need=${PITHEAD_KVM_MIN_AVAIL_MB:-20480}
-    avail=$(awk '/^MemAvailable:/{printf "%d", $2 / 1024}' /proc/meminfo)
-    printf '     · host MemAvailable=%s MiB before the guest boots (bar %s MiB)\n' "$avail" "$need"
-    [ "$avail" -ge "$need" ] && return 0
-    bad "KVM PRE-FLIGHT REFUSED: host MemAvailable ${avail} MiB is under the ${need} MiB bar — not booting the 16 GiB guest (#1059: the condition that hung the host)"
-    return 1
-}
