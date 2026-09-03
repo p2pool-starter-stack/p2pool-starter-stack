@@ -127,8 +127,8 @@ build() {
 
 write_artifact() {
     local tmp
-    # Build beside the artifact, then rename over it. Two reasons, and the mode is carried across
-    # explicitly so nothing is given up by not writing in place:
+    # Build beside the artifact, then rename over it. Two reasons, and the mode is set explicitly
+    # so nothing is given up by not writing in place:
     #
     #   - `cat >"$ARTIFACT"` truncates at OPEN time, before a single byte is written and whatever
     #     `set -e` does afterwards. A rebuild interrupted at that instant — Ctrl-C, a full disk, a
@@ -148,11 +148,9 @@ write_artifact() {
     # shellcheck disable=SC2064  # expand now: the trap must name THIS file, not whatever $tmp is later
     trap "rm -f -- '$tmp'" EXIT
     build >"$tmp"
-    if [ -e "$ARTIFACT" ]; then
-        chmod --reference="$ARTIFACT" "$tmp"
-    else
-        chmod 0755 "$tmp"
-    fi
+    # Always 0755: the artifact is tracked at that mode, an operator runs `./pithead`, release.sh
+    # bundles it as-is, and `chmod --reference` (carrying a mode across) is GNU-only — macOS refuses.
+    chmod 0755 "$tmp"
     mv -f "$tmp" "$ARTIFACT"
     echo "build-pithead: wrote $ARTIFACT from $(list_slices | wc -l | tr -d ' ') slice(s)."
 }
@@ -304,15 +302,16 @@ self_test() {
         rm -rf "$blank"
     done
 
-    # 8. A rebuild is idempotent and keeps the artifact's mode — an operator runs ./pithead.
+    # 8. A rebuild over an existing artifact exits 0 and leaves it executable — an operator runs
+    #    ./pithead. Guarded like every other case: unguarded, `set -e` aborted the whole self-test
+    #    here with both streams already redirected, so cases 9+ silently never ran (macOS, #1722).
     chmod 0755 "$tmp/pithead"
-    PITHEAD_BUILD_ROOT="$tmp" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1
-    if [ -x "$tmp/pithead" ]; then
-        echo "  ok   — a rebuild preserves the artifact's executable bit"
-    else
-        echo "  FAIL — a rebuild dropped the artifact's executable bit"
-        fail=1
-    fi
+    rc=0
+    PITHEAD_BUILD_ROOT="$tmp" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1 || rc=$?
+    _case "a rebuild over an existing artifact exits 0" 0 "$rc"
+    rc=0
+    [ -x "$tmp/pithead" ] || rc=1
+    _case "a rebuild preserves the artifact's executable bit" 0 "$rc"
 
     # 9. The slice order is LC_ALL=C LEXICAL, not numeric or version ordering. NO case above can
     #    see this: 00/10/99 sort identically under `sort` and `sort -V`, so a mutant that swapped
