@@ -46,7 +46,12 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
   hands on it, and the real commit gate — `pithead doctor --json` — must pass on that healthy
   stack yet refuse once a revenue service is down. The closing leg installs a `data_migration`
   bundle through `pithead os-update` and proves the migration hold: the chain services stay down
-  until the slot commits, then start, with the pending marker consumed.
+  until the slot commits, then start, with the pending marker consumed. After it, the floor-fallback
+  leg (`data-floor-fallback-leg.sh`, #1393) installs a migrating bundle stamped with a version no
+  release carries, so its slot cannot bring the stack up and falls back uncommitted: the previous
+  slot's boot must put the `/data` floor back from the record the raise left, and the same fall-back
+  with the record deleted must leave the floor alone and make `os-update` refuse with the
+  failed-update premise.
 - **rig** — answer `RigForge` on the same page and prove the other machine this image installs:
   it mines from the baked binary with no compile and no clearnet, starts no containers at all,
   and takes an A/B update — install, boot, self-commit on the miner running, persistence —
