@@ -241,6 +241,19 @@ os_update_rollback_verdict() {
     echo "pithead-boot: the $to update never committed — the bootloader fell back and this boot runs the previous version${held:+ (its gate was held by: $held)}"
 }
 
+# #1393: os-update raises the /data floor at INSTALL and records the floor it replaced (or `none`)
+# in .os-data-floor.prev; a fallback boot (marker naming another version) puts the floor back from
+# that record. NO record: the floor stays — never lowered without one. The stale marker goes either way.
+restore_data_floor_after_fallback() { # cwd /data/pithead; prints one line when it restored
+    [ -f .os-migration-pending ] || return 0
+    rm -f .os-migration-pending
+    local prev && prev=$(tr -d '[:space:]' 2>/dev/null <.os-data-floor.prev)
+    [ -n "$prev" ] || return 0
+    if [ "$prev" = none ]; then rm -f .os-data-floor; else printf '%s\n' "$prev" >.os-data-floor; fi
+    rm -f .os-data-floor.prev
+    echo "pithead-boot: the data migration never ran — the update fell back before it committed, so the /data floor is back to ${prev/#none/none (no earlier migration)}"
+}
+
 # Sourceable for the test suite: everything above is definitions, so a `source` stops here and the
 # suite can drive fail_boot in a sandbox. Executed directly — every real boot — this is a no-op.
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
@@ -301,18 +314,18 @@ os_update_rollback_verdict
 ./pithead render || fail_boot "the derived config could not be rendered"
 
 # The migration hold (#851): os-update leaves a marker when the installed bundle declares a
-# forward-only /data migration, stamped with that bundle's version. A marker matching THIS
-# slot's version means this is the migrating bundle's pre-commit boot — the chain services
-# (the holders of irreversible lmdb migrations) must not start until the commit decision is
-# made, so automatic A/B fallback always lands on data the old OS can still read. A marker
-# that does not match is a fallback boot (the migrating slot failed health): the migration
-# never ran, the data is untouched, and this boot proceeds normally. doctor reads the same
-# marker and judges the deliberately-held chain containers by the sync-hold rule, so the
-# commit gate below gates on everything that IS running instead of deadlocking on the hold.
+# forward-only /data migration, stamped with that bundle's version. A marker matching THIS slot's
+# version means this is the migrating bundle's pre-commit boot — the chain services (the holders of
+# irreversible lmdb migrations) must not start until the commit decision is made, so automatic A/B
+# fallback always lands on data the old OS can still read. A marker that does not match is a fallback
+# boot: the migration never ran, the floor it raised is put back, and this boot proceeds normally.
+# doctor reads the same marker and judges the held chain containers by the sync-hold rule.
 hold_chain=0
 if [ -f .os-migration-pending ] &&
     [ "$(tr -d '[:space:]' <.os-migration-pending)" = "$(tr -d '[:space:]' <VERSION 2>/dev/null)" ]; then
     hold_chain=1
+else
+    restore_data_floor_after_fallback
 fi
 
 if [ "$hold_chain" = 1 ]; then
@@ -362,7 +375,7 @@ for _ in $(seq 90); do
         # already happened. `|| true` for the same reason: a chain service that cannot start is
         # a fault to alert on, never grounds to fail a boot the commit already accepted.
         if [ "$hold_chain" = 1 ]; then
-            rm -f .os-migration-pending
+            rm -f .os-migration-pending .os-data-floor.prev
             # Logged BEFORE the up: the release line marks the commit boundary for the journal
             # (and the tier-4 battery), and the up that starts the chain can take minutes.
             echo "pithead-boot: slot committed — chain services released, the data migration runs now"

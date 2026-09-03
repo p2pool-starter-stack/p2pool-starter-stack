@@ -208,6 +208,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-os-update.sh" && domain_ran
 # shellcheck source=tests/stack/test-appliance-os-update-verbs.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-os-update-verbs.sh" && domain_ran test-appliance-os-update-verbs.sh "$_d0" "$?" || domain_ran test-appliance-os-update-verbs.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-appliance-data-floor.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-data-floor.sh" && domain_ran test-appliance-data-floor.sh "$_d0" "$?" || domain_ran test-appliance-data-floor.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-appliance-os-update-lock.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-os-update-lock.sh" && domain_ran test-appliance-os-update-lock.sh "$_d0" "$?" || domain_ran test-appliance-os-update-lock.sh "$_d0" "$?"
 
