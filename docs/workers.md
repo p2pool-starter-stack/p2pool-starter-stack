@@ -354,7 +354,7 @@ the latest RigForge release itself — the per-worker twin of the stack's one-cl
 The rig side must opt in: RigForge's `control_upgrade` capability (default off, on top of its
 `control` flag, bearer token, and source pin) and RigForge **v1.11.2 or newer** — earlier versions
 refuse legitimate upgrades on a fresh clone. See
-[RigForge › ADR 0002](https://github.com/p2pool-starter-stack/rigforge/blob/main/docs/adr/0002-remote-upgrade.md)
+[RigForge › ADR 0002](https://github.com/p2pool-starter-stack/rigforge/blob/main/docs/adr/0002-remote-worker-upgrade.md)
 for the rig's own guard chain (monotonic version, tag must be an ancestor of `main`, rollback when
 the miner doesn't come back live, and a six-hour throttle between attempts).
 
