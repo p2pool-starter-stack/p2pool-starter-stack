@@ -316,8 +316,8 @@ class TestRowIdsSeparateOneDetectionFromAnother:
 
         The WORKER NAME is the position deliberately: measured per position, a surrogate
         ``change_id`` never reaches the escape at all — ``worker_config_change_known`` hands it to
-        sqlite first and sqlite refuses it, which is a separate pre-existing raise on this path and
-        not what this test is about. Written against the reachable half, this goes RED without
+        sqlite first and sqlite refuses it — a separate pre-existing raise on this path, filed as
+        #1696, and not what this test is about. Written against the reachable half, this goes RED without
         ``errors="surrogatepass"``; written against the other it would have gone red for sqlite's
         reason and proved nothing about the escape."""
         svc, sm = _svc()

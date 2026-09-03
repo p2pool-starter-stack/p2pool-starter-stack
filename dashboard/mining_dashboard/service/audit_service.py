@@ -87,7 +87,7 @@ def _escape_id_part(part):
     the poll loop, where the old bare join never encoded anything at all. Measured per position: a
     surrogate in the WORKER NAME reaches here and is escaped to ``%ED%A0%80``; one in a
     ``change_id`` never arrives, because ``worker_config_change_known`` passes it to sqlite first
-    and sqlite refuses it. That upstream raise is not this function's to fix and predates it."""
+    and sqlite refuses it. That upstream raise predates this and is #1696, not this function's."""
     return quote(str(part), safe="", errors="surrogatepass").replace("~", "%7E").replace("-", "%2D")
 
 
