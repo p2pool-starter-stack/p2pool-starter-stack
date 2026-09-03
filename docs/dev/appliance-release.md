@@ -107,6 +107,15 @@ Two guards consume them, because a correctly-signed bundle is not automatically 
   unreadable there and the failure is silent data loss, not a policy preference. The escape is
   a factory reset (loses the chain) or restoring a backup taken on a version at or above the
   floor.
+  The floor is raised at install time, before the migration runs, and the migration itself
+  waits for the slot to commit (#851) — so a migrating bundle that fails its boot gate falls
+  back with the data untouched and the floor already raised. `os-update` therefore records the
+  floor it replaced (or `none`) in `.os-data-floor.prev` before raising, and the fallback boot
+  puts the floor back from that record and removes it; a box with no record keeps its floor,
+  since a floor is never lowered without one. Until the old slot carries that boot logic, the
+  guard tells the truth about the state instead: a floor above the running version means the
+  migration never ran (or the slot was installed outside `pithead`), the floor version or newer
+  installs, and nothing needs resetting or restoring for it (#1393).
 
 **The data-migration contract for release authors:** a release that ships a forward-only
 schema bump MUST declare it, or a later rollback silently strands the migrated chain data.

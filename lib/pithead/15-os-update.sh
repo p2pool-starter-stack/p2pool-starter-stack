@@ -60,8 +60,15 @@ os_raise_data_floor() { # $1: new floor — raise it, never lower (a migration o
     local f cur
     f=$(os_data_floor_file)
     cur=$(os_data_floor)
+    mkdir -p "$(dirname "$f")" 2>/dev/null || true
+    # The record a fallback boot restores from (#1393): the floor as it stands BEFORE this raise,
+    # or `none`. Written first, so a crash between the two leaves a record equal to the live floor
+    # (restoring it is a no-op), and written even when the raise below is a no-op, so every
+    # migrating install leaves one. pithead-boot consumes it: the fallback boot puts the floor
+    # back from it, the commit removes it. Nothing here ever lowers the floor — only that boot,
+    # with this record, does.
+    printf '%s\n' "${cur:-none}" >"$f.prev"
     if [ -z "$cur" ] || { os_semver_ok "$cur" && semver_newer "$1" "$cur"; }; then
-        mkdir -p "$(dirname "$f")" 2>/dev/null || true
         printf '%s\n' "$1" >"$f"
     fi
 }
@@ -104,6 +111,17 @@ os_update_version_guard() { # $1: bundle version, $2: allow_downgrade 0|1 — ec
         floor=$(os_data_floor)
         if ! os_semver_ok "$floor"; then
             printf '%s' "Refusing: the /data migration floor is unreadable ('${floor:-empty}'). A corrupt floor is not permission to install over migrated chain data — restore it, or recover with a factory reset (loses the chain) or a matching backup."
+            return 0
+        fi
+        # A floor ABOVE the running version cannot be what it claims (#1393): a slot that could not
+        # read /data would not be running. Either a migrating update failed its gate and fell back
+        # before its migration ran, with the floor never put back (the data is untouched), or this
+        # slot was installed outside pithead below migrated data. The guard lowers nothing — only
+        # pithead-boot does, with a record — so it refuses with the true premise and the open
+        # route, and never names a reset or a restore as the way out of this state.
+        if os_semver_ok "$running_version" && semver_newer "$floor" "$running_version" &&
+            { ! os_semver_ok "$bundle_version" || semver_newer "$floor" "$bundle_version"; }; then
+            printf '%s' "Refusing: the /data floor says OS >= $floor is needed to read the chain data, yet this slot runs $running_version — either a migrating update to $floor failed its gate and fell back before its migration ran (the chain data is untouched, and the floor was never put back), or this slot was installed outside pithead below migrated data. This bundle is '${bundle_version:-unstamped}'; the floor version or newer installs. Nothing needs resetting or restoring for this."
             return 0
         fi
         if ! os_semver_ok "$bundle_version" || semver_newer "$floor" "$bundle_version"; then
