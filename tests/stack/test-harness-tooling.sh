@@ -9,6 +9,20 @@ echo "== unit: lint-docs-voice self-test (#1441) =="
 bash "$ROOT/scripts/lint-docs-voice.sh" --self-test >/dev/null 2>&1
 assert_rc "docs-voice guard self-test passes" "$?" "0"
 
+# The assertion above only proves anything if the script still RECOGNISES --self-test: a revert
+# that drops the flag along with the guard (i.e. exactly the pre-#1441 script) makes the flag a
+# silent no-op — it just runs the ordinary scan against this real checkout, which has real
+# tracked docs and no banned words, and exits 0 regardless of the missing guard. That reverted
+# script would pass the assertion above. So drive the guard directly too, with no dependence on
+# the script knowing its own flag: an empty-enumeration repo must make the UNFLAGGED script
+# refuse, not pass.
+empty_repo="$SANDBOX/lint-docs-voice-empty"
+mkdir -p "$empty_repo"
+git init -q "$empty_repo" >/dev/null
+out=$(cd "$empty_repo" && bash "$ROOT/scripts/lint-docs-voice.sh" 2>&1) && rc=0 || rc=$?
+assert_rc "docs-voice guard refuses an empty prose-doc enumeration directly" "$rc" "1"
+assert_contains "docs-voice refusal names the empty enumeration" "$out" "prose-doc enumeration returned zero files"
+
 echo "== unit: lint-operator-strings self-test (#755) =="
 # The operator-strings guard's frontend scanner is non-trivial awk (comment-stripping + CSS-hex-colour
 # skip); a silent break would make it stop catching leaks. Its --self-test drives fixtures through the
