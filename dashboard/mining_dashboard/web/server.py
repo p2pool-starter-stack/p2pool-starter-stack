@@ -8,6 +8,7 @@ import uuid
 
 from aiohttp import web
 
+from mining_dashboard.client.xmrig_client import strip_sentinel_credentials
 from mining_dashboard.config import config
 from mining_dashboard.service import audit_service, control_service, worker_adopt, worker_refresh
 from mining_dashboard.service.metrics import build_metrics, share_reject_pct
@@ -293,10 +294,9 @@ async def handle_backup_download(request):
 
 
 # Terminal-ish outcomes worth a history row — shared by worker-apply and worker-upgrade (#1014).
-# noop/throttled are upgrade-only (the host runner's control_worker_upgrade case statement); the
-# rest are common to both actions. "accepted" is genuinely non-terminal (still running on the rig
-# past the wait budget) but IS the runner's final write for that request id, so it's recorded too
-# — the alternative is a change the operator made that the dashboard never mentions again.
+# noop/throttled are upgrade-only; the rest are common to both. "accepted" is genuinely
+# non-terminal (still running past the wait budget) but IS the runner's final write for that
+# request id, so it's recorded too — the alternative is a change the dashboard never mentions again.
 _RECORDABLE_WORKER_STATUSES = (
     "applied",
     "rejected",
@@ -366,6 +366,7 @@ async def handle_worker_apply(request):
     err = control_service.validate_worker_changes(changes)
     if err:
         raise web.HTTPBadRequest(text=err)
+    changes = strip_sentinel_credentials(changes)
     actor = request.headers.get("X-Auth-User", "")
     state_mgr = request.app["state_manager"]
     try:
@@ -562,11 +563,10 @@ def _apply_security_headers(response):
         "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
         "base-uri 'self'; form-action 'self'"
     )
-    # Make browsers revalidate instead of holding a stale copy under heuristic freshness. The
-    # static CSS/JS is baked into the image, so a `pithead upgrade` changes the served bytes;
-    # without this, a browser (notably iOS Safari) can keep serving the pre-upgrade dashboard.css
-    # for an unpredictable while (Issue #83). 'no-cache' still allows a conditional request, so an
-    # unchanged asset costs only a 304 — no re-download of the vendored libs on each page load.
+    # Make browsers revalidate instead of holding a stale copy under heuristic freshness — the
+    # static CSS/JS is baked into the image, so a `pithead upgrade` changes served bytes, and a
+    # browser (notably iOS Safari) can otherwise keep serving pre-upgrade dashboard.css a while
+    # (Issue #83). 'no-cache' still allows a conditional request, so an unchanged asset costs only a 304.
     response.headers["Cache-Control"] = "no-cache"
     return response
 

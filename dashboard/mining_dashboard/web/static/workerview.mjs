@@ -5,13 +5,12 @@
 // X-Pithead-Control CSRF header, and the HOST-side runner resolves the rig's address + token from
 // config.json and dials the rig (the container never holds the token, #440). The editor is scoped to
 // the writable allowlist the rig enforces; the rig re-validates and rolls back if the miner doesn't
-// return to a live hashrate. Prefill comes from Pithead's own last-applied record — the rig's
-// enriched feed doesn't expose the writable config values.
+// return to a live hashrate. Prefill prefers the rig's own values over Pithead's last-applied
+// record, which goes stale the moment someone edits the rig directly (#1235).
 //
-// Two edit modes (#518, ratified in #529): a table editor (one row per writable key, typed off its
-// current value) and a raw JSON textarea — both fold to the same {changes} diff and go through the
-// one apply() below. A "Load from file" button inside JSON mode reads a local file into the
-// textarea (FileReader, no upload) for pushing the same profile to several rigs.
+// Two edit modes (#518/#529): a table editor (one row per writable key) and a raw JSON textarea,
+// its whole object diffed before sending (#1548) — both fold to {changes} and go through apply().
+// JSON mode's "Load from file" button reads a local file into the textarea (FileReader, no upload).
 
 import { WorkerChartCard } from "./chart.mjs";
 import { ConfigProvenance, HistoryRow, STATUS_META } from "./confighistory.mjs";
@@ -23,6 +22,7 @@ import {
   buildChartMarkers,
   buildFields,
   buildTableChanges,
+  detailSnapshot,
   fieldNote,
   jsonSyntaxError,
   parseJsonChanges,
@@ -158,8 +158,8 @@ export class WorkerInspect extends Component {
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const detail = await res.json();
-      // Prefill the editor with the last-applied writable config, or an empty object to start from.
-      const editText = JSON.stringify(detail.last_applied || {}, null, 2);
+      // Same rig-first value the table renders from (#1235) — both modes need one starting point.
+      const editText = JSON.stringify(detailSnapshot(detail), null, 2);
       this.setState({ phase: "ready", detail, editText, tableEdits: {}, jsonError: null });
     } catch (e) {
       this.setState({ phase: "error", error: String(e) });
@@ -210,7 +210,7 @@ export class WorkerInspect extends Component {
     const { detail, mode, editText, tableEdits } = this.state;
     let changes;
     if (mode === "json") {
-      const out = parseJsonChanges(editText, detail.writable_keys);
+      const out = parseJsonChanges(editText, detail.writable_keys, detailSnapshot(detail));
       if (out.error) {
         this.setState({ result: { status: "error", error: out.error } });
         return;
@@ -226,10 +226,10 @@ export class WorkerInspect extends Component {
         });
         return;
       }
-      if (!Object.keys(changes).length) {
-        this.setState({ result: { status: "error", error: "No changes to apply." } });
-        return;
-      }
+    }
+    if (!Object.keys(changes).length) {
+      this.setState({ result: { status: "error", error: "No changes to apply." } });
+      return;
     }
     this.setState({ busy: true, result: { status: "running" } });
     try {

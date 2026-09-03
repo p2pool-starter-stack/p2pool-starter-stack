@@ -543,20 +543,40 @@ How it stays safe:
 - **Masked values stay masked.** If a writable value is ever a masked secret (the same
   `{__secret__: true}` sentinel the [Configuration view](#configuration-view) uses), the table
   editor renders it as a blank password field, never as JSON you could copy or mangle; leave it
-  blank to keep it, type a value to replace it. the config tab's Advanced pane carries the sentinel
-  through untouched unless you edit that key yourself.
-- **The pool password is not kept.** `pools` is editable and a pool entry carries the stratum
-  password, so the change record could hold one in plain text. It doesn't: the password and the TLS
-  fingerprint are stripped out of the record before it is written, and stripped again out of every
-  read of it — so a history written by an older build stops handing them back the moment you
-  upgrade, without anything having to rewrite the database. The password still reaches the rig; it
-  travels with the change itself. What the dashboard declines to do is keep its own copy.
+  blank to keep it, type a value to replace it. The JSON mode carries the sentinel through
+  untouched unless you edit that key yourself — it diffs the whole textarea against the same
+  values it was prefilled from, so leaving a field alone never resends it (#1548). The server
+  scrubs a leftover sentinel from a worker-apply request too, on the way to the rig — not the
+  primary defence, since the editor is expected to have already left it out, but there is no live
+  value here to swap it back FOR the way the host does for its own config secrets (#440), only one
+  to drop.
+- **The pool password is not kept, and leaving `pools` untouched can never wipe it (#1548).**
+  Neither editor mode resends a `pools` you didn't open: JSON mode diffs the whole textarea
+  against its prefill, table mode only ever emits a key you changed. The change record never gets
+  a chance to hold the value either way — it strips the password and the TLS fingerprint out
+  before writing, and strips them again out of every read.
+  **Editing a pool entry is a different story, and it is not fully solved yet.** RigForge deletes
+  `pass` and `tls-fingerprint` before serving its enriched feed (`rigforge.sh`'s
+  `_api_config_json`), so on a stock rig `pools` reaches this dashboard with no password key at
+  all — no `{__secret__: true}` sentinel, nothing for the editor to recognise as "a credential
+  lives here." (The sentinel and the scrub chain that removes a stray one before it reaches the
+  rig do exist and do fire, but only for a rig running an older or patched build that still serves
+  `pass`.) **Edit a pool entry's URL or any other field on a stock rig, in either mode, and the
+  submitted entry carries no password — RigForge accepts it: a missing `pass` defaults to the
+  literal string `x` (`parse_config`), and `_control_commit` replaces the array wholesale, so the
+  rig starts running with password `x`, silently.** Fixing this needs a change on the RigForge
+  side — a marker for "a password is set" that `_control_commit` can honour when an incoming entry
+  omits `pass` — tracked as rigforge#415; this dashboard's sentinel machinery becomes the real
+  defence once that lands. Until then, re-supply a pool's password whenever you edit anything else
+  on that pool.
 
 RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
-recorded with its keys, outcome, and time. Because the rig's enriched feed doesn't expose the writable
-config *values*, the editor prefills from the last config the dashboard applied — not a live read of
-the rig — so a change made directly on the rig (via `rigforge.sh`) won't show here until the next
-dashboard apply.
+recorded with its keys, outcome, and time. The editor prefills from the rig's own current writable
+config when RigForge's enriched feed carries it (#1235) — not a live read for every field, since a
+handful of fields (the pool credential among them) are masked before this dashboard ever sees the raw
+value — falling back to the last config *this* dashboard applied when the rig sends nothing, so a
+change made directly on the rig (via `rigforge.sh`) shows here on the next poll rather than waiting
+for the next dashboard apply.
 
 Below the change history sits a **Hashrate by config version** table: each *applied* change — a
 config apply or a rig upgrade — with the rig's measured hashrate (the same per-rig `worker_history`

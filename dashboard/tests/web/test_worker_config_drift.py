@@ -15,6 +15,7 @@ drift on a rig running exactly what we applied.
 
 import pytest
 
+from mining_dashboard.service.control_service import SECRET_SENTINEL
 from mining_dashboard.web.worker_detail import (
     _comparable,
     _has_unsettled_apply,
@@ -109,6 +110,15 @@ class TestWhatItRefusesToClaim:
         # otherwise be permanent, uncloseable drift on a rig that has none.
         applied = {"pools": [{"url": "a", "pass": "secret", "tls-fingerprint": "ff"}]}
         rig = {"pools": [{"url": "a"}]}
+        assert config_drift(applied, rig) == []
+
+    def test_a_masked_sentinel_on_the_rig_side_is_not_read_as_drift(self):
+        # mask_pool_credentials (#1548) puts a {"__secret__": True} sentinel on the rig side
+        # wherever a rig still serves "pass". Comparing that sentinel against our own stripped side
+        # raw would report permanent, uncloseable drift on every poll of a rig that never changed
+        # anything -- the rig side must be stripped the same way ours is before comparing.
+        applied = {"pools": [{"url": "a", "pass": "secret"}]}
+        rig = {"pools": [{"url": "a", "pass": dict(SECRET_SENTINEL)}]}
         assert config_drift(applied, rig) == []
 
     def test_a_real_pool_change_still_reports(self):

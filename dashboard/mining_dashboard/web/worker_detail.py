@@ -116,11 +116,14 @@ def config_drift(last_applied, rig_config, unsettled=False):
     - **Only keys we have applied.** ``last_applied`` is a merge of DIFFS, not a config, so it holds
       exactly the keys this dashboard has ever set. A hand-edit to a writable key we never touched
       moves the rig's revision and is invisible here — that is option A's coverage, not this one's.
-    - **Never the pool credentials.** ``strip_credentials`` runs over our side for the same reason
-      the rig's side already runs through it: RigForge deletes ``pass`` and ``tls-fingerprint``
-      before serving, so a password we once applied would be permanent, uncloseable drift. Stripping
-      both sides costs the ability to notice a changed pool password, which nothing on this side can
-      see anyway.
+    - **Never the pool credentials.** ``strip_credentials`` runs over BOTH sides before comparing.
+      RigForge deletes ``pass`` and ``tls-fingerprint`` before serving, so a password we once
+      applied would otherwise be permanent, uncloseable drift on our side alone. The rig side needs
+      the same pass for a different reason: ``_rig_writable_config`` masks a credential it does
+      receive to a ``{__secret__: true}`` sentinel (#1548) rather than stripping it, so a rig that
+      still serves ``pass`` would compare that sentinel against our stripped value and read as
+      permanent drift too, in the other direction. Stripping both sides costs the ability to notice
+      a changed pool password, which nothing on this side can see anyway.
     - **Never mid-flight.** A submitted change sits at ``accepted`` until the reconciler settles it,
       and is not in ``last_applied`` while the rig may already be running it — so comparing inside
       that window reports drift on a key we ourselves just set. Judged on the NEWEST apply row
@@ -130,6 +133,7 @@ def config_drift(last_applied, rig_config, unsettled=False):
     """
     if unsettled or not isinstance(rig_config, dict) or not isinstance(last_applied, dict):
         return None
+    rig_config = strip_credentials(rig_config)
     drift = []
     for key, applied in sorted(strip_credentials(last_applied).items()):
         # ABSENT and ``None`` are different answers and must not be folded together. A rig with no
