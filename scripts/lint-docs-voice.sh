@@ -13,10 +13,8 @@ if [ "${1:-}" = "--self-test" ]; then
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
-    empty="$tmp/emptyrepo"
-    mkdir -p "$empty"
-    git init -q "$empty" >/dev/null
-    out=$(cd "$empty" && bash "$self" 2>&1) && rc=0 || rc=$?
+    git init -q "$tmp" >/dev/null
+    out=$(cd "$tmp" && bash "$self" 2>&1) && rc=0 || rc=$?
     if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -q 'prose-doc enumeration returned zero files'; then
         echo "  self-test ok: an empty prose-doc enumeration is refused, not read as a clean scan"
     else
