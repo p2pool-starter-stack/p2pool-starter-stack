@@ -54,6 +54,7 @@ lib/pithead/12-firstboot-wizard.sh	556
 lib/pithead/28-parse-and-validate-config.sh	485
 lib/pithead/33-render-env.sh	494
 lib/pithead/39-describe-change.sh	428
+os/overlay/pithead-boot	420
 os/rootfs/Dockerfile	406
 scripts/release.sh	851
 scripts/shipped-image-sweep-report.sh	429
@@ -65,7 +66,7 @@ tests/integration/run.sh	2551
 tests/integration/selftest-e2e-phases.sh	507
 tests/integration/selftest.sh	686
 tests/os/failure-evidence.sh	567
-tests/os/run.sh	3437
+tests/os/run.sh	3423
 tests/stack/test-appliance-boot.sh	641
 tests/stack/test-appliance-identity-boot.sh	465
 tests/stack/test-appliance-identity.sh	483

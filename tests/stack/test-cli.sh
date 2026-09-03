@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # CLI domain (#1105 Phase 1): dispatch, subcommand chaining, completion, guards, the small input
 # validators, host/deps detection, version, and the first-run epilogue. Sourced by
 # tests/stack/run.sh after lib.sh. (The apply --dry-run and symlink-invocation sections stay
@@ -134,7 +134,7 @@ assert_rc "rejects 254 chars, past the bound (#558)" "$?" "1"
 echo "== unit: first-run epilogue shows once after up (#384) =="
 # The "what happens next" onboarding note: prints on the first up in a fresh deploy dir, drops a
 # marker beside .env, and stays silent on every later restart.
-FR="$(mktemp -d)"
+mk_tmpdir FR
 out="$(run_sourced "$FR" print_first_run_epilogue 2>&1)"
 assert_contains "first-run: epilogue explains the sync-then-mine hold" "$out" "held until Monero and Tari finish their first sync"
 assert_eq "first-run: silent on the second up (marker respected)" \

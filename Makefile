@@ -1,5 +1,5 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml lint-topology lint-file-budget lint-pithead-parity lint-trivy-parity release release-smoke
+.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml lint-topology lint-file-budget lint-pithead-parity lint-trivy-parity print-shellcheck-version release release-smoke
 
 test: lint test-dashboard test-frontend test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
@@ -44,6 +44,16 @@ test-inventory: ## Write the test coverage inventory to docs/dev/test-inventory.
 test-integration: ## Run the live config-matrix integration suite (requires a test box; pass ARGS=...)
 	bash tests/integration/run.sh $(ARGS)
 
+# The shellcheck version this repo's lint gate MEANS, and the ONE place it is written (#1679).
+# `lint-sh` refuses to run on any other version, and ci.yml's installer derives its download URL
+# from this variable (`make -s print-shellcheck-version`), so the pin cannot drift between the two.
+# Bumping it here is most of the bump: ci.yml's sha256 line is tied to one tarball and fails loudly
+# until it is updated to match. shfmt is NOT covered — its pin is still a literal in ci.yml.
+SHELLCHECK_VERSION := 0.11.0
+
+print-shellcheck-version: ## Print the pinned shellcheck version (ci.yml's installer reads this)
+	@echo $(SHELLCHECK_VERSION)
+
 lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-file-budget lint-pithead-parity lint-trivy-parity lint-proto lint-toml ## Lint/format-check every surface
 
 # Two shellcheck invocations, not one, and the split is load-bearing. shellcheck resolves a
@@ -57,6 +67,12 @@ lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-st
 # of being conserved by the split. The file SET is unchanged: every path below was in the old
 # single invocation, and none is listed twice.
 lint-sh: ## shellcheck + shfmt over the CLI, build/* + dashboard/ container scripts, release + test scripts
+	@# Refuse a version that is not the pin BEFORE linting anything: a different shellcheck reports
+	@# different findings over identical files, so its verdict is not this gate's (#1679).
+	@have=$$(shellcheck --version 2>/dev/null | awk '/^version:/ {print $$2}'); \
+		[ "$$have" = "$(SHELLCHECK_VERSION)" ] || { \
+			echo "lint-sh: shellcheck $${have:-not found} is not the pinned $(SHELLCHECK_VERSION) — its findings are not this gate's."; \
+			echo "lint-sh: install the pin (see docs/dev/release-server.md) or run the gate in CI."; exit 1; }
 	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh dashboard/*.sh \
 		tests/stack/lib.sh tests/stack/test-*.sh tests/stack/test_compose.sh tests/stack/test_data_reset.sh \
 		tests/stack/test_os_update_recovery.sh tests/stack/test_firstboot_journal.sh tests/stack/test_appliance_hugepages.sh \
@@ -106,6 +122,7 @@ lint-md: ## markdownlint over all Markdown (config: .markdownlint-cli2.jsonc)
 	npx --yes markdownlint-cli2@0.18.1
 
 lint-docs-voice: ## Fail if banned marketing words appear in prose docs (house voice: docs/dev/STYLE.md)
+	bash scripts/lint-docs-voice.sh --self-test
 	bash scripts/lint-docs-voice.sh
 
 lint-operator-strings: ## Fail if a #NNN issue/PR number or a bare docs/ path leaks into pithead or dashboard operator-facing text (#755, #1024)

@@ -40,6 +40,14 @@ assertions; `tests/stack/run.sh` itself is the tier-1 shell **suite** — it sou
 file rather than holding assertions of its own (see the test-inventory note under
 [Production-readiness posture](#production-readiness-posture) for how that sourcing is checked).
 
+A domain file is a fragment, not a script. It holds no assertion primitives of its own, so running
+one directly printed every `assert_*` call as `command not found` and still exited 0 for 21 of the
+55 — a domain reporting success having executed nothing, and building its fixtures in the caller's
+working directory on the way past. Each fragment now opens by dereferencing a marker `lib.sh` sets
+on the sourced path, so a direct run is refused with a message naming `run.sh` (#1657). The five
+`tests/stack/test_*.sh` files are the deliberate exception: the Makefile runs each of those
+directly, so they carry no marker check and must not gain one.
+
 ### A. Configuration permutations
 
 The deploy-time axes — each changes a real runtime path. Full table and assertions in
@@ -155,6 +163,7 @@ it — the worker-API **auth model is the #315 none/name/token matrix**, not the
 | Real client authenticates + parses the enriched `/1/summary` over a real socket — none/name/token matrix, wrong-token 401, miner-down body (rigforge#99 shape) | real client vs fake worker API | 2 ✅ (`fakes/fake_worker_api.py` + `test_contract.py`) |
 | The same socket carries the three blocks that drive Worker Inspect: the rig's effective writable `config` (#1235), its `config_meta` provenance (#1345), and the mirrored `control` outcome (#579) — including the fresh-rig `control: null` shape and a non-terminal status, both of which must reconcile nothing | real client vs fake worker API | 2 ✅ (`fakes/test_contract.py`) |
 | Our fake cannot drift from what a real worker emits (#1412): its `rigforge` key set is compared both ways against a vendored copy of RigForge's own `tests/contract/v1/feed.json`, that copy is pinned to the baked `RIGFORGE_REF` so a pin bump without a re-vendor reds here — and because that ref line is hand-edited text, the vendored bytes are separately byte-compared against RigForge's own copy at the baked ref, so editing `PROVENANCE` alone can no longer green a stale fixture, and a producer the check cannot reach fails in CI rather than skipping (#1426) — and every status word in `control-status.json` must be classified terminal or known-non-terminal, on a vocabulary asserted non-empty so an emptied fixture cannot pass having checked nothing | vendored producer fixtures | 2 ✅ (`fakes/contract/v1/` + `test_contract.py` + `test_contract_freshness.py`) |
+| The control-status vocabulary's third site (#1422): `dashboard`'s two Python constants are guarded against each other by name, but the `pithead` script's own `control_worker_apply`/`control_worker_upgrade` poll loops carry the same words as literal `case` arms nowhere cross-checked — a word RigForge adds and neither arm matches falls through to "keep polling" and times out as a normal-looking `accepted`, the rigforge#320 noop/throttled history repeating unseen. The two arms are shell literals, so a grep needs no rig: their union must equal the terminal words in the same vendored `control-status.json` the tier-2 guard above anchors to | `pithead` source | 1 ✅ (`tests/stack/test-control-status-vocabulary.sh`) |
 | Dashboard parses proxy `/workers` rows → worker list + hashrate aggregation; offline drop-off window | metrics / `worker_presence` | 1 ✅ |
 | `p2pool.stratum_password` renders `--access-password` (set) / omits it (default-off) | `pithead` render | 1 ✅ (`tests/stack`) · 4 ▶ (default-off live check) |
 | Proxy restart / node-down → reject → readmit (real containers) | control plane | 3 ▶ (mini-stack) |
@@ -205,10 +214,11 @@ no VM needed, run on every image build.
 | A/B contract: uncommitted auto-rollback, committed update persists, rollback off a committed slot, containers refreshed, `/data` grew, host identity (machine-id + SSH host-key fingerprint) survives the swap | battery `--phase update` | 4 ✅ |
 | Dashboard OS-update verbs: appliance-only refusals, host-derived target, resumable download (partial kept, `-C -` resume, headroom refusal), verify refusals (signature, compatible, variant, floor/downgrade, tag mismatch — bundle deleted), install writes the in-flight flag via the shared `os_update` path, an install that arrives while another pithead operation holds the machine comes back `rejected` rather than as a failed install — with the staged bundle kept for the retry and `rauc install` never reached (#1482) — reboot gated on an installed update, one verb per drain | `tests/stack/test-appliance-os-update-verbs.sh` (stubbed rauc/curl/systemctl/df) + `test_server.py`/`test_views.py`/`test_update_checker.py` + `osupdate.test.mjs` (resume chain, verdict banner, render gates) | 1 ✅ |
 | `os_bundle_meta`'s `[meta.pithead]` parse (#1093), pinned against a REAL `rauc info` capture, not a hand-written stand-in: `tests/stack/fixtures/rauc-info/` holds genuine `--output-format=shell` and `--output-format=json` output off one bundle built from the production `render_bundle_manifest` (recipe + refresh instructions in `capture.sh`, refresh when the RAUC package pin moves). The fake `rauc` in `tests/stack/test-appliance-os-update.sh` now answers format-honestly instead of returning the same fixture regardless of `--output-format`, so a caller that regressed to `json` — the shape RAUC 1.11 ships, which omits `[meta.*]` entirely — degrades to fail-closed "unstamped" for real in the suite, and `os_raise_data_floor` records the real bundle's own declared floor end to end through `os_update` | `tests/stack/test-appliance-os-update.sh` (real fixtures) | 1 ✅ |
-| Dashboard OS-update end-to-end: provision, check against a bench-local release server (root-owned test seam), download RESUMES from an interrupted transfer — proven by an independent witness (#1051: the server's own request log, not just the `resumed_from` field the test staged itself and which would hold even if curl silently restarted from zero), floor and bad-signature refusals with honest errors, install + explicit reboot intent + boot-gated commit lands the new slot, persisted verdict reaches `/api/state` | battery `--phase update` leg 4 (+ the `provision` os_update presence check) | 4 (added — unverified until the next battery run) |
+| Dashboard OS-update end-to-end: provision, check against a bench-local release server (root-owned test seam), download RESUMES from an interrupted transfer — proven by an independent witness (#1051: the server's own request log, not just the `resumed_from` field the test staged itself and which would hold even if curl silently restarted from zero), a floor above the running version refused with the #1393 premise (the plain below-floor door needs a downgrade bundle the leg does not build and is tier 1's, #1694) and a bad-signature refusal, both with honest errors, install + explicit reboot intent + boot-gated commit lands the new slot, persisted verdict reaches `/api/state` | battery `--phase update` leg 4 (+ the `provision` os_update presence check) | 4 (added — unverified until the next battery run) |
 | Post-reboot `rolled_back` verdict (#1051): a dashboard-driven install leaves an in-flight flag naming the target version; booting a DIFFERENT version writes the verdict into the state file and consumes the flag; landing on the target version leaves it alone (the commit gate's success half owns that); no in-flight flag is a no-op. Pulled out of `pithead-boot`'s executed-only body into `os_update_rollback_verdict`, sourceable the same way as `gate_ready`/`gate_url`, because it is pure file logic (an in-flight flag, `VERSION`, one `jq` call) that needs no real A/B updater to prove — before this it ran only on a real boot and no tier could drive it with a fixture | `tests/stack/test-appliance-boot.sh` (sourced `pithead-boot`, fixture `in-flight.json`/`VERSION`) | 1 ✅ |
 | The boot gate re-mints a certificate that an address outran (#1265): `render` mints BEFORE `up` from the address list as it stands, `doctor` re-checks coverage in the gate loop AFTER `up` once the list has settled, so a SLAAC/ULA address arriving in between failed doctor on all 90 rounds and a good update rolled back. The loop now re-mints — only when THIS round's doctor failed on coverage and nothing else (`gate_blocked_only_by_cert`), only from a doctor run this round (`gate_doctor_ran`), at most three times a boot — through `render`'s own idempotent mint, and restarts Caddy only when the certificate file changed (`gate_remint_cert`); `fail_boot` copies the failing checks into the in-flight flag and the fallback boot's `rolled_back` verdict carries them as `blocking` and names the first on the console, so "rolled back" no longer implies a bad release. The loop's wiring is asserted by order in the script (the loop sits below the sourcing boundary) | `tests/stack/test-appliance-boot-remint.sh` (sourced `pithead-boot`, fixture doctor JSON, stubbed `pithead render` + restart command) | 1 ✅ · 4 (added — unverified until the next battery run; the race needs a late-arriving address, which `--phase update` does not stage) |
-| The /data floor after a data_migration update that FAILED its gate (#1393): the raise records the floor it replaced (or `none`) in `.os-data-floor.prev` BEFORE raising, and even when the raise is a no-op; the fallback boot (`restore_data_floor_after_fallback`, sourced from `pithead-boot`) puts the floor back from that record and ONLY from a record — with none, the floor stays (never lowered without one) and only the stale marker goes; the commit-side removal consumes the record; and `os_update_version_guard` refuses a floor above the running version with the true premise (failed migrating update, or a slot installed outside pithead), the open route, and no reset named. The two boot call sites sit below the sourcing boundary and are asserted by the script's text | `tests/stack/test-appliance-data-floor.sh` (sandbox files, sourced `pithead-boot`, the real `pithead` guard) | 1 ✅ · 4 (added — unverified: a data_migration bundle that fails its gate on the KVM battery is its own bench item) |
+| The /data floor after a data_migration update that FAILED its gate (#1393): the raise records the floor it replaced (or `none`) in `.os-data-floor.prev` BEFORE raising, and even when the raise is a no-op; the fallback boot (`restore_data_floor_after_fallback`, sourced from `pithead-boot`) puts the floor back from that record and ONLY from a record — with none, the floor stays (never lowered without one) and only the stale marker goes; the commit-side removal consumes the record; and `os_update_version_guard` refuses a floor above the running version with the true premise (failed migrating update, or a slot installed outside pithead), the open route, and no reset named. The two boot call sites sit below the sourcing boundary and are asserted by the script's text | `tests/stack/test-appliance-data-floor.sh` (sandbox files, sourced `pithead-boot`, the real `pithead` guard) | 1 ✅ · 4 (added — the provision phase's floor-fallback leg, `tests/os/data-floor-fallback-leg.sh`: a migrating bundle stamped with a version no release carries fails its gate and falls back, then the same with the record deleted; unverified until the next battery run) |
+| The post-commit release of the held chain services after a data_migration update (#1684): the `up` that starts them is retried a bounded number of times with a pause (compose aborts the whole start on one mid-transition container — on the bench, p2pool stopping seconds after the held `up` started it — and a single swallowed `up` left every held service down under a dashboard reading `updated`); the markers go before the first try, the release line the tier-4 battery keys on prints before the first `up`, and the last failure is one named `FAULT` line on stderr with the recovery, never a failed boot. Pinned by mutation: one bare `up`, a dropped announcement, markers moved after the `up`, the release line moved after the `up`, and the call site back to the bare swallowed `up` each kill a named row. The call site sits below the sourcing boundary and is asserted by the script's text | `tests/stack/test-appliance-boot-release.sh` (stubbed `pithead` failing a scripted number of times, sourced `pithead-boot`) | 1 ✅ · 4 ▶ (the migration leg's `monerod never came back after the commit` row is the instrument that found it; #1684 closes on that row green at a tip carrying the fix) |
 | Install-to-disk copies a COMPLETE system; reinstall keep/fresh paths | battery `--phase install` | 4 ✅ |
 | Restore leg: a real encrypted backup off a live machine, uploaded instead of the form on a fresh install, wallet + Tor identity restored not regenerated. The closing verdict (#1091) requires the stack to actually come back up (`podman ps`) AND a value sourced from the restored config — the `--wallet` argument the stack's own start path rendered into the p2pool container, read with `podman inspect` — to match: `config.json` landing on disk alone proves only that the archive was unpacked, not that anything is RUNNING it. The source is the container's command line rather than p2pool's stratum stats (`/api/state`'s `.stratum.wallet`) because p2pool writes those only once a synced monerod hands it a block template, which a restored guest has no way to reach inside the verdict's window; the first live run failed on that by construction (#1662). The verdict (`restore_live_state_verdict`) lives in a sourceable file, the same pattern as `hugepages_boot_verdict` (#1212), so the discrimination is provable with fixtures without a KVM boot | `tests/os/restore-live-state-verdict.sh`, `tests/stack/test-appliance-identity-boot.sh` (fixture `podman ps` / wallet strings) · battery `--phase install` | 1 ✅ · 4 (source changed — unverified until the next battery run) |
 | Reinstall pre-fill (#794/#1038): the previous install's non-secret answers reach the wizard page ONLY when the branch that reads them off the target disk (`prefill_from_previous_install`) actually ran this boot — a wallet-address match on the page's own state alone cannot tell that from some other path producing the same value, the gap that left this leg green for four consecutive batteries with the branch itself unproven. Pairing the outcome with the branch's own console record (its log line, `journal+console` per `pithead-firstboot.service`) makes the two tell apart (`reinstall_prefill_verdict`), the same discrimination #1212 needed for hugepages | `tests/os/reinstall-prefill-verdict.sh`, `tests/stack/test-appliance-identity-boot.sh` (`reinstall_prefill_verdict`, fixture branch/wallet/password strings) + `tests/stack/test-appliance-install.sh` (`prefill_from_previous_install` itself) · battery `--phase install` | 1 ✅ · 4 (changed — unverified until the next battery run) |
@@ -416,3 +426,64 @@ tier 3/4:
   and/or a mini-stack scenario (tier 3).
 
 Keep each situation at the lowest honest tier; don't re-prove logic with a heavier harness.
+
+## Framework choice: hand-rolled, not bats/ShellSpec (#1338)
+
+`tests/stack/run.sh` line 3 says the suite is dependency-free — "no bats required". That traces to
+PR #37 and was never revisited until the question came up again, so it was measured instead of
+argued.
+
+**Decision: keep the hand-rolled suite.** Do not adopt bats-core, ShellSpec, shUnit2, or bashunit —
+not wholesale, not per-tier, not for new tests only.
+
+### What was measured
+
+Both leading candidates were installed and run against the real `pithead` binary. Three
+representative tests were ported — one pure-bash assertion, one config-render inspection, one
+touching the shared control sandbox — and mutation-tested to confirm the ports still failed on the
+defect they guard.
+
+| Framework | Original | Ported | Change |
+|---|---|---|---|
+| bats-core | 159 lines | 378 | 2.4x more |
+| ShellSpec | 74 lines | 197 | 2.7x more |
+| ShellSpec, control-sandbox slice alone | 41 | 140 | 3.4x more |
+
+Verbosity was the premise of the question. It runs the other way, and it grows worst exactly where
+the suite is hardest. shUnit2 and bashunit were not port-tested: both share the function-per-test
+shape that produced the blowup twice, so the remaining uncertainty didn't justify two more spikes —
+a judgement, not a measurement.
+
+### Why it does not fit, structurally
+
+- **`set -e`.** bats wraps every `@test` in `set -e`. The suite runs `set -uo pipefail` without
+  `-e`, because a large share of `run.sh` tests rejection paths shaped `out=$(cmd); rc=$?`. Under
+  bats those abort before the assertion runs — hit in 3 of 3 ports.
+- **One `When` per Example.** ShellSpec's rule splits a continuous scenario into separate Examples.
+  That doesn't remove the shared-sandbox order dependency, it hides it — and `shellspec --random
+  examples`, an ordinary flake-hunting flag, would corrupt the run silently.
+- **Gates that would break on day one.** [`tests/inventory.sh`](../../tests/inventory.sh) parses
+  `== section ==` headers; the `Makefile`'s `lint-sh` target globs `git ls-files '*.sh'` for shfmt,
+  which never matches `.bats` — test code would silently lose shfmt coverage. ShellSpec files fail
+  `shellcheck --severity=warning` outright (SC2148/SC2286/SC2016/SC2034), making a standing lint
+  exemption part of the deal.
+- **It does not address the lint-sh ceiling.** That failure is size-correlated on one large file
+  (#1206/#1333). Splitting the file is the fix; a framework does not split the file.
+
+### What to do instead
+
+- **Finish #1105.** Per-domain files under the file budget, invoked as their own process (the
+  `test_compose.sh` pattern) rather than sourced, gives the per-test isolation a framework was
+  going to sell, with no dependency.
+- **A section filter for local iteration** — a `PITHEAD_TEST_FILTER` env var, checked wherever a
+  section header prints, skipping the block unless the name matches — is the one capability worth
+  taking from the framework pitch, at a fraction of the cost. Noted here as the next step, not yet
+  built: today a single test can't run in isolation, so iterating on one function means replaying
+  both sandboxes from the top.
+
+Not recommended: a framework "for new tests only" (two assertion dialects, two lint
+configurations, two inventory parsers, and a standing question at every new test, in exchange for
+a filter flag); migrating `test_compose.sh` as a pilot (it's already process-isolated, so it's the
+one file that gains nothing while paying the full dependency and lint cost); splitting `run.sh`
+directly into `.bats` files (`.bats` never matches the shfmt glob, and the `set -e` problem would
+land across every rejection-path assertion at once).

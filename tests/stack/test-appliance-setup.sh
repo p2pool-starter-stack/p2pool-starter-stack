@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Appliance setup domain (#1105 Phase 1, develop-v2 lane): the firstboot provisioning path an
 # appliance walks the first time it is powered on, and the uninstall contract that path has to
 # survive — the wizard's minted pairing token and its spool consume (#77 phase 3), the

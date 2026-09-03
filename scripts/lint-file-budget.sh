@@ -2,8 +2,9 @@
 # The file-budget ratchet gate (#1105 Phase 0): stop the biggest files in the repo from getting
 # any bigger, without demanding anyone rewrite them today. Two rules:
 #
-#   1. A tracked file over the 400-line target must record a ceiling in
-#      docs/dev/file-budget.tsv; over 800 the refusal names the hard ceiling instead.
+#   1. A candidate file (tracked, or untracked and not gitignored — #1486) over the 400-line
+#      target must record a ceiling in docs/dev/file-budget.tsv; over 800 the refusal names the
+#      hard ceiling instead.
 #   2. An existing offender (already over 400 when this gate landed, or added to the budget
 #      since) gets its CURRENT line count recorded in docs/dev/file-budget.tsv as a personal
 #      ceiling. A PR may not grow that file past its recorded ceiling. Ceilings only ever go
@@ -121,10 +122,18 @@ count_lines() {
     awk 'END { print NR + 0 }' "$1" 2>/dev/null || echo 0
 }
 
-# Every tracked, non-exempt, non-binary file: "path<TAB>lines", one per line.
+# Every tracked OR untracked-but-not-gitignored, non-exempt, non-binary file: "path<TAB>lines",
+# one per line. `git ls-files` alone only lists the INDEX — a new file sits invisible right up
+# until `git add`, which is exactly the moment a budget gate exists to catch it (#1486). Union in
+# `--others --exclude-standard` (untracked, honoring .gitignore) so the working tree, not the
+# index, is what gets measured; the two lists are disjoint (`--others` never repeats a tracked
+# path) so no dedup is needed.
 list_candidates() {
     local f
-    git ls-files | while IFS= read -r f; do
+    {
+        git ls-files
+        git ls-files --others --exclude-standard
+    } | while IFS= read -r f; do
         [ -f "$f" ] || continue
         is_exempt "$f" && continue
         is_binary_or_empty "$f" && continue
@@ -228,9 +237,12 @@ monotonic_exempt() {
 }
 
 # Ceilings only ever go down. Compare the working-tree budget against the base branch's: any
-# path present in both whose ceiling ROSE is a rejected edit, proving the ratchet is real.
+# path present in both whose ceiling ROSE is a rejected edit, and any path with NO row on the
+# base ref (a first appearance) must record the file's real count rather than reserve headroom
+# under it — the same "a rise must record, not reserve" reasoning #1464 gave the one exempt row,
+# applied to the row's very first line instead of a later raise (#1470).
 check_monotonic() {
-    local base old_lines fail=0 path old_ceiling new_ceiling actual
+    local base old_lines new_lines fail=0 path old_ceiling new_ceiling actual
     base=$(resolve_base_ref)
     if [ -z "$base" ]; then
         echo "file-budget: NOTE — no base ref (origin/develop or develop) resolvable; skipping the" \
@@ -239,12 +251,28 @@ check_monotonic() {
     fi
     [ -f "$BUDGET_FILE" ] || return 0
     old_lines=$(git show "$base:$BUDGET_FILE" 2>/dev/null | parse_budget || true)
-    [ -n "$old_lines" ] || return 0
+    new_lines=$(parse_budget <"$BUDGET_FILE")
 
-    while IFS=$'\t' read -r path old_ceiling; do
+    # One pass over the working-tree rows: a path with no row on $base is a first appearance
+    # (#1470), not a raise — it must record the file's real count rather than reserve headroom
+    # above it, or nothing mechanical would object again until the file actually grew into it.
+    # count_lines is the gate's own counter (not wc -l, which undercounts a file with no
+    # trailing newline) and falls back to 0 when the path can't be read, so a deleted or
+    # unreadable path mismatches any ceiling and fails closed rather than passing.
+    while IFS=$'\t' read -r path new_ceiling; do
         [ -n "$path" ] || continue
-        new_ceiling=$(parse_budget <"$BUDGET_FILE" | awk -F'\t' -v p="$path" '$1==p {print $2; exit}')
-        if [ -n "$new_ceiling" ] && [ "$new_ceiling" -gt "$old_ceiling" ]; then
+        old_ceiling=$(printf '%s\n' "$old_lines" | awk -F'\t' -v p="$path" '$1==p {print $2; exit}')
+        if [ -z "$old_ceiling" ]; then
+            actual=$(count_lines "$path")
+            if [ "$new_ceiling" != "$actual" ]; then
+                echo "file-budget: FAIL — $BUDGET_FILE adds $path as a new row at ceiling" \
+                    "$new_ceiling, but the file is $actual lines. A row's first appearance must" \
+                    "record the real count, not reserve headroom."
+                fail=1
+            fi
+            continue
+        fi
+        if [ "$new_ceiling" -gt "$old_ceiling" ]; then
             if monotonic_exempt "$path"; then
                 # A rise must RECORD the artifact, not grant it headroom. Without this the
                 # exemption would let one PR set the row to any number it liked, and nothing
@@ -260,14 +288,16 @@ check_monotonic() {
                 fi
                 echo "file-budget: NOTE — $path's ceiling rises from $old_ceiling to $new_ceiling," \
                     "matching the file. That row records the un-split remainder of the generated" \
-                    "pithead artifact, so it tracks it both ways (#1464). Every Phase 2 cut lowers it." >&2
+                    "pithead artifact, so it tracks it both ways (#1464). Every Phase 2 cut lowers" \
+                    "it." >&2
                 continue
             fi
             echo "file-budget: FAIL — $BUDGET_FILE raises $path's ceiling from $old_ceiling to" \
                 "$new_ceiling. Ceilings only go down."
             fail=1
         fi
-    done <<<"$old_lines"
+    done <<<"$new_lines"
+
     return "$fail"
 }
 

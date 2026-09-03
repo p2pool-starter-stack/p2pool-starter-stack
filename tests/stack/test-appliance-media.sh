@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Appliance media domain (#1105 Phase 1, develop-v2 lane): the physical-presence config channel
 # (#786 sub-issue D) — a FAT stick carrying pithead-config.json, consumed on the boot leg by
 # os/overlay/pithead-media-config. Nine sections cover removable-partition discovery, finding and

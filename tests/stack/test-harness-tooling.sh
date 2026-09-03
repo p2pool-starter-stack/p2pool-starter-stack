@@ -1,7 +1,28 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Repo-tooling self-tests (#1105 Phase 1 domain: harness core). Sourced by tests/stack/run.sh
 # after lib.sh — the harness (ok/bad/assert_*, SANDBOX) is already loaded.
+echo "== unit: lint-docs-voice self-test (#1441) =="
+# An empty `git ls-files '*.md'` enumeration (broken glob, over-matching filter, run outside a
+# checkout) used to read as a clean scan — rc 0 either way. Its --self-test runs the real script
+# end to end in a throwaway repo with no tracked .md files and fails unless it refuses instead.
+bash "$ROOT/scripts/lint-docs-voice.sh" --self-test >/dev/null 2>&1
+assert_rc "docs-voice guard self-test passes" "$?" "0"
+
+# The assertion above only proves anything if the script still RECOGNISES --self-test: a revert
+# that drops the flag along with the guard (i.e. exactly the pre-#1441 script) makes the flag a
+# silent no-op — it just runs the ordinary scan against this real checkout, which has real
+# tracked docs and no banned words, and exits 0 regardless of the missing guard. That reverted
+# script would pass the assertion above. So drive the guard directly too, with no dependence on
+# the script knowing its own flag: an empty-enumeration repo must make the UNFLAGGED script
+# refuse, not pass.
+empty_repo="$SANDBOX/lint-docs-voice-empty"
+mkdir -p "$empty_repo"
+git init -q "$empty_repo" >/dev/null
+out=$(cd "$empty_repo" && bash "$ROOT/scripts/lint-docs-voice.sh" 2>&1) && rc=0 || rc=$?
+assert_rc "docs-voice guard refuses an empty prose-doc enumeration directly" "$rc" "1"
+assert_contains "docs-voice refusal names the empty enumeration" "$out" "prose-doc enumeration returned zero files"
+
 echo "== unit: lint-operator-strings self-test (#755) =="
 # The operator-strings guard's frontend scanner is non-trivial awk (comment-stripping + CSS-hex-colour
 # skip); a silent break would make it stop catching leaks. Its --self-test drives fixtures through the
@@ -72,6 +93,16 @@ echo "== unit: #1059 watch-report discrimination =="
 bash "$ROOT/tests/os/failure-evidence.sh" --self-test >/dev/null 2>&1
 assert_rc "#1059 watch-report self-test passes" "$?" "0"
 
+echo "== unit: #1676 version-aging helper self-test =="
+# tests/os/run.sh's leg 4 must make the guest claim a version OLDER than the bundle it is about to
+# install, and every minor release-prep tip is x.y.0 — the shape the helper used to refuse, which
+# reddened the release gate with seven reds for one cause. Its --self-test drives the three
+# step-down shapes, the one version with nothing below it, and the malformed inputs it must refuse,
+# each aged value checked against an independent ordering. Lives in tests/os/ (appliance lane);
+# driven here because tier 1 is the lowest tier that proves it and it needs no KVM.
+bash "$ROOT/tests/os/aged-version.sh" --self-test >/dev/null 2>&1
+assert_rc "#1676 aged-version self-test passes" "$?" "0"
+
 echo "== unit: tor healthcheck command-dependency self-test (#1372) =="
 # The #1098 pair above asks whether a healthcheck script EXISTS where its Dockerfile promises. This
 # asks the other half of the same contract: whether build/tor/healthcheck.sh can still RUN on
@@ -82,3 +113,73 @@ echo "== unit: tor healthcheck command-dependency self-test (#1372) =="
 # a leaking PATH would pass every case on the host's own commands and prove nothing.
 bash "$ROOT/build/tor/healthcheck-selftest.sh" --self-test >/dev/null 2>&1
 assert_rc "tor healthcheck runs on the commands its own image ships (#1372)" "$?" "0"
+
+echo "== unit: wait_while_alive polls on liveness, not a tick count (#1495) =="
+# The #1342 stanza's OLD shape -- a fixed tick*interval budget -- is reproduced here at a scale
+# that proves the point in under a second: a holder delayed past a budget it does not owe read as
+# a false "the lock is free" under load. Shown against the very shape it replaced, side by side,
+# rather than asserted from a description of it.
+whwa_flag="$SANDBOX/whwa-ready"
+whwa_ready() { [ -e "$whwa_flag" ]; }
+whwa_old_wait() { # <pid> <check-fn> <ticks> -- the fixed-budget shape #1495 removed
+    local i=0
+    while [ "$i" -lt "$3" ]; do
+        "$2" && return 0
+        sleep 0.05
+        i=$((i + 1))
+    done
+    return 1
+}
+rm -f "$whwa_flag"
+(
+    sleep 0.4
+    : >"$whwa_flag"
+    sleep 2
+) &
+whwa_pid=$!
+whwa_old_wait "$whwa_pid" whwa_ready 4 # ~0.2s budget: exhausts before the 0.4s delay lands
+assert_rc "the fixed-budget shape this replaced gives up on a delayed-but-live holder" "$?" "1"
+wait_while_alive "$whwa_pid" whwa_ready
+assert_rc "wait_while_alive rides out the same delay because the holder is still alive" "$?" "0"
+kill "$whwa_pid" 2>/dev/null
+wait "$whwa_pid" 2>/dev/null
+
+# The other half: a holder that exits WITHOUT ever satisfying CHECK must be reported as gone
+# immediately, not waited out to whatever budget happens to be generous enough to cover it.
+rm -f "$whwa_flag" # the first case's holder left this behind; a stale flag would satisfy CHECK for free
+whwa_start="$SECONDS"
+(exit 1) &
+whwa_pid=$!
+wait_while_alive "$whwa_pid" whwa_ready
+assert_rc "gives up the moment a holder that never checks in has already died" "$?" "1"
+assert_rc "and does so in under a second, not a fixed wait" \
+    "$([ "$((SECONDS - whwa_start))" -lt 2 ] && echo 0 || echo 1)" "0"
+unset -f whwa_ready whwa_old_wait
+rm -f "$whwa_flag"
+
+echo "== unit: every run.sh fragment refuses a direct run (#1657) =="
+# A test-*.sh domain file carries no assertion primitives of its own: run one directly and its
+# assert_* calls are "command not found" while the file still exits 0 for 21 of the 55 — a domain
+# reporting success having executed nothing. test-backup.sh goes further and builds its fixture
+# roots in the caller's working tree on the way past, because `cd "" && pwd -P` returns the cwd.
+# Enumerating every fragment rather than sampling one is the whole point: the regression this
+# guards against is a NEW fragment added without the marker check, and a fixed list would never
+# see it. STACK_SUITE is deliberately NOT unset here — lib.sh sets it as a plain assignment and
+# never exports it, so a child bash cannot inherit it; if someone ever exports it, every fragment
+# stops refusing at once and this row is what says so.
+frag_probe="$SANDBOX/fragment-refusal"
+mkdir -p "$frag_probe"
+frag_bad=""
+for frag in "$ROOT"/tests/stack/test-*.sh; do
+    frag_out=$(cd "$frag_probe" && bash "$frag" 2>&1) &&
+        frag_bad="$frag_bad $(basename "$frag"):exited-0"
+    case "$frag_out" in
+    *"tests/stack/run.sh"*) ;;
+    *) frag_bad="$frag_bad $(basename "$frag"):refusal-does-not-name-run.sh" ;;
+    esac
+done
+assert_eq "every tests/stack/test-*.sh refuses a direct run, naming run.sh" "$frag_bad" ""
+# The row above asserts the exit status; this one asserts the consequence that status exists to
+# prevent. They are not the same arm: a guard moved below a fixture-building line would still
+# refuse, and only this row would notice the files it wrote on the way there.
+assert_eq "no fragment writes into the caller's directory before refusing" "$(ls -A "$frag_probe")" ""

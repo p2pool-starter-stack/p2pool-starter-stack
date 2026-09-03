@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Tor-network domain (#1105 Phase 1, develop-v2 lane): the Tor-only egress boundary and the
 # Tor<->clearnet transport switch — tor_egress_rules + render_tor_egress_nft (both the legacy
 # iptables/DOCKER-USER path and the v2 nftables/podman path, including the IPv6 backstop and its
@@ -645,7 +645,7 @@ assert_contains "doctor OK when p2pool IS routed over Tor (#273)" \
 TOR_ENTRY="$ROOT/build/tor/entrypoint.sh"
 tor_torrc() { # <DASHBOARD_ONION_ENABLED> [COMPOSE_PROFILES] -> the torrc the entrypoint would hand to `tor -f`
     local d
-    d="$(mktemp -d)"
+    mk_tmpdir d
     # The stub cats the SANDBOX path, not /tmp/torrc (#1104). That is what makes the TORRC_OUT seam
     # load-bearing: if the entrypoint ignored it and wrote the host-global file, this prints nothing
     # and every assertion below goes red. Catting /tmp/torrc instead would keep passing off a stale

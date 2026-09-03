@@ -86,6 +86,20 @@ self_test() {
     rm -f "$tmp/new.sh"
     git -C "$tmp" rm -q --cached new.sh >/dev/null 2>&1 || true
 
+    # #1486 — `git ls-files` alone only sees the INDEX; an untracked new file must be a
+    # candidate too, or the gate reads a skip as a pass on exactly the file it exists to catch.
+    seq 1 500 >"$tmp/untracked.sh"
+    rc=0
+    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
+    expect "an over-target file that is untracked (never git add'ed) still FAILS (#1486)" 1 "$rc"
+    if grep -q "untracked.sh is 500 lines (> 400 target) but has no" "$out"; then
+        echo "  self-test ok: names the untracked file, not a vacuous pass"
+    else
+        echo "  self-test FAIL: did not name the untracked file"
+        st_fail=1
+    fi
+    rm -f "$tmp/untracked.sh"
+
     printf '# test budget\nbudgeted.sh\t400\n' >"$tmp/$BUDGET_FILE"
     rc=0
     (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
@@ -235,6 +249,37 @@ self_test() {
         st_fail=1
     fi
     rm -rf "$tmp4"
+
+    # #1470 — a row with NO counterpart on the base ref is a first appearance, not a raise, so
+    # the monotonic loop above never visits it. Its own repo, so the 500/900 base state above
+    # cannot leak into it.
+    local tmp5
+    tmp5=$(mktemp -d)
+    git -C "$tmp5" init -q -b develop
+    git -C "$tmp5" config user.email test@example.invalid
+    git -C "$tmp5" config user.name test
+    mkdir -p "$tmp5/$(dirname "$BUDGET_FILE")"
+    seq 1 500 >"$tmp5/budgeted.sh"
+    printf '# test budget\nbudgeted.sh\t500\n' >"$tmp5/$BUDGET_FILE"
+    git -C "$tmp5" add -A && git -C "$tmp5" commit -q -m base
+
+    seq 1 500 >"$tmp5/newfile.sh"
+    printf '# test budget\nbudgeted.sh\t500\nnewfile.sh\t900\n' >"$tmp5/$BUDGET_FILE"
+    rc=0
+    (cd "$tmp5" && run_gate) >"$out" 2>&1 || rc=$?
+    expect "a new row reserving headroom above the file's real size FAILS (#1470)" 1 "$rc"
+    if grep -q "adds newfile.sh as a new row at ceiling 900, but the file is 500 lines" "$out"; then
+        echo "  self-test ok: names the reserved headroom"
+    else
+        echo "  self-test FAIL: did not name the reserved headroom"
+        st_fail=1
+    fi
+
+    printf '# test budget\nbudgeted.sh\t500\nnewfile.sh\t500\n' >"$tmp5/$BUDGET_FILE"
+    rc=0
+    (cd "$tmp5" && run_gate) >"$out" 2>&1 || rc=$?
+    expect "control: a new row stating the file's real count on first appearance passes" 0 "$rc"
+    rm -rf "$tmp5"
 
     rc=0
     (

@@ -274,7 +274,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Collect every leg's scan output
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: shipped-sweep-*
           merge-multiple: true
@@ -423,17 +423,17 @@ jobs:
       - name: "Install shellcheck + shfmt (pinned + sha256-verified, #286)"
         # Direct upstream-release downloads with a sha256 check (RigForge convention) instead of the
         # runner's preinstalled shellcheck / apt — reproducible, and immune to the apt-mirror
-        # flakiness of #64. Keep these pins in sync with the local-dev tooling.
+        # flakiness of #64. shellcheck's version comes from the Makefile (#1679); shfmt's is hand-kept.
         run: |
           curl -fsSL -o /tmp/shfmt \
             https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
           echo "fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1  /tmp/shfmt" | sha256sum -c -
           sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
-          curl -fsSL -o /tmp/sc.tar.xz \
-            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          SC=$(make -s print-shellcheck-version) # the Makefile is the pin; `make lint-sh` below refuses any other version (#1679)
+          curl -fsSL -o /tmp/sc.tar.xz "https://github.com/koalaman/shellcheck/releases/download/v$SC/shellcheck-v$SC.linux.x86_64.tar.xz"
           echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
           tar -xJf /tmp/sc.tar.xz -C /tmp
-          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          sudo install -m 0755 "/tmp/shellcheck-v$SC/shellcheck" /usr/local/bin/shellcheck
       - name: Lint pithead, build/* + dashboard/ container scripts, and test scripts (shellcheck + shfmt)
         # Single source of truth: the Makefile `lint-sh` target (so the file list can't drift
         # between here and the Makefile). Covers build/*/*.sh and dashboard/*.sh — the entrypoints

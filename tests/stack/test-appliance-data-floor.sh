@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # The /data migration floor after a data_migration update that FAILED its gate (#1393). os-update
 # raises the floor at install time, before the migration runs; the migration hold (#851) then
 # keeps the chain services down until the slot commits, so a slot that fails its gate falls back

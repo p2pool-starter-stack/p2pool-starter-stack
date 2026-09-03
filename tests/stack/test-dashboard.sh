@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-#
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 # Dashboard domain (#1105 Phase 1, develop-v2 lane): the dashboard's own login (Caddy basic_auth
 # enable/disable/change previews plus the actual basic_auth block in the rendered Caddyfile, #8),
 # generate_caddyfile's scheme/port/Host-header render (secure vs. plain HTTP; a custom HOST_PORT
@@ -11,11 +11,10 @@
 # status` (#384).
 #
 # The dashboard-onion cluster (vhost render, client-auth crypto, rotate/upgrade/apply capture
-# flows, status) is its own domain in test-dashboard-onion.sh, stacked on this file: it is sourced
-# immediately after this one in run.sh and reads two globals this file sets ($auth_hb64, the bcrypt
-# hash fixture from the dashboard-auth unit test; $caddy_https, the plain secure-mode Caddyfile
-# render from the scheme unit test) — plain top-level assignments, so they survive the handoff
-# between the two sourced files in the same shell. Do not reorder the two `source` lines in run.sh.
+# flows, status) is its own domain in test-dashboard-onion.sh, conventionally sourced after this
+# one in run.sh. It used to read two globals this file sets ($auth_hb64, $caddy_https) as a
+# cross-file source-order dependency; #1330 re-derives both locally there instead, so this file's
+# source position no longer matters to it.
 # Sourced by tests/stack/run.sh.
 #
 # Re-derivations:
@@ -510,7 +509,7 @@ echo "== unit: dashboard_sync_progress re-renders per-chain sync from /api/state
 # The one-curl re-render behind `pithead status`: read the dashboard's own /api/state (host-local,
 # no auth) and print per-chain progress, skipping synced chains and degrading quietly when the app
 # isn't up. Stub curl to serve a canned body — real jq parses it, matching the dashboard's shape.
-SP="$(mktemp -d)"
+mk_tmpdir SP
 mkdir -p "$SP/bin"
 cat >"$SP/bin/curl" <<'EOF'
 #!/usr/bin/env bash

@@ -9,7 +9,19 @@
 # Mechanical move only: this is the SAME code that used to sit at the top of run.sh, moved
 # here verbatim so run.sh can source it. No behaviour changed.
 
-# shellcheck disable=SC2034  # sourced library: fixture constants are consumed by run.sh
+# Every test-*.sh domain file is a FRAGMENT: run.sh sources it after this file, and it carries no
+# assertion primitives of its own. Run one directly and all 60-odd assert_* calls are "command not
+# found" while the file still exits 0 — a domain reporting success having executed nothing (#1657).
+# So each fragment opens by dereferencing this marker with :?, which is set only on the sourced
+# path; bash then refuses the direct run with a message naming run.sh, and exits non-zero.
+# ⛔ NEVER export this. A plain assignment is what makes the marker work: a child bash cannot
+# inherit it, so `bash tests/stack/test-cli.sh` refuses even from inside a suite run. Exporting it
+# would silently disarm all 55 fragments at once; test-harness-tooling.sh's #1657 rows say so.
+# The five standalone test_*.sh files are NOT fragments (the Makefile runs each one directly, and
+# tests/inventory.sh lists them as UNSOURCED) — they carry no marker check and must not gain one.
+# shellcheck disable=SC2034  # sourced library: this marker and the fixtures are read by run.sh
+STACK_SUITE=1
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STACK="$ROOT/pithead"
 PASS=0
@@ -75,10 +87,48 @@ run_sourced() {
     )
 }
 
+# Poll CHECK (a predicate function name) until it succeeds, but never past the point where PID
+# has already exited -- callers learn "the process gave up trying" rather than counting ticks
+# that a loaded box may not owe it (#1495: a fixed 200x0.05s budget reddened the #1342 mutation-
+# lock test under concurrent runs). `kill -0` reads bash's own job table, so it flips the instant
+# the backgrounded job dies, no explicit reap needed. Returns 1 if PID dies before CHECK succeeds.
+wait_while_alive() { # <pid> <check-fn-name>
+    while ! "$2"; do
+        kill -0 "$1" 2>/dev/null || return 1
+        sleep 0.05
+    done
+}
+
+# mk_tmpdir <varname> — create a throwaway directory and ASSIGN IT BY NAME, or refuse the run.
+#
+# Assigning by name rather than printing is the whole point (#1705). The obvious constructor,
+# called as `X=$(mk_tmpdir)`, cannot fail closed: its `exit` ends only the command substitution's
+# subshell, the assignment still succeeds with X empty, and tests/stack/run.sh sets no `-e`, so
+# the run carries on. `set -u` does not fire either — the variable IS set, it is empty. A later
+# `rm -rf "$X/store"` then targets /store. Assigning through the caller's own shell is what puts
+# the refusal somewhere it can stop the run.
+mk_tmpdir() {
+    local _mk_d
+    _mk_d="$(mktemp -d)" && [ -d "$_mk_d" ] || {
+        printf 'lib.sh: mktemp -d did not create a directory for %s — refusing to run (#1705)\n' "$1" >&2
+        exit 1
+    }
+    printf -v "$1" '%s' "$_mk_d"
+}
+
 # A throwaway sandbox dir, cleaned on exit. Physical path (#695): pithead canonicalizes its
 # own directory with pwd -P, so a sandbox spelled through a symlink (macOS /var -> /private/var)
 # would render .env paths that no longer string-match the $SANDBOX-based assertions.
-SANDBOX="$(cd "$(mktemp -d)" && pwd -P)"
+# The refusal is mk_tmpdir's. #1661 built it inline here, against the one-liner that collapsed to
+# `cd "" && pwd -P` and armed the trap below on the working tree; #1705 made it the single
+# constructor so that recipe cannot drift between this file and the domain files.
+mk_tmpdir _sbx
+# mk_tmpdir assigns through `printf -v`, which shellcheck cannot follow, so it reads _sbx as
+# never assigned. The 38 call sites in the domain files are not flagged only because their names
+# are uppercase and shellcheck assumes those may come from the environment — so this directive
+# is narrower than it looks, and a lowercase name added later will need its own.
+# shellcheck disable=SC2154
+SANDBOX="$(cd "$_sbx" && pwd -P)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 # A fake docker that records calls and answers the few queries setup/apply make.

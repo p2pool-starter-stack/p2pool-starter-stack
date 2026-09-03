@@ -795,6 +795,19 @@ read with `16#`, which is fatal on an empty string, so a peer that stalled part-
 header left an interpreter error on stderr and an empty verdict. Those cases assert the empty
 stderr alongside the reason, because the return code was already 1 while the bug was live and a
 case checking only the code would have passed against it.
+`selftest-stack-sandbox.sh` reaches the other way, into the tier-1 suite's own plumbing.
+`tests/stack/lib.sh` built its throwaway sandbox as `SANDBOX="$(cd "$(mktemp -d)" && pwd -P)"`, and
+`mktemp -d` prints nothing on stdout when it fails, so the inner substitution collapsed to `cd ""`
+— which returns 0 without moving — and the sandbox became the directory the suite was invoked
+from, which `tests/stack/run.sh` documents as the repo root. The next line then armed `rm -rf` on
+the working tree, through an EXIT trap that fires at the end of a run that otherwise looked normal
+([#1661](https://github.com/p2pool-starter-stack/pithead/issues/1661)). Asserting that the sourcing
+failed is green against that defect, because the defective form succeeds and hands back a real
+path, so the cases assert the value instead: `SANDBOX` is never the caller's directory, and a
+sentinel file in that directory is still on disk once the subshell's EXIT trap has run. A case with
+a working `mktemp` holds the other side, so deleting the sandbox logic outright cannot pass. The
+last case drives the pre-fix expression against the same fixture and requires it to destroy the
+sentinel, so a row that is green because the fixture never armed fails rather than reads as proof.
 
 ---
 

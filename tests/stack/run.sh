@@ -32,6 +32,22 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-dashboard.sh" && domain_ran test-dash
 # shellcheck source=tests/stack/test-dashboard-onion.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-dashboard-onion.sh" && domain_ran test-dashboard-onion.sh "$_d0" "$?" || domain_ran test-dashboard-onion.sh "$_d0" "$?"
 
+# Regression (#1330): test-dashboard-onion.sh must not depend on running after test-dashboard.sh.
+# A `( ... )` subshell is a fork of THIS process and inherits its whole variable table, exported
+# or not — including $auth_hb64/$caddy_https, already left behind here by test-dashboard.sh's
+# earlier `source` a few lines up, so a subshell guard would stay green even if this file went
+# back to reading those as globals. Only a genuinely separate `bash` process is isolated: it
+# inherits the environment (exported vars), never a parent shell's plain variables. $HERE isn't
+# exported either, so it's passed as an argument rather than read from the environment.
+# shellcheck disable=SC1090,SC2015  # STACK/HERE paths are dynamic by design
+bash -c '
+    set -uo pipefail
+    source "$1/lib.sh"
+    source "$1/test-dashboard-onion.sh" >/dev/null 2>&1
+    [ "$FAIL" -eq 0 ] && [ "$PASS" -gt 0 ]
+' _ "$HERE"
+assert_rc "test-dashboard-onion.sh does not depend on run.sh's source order (#1330)" "$?" "0"
+
 # shellcheck source=tests/stack/test-release.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-release.sh" && domain_ran test-release.sh "$_d0" "$?" || domain_ran test-release.sh "$_d0" "$?"
 
@@ -69,6 +85,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-secrets.sh" && domain_ran test-secret
 # ---------------------------------------------------------------------------
 # shellcheck source=tests/stack/test-rig-worker.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-rig-worker.sh" && domain_ran test-rig-worker.sh "$_d0" "$?" || domain_ran test-rig-worker.sh "$_d0" "$?"
+
+# shellcheck source=tests/stack/test-control-status-vocabulary.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-control-status-vocabulary.sh" && domain_ran test-control-status-vocabulary.sh "$_d0" "$?" || domain_ran test-control-status-vocabulary.sh "$_d0" "$?"
 
 # ---------------------------------------------------------------------------
 # shellcheck source=tests/stack/test-monero-tari.sh disable=SC2015
@@ -201,6 +220,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-boot.sh" && domain_ran test
 
 # shellcheck source=tests/stack/test-appliance-boot-remint.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-boot-remint.sh" && domain_ran test-appliance-boot-remint.sh "$_d0" "$?" || domain_ran test-appliance-boot-remint.sh "$_d0" "$?"
+
+# shellcheck source=tests/stack/test-appliance-boot-release.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-boot-release.sh" && domain_ran test-appliance-boot-release.sh "$_d0" "$?" || domain_ran test-appliance-boot-release.sh "$_d0" "$?"
 
 # shellcheck source=tests/stack/test-appliance-os-update.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-os-update.sh" && domain_ran test-appliance-os-update.sh "$_d0" "$?" || domain_ran test-appliance-os-update.sh "$_d0" "$?"

@@ -26,16 +26,14 @@
 #   rig     answer "RigForge" on the same page and prove the OTHER machine this image installs:
 #           mines from the baked binary with no compile and no stack at all, and takes an A/B
 #           update — install, uncommitted rollback, self-commit — exactly like a coordinator.
-#   media   physical-presence config channel (#786 sub-issue D): a removable stick applied at
-#           boot shows its exact diff on the console, counts down, applies, and consumes itself —
-#           and pulling the stick mid-countdown cancels the change. A minimal stick changes only
-#           what it names (#965): the dashboard login, appliance defaults and node credentials
-#           all survive, and the old login still opens the served dashboard. Opt-in, like fault.
+#   media   physical-presence config channel (#786 sub-issue D): a removable stick applied at boot
+#           shows its exact diff on the console, counts down, applies, and consumes itself; pulling
+#           it mid-countdown cancels the change. A minimal stick (#965) changes only what it names;
+#           dashboard login, appliance defaults and node credentials survive, old login still works.
 #   fault   power cuts mid-write and mid-commit, plus a corrupt bundle. A brick is disqualifying.
-#   reset   factory-reset's ESP marker (the real `pithead factory-reset`) wipes /data and returns
-#           a FRESH machine to the wizard; a corrupt data-partition superblock drives the same
-#           wedged-/data recovery instead of bricking. Opt-in: destructive, not in `all`.
-#   all     boot, update, install, provision and rig (default) — media, fault and reset are opt-in
+#   reset   factory-reset's ESP marker (the real `pithead factory-reset`) wipes /data and returns a
+#           FRESH machine to the wizard; a corrupt /data superblock drives wedged-/data recovery.
+#   all     every phase above, in that order — media, fault and reset included since #1064
 #
 # A failed assertion is recorded and the run continues, so one bench boot collects the whole
 # battery rather than stopping at the first fault; the run exits non-zero if any assertion failed.
@@ -55,6 +53,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/restore-live-state-verdict.sh"
 # shellcheck source=tests/os/reinstall-prefill-verdict.sh
 . "$SCRIPT_DIR/reinstall-prefill-verdict.sh"
+# shellcheck source=tests/os/data-floor-fallback-leg.sh
+. "$SCRIPT_DIR/data-floor-fallback-leg.sh"
+# shellcheck source=tests/os/aged-version.sh
+. "$SCRIPT_DIR/aged-version.sh"
 
 IMAGE=""
 KEEP=0
@@ -252,30 +254,6 @@ _build_image() {
         return 1
     }
     printf 'os/rauc/build/system.img'
-}
-
-# The checkout's VERSION with the patch component DECREMENTED — the version leg 4 makes the guest
-# claim to be running, so that the bundle (stamped with the real VERSION) is a genuine update.
-#
-# It has to be done on this side. The obvious move — stamp the BUNDLE one patch newer — produces a
-# bundle whose manifest and payload disagree, and that breaks two things at once. pithead-boot
-# writes the `rolled_back` verdict purely by comparing the in-flight target to the booted slot's
-# VERSION, before the health gate runs at all, so a mismatch reports a rollback that never
-# happened. And STACK_VERSION is derived from that same VERSION file and tags all five first-party
-# images, so a payload rewritten to match would send the post-update boot hunting image tags that
-# were never published — turning the fake rollback into a real one.
-_prev_patch_version() {
-    local v major minor patch
-    v=$(tr -d ' \t\r\n' <VERSION)
-    major=${v%%.*}
-    patch=${v##*.}
-    minor=${v#*.}
-    minor=${minor%%.*}
-    [ "$patch" -gt 0 ] 2>/dev/null || {
-        printf '%s' "$v"
-        return 1
-    }
-    printf '%s.%s.%s' "$major" "$minor" "$((patch - 1))"
 }
 
 # Build an update bundle carrying $1 as its marker.
@@ -995,18 +973,26 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     # for a compromised container. Both images here are built from the one checkout, so without
     # this the guest is already running the version the bundle carries and leg 4 could never get
     # past its first download — it reported #976's path as broken while never offering it anything
-    # to install. Age the RUNNING side, never the bundle's stamp (see _prev_patch_version).
+    # to install. Age the RUNNING side, never the bundle's stamp (see tests/os/aged-version.sh).
     #
     # Safe here specifically: nothing renders .env or runs compose between this write and the
     # reboot — `pithead os-update` is a rauc install — and pithead-sync restores the slot's real
     # VERSION on the next boot, before pithead-boot reads it to judge the update. So the guest
     # claims the older version exactly for the length of the check/download/install window.
+    # #1676: a failed precondition here used to cost SEVEN reds — every later step fails on the
+    # same un-aged guest — so both failure shapes return after their one red.
     local aged
-    if aged=$(_prev_patch_version); then
-        _ssh "printf '%s\n' '$aged' > /data/pithead/VERSION" ||
-            bad "leg 4: could not age the guest's running version to $aged"
-    else
-        bad "leg 4: VERSION patch component is 0 — cannot age the running version below it"
+    if ! aged=$(aged_version "${tag#v}"); then
+        bad "leg 4: cannot age the running version ${tag#v} — nothing sorts below it (tests/os/aged-version.sh)"
+        kill "$srv_pid" 2>/dev/null
+        rm -rf "$srv"
+        return
+    fi
+    if ! _ssh "printf '%s\n' '$aged' > /data/pithead/VERSION"; then
+        bad "leg 4: could not age the guest's running version to $aged"
+        kill "$srv_pid" 2>/dev/null
+        rm -rf "$srv"
+        return
     fi
 
     local out st
@@ -1022,9 +1008,9 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
         return
     fi
 
-    # Refusal 1 — the /data migration floor: a valid signature is not permission to install below
-    # it. This drives the SAME shared guard the CLI enforces (downgrade family), via the dashboard
-    # door, with a floor planted above the bundle's version.
+    # Refusal 1 — the /data floor, via the dashboard door onto the SAME guard the CLI enforces. A
+    # floor above this (newer) bundle is above the running version too: since #1393 that is the
+    # failed-migration state, refused FIRST with its premise; the plain door is tier 1's (#1694).
     _ssh "printf '99.0.0\n' > /data/pithead/.os-data-floor"
     out=$(_os_step "{\"action\":\"download\",\"version\":\"$tag\"}" 900)
     if [ "$(printf '%s' "$out" | jq -r '.status')" = "downloaded" ]; then
@@ -1034,10 +1020,10 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     fi
     out=$(_os_step '{"action":"verify"}' 120)
     st=$(printf '%s' "$out" | jq -r '.status')
-    if [ "$st" = "rejected" ] && printf '%s' "$out" | jq -r '.error' | grep -q "strand the chain data"; then
-        ok "leg 4: DOWNGRADE/FLOOR REFUSED — verify rejects below the /data floor with the honest error"
+    if [ "$st" = "rejected" ] && printf '%s' "$out" | jq -r '.error' | grep -q "failed its gate.*the floor version or newer installs"; then
+        ok "leg 4: FLOOR ABOVE THE RUNNING VERSION REFUSED — verify refuses with the failed-migration premise and the open route"
     else
-        bad "leg 4: verify below the floor did not refuse honestly (got: $(printf '%s' "$out" | cut -c1-200))"
+        bad "leg 4: verify under a floor above the running version did not refuse with the true premise (got: $(printf '%s' "$out" | cut -c1-200))"
     fi
     if ! _ssh "test -f /data/pithead/data/os-update/pithead-os-$tag.raucb"; then
         ok "leg 4: the floor-refused bundle was deleted"
@@ -2501,6 +2487,7 @@ phase_provision() {
     else
         ok "the migration-pending marker was consumed"
     fi
+    phase_provision_floor_fallback_leg "$mig_bundle"
 }
 
 # Build a small raw disk with one FAT partition carrying $2 as pithead-config.json at its root —
@@ -3414,10 +3401,9 @@ media) phase_media ;;
 fault) phase_fault ;;
 reset) phase_reset ;;
 all)
-    # ALL of them. This arm used to run five of eight, while the release checklist told a
-    # maintainer that step 1 covered everything — so the three mid-write power cuts, the
-    # mid-commit cut, the corrupt-bundle refusal, the factory reset, the wedged-/data recovery
-    # and the whole media channel were silently omitted from every cut (#1064).
+    # ALL of them. This arm once ran five of eight while the release checklist told a maintainer
+    # that step 1 covered everything — the mid-write and mid-commit power cuts, the corrupt-bundle
+    # refusal, the factory reset, the wedged-/data recovery and the media channel omitted (#1064).
     phase_boot
     phase_update
     phase_install
