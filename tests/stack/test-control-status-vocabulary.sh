@@ -34,12 +34,8 @@ assert_contains "the vendored fixture actually lists terminal words to check aga
 # Each function's `case "$status" in` arm list sits on the line right after the line that opens
 # it — pull it from the function's own byte range so a `case` added to a LATER function (there is
 # none today) can never be mistaken for either poll loop's.
-_csv_arms_between() { # <start-pattern> <end-pattern-or-empty-for-eof>
-    if [ -n "$2" ]; then
-        awk "/$1/,/$2/" "$STACK"
-    else
-        awk "/$1/,0" "$STACK"
-    fi | grep -A1 'case "\$status" in' | tail -1 | tr -d ' \t)' | tr '|' '\n' | sort -u
+_csv_arms_between() { # <start-pattern> <end-pattern>
+    awk "/$1/,/$2/" "$STACK" | grep -A1 'case "\$status" in' | tail -1 | tr -d ' \t)' | tr '|' '\n' | sort -u
 }
 
 _csv_apply_arms=$(_csv_arms_between '^control_worker_apply\(\)' '^control_worker_upgrade\(\)')
