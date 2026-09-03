@@ -12,6 +12,9 @@
 #   --fresh-index  bust ONLY the rootfs Dockerfile's apt-update layer (#929): a warm builder
 #                  cache reuses that layer's apt index for weeks, and when the mirror rotates a
 #                  package the stale index 404s on install. Later layers still cache normally.
+# The compose file is NOT taken from the working tree when the release it names already exists:
+# stage_compose below copies it from the tag STACK_VERSION resolves to, and falls back to the tree
+# only while that tag does not exist yet (mid release-prep). See the function for why.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -56,9 +59,40 @@ apt_fetch_failure_hint() {
     fi
 }
 
+# stage_compose (#1215): put the compose file the image will ship, plus a COMPOSE_SOURCE stamp
+# naming where it came from, into <stage-dir>. Every `image:` in docker-compose.yml is pinned by
+# STACK_VERSION, which the appliance derives from its baked VERSION — so an image built from a
+# tree that is AHEAD of that release bakes a compose file assuming image content the pinned tags
+# predate (#1098 was one instance: a healthcheck script the published image did not carry, and
+# the symptom was a permanently-unhealthy container). The fix is structural: when the tag exists,
+# the compose file comes from it, so compose and images agree by construction; when it does not,
+# this IS the release being prepared and the tree is the right source (release.sh tags this very
+# commit). The one silent case left — a clone that simply has not fetched the tag — is refused,
+# because it would bake the tree's compose under a version that already shipped a different one.
+# The stamp records the resolved commit, not just the tag name: a tag can be re-pointed, and
+# verify-image compares the shipped file against exactly what was staged.
+stage_compose() { # <version-tag> <stage-dir>  -> prints the COMPOSE_SOURCE line
+    local tag="$1" dir="$2" sha
+    mkdir -p "$dir"
+    if sha=$(git rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null); then
+        git show "$sha:docker-compose.yml" >"$dir/docker-compose.yml"
+        printf 'tag %s %s\n' "$tag" "$sha" >"$dir/COMPOSE_SOURCE"
+    else
+        # ls-remote's rc 0 means the tag exists on origin. Anything else (no such tag, no remote,
+        # no network) leaves the tree as the source — a build must not hang on the network here.
+        if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "==> tag $tag exists on origin but not in this clone; refusing to bake the tree's compose file under a released version. Run: git fetch --tags" >&2
+            return 1
+        fi
+        cp docker-compose.yml "$dir/docker-compose.yml"
+        printf 'tree\n' >"$dir/COMPOSE_SOURCE"
+    fi
+    cat "$dir/COMPOSE_SOURCE"
+}
+
 # Test seam: `PITHEAD_BUILD_IMAGE_TEST=1 source os/build-image.sh [args...]` parses args and
-# defines apt_fetch_failure_hint above, then returns here instead of touching docker — lets
-# tests/stack/run.sh exercise flag parsing and the remedy hint without a build.
+# defines apt_fetch_failure_hint and stage_compose above, then returns here instead of touching
+# docker — lets tests/stack exercise flag parsing, the remedy hint and the staging without a build.
 if [ "${PITHEAD_BUILD_IMAGE_TEST:-0}" = "1" ]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -68,6 +102,9 @@ fi
 # offline-first-boot property depends on it). The rest of the release's images are pulled at
 # provision time for now — baking the full set is tracked with the appliance-size work.
 STACK_VERSION="v$(tr -d ' \t\r\n' <VERSION)"
+# os/build/ is git-ignored, so staging there keeps the tree clean (the build stamps itself dirty
+# otherwise, and mkimage refuses a dirty stamp). The Dockerfile COPYs both files from this path.
+echo "==> compose file staged from: $(stage_compose "$STACK_VERSION" os/build/stage)"
 WIZARD_IMAGE="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION}"
 mkdir -p os/rootfs/images
 echo "==> staging wizard image $WIZARD_IMAGE"

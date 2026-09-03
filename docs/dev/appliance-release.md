@@ -159,6 +159,17 @@ bench is the KVM-capable build box; a laptop cannot run this (`/dev/kvm` is requ
 os/build-image.sh --ssh && sudo os/rauc/mkimage.sh --dev
 ```
 
+**A dev image ships the last release's compose file, not the tree's.** Every `image:` in
+`docker-compose.yml` is pinned by `STACK_VERSION`, and the appliance derives that from its baked
+`VERSION`, so a tree ahead of that release would bake a compose file that assumes image content
+the pinned tags predate — once a healthcheck script the published image did not carry, and a
+container that stayed unhealthy for good (#1098). `os/build-image.sh` therefore stages
+`docker-compose.yml` from the tag `v<VERSION>` whenever that tag exists, records the choice in
+`/opt/pithead/COMPOSE_SOURCE` (`tag NAME SHA`, or `tree`) and prints it. What that costs: a compose
+change on the branch is not exercised on the appliance until the next cut, where the tag does not
+exist yet and the tree is the source. A clone that has not fetched the tag is refused rather than
+silently built the old way; `git fetch --tags` clears it.
+
 `--dev` auto-generates a throwaway `CN=pithead-dev` signing key for the bench. A release build
 omits it and must name the real key instead (`PITHEAD_RAUC_CERT` + `PITHEAD_RAUC_KEY`) — see
 [Cutting a release](#cutting-a-release) and the key custody runbook in
@@ -351,7 +362,10 @@ one version and one GitHub Release.
    A distro build reports different findings over the same files, so a skew reds the cut for
    nothing — install the pin from [`release-server.md`](release-server.md#the-lintrelease-toolchain).
 2. Bump `VERSION`. The tag is `v<VERSION>` and every artifact derives from it —
-   `STACK_VERSION` is the single place the registry tag comes from.
+   `STACK_VERSION` is the single place the registry tag comes from. The compose file the image
+   ships comes from that tag whenever it already exists and from the tree only while it does not;
+   at this step it does not, so the release build bakes the tree's copy, and the tag `release.sh`
+   then creates on this commit names those same bytes.
 3. Build the image and bundle with the **release key**, never the throwaway `--dev` chain. Point
    both `mkimage.sh` and `mkbundle.sh` at it and omit `--dev` — a release build refuses to run
    without an explicit key, so there is no silent-dev-cert path:
@@ -371,9 +385,10 @@ one version and one GitHub Release.
    ```
 
    Run it **from the repo checkout you built**, because it compares the artifact against these
-   files: the shipped `pithead`, compose file and config reference must be byte-identical to the
-   tree, and the baked container archive is unpacked to confirm it carries this tree's
-   `wizard.py`.
+   files: the shipped `pithead` and config reference must be byte-identical to the tree, the
+   shipped compose file must be byte-identical to the source its own `COMPOSE_SOURCE` stamp names
+   (the tree at a cut; the staged tag's commit in a dev build), and the baked container archive
+   is unpacked to confirm it carries this tree's `wizard.py`.
 
    All of that exists because a release build once shipped a dashboard two commits stale — the
    release clone was pulling from an intermediate clone rather than origin, so `git pull`

@@ -153,11 +153,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # genuinely leaves every slot and update bundle smaller.
 
 # The stack, at the image's exact release state: pithead + schemas + the build/ mount sources
-# (config templates and entrypoints that services bind-mount). Build context = repo root.
-# The commit this image was built from — the artifact's own answer to "did my change ship?".
-COPY os/rootfs/BUILD_COMMIT /opt/pithead/BUILD_COMMIT
-COPY pithead pithead-completion.bash VERSION docker-compose.yml \
-     config.reference.json config.core-keys.json config.minimal.json /opt/pithead/
+# services bind-mount. Context = repo root. BUILD_COMMIT: the commit built from — the artifact's own
+# answer to "did my change ship?". os/build/stage/: the compose file + its COMPOSE_SOURCE stamp — the
+# STACK_VERSION tag's copy when that tag exists, else the tree's (#1215, staged by build-image.sh).
+COPY os/rootfs/BUILD_COMMIT os/build/stage/docker-compose.yml os/build/stage/COMPOSE_SOURCE /opt/pithead/
+COPY pithead pithead-completion.bash VERSION config.reference.json config.core-keys.json config.minimal.json /opt/pithead/
 # ONLY the build/ subtrees services bind-mount at runtime (config templates and wrapper
 # entrypoints). dashboard/Dockerfile isn't among them (moved out of build/, #1106; see
 # KNOWN-ISSUES.md) — is_source_checkout() keys off its presence here, so shipping one by accident
