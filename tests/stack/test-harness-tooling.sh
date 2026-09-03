@@ -205,3 +205,11 @@ case "$vd_hb_out" in
 *) ok "the heartbeat PASS line carries no measured elapsed value" ;;
 esac
 unset vd_id_out vd_hb_out
+
+echo "== unit: scheduled-run watch self-test (#1377) =="
+# The Monday CVE sweep's reader. Its red path CANNOT be exercised live — staging it would mean
+# making the default branch's CI genuinely fail — so the fixtures here are the only place the
+# failure branch runs at all. They also pin the distinction the watcher exists for: a sweep that
+# FAILED is reported and exits 0 (a finding), while a sweep it could not read exits 1 (UNCHECKED).
+bash "$ROOT/scripts/scheduled-run-watch.sh" --self-test >/dev/null 2>&1
+assert_rc "scheduled-run watch self-test passes" "$?" "0"

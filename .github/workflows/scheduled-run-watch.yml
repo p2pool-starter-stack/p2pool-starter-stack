@@ -1,0 +1,136 @@
+name: Scheduled-run watch
+
+# The Monday run of ci.yml IS the CVE sweep (#833, #1313). A scheduled run has no pull request, so
+# nothing draws a person to its result — and on 2026-08-17 `build-images` went red and nobody was
+# told for seven days (#1377). This watcher is that run's reader.
+#
+# ci.yml's own header currently justifies `build-images` having no reader with "the run reddening
+# in the Actions tab is its alert (the lychee.yml posture)". That justification does not survive
+# contact with lychee.yml: it was red for NINE consecutive Mondays (2026-06-29 to 2026-08-24, last
+# green 06-22) and nobody noticed, because a gate that is already red has no transition left to
+# make and so cannot signal a new break (#1419). A red tick is not a notification.
+#
+# WHY A WEEKLY REPORT AND NOT A FAILURE-TRIGGERED NOTICE. A notifier that speaks only on failure is
+# indistinguishable from one that has died — it is COMMON's "arrives by absence" shape, and it is
+# the same defect class this whole lane exists for. This one upserts its issue on EVERY run,
+# passing or failing, and stamps the last fully successful check, so silence is readable. That is
+# also why the report carries a history table: a single red says little, a streak says the gate has
+# stopped being an instrument.
+#
+# WHY NOT `workflow_run`, which is the obvious event-driven shape: zizmor's `dangerous-triggers`
+# audit rejects it at HIGH ("workflow_run is almost always used insecurely"), measured on a draft
+# against the pinned zizmor 1.25.2 that ci.yml runs. The repo has ZERO zizmor suppressions today
+# (`No findings to report`, measured on develop the same day), so taking that route would have made
+# this change the first security-audit mute in the tree — to save a cron slot, in a lane whose
+# standing rule is not to mute a scanner to clear a gate.
+#
+# WHY NOT A JOB INSIDE ci.yml. The reader ci.yml already has is `sweep-shipped-report`, whose
+# tracking issue is titled "Shipped-image CVE sweep" — and that title is also the upsert key, so it
+# cannot be widened without orphaning the issue and filing a duplicate. Filing a `build-images` red
+# under it would put a REBUILD finding inside the one report whose premise is that it scanned the
+# bytes users pulled, and would make its "Last fully successful sweep" stamp span two questions.
+# Separately, ci.yml is at 512 lines against a 513 ceiling on develop-v2, so a job there could not
+# be synced to the twin at all.
+#
+# This file lives on the DEFAULT branch on purpose: a `schedule:` is read from the default branch
+# only — pin-watch.yml's header carries the history of learning that the hard way (#1048, #1064,
+# #1146).
+on:
+  schedule:
+    # Mondays 08:00 UTC. THE ORDERING IS LOAD-BEARING, not tidiness: this job reports on the
+    # 05:00 sweep, so it must run after that sweep has FINISHED (ci.yml's own jobs are capped at
+    # 30 minutes each). Move this line earlier and the watch reads a run still in progress, which
+    # it correctly refuses as UNCHECKED — a self-inflicted red every Monday. It also sits after
+    # the 06:00 os-rootfs/lychee, 06:30 pin-watch and 07:00 trivyignore-watch slots so the whole
+    # Monday block stays in one readable order.
+    - cron: "0 8 * * 1"
+    # TEMPORARY PROOF SLOT (#1377), and it must be retired. The YAML existing proves nothing — a
+    # `schedule:` on the wrong branch is silent and reports green, which is the false-green trap
+    # this lane is repeatedly asked to prove against. So registration is proven the way #1257
+    # proved trivyignore-watch's: a near-term slot fires once, the `event=schedule` run is put on
+    # record, and then THIS LINE IS DELETED. Retire it in a follow-up PR that cites the run id.
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+# Least privilege (#282). `actions: read` is what lets the job read ci.yml's own run history — it
+# is a read of this repo's Actions metadata and nothing else. `issues: write` is the job's one
+# output: it never pushes, comments on a PR, or publishes.
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  scheduled-run-watch:
+    name: Report whether the Monday CVE sweep ran and passed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Collect ci.yml's scheduled-run history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          # NOT `set -e`: a lookup that could not run is a result to publish, not a reason to
+          # publish nothing. Every failure here lands as a missing or empty file, and the render
+          # script refuses on exactly that and says UNCHECKED — which is the reader's answer.
+          mkdir -p watch
+          gh run list --workflow ci.yml --event schedule \
+            --json databaseId,url,createdAt,status,conclusion --limit 20 >watch/runs.json
+          # The jobs of the newest run, so a failure can name WHICH job failed. Fetched
+          # unconditionally: deciding whether it is needed is the render script's job, and asking
+          # the question twice in two places is how the two answers drift.
+          id=$(jq -r 'sort_by(.createdAt) | reverse | .[0].databaseId // empty' watch/runs.json 2>/dev/null)
+          [ -n "$id" ] && gh run view "$id" --json jobs >watch/jobs.json
+          exit 0
+      - name: Render the report
+        id: report
+        run: |
+          set -uo pipefail
+          # The rc is carried to the last step rather than failing here, so a watch that could not
+          # do its job still publishes the fact that it could not — and still fails the run.
+          bash scripts/scheduled-run-watch.sh watch >report.md
+          rc=$?
+          # An empty report is itself a failure to report — never publish silence.
+          [ -s report.md ] || { echo "The scheduled-run watch produced no report at all — see the run log." >report.md; rc=1; }
+          echo "rc=$rc" >>"$GITHUB_OUTPUT"
+      - name: Publish it to the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC: ${{ steps.report.outputs.rc }}
+        run: |
+          set -Eeuo pipefail
+          # The title is the upsert key and it lives in the script, so there is exactly one
+          # spelling of it anywhere. A second spelling here would file a second issue on the very
+          # next run and then keep both stale.
+          TITLE="$(bash scripts/scheduled-run-watch.sh --title)"
+          body=$(cat report.md)
+          # Exact title match over the open list, NOT `--search`: the search index lags issue
+          # creation by minutes, so a search-based dedup files a second issue on the next run.
+          n=$(gh issue list --state open --limit 200 --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          # A run that could not do its job must not DELETE the "last fully successful" date —
+          # that date is the only thing separating "failed once this morning" from "has been dead
+          # for six weeks". Stamp it on success, carry it forward on failure (pin-watch pattern).
+          if [ "$RC" = "0" ]; then
+            body="$body"$'\n\n'"_Last fully successful check: $(date -u +%F)_"
+          elif [ -n "$n" ]; then
+            prev=$(gh issue view "$n" --json body --jq .body | grep -a "^_Last fully successful check:" || true)
+            if [ -n "$prev" ]; then
+              body="$body"$'\n\n'"$prev (this run could not complete)"
+            fi
+          fi
+          if [ -n "$n" ]; then
+            gh issue edit "$n" --body "$body"
+            echo "updated #$n"
+          else
+            gh issue create --title "$TITLE" --label infra --body "$body"
+          fi
+      - name: Fail the run if the watch could not do its job
+        if: steps.report.outputs.rc != '0'
+        run: |
+          echo "::error::the scheduled-run watch could not determine whether the Monday sweep passed — that run is UNCHECKED, not clean"
+          exit 1
