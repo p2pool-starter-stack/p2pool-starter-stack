@@ -262,8 +262,8 @@ check_appliance_cert() {
     if openssl x509 -in "$crt" -noout -checkend 2592000 >/dev/null 2>&1; then
         dr_ok "The dashboard certificate does not expire within 30 days ($enddate)."
     elif openssl x509 -in "$crt" -noout -checkend 0 >/dev/null 2>&1; then
-        dr_fail_surface "The dashboard certificate expires within 30 days ($enddate). Run './pithead apply' to re-mint." "The dashboard certificate expires within 30 days ($enddate). This machine re-mints it whenever it renders its web configuration, so saving any change from the dashboard renews it."
+        dr_fail_surface "The dashboard certificate expires within 30 days ($enddate). Run './pithead apply' to re-mint." "The dashboard certificate expires within 30 days ($enddate). This machine only re-mints it when the set of names it answers to changes, so it will not renew on its own; replacing it needs console access."
     else
-        dr_fail_surface "The dashboard certificate has EXPIRED ($enddate) — browsers will refuse it. Run './pithead apply' to re-mint." "The dashboard certificate has EXPIRED ($enddate) — browsers will refuse it. This machine re-mints it whenever it renders its web configuration, so saving any change from the dashboard renews it."
+        dr_fail_surface "The dashboard certificate has EXPIRED ($enddate) — browsers will refuse it. Run './pithead apply' to re-mint." "The dashboard certificate has EXPIRED ($enddate) — browsers will refuse it. This machine only re-mints it when the set of names it answers to changes, so it will not renew on its own; replacing it needs console access."
     fi
 }

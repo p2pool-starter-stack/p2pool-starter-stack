@@ -1144,11 +1144,21 @@ from: before it, the dashboard could tell you *that* a service was unhealthy and
 
 A check that fails tells you what to do about it in the terms of the machine you are on. On an
 appliance there is no shell, so where the DIY stack says to run `./pithead apply` or
-`./pithead setup`, this panel names the setup page, the update button or the log view instead —
-and where the appliance offers nothing that would fix it, it says so rather than naming a command
-you cannot run. A payout address is the clearest case: it is not editable from the dashboard at
-all, so the report tells you that correcting it needs console access, instead of quoting a CLI
-verb into a browser.
+`./pithead setup`, this panel names a surface you can actually reach instead — the update button,
+the log view, or the setup page while the machine is still unprovisioned.
+
+Where the appliance offers nothing that would fix it, the report says so and stops, rather than
+naming a command you cannot run or a page that is no longer there. Three cases are worth knowing,
+because each is a real dead end rather than an oversight:
+
+- **A payout address is not editable from the dashboard at all**, so the report tells you that
+  correcting it needs console access.
+- **The setup page closes permanently once the machine is provisioned.** Verdicts that can only
+  appear after provisioning — setup that did not finish, a hidden service that was never
+  generated — therefore do not send you back to it.
+- **The dashboard certificate is re-minted only when the set of names this machine answers to
+  changes.** An expiring or expired certificate whose name list is still correct will not renew
+  itself, and replacing it needs console access.
 
 One thing reads differently here than at a terminal: the report is redacted on its way to the
 browser, so where `pithead doctor` prints your dashboard onion address in full, this panel shows

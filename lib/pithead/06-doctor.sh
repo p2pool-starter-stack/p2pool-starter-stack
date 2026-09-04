@@ -40,7 +40,7 @@ doctor() {
         if podman info >/dev/null 2>&1; then
             dr_ok "Container engine (podman) is reachable."
         else
-            dr_fail "Container engine (podman) is not reachable — check 'systemctl status podman.socket' (rootful podman has no daemon; the socket serves the API)."
+            dr_fail_surface "Container engine (podman) is not reachable — check 'systemctl status podman.socket' (rootful podman has no daemon; the socket serves the API)." "The container engine is not reachable, so the mining stack cannot run. This machine starts it at boot, so this system copy is faulty."
         fi
     elif ! command -v docker >/dev/null 2>&1; then
         dr_info "Skipped — docker is not installed."
@@ -91,7 +91,7 @@ doctor() {
             case "$(monero_address_type "$_mw")" in
             primary) dr_ok "Monero payout address is a primary address (p2pool/XvB can pay it)." ;;
             subaddress) dr_fail_surface "Monero payout address is a SUBADDRESS (8…) — p2pool CANNOT pay it, so you are NOT being paid. Set monero.wallet_address to your PRIMARY address (4…) and run './pithead apply'." "Monero payout address is a SUBADDRESS (8…) — p2pool CANNOT pay it, so you are NOT being paid. It must be your PRIMARY address (4…). A payout address is not editable from the dashboard: changing it needs console access to this machine." ;;
-            integrated) dr_fail "Monero payout address is an INTEGRATED address — p2pool can't pay it. Use your plain PRIMARY address (4…)." ;;
+            integrated) dr_fail_surface "Monero payout address is an INTEGRATED address — p2pool can't pay it. Use your plain PRIMARY address (4…)." "Monero payout address is an INTEGRATED address — p2pool can't pay it. It must be your plain PRIMARY address (4…). A payout address is not editable from the dashboard: changing it needs console access to this machine." ;;
             checksum) dr_fail_surface "Monero payout address FAILS its checksum — at least one character is mistyped, and p2pool crashes on it at startup. Re-copy the address from your wallet into monero.wallet_address and run './pithead apply'." "Monero payout address FAILS its checksum — at least one character is mistyped, and p2pool crashes on it at startup. Re-copy it from your wallet rather than fixing it by eye. A payout address is not editable from the dashboard: changing it needs console access to this machine." ;;
             *) dr_warn "Monero payout address doesn't look like a primary address (expected 95 chars starting with 4)." ;;
             esac
@@ -255,7 +255,7 @@ doctor() {
         if [ "$(env_get DEPLOYMENT_COMPLETED)" == "true" ]; then
             dr_ok "DEPLOYMENT_COMPLETED=true — setup finished."
         else
-            dr_warn_surface "DEPLOYMENT_COMPLETED is not true — setup may be incomplete. Run './pithead setup'." "Setup did not finish — complete it from this machine's setup page."
+            dr_warn_surface "DEPLOYMENT_COMPLETED is not true — setup may be incomplete. Run './pithead setup'." "Setup did not finish, so parts of this machine may be unconfigured. Its setup page closes once the machine is provisioned, so no dashboard surface resumes it — correcting this needs console access."
         fi
 
         # --- Tor onion addresses ---
@@ -278,7 +278,7 @@ doctor() {
             fi
             onion=$(env_get "$k")
             if onion_missing "$onion"; then
-                dr_warn_surface "$k is not provisioned (value: '${onion:-empty}') — re-run './pithead setup' to generate Tor hidden services." "$k is not provisioned (value: '${onion:-empty}') — the Tor hidden services have not been generated. Run setup again from this machine's setup page."
+                dr_warn_surface "$k is not provisioned (value: '${onion:-empty}') — re-run './pithead setup' to generate Tor hidden services." "$k is not provisioned (value: '${onion:-empty}') — the Tor hidden services have not been generated. This machine's setup page closes once it is provisioned, so no dashboard surface regenerates them — correcting this needs console access."
             else
                 dr_ok "$k set."
             fi
@@ -291,7 +291,7 @@ doctor() {
             if onion_line=$(dashboard_onion_status); then
                 dr_ok "Dashboard onion: $onion_line"
             else
-                dr_warn_surface "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run './pithead setup' or './pithead apply'." "DASHBOARD_ONION_ADDRESS is not provisioned yet — run setup again from this machine's setup page."
+                dr_warn_surface "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run './pithead setup' or './pithead apply'." "DASHBOARD_ONION_ADDRESS is not provisioned yet — the dashboard's own hidden service has not been generated. This machine's setup page closes once it is provisioned, so no dashboard surface regenerates it — correcting this needs console access."
             fi
         fi
     fi

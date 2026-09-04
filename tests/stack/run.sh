@@ -312,12 +312,19 @@ done
 #    listed -- a `systemctl` this file never learned, a new console noun -- passes it clean. A green
 #    result here means "none of the KNOWN verb forms leaked", never "no verb leaked". Extend the
 #    alternation when doctor learns a new way to tell someone to do something.
+#
+#    AND IT IS LITERAL-ONLY, which is the blind spot extending the alternation does NOT close. The
+#    site pattern needs a quoted message on the same line, so a verdict whose text arrives in a
+#    VARIABLE can never be reached by any needle: 05-doctor-checks.sh:111 (dr_warn "$(head -n 1
+#    ...)", appliance-only by construction, text from the hugepages helper), 20-doctor-install-
+#    checks.sh:28 (dr_warn "$msg") and 21-doctor-stack-checks.sh:261 (dr_fail "${verdict#fail:}").
+#    Those three are unguarded here today and cannot be guarded here — read them by hand.
 dr_verb_leaks=$(grep -nE '(dr_fail|dr_warn|dr_info) "' "$STACK" |
-    grep -E "\./pithead |docker compose |docker pull |docker-compose-v2|Start the Docker daemon|sudo |git pull" |
+    grep -E "\./pithead |docker compose |docker pull |docker-compose-v2|Start the Docker daemon|sudo |systemctl|git pull" |
     grep -v "appliance-unreachable" || true)
 assert_eq "no plain doctor verdict still names a CLI verb (#1213)" \
     "$(printf '%s' "$dr_verb_leaks" | grep -c . || true)" "0"
-[ -n "$dr_verb_leaks" ] && printf '    leaked: %s\n' "$dr_verb_leaks" | head -12
+[ -n "$dr_verb_leaks" ] && printf '    leaked: %s\n' "$dr_verb_leaks" | head -12 || true
 
 # ---------------------------------------------------------------------------
 echo ""
