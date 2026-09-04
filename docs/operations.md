@@ -112,8 +112,11 @@ takes it after its prompts, so a passphrase you have not typed yet holds nothing
 first-boot wizard holds it only while it deploys. `os-update` takes it just before it writes the
 spare slot, so a confirmation it is still waiting on holds nothing up either, and
 `rotate-secrets` takes it after its own confirmation and before it writes the copies of your old
-secrets, so a rotation that ends up waiting has not yet changed a credential. Read-only
-commands — `status`, `doctor` and `logs` among them — never take it and never wait.
+secrets, so a rotation that ends up waiting has not yet changed a credential. A one-click
+upgrade from the dashboard takes it before it writes over the install, so one that arrives while
+another command is running comes back refused with nothing changed, instead of overwriting the
+install underneath it. Read-only commands — `status`, `doctor` and `logs` among them — never take
+it and never wait.
 
 The lock covers one stack, not one directory. A bundle install keeps each release in its own
 `pithead-vX.Y.Z` directory beside the one before it (see [The deploy-box
