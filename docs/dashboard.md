@@ -1144,7 +1144,7 @@ from: before it, the dashboard could tell you *that* a service was unhealthy and
 
 One thing reads differently here than at a terminal: the report is redacted on its way to the
 browser, so where `pithead doctor` prints your dashboard onion address in full, this panel shows
-it struck out. The CLI prints it because you asked for it at your own terminal; this copy crosses
+it as `[redacted].onion`. The CLI prints it because you asked for it at your own terminal; this copy crosses
 into the dashboard container, and the address is worth keeping out of there. Run `pithead doctor`
 on the host, or check the emergency kit, when you need the address itself.
 
