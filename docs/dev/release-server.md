@@ -108,20 +108,24 @@ missing tool rather than dying mid-gate. Restore them with the same pinned versi
 and reformat differently, so a version skew would fail `make lint` on the box for diffs the merge
 gate never saw. Both pins live in the `Makefile` — `SHELLCHECK_VERSION` and `SHFMT_VERSION` — and
 each is what `ci.yml` installs and what `make lint-sh` refuses to run without;
-`make -s print-shellcheck-version` and `make -s print-shfmt-version` print them, so the versions
-below are copies and those commands are the source. One wrinkle worth knowing when you check by
-hand: `shfmt --version` prints a leading `v` on the upstream release builds (`v3.13.1`) while some
-distro builds print a bare number, so the gate strips it before comparing.
+`make -s print-shellcheck-version` and `make -s print-shfmt-version` print them, and the block below
+calls those commands rather than copying what they print, so it cannot go stale against the pins.
+One wrinkle worth knowing when you check by hand: `shfmt --version` prints a leading `v` on the
+upstream release builds while some distro builds print a bare number, so the gate strips it before
+comparing.
 
 ```bash
 # node 20 (brings npx) + the basics the harness also needs
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs jq curl git tar
+sudo apt-get install -y nodejs jq curl git tar make
 
-# shellcheck 0.11.0 (= make -s print-shellcheck-version) + shfmt 3.13.1 (= make -s print-shfmt-version)
-curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ -C /tmp
-sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
-sudo curl -fsSL -o /usr/local/bin/shfmt https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
+# shellcheck + shfmt, read from the Makefile pins instead of copied.
+# Run from the repo root - clone it there first if the box has just been reimaged.
+SC=$(make -s print-shellcheck-version)
+SF=$(make -s print-shfmt-version)
+curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v$SC/shellcheck-v$SC.linux.x86_64.tar.xz" | tar -xJ -C /tmp
+sudo install -m 0755 "/tmp/shellcheck-v$SC/shellcheck" /usr/local/bin/shellcheck
+sudo curl -fsSL -o /usr/local/bin/shfmt "https://github.com/mvdan/sh/releases/download/v$SF/shfmt_v${SF}_linux_amd64"
 sudo chmod 0755 /usr/local/bin/shfmt
 
 # uv 0.10.10 (pinned installer; brings uvx, and adds ~/.local/bin to PATH)
