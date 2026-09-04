@@ -233,6 +233,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-cert-advisory.sh" && domain
 # shellcheck source=tests/stack/test-appliance-boot-release.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-boot-release.sh" && domain_ran test-appliance-boot-release.sh "$_d0" "$?" || domain_ran test-appliance-boot-release.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-appliance-build-compose-source.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-build-compose-source.sh" && domain_ran test-appliance-build-compose-source.sh "$_d0" "$?" || domain_ran test-appliance-build-compose-source.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-appliance-os-update.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-os-update.sh" && domain_ran test-appliance-os-update.sh "$_d0" "$?" || domain_ran test-appliance-os-update.sh "$_d0" "$?"
 

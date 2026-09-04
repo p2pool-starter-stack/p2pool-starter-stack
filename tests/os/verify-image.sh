@@ -31,7 +31,21 @@ rigforge_ref_matches() { # <image-root> <dockerfile> — 0 iff the recorded ref 
     pin=$(sed -n 's/^ARG RIGFORGE_REF=\([^ ]*\).*/\1/p' "$2" 2>/dev/null)
     [ -n "$rec" ] && [ "$rec" = "$pin" ]
 }
-# Sourcing defines the helper and runs nothing, so the self-test drives the REAL comparison.
+# compose_reference (#1215): write to <out-file> the compose file the shipped one must equal, as
+# named by the image's own COMPOSE_SOURCE stamp — the tree's copy for `tree`, or the staged commit's
+# copy for `tag NAME SHA`. Non-zero when the stamp is missing or malformed, names a tag other than
+# the shipped VERSION's, or names a commit this checkout does not hold: each of those is a reason
+# the comparison cannot be trusted, and a comparison that cannot run must read as a failure.
+compose_reference() { # <image-root> <out-file>
+    local kind tag sha
+    read -r kind tag sha 2>/dev/null <"$1/opt/pithead/COMPOSE_SOURCE" || return 1
+    case "$kind" in
+    tree) cp ./docker-compose.yml "$2" ;;
+    tag) [ "$tag" = "v$(tr -d ' \t\r\n' <"$1/opt/pithead/VERSION")" ] && git show "$sha:docker-compose.yml" >"$2" 2>/dev/null || return 1 ;;
+    *) return 1 ;;
+    esac
+}
+# Sourcing defines the helpers and runs nothing, so the self-tests drive the REAL comparisons.
 if [ "${BASH_SOURCE[0]}" != "${0}" ]; then return 0; fi
 
 IMAGE="${1:-}"
@@ -268,7 +282,12 @@ fi
 if [ -f ./pithead ] && [ -f dashboard/mining_dashboard/wizard.py ]; then
     echo "==> the artifact matches the tree it was built from"
     chk "shipped pithead is the tree's pithead" 'cmp -s "$ROOT/opt/pithead/pithead" ./pithead'
-    chk "shipped compose file matches" 'cmp -s "$ROOT/opt/pithead/docker-compose.yml" ./docker-compose.yml'
+    # The compose file is staged from the STACK_VERSION tag when that tag exists (#1215), so the
+    # tree is the wrong reference then. The stamp says which; compose_reference refuses the rest.
+    COMPOSE_REF=$(mktemp)
+    chk "shipped compose file matches its stamped source ($(cat "$ROOT/opt/pithead/COMPOSE_SOURCE" 2>/dev/null || echo missing))" \
+        'compose_reference "$ROOT" "$COMPOSE_REF" && cmp -s "$ROOT/opt/pithead/docker-compose.yml" "$COMPOSE_REF"'
+    rm -f "$COMPOSE_REF"
     chk "shipped config reference matches" 'cmp -s "$ROOT/opt/pithead/config.reference.json" ./config.reference.json'
 
     # The wizard is the part that shipped stale, and it lives inside a container archive rather
