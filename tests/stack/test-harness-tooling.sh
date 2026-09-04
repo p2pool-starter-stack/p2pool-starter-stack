@@ -288,6 +288,7 @@ test-config.sh|bad_port
 test-config.sh|checked
 test-config.sh|core_checked
 test-control-core.sh|reowned
+test-control-diagnostics.sh|_c
 test-doctor.sh|ip
 test-release.sh|comp
 test-release.sh|pin_rel
