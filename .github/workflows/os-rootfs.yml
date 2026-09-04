@@ -92,6 +92,13 @@ jobs:
         # (ci.yml builds and scans the dashboard image directly).
         run: |
           git rev-parse HEAD > os/rootfs/BUILD_COMMIT
+          # The Dockerfile COPYs the compose file build-image.sh stages from the release tag
+          # (#1215). A shallow checkout carries no tags, so fetch the one VERSION names first —
+          # absent on origin means the release being prepared, and stage_compose takes the tree
+          # and says so; present but unfetched, it refuses by name rather than baking the tree's.
+          tag="v$(tr -d ' \t\r\n' <VERSION)"
+          git fetch -q --depth=1 origin "+refs/tags/$tag:refs/tags/$tag" 2>/dev/null || true
+          os/build-image.sh --stage-only
           docker build -f os/rootfs/Dockerfile -t pithead-os-rootfs:ci \
             --build-arg PITHEAD_UPDATER=rauc .
       - name: Scan rootfs for CVEs (Trivy)

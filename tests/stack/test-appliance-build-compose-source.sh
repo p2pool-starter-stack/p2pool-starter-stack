@@ -74,6 +74,23 @@ assert_contains "the refusal names the tag and the remedy" "$cs_out" "tag v0.0.2
 assert_contains "the remedy is the fetch" "$cs_out" "git fetch --tags"
 assert_eq "the refusal stages nothing a later COPY could pick up" "$(ls "$CS/unfetched" 2>/dev/null)" ""
 
+echo "== unit: build-image --stage-only parses, and stops after staging, before the first docker step (#1215) =="
+# The CI rootfs scan runs the Dockerfile itself, so it needs the staging without the build. The
+# seam returns before the staging line, so the flag's parse is the driven half; the stop is asserted
+# by ORDER in the script (static): after the staging echo, before the wizard image is touched.
+# Mutation run: drop the case arm -> the parse row goes red; move the stop below the wizard step ->
+# the order row goes red.
+assert_eq "--stage-only is accepted and recorded" \
+    "$( (export PITHEAD_BUILD_IMAGE_TEST=1 && set -- --stage-only && source "$ROOT/os/build-image.sh" && echo "STAGE_ONLY=${STAGE_ONLY:-unset}") 2>&1)" "STAGE_ONLY=1"
+bi_line() { grep -n -F -- "$1" "$ROOT/os/build-image.sh" | head -1 | cut -d: -f1; }
+l_stage=$(bi_line 'echo "==> compose file staged from: $(stage_compose "$STACK_VERSION" os/build/stage)"')
+l_stop=$(bi_line 'if [ "${STAGE_ONLY:-0}" = 1 ]; then')
+l_wizard=$(bi_line 'echo "==> staging wizard image $WIZARD_IMAGE"')
+assert_eq "the stop sits after the staging line and before the wizard image step" \
+    "$([ "${l_stage:-0}" -lt "${l_stop:-0}" ] && [ "${l_stop:-0}" -lt "${l_wizard:-0}" ] && echo ordered)" "ordered"
+unset -f bi_line
+unset l_stage l_stop l_wizard
+
 echo "== unit: verify-image compose_reference — the stamp names the file the shipped compose must equal (#1215) =="
 # A fake image root: only the two files the helper reads. Driven from inside the scratch repo so
 # `./docker-compose.yml` and `git show` resolve against it, exactly as verify-image runs.

@@ -2,7 +2,7 @@
 # Build the pithead-os appliance rootfs (#77 phase 2): the OS as a container build, exported to a
 # tarball. os/rauc/mkimage.sh turns that tarball into a bootable image and os/rauc/mkbundle.sh
 # turns it into an update bundle. Run from the repo root on a box with docker.
-#   os/build-image.sh [--ssh [PUBKEY_FILE]] [--fresh-index]   -> os/build/pithead-root.tar
+#   os/build-image.sh [--ssh [PUBKEY_FILE]] [--fresh-index] [--stage-only]   -> os/build/pithead-root.tar
 #
 #   --ssh [FILE]   debug/bench variant: bake FILE (default: the builder's ~/.ssh/id_ed25519.pub,
 #                  falling back to id_rsa.pub) as root's authorized key and enable sshd. Release
@@ -12,6 +12,9 @@
 #   --fresh-index  bust ONLY the rootfs Dockerfile's apt-update layer (#929): a warm builder
 #                  cache reuses that layer's apt index for weeks, and when the mirror rotates a
 #                  package the stale index 404s on install. Later layers still cache normally.
+#   --stage-only   stage os/build/stage/ (the compose file and its stamp, see stage_compose) and
+#                  stop before docker: the CI rootfs scan runs the Dockerfile itself and needs
+#                  exactly this step first, since the Dockerfile COPYs from that directory.
 # The compose file is NOT taken from the working tree when the release it names already exists:
 # stage_compose below copies it from the tag STACK_VERSION resolves to, and falls back to the tree
 # only while that tag does not exist yet (mid release-prep). See the function for why.
@@ -42,8 +45,11 @@ while [ $# -gt 0 ]; do
     --fresh-index)
         FRESH_INDEX=1
         ;;
+    --stage-only)
+        STAGE_ONLY=1
+        ;;
     *)
-        echo "unknown argument: $1 (usage: os/build-image.sh [--ssh [PUBKEY_FILE]] [--fresh-index])" >&2
+        echo "unknown argument: $1 (usage: os/build-image.sh [--ssh [PUBKEY_FILE]] [--fresh-index] [--stage-only])" >&2
         exit 1
         ;;
     esac
@@ -105,6 +111,10 @@ STACK_VERSION="v$(tr -d ' \t\r\n' <VERSION)"
 # os/build/ is git-ignored, so staging there keeps the tree clean (the build stamps itself dirty
 # otherwise, and mkimage refuses a dirty stamp). The Dockerfile COPYs both files from this path.
 echo "==> compose file staged from: $(stage_compose "$STACK_VERSION" os/build/stage)"
+if [ "${STAGE_ONLY:-0}" = 1 ]; then
+    echo "==> --stage-only: os/build/stage/ is ready; stopping before the build"
+    exit 0
+fi
 WIZARD_IMAGE="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION}"
 mkdir -p os/rootfs/images
 echo "==> staging wizard image $WIZARD_IMAGE"
