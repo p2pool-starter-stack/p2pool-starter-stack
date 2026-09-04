@@ -376,21 +376,25 @@ Static allocation — each box states its owner in `/etc/bench-role`, and each b
 | Production host | Production | Production stack; deploys only. |
 
 The run lock — **RESERVE**. Both harnesses take a `flock` on `/var/lock/rig-e2e.lock` before
-the first service-touching action and hold it on an inherited FD for the whole run, so the kernel releases
-it the moment the run dies — `kill -9` included, no stale-lock cleanup. rigforge#183 defines the
-mechanism; [#430](https://github.com/p2pool-starter-stack/pithead/issues/430) is this repo's
-mirror; the shared path on every box is the protocol. Mutating runs hold it exclusive; read-only
-runs (`run.sh --check` / `--readiness`) hold it shared, so concurrent readers coexist but still
+the first service-touching action and hold it on an inherited FD for the whole run, so the
+kernel releases it the moment the run dies — `kill -9` included, no stale-lock cleanup.
+rigforge#183 defines the mechanism;
+[#430](https://github.com/p2pool-starter-stack/pithead/issues/430) is this repo's mirror; the
+shared path on every box is the protocol. Mutating runs hold it exclusive; read-only runs
+(`run.sh --check` / `--readiness`) hold it shared, so concurrent readers coexist but still
 exclude mutators. `tests/integration/run.sh` takes it on the target box (over SSH for `--host`);
 `e2e.sh` also takes it on the loaner rig it borrows. A busy box makes the run exit 75
-(`EX_TEMPFAIL`) naming the holder; set `RIG_LOCK_WAIT=1` to queue instead.
-`/run/rig-e2e.holder` is a display-only sidecar naming the holder — the flock is authoritative,
-and a stale sidecar is harmless.
+(`EX_TEMPFAIL`) naming the holder; set `RIG_LOCK_WAIT=1` to queue instead. `/run/rig-e2e.holder`
+is a display-only sidecar naming the holder — the flock is authoritative, and a stale sidecar
+is harmless.
 
-**CHECK** — and **FREE**, which is not a step. Off-box actors (a human or an agent over SSH)
-touch services on a shared box only after the same check. Nothing releases the lock afterwards: it
-lives on an inherited descriptor, so the kernel drops it when the run ends, however it ends. A
-holder that has to remember to free is a holder that eventually does not:
+**CHECK** — and **FREE**, which is not a step for anyone. A harness frees the lock by dying:
+it holds it on an inherited descriptor, so the kernel drops it when the run ends, however it
+ends, and a holder that has to remember to free is a holder that eventually does not. An off-box
+actor (a human or an agent over SSH) never holds it at all — the command below is a probe.
+`true` returns at once and the lock goes with the ssh session, so it reports that the box was
+free at that instant and nothing more. For however long the work then takes, the actor is
+unprotected and a harness run can take the lock underneath it:
 
 ```bash
 ssh <box> 'flock -n -x /var/lock/rig-e2e.lock true' || ssh <box> 'cat /run/rig-e2e.holder'
