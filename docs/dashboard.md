@@ -1142,6 +1142,14 @@ checks the CLI prints, failures first, with the host's summary counts above them
 that matters on a [Pithead OS appliance](appliance.md), where there is no shell to run `doctor`
 from: before it, the dashboard could tell you *that* a service was unhealthy and never *why*.
 
+A check that fails tells you what to do about it in the terms of the machine you are on. On an
+appliance there is no shell, so where the DIY stack says to run `./pithead apply` or
+`./pithead setup`, this panel names the setup page, the update button or the log view instead —
+and where the appliance offers nothing that would fix it, it says so rather than naming a command
+you cannot run. A payout address is the clearest case: it is not editable from the dashboard at
+all, so the report tells you that correcting it needs console access, instead of quoting a CLI
+verb into a browser.
+
 One thing reads differently here than at a terminal: the report is redacted on its way to the
 browser, so where `pithead doctor` prints your dashboard onion address in full, this panel shows
 it as `[redacted].onion`. The CLI prints it because you asked for it at your own terminal; this copy crosses

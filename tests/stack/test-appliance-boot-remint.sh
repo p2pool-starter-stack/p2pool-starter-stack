@@ -51,8 +51,13 @@ assert_eq "no doctor file at all does NOT" "$(bc_run "")" "not"
 assert_eq "a malformed doctor file does NOT" "$(bc_run 'not json')" "not"
 # The prefix the trigger matches must be the one doctor prints, or a reworded doctor silently
 # disarms the re-mint while every row above stays green: both sides are pinned to the source.
+# BOTH ARMS, since #1213 split this check into host and appliance wording: this gate runs ONLY on
+# an appliance, so the arm it actually reads is the SECOND one. A pin naming one arm would leave a
+# reworded appliance arm free to disarm the re-mint with this row still green.
 assert_eq "the trigger's prefix is doctor's own coverage message, verbatim at source" \
-    "$(grep -c 'dr_fail "The dashboard certificate does not cover: ' "$ROOT/lib/pithead/20-doctor-install-checks.sh")" "1"
+    "$(grep -c 'dr_fail_surface "The dashboard certificate does not cover: ' "$ROOT/lib/pithead/20-doctor-install-checks.sh")" "1"
+assert_eq "…and the appliance arm — the only one this gate ever reads — carries it too" \
+    "$(grep -o 'The dashboard certificate does not cover: ' "$ROOT/lib/pithead/20-doctor-install-checks.sh" | grep -c .)" "2"
 assert_eq "…and the boot script matches exactly that prefix" \
     "$(grep -c 'startswith("The dashboard certificate does not cover")' "$ROOT/os/overlay/pithead-boot")" "1"
 

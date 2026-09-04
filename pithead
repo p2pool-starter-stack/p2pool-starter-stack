@@ -1176,6 +1176,19 @@ dr_info() {
     dr_record info "$1"
     printf '  %b•%b      %s\n' "$C_YELLOW" "$C_RESET" "$1"
 }
+# One verdict, worded for the surface the operator is actually on (#1213). Doctor's messages reach
+# the dashboard verbatim since the diagnostics verbs landed -- control_diag_doctor runs
+# `doctor --json` and every dr_fail/dr_warn message ships as {status, message} -- so a remedial
+# string naming a CLI verb is a dead end on an appliance, which has no shell. That is the defect
+# class the refusal strings were already fixed for; these are the same treatment for doctor.
+# First argument is the DIY/host wording, byte for byte what it always was. The second is what an
+# appliance operator is told instead, and it NEVER invents a remedy: it names a dashboard surface
+# only where one exists (the setup page, the one-click upgrade, the per-container log view) and
+# otherwise states the diagnosis and stops -- the same choice describe_change makes when there is
+# no remedy to offer. is_appliance resolves at call time, as it already does elsewhere here.
+dr_fail_surface() { if is_appliance; then dr_fail "$2"; else dr_fail "$1"; fi; }
+dr_warn_surface() { if is_appliance; then dr_warn "$2"; else dr_warn "$1"; fi; }
+dr_info_surface() { if is_appliance; then dr_info "$2"; else dr_info "$1"; fi; }
 # `doctor --json` capture (#77 phase 1): every check verdict lands as a status<TAB>message line in
 # DR_JSON_FILE when set; doctor assembles the machine report from it. TSV keeps this a plain
 # append — messages are prose and never carry tabs.
@@ -1270,11 +1283,11 @@ cpu_has_avx2() {
 # upgrade" BEFORE one is attempted rather than during it (#1108). Read-only: nothing is pulled.
 check_release_verification() {
     if is_source_checkout; then
-        dr_info "Source checkout — images build locally and are not signature-verified, and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'."
+        dr_info "Source checkout — images build locally and are not signature-verified, and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'." # appliance-unreachable: is_source_checkout excludes is_appliance
     elif [ ! -f cosign.pub ]; then
         dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified. Release bundles ship the key from the first signed release."
     elif ! cosign_available; then
-        dr_warn "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon."
+        dr_warn_surface "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon." "The container engine is not available to run the release verifier, so no image can be pulled until it is back. The appliance image ships that engine, so this system copy is faulty."
     elif docker image inspect "$COSIGN_IMAGE" >/dev/null 2>&1; then
         dr_ok "'up' and 'upgrade' verify the release images against cosign.pub; the pinned verifier image is already here, nothing to install."
     else
@@ -1282,7 +1295,7 @@ check_release_verification() {
         # does not have it yet. Worth saying plainly: if that one fetch fails, the operation reports a
         # *signature* failure — which reads as a tampered release rather than as an image this host
         # could not pull (#1084).
-        dr_warn "The pinned release verifier image is not on this host yet — the next 'up' or 'upgrade' fetches it. If that fetch fails, the operation reports a signature failure even though nothing was tampered with. Pre-fetch it with: docker pull $COSIGN_IMAGE"
+        dr_warn_surface "The pinned release verifier image is not on this host yet — the next 'up' or 'upgrade' fetches it. If that fetch fails, the operation reports a signature failure even though nothing was tampered with. Pre-fetch it with: docker pull $COSIGN_IMAGE" "The pinned release verifier image is not on this machine yet — the next update fetches it. If that fetch fails, the update reports a signature failure even though nothing was tampered with."
     fi
 }
 
@@ -1302,22 +1315,22 @@ doctor() {
     if command -v jq >/dev/null 2>&1; then
         dr_ok "jq found ($(jq --version 2>/dev/null || echo 'unknown version'))."
     else
-        dr_fail "jq not found — install it (Ubuntu: 'sudo apt-get install -y jq')."
+        dr_fail_surface "jq not found — install it (Ubuntu: 'sudo apt-get install -y jq')." "jq is not present, so doctor cannot read this machine's configuration. The appliance image ships it, so this system copy is faulty."
     fi
     if command -v openssl >/dev/null 2>&1; then
         dr_ok "openssl found."
     else
-        dr_fail "openssl not found — install it (Ubuntu: 'sudo apt-get install -y openssl')."
+        dr_fail_surface "openssl not found — install it (Ubuntu: 'sudo apt-get install -y openssl')." "openssl is not present, so the dashboard certificate cannot be checked. The appliance image ships it, so this system copy is faulty."
     fi
     if command -v docker >/dev/null 2>&1; then
         dr_ok "docker found ($(docker --version 2>/dev/null || echo 'unknown version'))."
     else
-        dr_fail "docker not found — install Docker and the compose v2 plugin."
+        dr_fail_surface "docker not found — install Docker and the compose v2 plugin." "The container engine is not present, so the mining stack cannot start. The appliance image ships it, so this system copy is faulty."
     fi
     if docker compose version >/dev/null 2>&1; then
         dr_ok "docker compose (v2 plugin) found."
     else
-        dr_fail "docker compose (v2 plugin) not found — install 'docker-compose-v2'."
+        dr_fail_surface "docker compose (v2 plugin) not found — install 'docker-compose-v2'." "The container engine's compose plugin is not present, so the mining stack cannot start. The appliance image ships it, so this system copy is faulty."
     fi
     check_release_verification
 
@@ -1335,7 +1348,7 @@ doctor() {
     elif docker info >/dev/null 2>&1; then
         dr_ok "Docker daemon is reachable."
     else
-        dr_fail "Docker daemon is not reachable — start it (e.g. 'sudo systemctl start docker') and ensure your user is in the 'docker' group."
+        dr_fail_surface "Docker daemon is not reachable — start it (e.g. 'sudo systemctl start docker') and ensure your user is in the 'docker' group." "The container engine is not reachable, so the mining stack cannot run. This machine starts it at boot, so this system copy is faulty."
     fi
 
     # --- Docker boot persistence (Linux/systemd) ---
@@ -1349,7 +1362,7 @@ doctor() {
         if docker_boot_enabled; then
             dr_ok "Docker is enabled to start at boot — the stack will come back after a reboot."
         else
-            dr_warn "The container engine is NOT enabled to start at boot — after a power loss/reboot the stack won't restart. Fix: 'sudo systemctl enable --now docker' (docker) or 'sudo systemctl enable --now podman.socket' (podman)."
+            dr_warn_surface "The container engine is NOT enabled to start at boot — after a power loss/reboot the stack won't restart. Fix: 'sudo systemctl enable --now docker' (docker) or 'sudo systemctl enable --now podman.socket' (podman)." "The container engine is NOT enabled to start at boot — after a power loss or reboot the mining stack won't restart. This machine enables it at install time, so this system copy is faulty."
         fi
     fi
 
@@ -1367,7 +1380,7 @@ doctor() {
     # --- Time sync (mining is time-sensitive; P2Pool strongly recommends NTP before mining) ---
     case "$(clock_sync_status)" in
     synced) dr_ok "System clock is NTP-synchronized." ;;
-    unsynced) dr_warn "System clock is NOT NTP-synchronized — clock skew gets shares/blocks rejected. Enable time sync: 'sudo timedatectl set-ntp true' (or run chrony/systemd-timesyncd/ntpd)." ;;
+    unsynced) dr_warn_surface "System clock is NOT NTP-synchronized — clock skew gets shares/blocks rejected. Enable time sync: 'sudo timedatectl set-ntp true' (or run chrony/systemd-timesyncd/ntpd)." "System clock is NOT NTP-synchronized — clock skew gets shares and blocks rejected. There is no dashboard control that sets the clock." ;;
     *) dr_info "Could not verify system-clock sync (no timedatectl) — make sure NTP is running; mining is time-sensitive." ;;
     esac
 
@@ -1378,9 +1391,9 @@ doctor() {
         if [ -n "$_mw" ] && [ "$_mw" != "your_monero_wallet_address" ]; then
             case "$(monero_address_type "$_mw")" in
             primary) dr_ok "Monero payout address is a primary address (p2pool/XvB can pay it)." ;;
-            subaddress) dr_fail "Monero payout address is a SUBADDRESS (8…) — p2pool CANNOT pay it, so you are NOT being paid. Set monero.wallet_address to your PRIMARY address (4…) and run './pithead apply'." ;;
+            subaddress) dr_fail_surface "Monero payout address is a SUBADDRESS (8…) — p2pool CANNOT pay it, so you are NOT being paid. Set monero.wallet_address to your PRIMARY address (4…) and run './pithead apply'." "Monero payout address is a SUBADDRESS (8…) — p2pool CANNOT pay it, so you are NOT being paid. It must be your PRIMARY address (4…). A payout address is not editable from the dashboard: changing it needs console access to this machine." ;;
             integrated) dr_fail "Monero payout address is an INTEGRATED address — p2pool can't pay it. Use your plain PRIMARY address (4…)." ;;
-            checksum) dr_fail "Monero payout address FAILS its checksum — at least one character is mistyped, and p2pool crashes on it at startup. Re-copy the address from your wallet into monero.wallet_address and run './pithead apply'." ;;
+            checksum) dr_fail_surface "Monero payout address FAILS its checksum — at least one character is mistyped, and p2pool crashes on it at startup. Re-copy the address from your wallet into monero.wallet_address and run './pithead apply'." "Monero payout address FAILS its checksum — at least one character is mistyped, and p2pool crashes on it at startup. Re-copy it from your wallet rather than fixing it by eye. A payout address is not editable from the dashboard: changing it needs console access to this machine." ;;
             *) dr_warn "Monero payout address doesn't look like a primary address (expected 95 chars starting with 4)." ;;
             esac
         fi
@@ -1391,8 +1404,8 @@ doctor() {
             case "$(tari_address_type "$_tw")" in
             ok) dr_ok "Tari payout address passes its checksum." ;;
             unchecked) dr_info "Could not verify the Tari payout address checksum (no usable python3)." ;;
-            checksum) dr_fail "Tari payout address FAILS its checksum — at least one character is mistyped, and Tari rewards are silently lost. Re-copy the address from your Tari wallet into tari.wallet_address and run './pithead apply'." ;;
-            network) dr_fail "Tari payout address is for a different Tari network — this stack mines MAINNET Tari. Set tari.wallet_address to your mainnet address and run './pithead apply'." ;;
+            checksum) dr_fail_surface "Tari payout address FAILS its checksum — at least one character is mistyped, and Tari rewards are silently lost. Re-copy the address from your Tari wallet into tari.wallet_address and run './pithead apply'." "Tari payout address FAILS its checksum — at least one character is mistyped, and Tari rewards are silently lost. Re-copy it from your Tari wallet rather than fixing it by eye. A payout address is not editable from the dashboard: changing it needs console access to this machine." ;;
+            network) dr_fail_surface "Tari payout address is for a different Tari network — this stack mines MAINNET Tari. Set tari.wallet_address to your mainnet address and run './pithead apply'." "Tari payout address is for a different Tari network — this machine mines MAINNET Tari, and this address came from a testnet wallet. A payout address is not editable from the dashboard: changing it needs console access to this machine." ;;
             *) dr_warn "Tari payout address doesn't look like a valid Tari address (base58 or emoji form)." ;;
             esac
         fi
@@ -1412,7 +1425,7 @@ doctor() {
         elif [ "$huge_total" -gt 0 ] 2>/dev/null; then
             dr_ok "HugePages reserved: ${huge_total} total, ${huge_free:-?} free (RandomX uses these)."
         else
-            dr_warn "HugePages_Total is 0 — RandomX mining is slower. Run './pithead setup' (kernel optimization) to reserve them."
+            dr_warn_surface "HugePages_Total is 0 — RandomX mining is slower. Run './pithead setup' (kernel optimization) to reserve them." "HugePages_Total is 0 — RandomX mining is slower. There is no dashboard control that reserves them."
         fi
         check_hugepages_degraded
         check_local_miner_hugepages_blocked
@@ -1467,7 +1480,7 @@ doctor() {
         case "$_p2args" in
         "") : ;;
         *--socks5*) dr_ok "p2pool routes outbound sidechain P2P via Tor (#165)." ;;
-        *) dr_fail "p2pool is NOT routing over Tor despite p2pool.clearnet=false — its sidechain P2P would hit CLEARNET (exposing your IP). Almost certainly a STALE p2pool image not applying P2POOL_FLAGS (#165/#273): run './pithead upgrade' to rebuild it. (#270's egress firewall blocks the dial meanwhile, so p2pool can't peer until you do.)" ;;
+        *) dr_fail_surface "p2pool is NOT routing over Tor despite p2pool.clearnet=false — its sidechain P2P would hit CLEARNET (exposing your IP). Almost certainly a STALE p2pool image not applying P2POOL_FLAGS (#165/#273): run './pithead upgrade' to rebuild it. (#270's egress firewall blocks the dial meanwhile, so p2pool can't peer until you do.)" "p2pool is NOT routing over Tor despite p2pool.clearnet=false — its sidechain P2P would hit CLEARNET (exposing your IP). Almost certainly a STALE p2pool image not applying its Tor flags: install the latest update from the dashboard to rebuild it. (The Tor-only egress firewall blocks the dial meanwhile, so p2pool cannot peer until you do.)" ;;
         esac
     fi
 
@@ -1537,13 +1550,13 @@ doctor() {
     echo ""
     echo "Deployment:"
     if [ ! -f "$ENV_FILE" ]; then
-        dr_warn "No $ENV_FILE found — the stack has not been set up. Run './pithead setup'. (Skipping env-dependent checks.)"
+        dr_warn_surface "No $ENV_FILE found — the stack has not been set up. Run './pithead setup'. (Skipping env-dependent checks.)" "The stack has not been set up — finish setup from this machine's setup page. (Skipping the checks that depend on it.)"
     else
         dr_ok "$ENV_FILE present."
         if [ "$(env_get DEPLOYMENT_COMPLETED)" == "true" ]; then
             dr_ok "DEPLOYMENT_COMPLETED=true — setup finished."
         else
-            dr_warn "DEPLOYMENT_COMPLETED is not true — setup may be incomplete. Run './pithead setup'."
+            dr_warn_surface "DEPLOYMENT_COMPLETED is not true — setup may be incomplete. Run './pithead setup'." "Setup did not finish — complete it from this machine's setup page."
         fi
 
         # --- Tor onion addresses ---
@@ -1566,7 +1579,7 @@ doctor() {
             fi
             onion=$(env_get "$k")
             if onion_missing "$onion"; then
-                dr_warn "$k is not provisioned (value: '${onion:-empty}') — re-run './pithead setup' to generate Tor hidden services."
+                dr_warn_surface "$k is not provisioned (value: '${onion:-empty}') — re-run './pithead setup' to generate Tor hidden services." "$k is not provisioned (value: '${onion:-empty}') — the Tor hidden services have not been generated. Run setup again from this machine's setup page."
             else
                 dr_ok "$k set."
             fi
@@ -1579,7 +1592,7 @@ doctor() {
             if onion_line=$(dashboard_onion_status); then
                 dr_ok "Dashboard onion: $onion_line"
             else
-                dr_warn "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run './pithead setup' or './pithead apply'."
+                dr_warn_surface "DASHBOARD_ONION_ADDRESS is not provisioned yet — re-run './pithead setup' or './pithead apply'." "DASHBOARD_ONION_ADDRESS is not provisioned yet — run setup again from this machine's setup page."
             fi
         fi
     fi
@@ -1602,7 +1615,7 @@ doctor() {
             done
             dr_ok "Read container status from 'docker compose ps' (review the table above)."
         else
-            dr_warn "No containers reported by 'docker compose ps' — the stack may be stopped (run './pithead up') or run from a different directory."
+            dr_warn_surface "No containers reported by 'docker compose ps' — the stack may be stopped (run './pithead up') or run from a different directory." "No containers are running — the mining stack is stopped on this machine."
         fi
         check_revenue_containers
         check_dashboard_answers
@@ -4890,12 +4903,12 @@ check_control_units() {
         fi
     fi
     if [ -z "$owner" ]; then
-        dr_fail "The control channel is enabled but no runner units are installed — the dashboard's config changes and one-click upgrades will never run, with no error shown. Fix: run './pithead apply' from this directory."
+        dr_fail_surface "The control channel is enabled but no runner units are installed — the dashboard's config changes and one-click upgrades will never run, with no error shown. Fix: run './pithead apply' from this directory." "The control channel is enabled but no runner units are installed — config changes and one-click upgrades made here will never run, with no error shown. The installed system provides these units, so this system copy is faulty."
     elif [ "$owner" != "$here" ]; then
-        dr_fail "The control runner units point at $owner, but this install is $here — the dashboard writes its requests here and nothing reads them, so config changes and one-click upgrades silently never run. Fix: run './pithead apply' from this directory."
+        dr_fail_surface "The control runner units point at $owner, but this install is $here — the dashboard writes its requests here and nothing reads them, so config changes and one-click upgrades silently never run. Fix: run './pithead apply' from this directory." "The control runner units point at $owner, but this install is $here — requests are written here and nothing reads them, so config changes and one-click upgrades silently never run. The installed system sets this up, so this system copy is faulty."
     elif [ -n "$spool" ] &&
         ! grep -qsF "PathExistsGlob=$spool/requests/*.json" "$unit_dir/pithead-control.path"; then
-        dr_fail "The control runner watches a different spool than this install writes to ($spool) — requests are never picked up, with no error shown. Fix: run './pithead apply' from this directory."
+        dr_fail_surface "The control runner watches a different spool than this install writes to ($spool) — requests are never picked up, with no error shown. Fix: run './pithead apply' from this directory." "The control runner watches a different spool than this install writes to ($spool) — requests are never picked up, with no error shown. The installed system sets this up, so this system copy is faulty."
     else
         dr_ok "Control runner units target this install."
     fi
@@ -4981,7 +4994,7 @@ check_appliance_cert() {
     local crt
     crt="$(appliance_tls_dir)/wizard.crt"
     if [ ! -s "$crt" ]; then
-        dr_info "No dashboard certificate at $crt yet — run './pithead apply' to mint one."
+        dr_info_surface "No dashboard certificate at $crt yet — run './pithead apply' to mint one." "No dashboard certificate yet — this machine mints one whenever it renders its web configuration."
         return 0
     fi
     if ! command -v openssl >/dev/null 2>&1; then
@@ -5072,7 +5085,7 @@ check_appliance_cert() {
     fi
 
     if [ -n "$missing" ]; then
-        dr_fail "The dashboard certificate does not cover: $missing — Caddy serves those names without a certificate for them. Run './pithead apply' to re-mint."
+        dr_fail_surface "The dashboard certificate does not cover: $missing — Caddy serves those names without a certificate for them. Run './pithead apply' to re-mint." "The dashboard certificate does not cover: $missing — those names are served without a certificate for them. This machine re-mints the certificate whenever it renders its web configuration, so saving any change from the dashboard renews it."
     else
         dr_ok "The dashboard certificate covers every name Caddy serves."
     fi
@@ -5083,9 +5096,9 @@ check_appliance_cert() {
     if openssl x509 -in "$crt" -noout -checkend 2592000 >/dev/null 2>&1; then
         dr_ok "The dashboard certificate does not expire within 30 days ($enddate)."
     elif openssl x509 -in "$crt" -noout -checkend 0 >/dev/null 2>&1; then
-        dr_fail "The dashboard certificate expires within 30 days ($enddate). Run './pithead apply' to re-mint."
+        dr_fail_surface "The dashboard certificate expires within 30 days ($enddate). Run './pithead apply' to re-mint." "The dashboard certificate expires within 30 days ($enddate). This machine re-mints it whenever it renders its web configuration, so saving any change from the dashboard renews it."
     else
-        dr_fail "The dashboard certificate has EXPIRED ($enddate) — browsers will refuse it. Run './pithead apply' to re-mint."
+        dr_fail_surface "The dashboard certificate has EXPIRED ($enddate) — browsers will refuse it. Run './pithead apply' to re-mint." "The dashboard certificate has EXPIRED ($enddate) — browsers will refuse it. This machine re-mints it whenever it renders its web configuration, so saving any change from the dashboard renews it."
     fi
 }
 
@@ -5113,9 +5126,9 @@ check_tor_running() {
     if container_is_running tor; then
         dr_ok "Tor container is running — the privacy backbone is up."
     elif mining_stack_running; then
-        dr_fail "The Tor container is DOWN while the mining stack is still running — the privacy backbone is dead: clearnet dials are no longer fail-closed and off-box connections (Healthchecks, Telegram, XvB, peers) have lost their Tor path. Restart it ('./pithead restart tor'; set tor.auto_heal:true to self-heal), or bring the stack down ('./pithead down')."
+        dr_fail_surface "The Tor container is DOWN while the mining stack is still running — the privacy backbone is dead: clearnet dials are no longer fail-closed and off-box connections (Healthchecks, Telegram, XvB, peers) have lost their Tor path. Restart it ('./pithead restart tor'; set tor.auto_heal:true to self-heal), or bring the stack down ('./pithead down')." "The Tor container is DOWN while the mining stack is still running — the privacy backbone is dead: clearnet dials are no longer fail-closed and off-box connections (Healthchecks, Telegram, XvB, peers) have lost their Tor path. There is no dashboard control that restarts Tor on its own."
     else
-        dr_info "Tor container isn't running — the stack is down (expected after './pithead down')."
+        dr_info_surface "Tor container isn't running — the stack is down (expected after './pithead down')." "Tor container isn't running — the mining stack is down, which is expected while it is stopped."
     fi
     return 0
 }
@@ -5161,14 +5174,14 @@ check_egress_firewall_nft() {
     # cheap `list tables` probe (succeeds whether or not our table exists) tells the two apart, so a
     # sudo refusal can't masquerade as a missing firewall (a false FAIL).
     if ! sudo -n nft list tables >/dev/null 2>&1; then
-        dr_info "Tor-egress firewall check skipped — reading nftables needs passwordless sudo. Verify manually: 'sudo nft list table inet $TOR_EGRESS_NFT_TABLE'."
+        dr_info_surface "Tor-egress firewall check skipped — reading nftables needs passwordless sudo. Verify manually: 'sudo nft list table inet $TOR_EGRESS_NFT_TABLE'." "Tor-egress firewall check skipped — the nftables rules could not be read on this machine."
         return 0
     fi
     ruleset=$(sudo -n nft list table inet "$TOR_EGRESS_NFT_TABLE" 2>/dev/null) || ruleset=""
     if printf '%s\n' "$ruleset" | grep -q 'hook forward' && printf '%s\n' "$ruleset" | grep -qw drop; then
         dr_ok "Tor-only egress firewall is installed — clearnet dials from the stack are fail-closed via nftables (inet $TOR_EGRESS_NFT_TABLE)."
     else
-        dr_fail "Tor-only egress firewall is MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them."
+        dr_fail_surface "Tor-only egress firewall is MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them." "Tor-only egress firewall is MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a reboot in which the rules were lost but the containers came back. Restarting this machine reinstalls them."
     fi
 }
 
@@ -5180,13 +5193,13 @@ check_egress_firewall_iptables() {
         return 0
     fi
     if ! rules=$(sudo -n iptables -S DOCKER-USER 2>/dev/null); then
-        dr_info "Tor-egress firewall check skipped — reading iptables needs passwordless sudo. Verify manually: 'sudo iptables -S DOCKER-USER | grep $TOR_EGRESS_TAG'."
+        dr_info_surface "Tor-egress firewall check skipped — reading iptables needs passwordless sudo. Verify manually: 'sudo iptables -S DOCKER-USER | grep $TOR_EGRESS_TAG'." "Tor-egress firewall check skipped — the iptables rules could not be read on this machine."
         return 0
     fi
     if printf '%s\n' "$rules" | grep -qF -- "$TOR_EGRESS_TAG"; then
         dr_ok "Tor-only egress firewall rules are installed — clearnet dials from the stack are fail-closed."
     else
-        dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them."
+        dr_fail_surface "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them." "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a reboot in which the rules were lost but the containers came back. Restarting this machine reinstalls them."
     fi
 }
 
@@ -5208,7 +5221,7 @@ check_stratum_listening() {
     if ss -Hltn 2>/dev/null | grep -q ":$port "; then
         dr_ok "Stratum :$port is listening — workers can connect."
     else
-        dr_fail "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and $DOCS_URL/docs/workers.md."
+        dr_fail_surface "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and $DOCS_URL/docs/workers.md." "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Read the xmrig-proxy log from the dashboard's diagnostics view, and see $DOCS_URL/docs/workers.md."
     fi
     return 0
 }
@@ -5236,7 +5249,7 @@ check_dashboard_answers() {
     if curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:8000/api/state" 2>/dev/null; then
         dr_ok "Dashboard app answers on 127.0.0.1:8000."
     else
-        dr_warn "Dashboard container is running but the app isn't answering on 127.0.0.1:8000 — check './pithead logs dashboard'."
+        dr_warn_surface "Dashboard container is running but the app isn't answering on 127.0.0.1:8000 — check './pithead logs dashboard'." "The dashboard container is running but the app isn't answering on its own port."
     fi
     return 0
 }
@@ -5383,7 +5396,7 @@ check_tor_clearnet_egress() {
         "https://www.google.com/generate_204" 2>/dev/null; then
         dr_ok "Tor clearnet egress works — Healthchecks, Telegram, and XvB can reach their services."
     else
-        dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself."
+        dr_warn_surface "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself." "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this). There is no dashboard control that restarts Tor on its own."
     fi
     return 0
 }
@@ -5419,7 +5432,7 @@ check_monerod_synchronized() {
     if printf '%s' "$body" | jq -e '(.status == "OK") and (.synchronized == true)' >/dev/null 2>&1; then
         dr_ok "monerod reports synchronized with the Monero network."
     else
-        dr_warn "monerod is running but reports NOT synchronized — normal during initial sync; if it stays like this on a previously-synced node (peers lost after a Tor restart), './pithead restart monerod' re-dials and recovers in about a minute."
+        dr_warn_surface "monerod is running but reports NOT synchronized — normal during initial sync; if it stays like this on a previously-synced node (peers lost after a Tor restart), './pithead restart monerod' re-dials and recovers in about a minute." "monerod is running but reports NOT synchronized — normal during initial sync. If it stays like this on a node that was synced before, its peers were lost after a Tor restart; there is no dashboard control that restarts monerod on its own."
     fi
     return 0
 }
