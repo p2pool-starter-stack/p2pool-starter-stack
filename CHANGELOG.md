@@ -22,7 +22,8 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
 
 - **Pithead OS, the appliance.** Write `pithead-os-v2.0.0.img` to a USB stick and boot the machine
   from it: it installs itself and serves a one-page setup wizard to your browser. The page asks
-  what the machine is — a full coordinator, a remote node, or a mining rig ([#797](https://github.com/p2pool-starter-stack/pithead/issues/797)) — which disk
+  what the machine is — a full coordinator, a coordinator that also mines with its own CPU, or a
+  mining rig ([#797](https://github.com/p2pool-starter-stack/pithead/issues/797)) — which disk
   to use, and the same questions the DIY installer asks. A machine without a monitor can be set up
   from a file dropped on the stick ([#924](https://github.com/p2pool-starter-stack/pithead/issues/924)), and settings can be changed later the same way; a
   stick rewrite changes only the settings it names ([#910](https://github.com/p2pool-starter-stack/pithead/issues/910), [#965](https://github.com/p2pool-starter-stack/pithead/issues/965)).
@@ -36,7 +37,7 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
   might be rolled back.
 - **Backups and restores.** `pithead backup` exports an encrypted archive ([#908](https://github.com/p2pool-starter-stack/pithead/issues/908)), and the setup
   wizard can restore one on a fresh machine ([#909](https://github.com/p2pool-starter-stack/pithead/issues/909)). A restored machine keeps its own identity:
-  the machine-id and SSH host keys live on the data partition ([#894](https://github.com/p2pool-starter-stack/pithead/issues/894), [#975](https://github.com/p2pool-starter-stack/pithead/issues/975)), and the
+  the machine-id and SSH host keys live on the data partition ([#894](https://github.com/p2pool-starter-stack/pithead/issues/894), [#895](https://github.com/p2pool-starter-stack/pithead/issues/895)), and the
   journal follows the machine rather than the boot ([#1659](https://github.com/p2pool-starter-stack/pithead/issues/1659)).
 - **Two resets instead of an uninstall.** A config reset clears the settings and reopens the setup
   wizard, keeping the synced chain, the wallet and the Tor keys; a factory reset wipes the data
@@ -44,8 +45,8 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
   and a container store left inconsistent by an interrupted write is rebuilt on the next boot
   ([#1029](https://github.com/p2pool-starter-stack/pithead/issues/1029)).
 - **Host tuning baked into the image.** Hugepages are reserved at boot in proportion to the fitted
-  RAM ([#977](https://github.com/p2pool-starter-stack/pithead/issues/977)) up to a declared ceiling that neither the host nor the miner unit can grow past
-  ([#1103](https://github.com/p2pool-starter-stack/pithead/issues/1103), [#1724](https://github.com/p2pool-starter-stack/pithead/issues/1724)); the CPU governor is set to performance; a hardware watchdog resets a
+  RAM ([#977](https://github.com/p2pool-starter-stack/pithead/issues/977)) up to a declared ceiling that, on a single-socket machine, neither the host nor the miner unit
+  can grow past ([#1103](https://github.com/p2pool-starter-stack/pithead/issues/1103), [#1724](https://github.com/p2pool-starter-stack/pithead/issues/1724)); the CPU governor is set to performance; a hardware watchdog resets a
   box whose kernel or init has hung, with nobody present. The Tor-only egress firewall is enforced under the
   appliance's own container engine, and IPv6 fails closed. The mining-rig role ships RigForge
   v1.16.0.
@@ -67,8 +68,8 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
   apply, upgrade, the resets, rotate-secrets and the OS-update verbs serialise; a second invocation
   that arrives while one holds the lock is refused and told why, instead of two writers racing on
   the same files.
-- **The Tari disk budget is 200 GiB ([#1011](https://github.com/p2pool-starter-stack/pithead/issues/1011)),** which raises the minimum disk the appliance
-  accepts.
+- **The Tari disk budget is 200 GiB ([#1011](https://github.com/p2pool-starter-stack/pithead/issues/1011)),** which raises the free space setup and
+  `doctor` ask for.
 - **The appliance builds docker-compose and cosign from source in its rootfs** instead of
   downloading release binaries.
 - **A failed setup keeps the machine's existing configuration ([#1059](https://github.com/p2pool-starter-stack/pithead/issues/1059))** rather than discarding
