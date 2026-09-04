@@ -31,6 +31,18 @@ touching anything, free when done — see the reservation protocol in
 [release-server.md](release-server.md). The loaner rigs carry their own contract at `~/README.md`
 on each box: back up the config, repoint, and **restore + restart when the job frees it**.
 
+That protocol covers the **rigs**. It does not cover the appliance under test, which
+[#1022](https://github.com/p2pool-starter-stack/pithead/issues/1022) records as having no lock, no
+holder marker and no contract file of its own — so nothing stops two sessions working on it at
+once, and the battery below reflashes and factory-resets the box. A collision costs whoever else
+is holding it both their run and the chain on that disk. Until #1022 lands a mechanism, reserving
+the appliance is an agreement between sessions and nothing enforces it: say in your handoff that
+you are holding it, and say when you let go.
+
+The appliance cannot copy the rig protocol, and #1022 names the reason: a lock stored *on*
+the appliance is destroyed by the very tests that take it. Its reservation has to live on a
+coordinator that the reflash does not touch.
+
 ### Know which image you are holding
 
 A **debug** image (sshd on, keys baked) is bench equipment. A **release** image is shell-less

@@ -375,8 +375,8 @@ Static allocation — each box states its owner in `/etc/bench-role`, and each b
 | Test bench | Pithead | Test bench + release box (the tier-4 target). |
 | Production host | Production | Production stack; deploys only. |
 
-The run lock. Both harnesses take a `flock` on `/var/lock/rig-e2e.lock` before the first
-service-touching action and hold it on an inherited FD for the whole run, so the kernel releases
+The run lock — **RESERVE**. Both harnesses take a `flock` on `/var/lock/rig-e2e.lock` before
+the first service-touching action and hold it on an inherited FD for the whole run, so the kernel releases
 it the moment the run dies — `kill -9` included, no stale-lock cleanup. rigforge#183 defines the
 mechanism; [#430](https://github.com/p2pool-starter-stack/pithead/issues/430) is this repo's
 mirror; the shared path on every box is the protocol. Mutating runs hold it exclusive; read-only
@@ -387,8 +387,10 @@ exclude mutators. `tests/integration/run.sh` takes it on the target box (over SS
 `/run/rig-e2e.holder` is a display-only sidecar naming the holder — the flock is authoritative,
 and a stale sidecar is harmless.
 
-Off-box actors (a human or an agent over SSH) touch services on a shared box only after the same
-check:
+**CHECK** — and **FREE**, which is not a step. Off-box actors (a human or an agent over SSH)
+touch services on a shared box only after the same check. Nothing releases the lock afterwards: it
+lives on an inherited descriptor, so the kernel drops it when the run ends, however it ends. A
+holder that has to remember to free is a holder that eventually does not:
 
 ```bash
 ssh <box> 'flock -n -x /var/lock/rig-e2e.lock true' || ssh <box> 'cat /run/rig-e2e.holder'
