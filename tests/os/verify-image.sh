@@ -148,13 +148,13 @@ chk "data-reset script present and executable" 'test -x "$ROOT/usr/local/sbin/pi
 chk "data-reset ordered before /data mounts (a mounted partition cannot be reformatted)" \
     'grep -q "^Before=data.mount local-fs.target" "$ROOT/etc/systemd/system/pithead-data-reset.service"'
 # Hugepages: the sysctl the Dockerfile calls load-bearing for the memory caps.
-chk "hugepage reservation baked (RandomX dataset must land in hugetlbfs)" \
-    'grep -q "vm.nr_hugepages=3072" "$ROOT/etc/sysctl.d/99-pithead-hugepages.conf"'
+chk "hugepage reservation baked (RandomX dataset must land in hugetlbfs)" 'grep -q "vm.nr_hugepages=3072" "$ROOT/etc/sysctl.d/99-pithead-hugepages.conf"'
 # The low-RAM sizing that corrects that sysctl at boot: without it a small machine gets the
 # silent 6 GiB carve-out back.
-chk "hugepages sizing unit enabled (low-RAM boots degrade loudly, not silently)" \
-    'test -L "$ROOT/etc/systemd/system/multi-user.target.wants/pithead-hugepages.service"'
+chk "hugepages sizing unit enabled (low-RAM boots degrade loudly, not silently)" 'test -L "$ROOT/etc/systemd/system/multi-user.target.wants/pithead-hugepages.service"'
 chk "hugepages sizing script present and executable" 'test -x "$ROOT/usr/local/sbin/pithead-hugepages"'
+# The pool's second writer (#1724): the miner unit must not be able to grow nr_hugepages through either sysfs subtree xmrig writes. The live unit's readback is the battery's; this pins the ship.
+chk "miner unit drop-in fences BOTH hugepage sysfs subtrees (#1724)" 'grep -qxF "ReadOnlyPaths=/sys/devices/system/node /sys/kernel/mm/hugepages" "$ROOT/etc/systemd/system/xmrig.service.d/pithead-hugepages.conf"'
 
 echo "==> docker-export artefacts (all six members)"
 chk "no /.dockerenv" '[ ! -e "$ROOT/.dockerenv" ]'

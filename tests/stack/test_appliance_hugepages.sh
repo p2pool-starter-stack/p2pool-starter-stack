@@ -295,6 +295,60 @@ assert_eq "off the appliance -> silent regardless" \
 # PATH would make any later case answer to it silently.
 PATH="$CEI_PATH_SAVED"
 
+echo "== unit: hugepages_miner_verdict — the pool's second writer is fenced (#1724) =="
+# The battery reads three values off a provisioned guest with the miner up and hands them here;
+# this drives the same function against canned strings, so every branch is proven without a boot.
+# The pairing is the point (see the function's own header): a pool at or under the ceiling proves
+# nothing while the miner can still write, and the drop-in's presence proves nothing about what
+# systemd loaded — hence the ReadOnlyPaths reading comes from `systemctl show`, on the live unit.
+hmv() { # <hugepages-total> <ReadOnlyPaths value> <1G nr_hugepages> -> "<rc> <verdict-text>"
+    local out rc
+    out=$(
+        # shellcheck disable=SC1091
+        source "$ROOT/tests/os/hugepages-boot-verdict.sh"
+        hugepages_miner_verdict "$1" "$2" "$3"
+    )
+    rc=$?
+    printf '%s %s' "$rc" "$out"
+}
+RO="/sys/devices/system/node /sys/kernel/mm/hugepages"
+assert_eq "fenced + pool at the baked 3072 + no 1G pool: passes" \
+    "$(hmv 3072 "$RO" "")" \
+    "0 the miner unit is fenced off both hugepage subtrees and the pool held (3072 pages, ceiling 4608, 1 GiB pool none)"
+assert_eq "fenced + pool exactly AT the ceiling: passes (the sizer may legitimately land there)" \
+    "$(hmv 4608 "$RO" 0)" \
+    "0 the miner unit is fenced off both hugepage subtrees and the pool held (4608 pages, ceiling 4608, 1 GiB pool 0)"
+assert_contains "fenced but one page OVER the ceiling: fails" "$(hmv 4609 "$RO" 0)" "1 the hugepage pool grew past the ceiling"
+# The #1724 measurement itself: 4608 pages with NOTHING fencing the unit is the state the issue
+# was filed from, and a pool-only check reads it as fine. Both halves of the fence are separate
+# rows because ProtectKernelTunables alone left /sys writable on the systemd measured (255).
+assert_contains "the #1724 state — 4608 pages, unit unfenced: fails on the fence, not the count" \
+    "$(hmv 4608 "" "")" "1 the miner unit can still write the per-node hugepage pools (ReadOnlyPaths: unset)"
+assert_contains "per-node subtree named, global one missing: fails" \
+    "$(hmv 3072 "/sys/devices/system/node" "")" "1 the miner unit can still write the global hugepage pool"
+assert_contains "global subtree named, per-node one missing: fails" \
+    "$(hmv 3072 "/sys/kernel/mm/hugepages" "")" "1 the miner unit can still write the per-node hugepage pools"
+# xmrig asks for 1 GiB pages on every start (randomx.1gb-pages renders true) and the sizer never
+# writes that pool, so any non-zero count there is the miner's write and only the miner's — it
+# fails even at a 2 MiB count the ceiling is happy with.
+assert_contains "a 1 GiB pool appeared while the 2 MiB count is fine: fails" \
+    "$(hmv 3072 "$RO" 3)" "1 a 1 GiB hugepage pool was reserved (3 pages)"
+assert_contains "pool unreadable: fails rather than passing on an empty string" "$(hmv "" "$RO" "")" "1 hugepage pool unreadable"
+# The ceiling is one number expressed in two units, in two files that never see each other: the
+# render declares MB to RigForge, the verdict compares 2 MiB pages. Drift between them would make
+# the assertion above bound the wrong pool, silently and in the permissive direction.
+assert_eq "the verdict's page ceiling is the render's MB ceiling, in pages" \
+    "$(
+        # shellcheck disable=SC1091
+        source "$ROOT/tests/os/hugepages-boot-verdict.sh"
+        echo $((HUGEPAGES_CEILING_PAGES * 2))
+    )" \
+    "$(
+        # shellcheck disable=SC1090
+        source "$STACK" >/dev/null 2>&1
+        echo "$PITHEAD_HUGEPAGES_POOL_CEILING_MB"
+    )"
+
 echo ""
 printf 'appliance-hugepages tests: \033[1;32m%d passed\033[0m, ' "$PASS"
 if [ "$FAIL" -gt 0 ]; then

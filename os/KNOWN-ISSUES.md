@@ -282,6 +282,19 @@ socket count in either direction: the bench guest reports four sockets and one n
 is unanswered. Answering it needs synced chains rather than another KVM guest, because the sync gate
 holds the stratum the miner dials.
 
+**Fixed — the hugepage pool had a second writer, and the ceiling bounded only the first (#1724).**
+The ceiling above is declared to RigForge, so it binds the sizer's write. The miner is a writer too:
+the unit runs as root, and before every large-page allocation xmrig itself raises `nr_hugepages`
+through sysfs whenever free pages fall short of what it wants — the per-node file first, then the
+global one, never the sysctl. The #1103 bench watched the pool go from the baked 3072 pages to 4608
+with the sizer out of the path, and every miner start also asks for a 1 GiB pool the sizer never
+touches. The image now ships a systemd drop-in for the miner unit that makes both hugepage subtrees
+read-only to it, so a refused write leaves the miner to fall back to the next page size, which it
+already does when the kernel declines. The two subtrees are named on purpose: on the systemd
+measured (255; this image ships 257), the blanket kernel-tunable protection left `/sys` writable,
+and so did a read-only path over `/sys` as a whole. The node and hugepage counters stay readable, because the miner reads
+that tree to detect NUMA nodes.
+
 **Fixed — a restored coordinator strands dark instead of provisioning itself (#1239).**
 Live KVM guest evidence: `pithead-firstboot` lands a restored archive (`consume_preseed_restore`
 or the wizard's spool channel) and calls `setup()`, but the archive's `.env` is the SOURCE
