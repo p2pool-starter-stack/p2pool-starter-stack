@@ -10,6 +10,7 @@
 // Run with Node's built-in test runner:
 //     node --test dashboard/tests/frontend/*.test.mjs
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -150,6 +151,33 @@ test("the idle card offers both actions and every container the host allowlists"
   assert.match(out, /Run health check/);
   assert.match(out, /Show recent log/);
   for (const c of DIAG_CONTAINERS) assert.match(out, new RegExp(`<option value="${c}"`));
+});
+
+test("the picker's container list has not drifted from the host's allowlist (#1731)", () => {
+  // DIAG_CONTAINERS is a second copy of the host's PITHEAD_DIAG_CONTAINERS and this test is the
+  // only thing holding them together. Drift is not a security hole — the host still decides, and
+  // its refusal reaches the panel verbatim — but it offers an operator a service the host will
+  // refuse, or hides one it would serve, and both read as a dashboard bug.
+  //
+  // Read from the built `pithead` rather than lib/pithead/46a-control-diagnostics.sh, matching the
+  // editable/confirm drift tests in test_control_service.py. lint-pithead-parity is what makes the
+  // built file a faithful stand-in for the slice it was concatenated from.
+  const pithead = readFileSync(new URL("../../../pithead", import.meta.url), "utf8");
+  const m = /readonly PITHEAD_DIAG_CONTAINERS="([^"]*)"/.exec(pithead);
+  assert.ok(m, "could not find PITHEAD_DIAG_CONTAINERS in pithead");
+  const hostList = m[1].split(/\s+/).filter(Boolean);
+  // The deepEqual below would also fail on an empty list, so this guard is here for its MESSAGE,
+  // not for the detection: it names the shape of the failure instead of printing a nine-element
+  // array against an empty one. It is reachable only when the regex matched an empty capture —
+  // the no-match case is already taken by the assertion above — so it does not say "the regex
+  // stopped matching", which would be false in the one case that can reach it.
+  assert.ok(
+    hostList.length > 0,
+    "the host allowlist parsed as empty — PITHEAD_DIAG_CONTAINERS was emptied, or the regex no longer captures its value",
+  );
+  // Membership, not order: the host tests the requested name for exact membership in a
+  // whitespace-separated list, so a reordering there is harmless and must not red this.
+  assert.deepEqual([...DIAG_CONTAINERS].sort(), [...hostList].sort());
 });
 
 test("the picker offers neither wallet daemon — the host refuses both", () => {
