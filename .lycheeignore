@@ -12,3 +12,7 @@ https://gitlab\.torproject\.org.*
 # Resolvable only on the appliance's LAN, never from CI — same class as the localhost entries
 # above, not a dead link. #1419.
 https?://pithead\.local.*
+# www.gnu.org rate-limits and times out non-browser clients (measured 2026-09-03: [TIMEOUT] and
+# [429] on the same link four minutes apart). The link is valid — the GPL-3.0 text, cited from a
+# license notice. Ignore the host, not a global --accept 429 that would mask real dead links. #1726.
+https://www\.gnu\.org.*
