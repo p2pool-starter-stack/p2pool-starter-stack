@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from mining_dashboard.service import control_service, diagnostics_service
+from mining_dashboard.service import control_service, diagnostics_service, request_spool
 from mining_dashboard.service.storage_service import StateManager
 from mining_dashboard.web.server import create_app
 
@@ -81,9 +81,7 @@ class TestDiagDoctor:
         assert spooled(spool)["actor"] == ""
 
     async def test_a_spool_failure_is_a_500_that_names_no_path(self, diag_client, monkeypatch):
-        monkeypatch.setattr(
-            diagnostics_service.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests"
-        )
+        monkeypatch.setattr(request_spool.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests")
         resp = await diag_client.post("/api/control/diag-doctor", headers=CONTROL_HEADERS)
         assert resp.status == 500
         assert "nonexistent" not in json.dumps(await resp.json())
@@ -198,9 +196,7 @@ class TestDiagLogs:
         assert spooled(spool)["lines"] == 10_000
 
     async def test_a_spool_failure_is_a_500_that_names_no_path(self, diag_client, monkeypatch):
-        monkeypatch.setattr(
-            diagnostics_service.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests"
-        )
+        monkeypatch.setattr(request_spool.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests")
         resp = await diag_client.post(
             "/api/control/diag-logs", headers=CONTROL_HEADERS, json={"container": "tor"}
         )
