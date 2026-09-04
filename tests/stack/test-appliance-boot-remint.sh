@@ -60,7 +60,8 @@ echo "== unit: gate_remint_cert — bounded, and Caddy restarts only when the ce
 # A stubbed `pithead` whose `render` writes wizard.crt (or does not), and a restart command that
 # leaves a file. ONE subshell for the whole sequence, because the bound is a counter that must
 # persist across calls: changed -> restart; unchanged -> no restart and a line saying render and
-# doctor disagree; render failing -> no restart; a fourth call -> refused before render runs.
+# doctor disagree (and that the gate commits on it — test-appliance-cert-advisory.sh drives that
+# half); render failing -> no restart; a fourth call -> refused before render runs.
 # Mutation run: drop the before/after comparison -> the unchanged row's restart goes red; drop
 # the BOOT_REMINT_MAX check -> the fourth-call row and the render count go red.
 RM="$BR/remint"
@@ -101,7 +102,7 @@ rm_out=$(
 assert_contains "a changed certificate: rc 0 and Caddy restarted" "$rm_out" "call1 rc=0 restarted=yes"
 assert_contains "  …saying so on the console, with the count" "$rm_out" "re-minted the dashboard certificate for an address that arrived after render (1/3)"
 assert_contains "an unchanged certificate: rc 1 and NO restart" "$rm_out" "call2 rc=1 restarted=no"
-assert_contains "  …saying render and doctor disagree, and that the gate keeps waiting" "$rm_out" "render minted no new certificate (2/3) — render and doctor disagree about the names; the gate keeps waiting"
+assert_contains "  …saying render and doctor disagree, and that the gate records it and commits" "$rm_out" "render minted no new certificate (2/3) — render and doctor disagree about the names; that is this machine's address list, not the slot, so the gate records it and commits"
 assert_contains "render failing: rc 1 and NO restart, even though the file moved" "$rm_out" "call3 rc=1 restarted=no"
 assert_contains "the fourth call is refused (BOOT_REMINT_MAX=3)" "$rm_out" "call4 rc=1 restarted=no"
 assert_contains "  …before render runs: three renders for four calls" "$rm_out" "renders=3"
