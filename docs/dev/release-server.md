@@ -119,9 +119,10 @@ comparing.
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs jq curl git tar make
 
-# shellcheck + shfmt, read from the Makefile pins instead of copied. This block reads the repo,
-# so it needs a checkout and runs from its root. The two guards say that if it is not, rather than
-# letting an empty version build a URL that 404s and an install path that does not exist.
+# shellcheck + shfmt, read from the Makefile pins instead of copied. This block reads the repo, so
+# it needs a checkout and runs from its root. If it does not, the two guards name that as the cause.
+# Run as a script they also stop it; pasted into an interactive shell they do not, so what follows
+# is a 404 you can interpret rather than one you cannot.
 SC=$(make -s print-shellcheck-version)
 SF=$(make -s print-shfmt-version)
 : "${SC:?not in a checkout - run this block from the repo root}"
