@@ -163,6 +163,14 @@ rf_out=$(
         printf 'r%s=%s ' "$n" "$gate_remint_state"
     done
     gate_cert_advisory
+    # SC2320 below is a false positive, and it only appears in the paired lint: when lint-sh
+    # names os/overlay/pithead-boot on the same command line shellcheck inlines the sourced
+    # gate_cert_advisory and attributes the status to the loop's printf instead. Linted alone,
+    # this file reports nothing. The shell disagrees with the warning — $? here is the
+    # function's own status, measured 1 on this fixture and 127 with the function missing, and
+    # that 127 is the arming this row rests on. Collapsing the capture to an if/else that
+    # writes 1 would silence the warning and take the arming with it.
+    # shellcheck disable=SC2320
     adv_rc=$?
     printf 'advisory_rc=%s' "$adv_rc"
 )
