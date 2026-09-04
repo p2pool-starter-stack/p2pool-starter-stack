@@ -318,7 +318,12 @@ done
 #    VARIABLE can never be reached by any needle: 05-doctor-checks.sh:111 (dr_warn "$(head -n 1
 #    ...)", appliance-only by construction, text from the hugepages helper), 20-doctor-install-
 #    checks.sh:28 (dr_warn "$msg") and 21-doctor-stack-checks.sh:261 (dr_fail "${verdict#fail:}").
-#    Those three are unguarded here today and cannot be guarded here — read them by hand.
+#    Those three are unguarded here today and cannot be guarded here — read them by hand. One of
+#    them is not merely unguarded but LEAKING: 20-doctor-install-checks.sh:28 builds a message at
+#    :27 naming three remedies (firewall it to your LAN, set p2pool.stratum_bind, require a
+#    p2pool.stratum_password) and an appliance operator can reach none of them — neither key is in
+#    CONTROL_DASHBOARD_EDITABLE_KEYS or CONTROL_DASHBOARD_CONFIRM_KEYS. Pre-existing, not this
+#    change's doing, and narrow; recorded here so the hand-read starts with the one that is wrong.
 dr_verb_leaks=$(grep -nE '(dr_fail|dr_warn|dr_info) "' "$STACK" |
     grep -E "\./pithead |docker compose |docker pull |docker-compose-v2|Start the Docker daemon|sudo |systemctl|git pull" |
     grep -v "appliance-unreachable" || true)
