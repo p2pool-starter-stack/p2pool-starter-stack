@@ -154,6 +154,30 @@ _wait_ssh() { # $1 seconds — the definition of "not bricked"
     done
     return 1
 }
+_boot_id() { _ssh cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d '\r\n' | grep .; } # rc 1 when unreadable
+# A reboot is OBSERVED, never assumed (#1651): wait for a boot id DIFFERENT from $1. `sleep 10; _wait_ssh` reconnected
+# to the still-running old boot whenever the shutdown outlasted the sleep (or the reboot command never landed) and
+# read the OLD marker as the verdict. Reports how many probes the old boot answered, so a near-miss is visible.
+_wait_new_boot() { # $1 = boot id before the reboot, $2 = seconds
+    local deadline=$(($(date +%s) + $2)) SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" now stale=0
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        now=$(_boot_id)
+        [ -n "$now" ] && [ "$now" != "$1" ] && break
+        [ "$now" = "$1" ] && stale=$((stale + 1))
+        sleep 5
+    done
+    [ "$stale" -eq 0 ] || info "the old boot $1 answered $stale probe(s) after the reboot command before going down"
+    [ -n "$now" ] && [ "$now" != "$1" ] && return 0
+    info "no new boot within $2 s — boot id ${now:-unreadable}, was $1"
+    return 1
+}
+_reboot_wait() { # $1 = the command that reboots the guest, $2 = seconds to wait for the new boot
+    local before
+    before=$(_boot_id) || info "could not read the boot id before '$1' — a reconnect and a reboot would look alike"
+    [ -n "$before" ] || return 1
+    _ssh "$1" >/dev/null 2>&1 || true # the session dies with the reboot
+    _wait_new_boot "$before" "$2"
+}
 # Classify why _wait_ssh gave up, using only signals that do NOT need a working SSH session — the
 # guest either isn't running, isn't the one we're still probing, or is running and refusing the
 # connection (sshd not up yet, or genuinely dead) vs. not answering the network at all. $1 is the
@@ -501,9 +525,7 @@ phase_boot() {
     id_before=$(_ssh cat /etc/machine-id)
     jd_before=$(_ssh 'ls /var/log/journal | wc -l' | tr -d '\r\n ')
     if [ -n "$id_before" ]; then
-        _ssh reboot >/dev/null 2>&1 || true
-        sleep 10
-        if _wait_ssh 240; then
+        if _reboot_wait reboot 240; then
             id_after=$(_ssh cat /etc/machine-id)
             [ -n "$id_after" ] && [ "$id_before" = "$id_after" ] && ok "machine-id stable across a reboot ($id_before)" ||
                 bad "machine-id changed across a reboot (before: $id_before, after: ${id_after:-none})"
@@ -627,9 +649,7 @@ phase_update() {
         return
     }
     ok "v2 installed into the spare slot"
-    _ssh "$(_boot_spare_cmd)" || true
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait "$(_boot_spare_cmd)" 300 || {
         bad "guest never returned after booting the spare slot"
         return
     }
@@ -638,9 +658,7 @@ phase_update() {
         bad "expected v2 in the spare slot, got '$marker'"
         return
     }
-    _ssh reboot || true # uncommitted -> the bootloader must fall back on its own
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait reboot 300 || { # uncommitted -> the bootloader must fall back on its own
         bad "guest never returned after the no-commit reboot"
         return
     }
@@ -655,9 +673,7 @@ phase_update() {
         bad "the second v2 install failed on the guest"
         return
     }
-    _ssh "$(_boot_spare_cmd)" || true
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait "$(_boot_spare_cmd)" 300 || {
         bad "guest never returned after the second install"
         return
     }
@@ -666,9 +682,7 @@ phase_update() {
         return
     }
     ok "committed the booted update"
-    _ssh reboot || true
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait reboot 300 || {
         bad "guest never returned after the post-commit reboot"
         return
     }
@@ -711,9 +725,7 @@ phase_update() {
     # and everything after belongs to the boot leg 4 actually runs against.
     local serial_mark
     serial_mark=$(wc -c <"$SERIAL" 2>/dev/null | tr -d ' ')
-    _ssh "$(_rollback_cmd)" || true
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait "$(_rollback_cmd)" 300 || {
         bad "guest never returned after an operator rollback"
         return
     }
@@ -2254,9 +2266,7 @@ phase_provision() {
     # pithead-boot's own loader running on a provisioned machine (#798).
     _ssh "rm -f /data/pithead/data/.loaded-*.sha" 2>/dev/null ||
         bad "could not drop the digest records before the reboot"
-    _ssh reboot 2>/dev/null || true
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait reboot 300 || {
         bad "guest never returned from the reboot"
         return
     }
@@ -2438,9 +2448,7 @@ phase_provision() {
         bad "no migration-pending marker after installing a data_migration bundle"
         return
     fi
-    _ssh reboot || true
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait reboot 300 || {
         bad "guest never returned after booting the migration bundle"
         return
     }
@@ -2854,9 +2862,7 @@ phase_rig() {
 
     # ---- reboot: pithead-boot owns a rig now, and commits its slot -------------------------
     info "reboot leg — the rig must come back mining, and commit its own slot"
-    _ssh reboot 2>/dev/null || true
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait reboot 300 || {
         bad "the rig never returned from the reboot"
         return
     }
@@ -2917,9 +2923,7 @@ phase_rig() {
         return
     }
     ok "v2 installed into the rig's spare slot"
-    _ssh "$(_boot_spare_cmd)" || true
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait "$(_boot_spare_cmd)" 300 || {
         bad "the rig never returned after booting the spare slot"
         return
     }
@@ -2964,9 +2968,7 @@ phase_rig() {
         ;;
     *) bad "the rig never self-committed the updated slot — grubenv: ${genv2:-unreadable}" ;;
     esac
-    _ssh reboot || true
-    sleep 10
-    _wait_ssh 300 || {
+    _reboot_wait reboot 300 || {
         bad "the rig never returned after the post-commit reboot"
         return
     }
@@ -3055,10 +3057,12 @@ phase_fault() {
         bad "re-staging the bundle before the commit test failed"
         return
     }
+    local before
+    before=$(_boot_id) || bad "could not read the boot id before the install — a reconnect and a reboot would look alike"
+    [ -n "$before" ] || return
     out=$(_ssh "$(_install_and_boot_cmd /data/update.bundle) 2>&1" || true)
     [ -n "$out" ] && info "install output: $(printf '%s' "$out" | tail -3 | tr '\n' ' ' | cut -c1-160)"
-    sleep 10
-    _wait_ssh 300 || {
+    _wait_new_boot "$before" 300 || {
         bad "guest never returned after installing v2"
         return
     }
@@ -3085,9 +3089,7 @@ phase_fault() {
     # be able to put the previous version back on demand — not only wait for an automatic fallback.
     info "operator-initiated rollback"
     marker=$(_marker)
-    _ssh "$(_rollback_cmd)" >/dev/null 2>&1 || true
-    sleep 10
-    if _wait_ssh 300; then
+    if _reboot_wait "$(_rollback_cmd)" 300; then
         local after
         after=$(_marker)
         if [ -n "$after" ] && [ "$after" != "$marker" ]; then
@@ -3230,9 +3232,7 @@ phase_reset() {
 
     # The real command an operator runs — not a reimplementation of it (factory_reset() in
     # `pithead`). It arms the ESP marker and reboots; the ssh connection drops with the reboot.
-    _ssh "cd /data/pithead && ./pithead factory-reset -y" >/dev/null 2>&1 || true
-    sleep 10
-    if _wait_ssh 300; then
+    if _reboot_wait "cd /data/pithead && ./pithead factory-reset -y" 300; then
         ok "guest returned after the factory-reset reboot"
     else
         bad "guest never returned after factory-reset — BRICKED"
