@@ -767,7 +767,13 @@ element for the screen to read, and a list element's path ends in `[]`, which no
 match, so all four of the schema's arrays sat outside that guarantee — three of them carrying
 secrets the masked-config pass covers by path. Checking that pass's own path list against this
 file's classification is what turned up `xvb.standby.source`, which the screen now reaches; the
-check itself is not yet mechanical here. It also guards the other direction: a sha256 digest, a non-secret flag value, the
+check itself is not yet mechanical here. Two of those arrays hold objects, and the row for them
+asserts nothing, because an empty reference gives no element to probe — so that emptiness is now
+read from the schema rather than stated
+([#1748](https://github.com/p2pool-starter-stack/pithead/issues/1748)). Populate one and the row
+fails and asks for a reclassification; before, it went on reporting that the reference carried no
+element, and an element under a name the screen does not carry reddened nothing at all. It also
+guards the other direction: a sha256 digest, a non-secret flag value, the
 reserved IP ranges and a HAProxy timestamp must survive, because an artifact with its image pins or
 its port map stripped is useless for the triage it exists for. That timestamp is not a hypothetical
 near-miss: HAProxy's `DD/Mon/YYYY:HH:MM:SS` reads as an IPv6 address, because a four-digit year

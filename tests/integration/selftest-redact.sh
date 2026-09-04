@@ -218,9 +218,10 @@ SCREEN = re.compile(r"(password|passwd|secret|token|login|username|user|key|wall
 
 # An ARRAY is classified on its own account, whatever its name and whether the reference
 # populates it (#1723). Two blind spots meet: an empty list yields no element to screen, and a
-# scalar element's path ends in "[]", which no `$`-anchored suffix can match. All four arrays in
-# the schema ship empty, three of them carrying secrets render_masked_config masks.
-ARRAY = object()
+# scalar element's path ends in "[]", which no `$`-anchored suffix can match.
+# The list is yielded WHOLE rather than as a sentinel, so its LENGTH reaches the classifier as a
+# measurement (#1748) — ELEMENT_SHAPE_UNKNOWN's premise is that the reference carries no element,
+# and that had been a sentence in the output rather than something read from the document.
 
 
 def walk(node, path=""):
@@ -228,7 +229,7 @@ def walk(node, path=""):
         for k, v in node.items():
             yield from walk(v, f"{path}.{k}" if path else k)
     elif isinstance(node, list):
-        yield path + "[]", ARRAY
+        yield path + "[]", node
         for v in node:
             yield from walk(v, path + "[]")
     else:
@@ -236,8 +237,9 @@ def walk(node, path=""):
 
 
 for path, value in walk(json.load(open(sys.argv[1], encoding="utf-8"))):
-    if value is ARRAY:
+    if isinstance(value, list):
         print(path)
+        print("@@%s %d" % (path, len(value)))  # the array's length, for the entry condition below
     elif isinstance(value, str) and SCREEN.search(path.split(".")[-1]):
         print(path)
 # The invariant above, MECHANICALLY (#1590): it shipped as a comment and was already false once,
@@ -258,7 +260,8 @@ PY
 )"
 # Violations are prefixed, so one python run reports both the population and the invariant.
 VOCAB_BAD="$(printf '%s\n' "$SCREENED" | sed -n 's/^!!//p')"
-SCREENED="$(printf '%s\n' "$SCREENED" | grep -v '^!!')"
+ARRAY_LEN="$(printf '%s\n' "$SCREENED" | sed -n 's/^@@//p')"
+SCREENED="$(printf '%s\n' "$SCREENED" | grep -v '^@@' | grep -v '^!!')"
 [ -n "$SCREENED" ] || it_fail "screen over config.reference.json returns fields" "empty population"
 if [ -n "$VOCAB_BAD" ]; then
     it_fail "redact()'s two suffix vocabularies agree, and the screen covers them" "$VOCAB_BAD"
@@ -311,10 +314,18 @@ for field in $SCREENED; do
         assert_contains "KNOWN GAP ($gap_ref) — $field is NOT redacted by the STREAM filter" "$out" "$SENTINEL"
         continue
     fi
-    # No assertion is possible against an empty object array, and a passing row here would read as
-    # coverage it does not have. The classification requirement above is what this list buys.
+    # No assertion is possible against an EMPTY object array, and a passing row here would read as
+    # coverage it does not have. That emptiness is the bucket's whole premise, so it is READ from
+    # the schema (#1748): asserted, the row went on printing it over a reference that had gained
+    # an element, and an element named outside the screen's vocabulary reds nothing else either.
     if in_list "$field" "$ELEMENT_SHAPE_UNKNOWN"; then
-        it_warn "NOT MEASURED (#1723): $field is an array of objects and the reference carries no element — its .token entries are covered by render_masked_config and by tier 1, not by this filter."
+        elems="$(printf '%s\n' "$ARRAY_LEN" | awk -v f="$field" '$1 == f { print $2; exit }')"
+        if [ "$elems" = "0" ]; then
+            it_warn "NOT MEASURED (#1723): $field is an array of objects and the reference carries 0 elements, read from the schema — its .token entries are covered by render_masked_config and by tier 1, not by this filter."
+        else
+            it_fail "$field is in ELEMENT_SHAPE_UNKNOWN and the reference carries no element" \
+                "the reference carries ${elems:-no measured count} — this bucket asserts nothing BECAUSE there was no element to probe, so reclassify $field against what its element actually holds"
+        fi
         continue
     fi
     assert_contains "$field survives redaction" "$out" "$SENTINEL"
