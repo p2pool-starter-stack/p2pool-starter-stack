@@ -294,6 +294,48 @@ self_test() {
     expect "control: a new row stating the file's real count on first appearance passes" 0 "$rc"
     rm -rf "$tmp5"
 
+    # #1739 — the resolve-failure arm: FATAL under GITHUB_ACTIONS, a NOTE outside it. Its own repo,
+    # on a branch named neither develop nor develop-v2 and with no remotes, so resolve_base_ref
+    # finds none of its four candidates — the shape a depth-1 CI checkout has. Every other fixture
+    # in this file is `git init -b develop`, so the bare local `develop` always resolves and none
+    # of them ever reach this arm; that is why it needs a repo of its own to be exercised at all.
+    local tmp6
+    tmp6=$(mktemp -d)
+    git -C "$tmp6" init -q -b probe
+    git -C "$tmp6" config user.email test@example.invalid
+    git -C "$tmp6" config user.name test
+    mkdir -p "$tmp6/$(dirname "$BUDGET_FILE")"
+    seq 1 500 >"$tmp6/budgeted.sh"
+    printf '# test budget\nbudgeted.sh\t500\n' >"$tmp6/$BUDGET_FILE"
+    git -C "$tmp6" add -A && git -C "$tmp6" commit -q -m no-base-refs
+    rc=0
+    (cd "$tmp6" && [ -z "$(resolve_base_ref)" ]) || rc=1
+    expect "calibration: this fixture really does resolve NO base ref" 0 "$rc"
+    rc=0
+    (cd "$tmp6" && export GITHUB_ACTIONS=true && run_gate) >"$out" 2>&1 || rc=$?
+    expect "an unresolvable base ref is FATAL under GITHUB_ACTIONS (#1739)" 1 "$rc"
+    if grep -q "no base ref .* resolvable under GITHUB_ACTIONS" "$out"; then
+        echo "  self-test ok: names the unresolvable base ref and the remedy"
+    else
+        echo "  self-test FAIL: did not name the unresolvable base ref"
+        st_fail=1
+    fi
+
+    # NEGATIVE CONTROL, and the `unset` in it is load-bearing: this self-test itself runs IN CI,
+    # where GITHUB_ACTIONS is already true in the environment. Inheriting it would redden this
+    # case there while it passed locally, and — worse — a case that cannot produce the OTHER
+    # answer never shows the arm discriminates on the variable rather than on the missing refs.
+    rc=0
+    (cd "$tmp6" && unset GITHUB_ACTIONS && run_gate) >"$out" 2>&1 || rc=$?
+    expect "control: the same fixture outside CI still PASSES, with the NOTE" 0 "$rc"
+    if grep -q "NOTE — no base ref" "$out"; then
+        echo "  self-test ok: the local skip still says why it skipped"
+    else
+        echo "  self-test FAIL: the local skip lost its NOTE"
+        st_fail=1
+    fi
+    rm -rf "$tmp6"
+
     rc=0
     (
         cd "$tmp" || exit 90

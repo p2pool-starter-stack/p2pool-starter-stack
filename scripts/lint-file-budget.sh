@@ -248,6 +248,20 @@ check_monotonic() {
         # It DID happen in CI — on every pull_request run, until lint-surfaces was given
         # fetch-depth: 0 (#1452, #1608). A depth-1 checkout resolves none of the four candidates,
         # so the ratchet skipped here while the gate went on to print "file budget OK".
+        #
+        # In CI that is a misconfigured job, never a clean tree, so there it is FATAL (#1739). A
+        # stderr NOTE inside a job whose other output is voluminous is not a signal anyone reads,
+        # so without this arm the ratchet un-arms silently the moment fetch-depth: 0 is lost again
+        # — a reflow, a checkout-action bump that changes defaults, a copied job block — and the
+        # run that skipped is indistinguishable from a run that checked. Outside CI the NOTE
+        # stays: a local checkout legitimately may not carry the base branch refs.
+        if [ "${GITHUB_ACTIONS:-}" = true ]; then
+            echo "file-budget: FAIL — no base ref (origin/develop-v2, develop-v2, origin/develop" \
+                "or develop) resolvable under GITHUB_ACTIONS. The monotonic-ceiling check cannot" \
+                "run, and a job that resolves no base ref at all is misconfigured rather than" \
+                "clean: restore fetch-depth: 0 on this job (#1452, #1739)."
+            return 1
+        fi
         echo "file-budget: NOTE — no base ref (origin/develop-v2, develop-v2, origin/develop or" \
             "develop) resolvable; skipping the monotonic-ceiling check. A checkout without the base" \
             "branch refs does this; in CI it means the job has lost its fetch-depth: 0 (#1452)." >&2
