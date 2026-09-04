@@ -1131,6 +1131,38 @@ three out-of-band kinds above — persist to the dashboard's own database, so th
 fields and search reach further back than the log's own trimmed tail. Walk the result with the
 page-size control (5, 10, 20, 50 or 100 rows a page), newest first.
 
+### Service diagnostics
+
+Two read-only questions you can ask the host, in the same card stack as the config editor and
+under the same `dashboard.control.enabled` flag. Neither changes anything: they run a check and
+report, which is why neither asks you to confirm.
+
+**Run health check** runs the host's own `pithead doctor` and shows what it found — the same
+checks the CLI prints, failures first, with the host's summary counts above them. This is the one
+that matters on a [Pithead OS appliance](appliance.md), where there is no shell to run `doctor`
+from: before it, the dashboard could tell you *that* a service was unhealthy and never *why*.
+
+One thing reads differently here than at a terminal: the report is redacted on its way to the
+browser, so where `pithead doctor` prints your dashboard onion address in full, this panel shows
+it as `[redacted].onion`. The CLI prints it because you asked for it at your own terminal; this copy crosses
+into the dashboard container, and the address is worth keeping out of there. Run `pithead doctor`
+on the host, or check the emergency kit, when you need the address itself.
+
+**Show recent log** returns the last 200 lines from one service, redacted on the host by the same
+redactor the [support bundle](operations.md) uses — so a credential a service echoed on its
+launch line does not reach the browser. Pick the service from the list; the host caps the line
+count and the total size itself, whatever the page asks for.
+
+Two services are deliberately missing from that list: `wallet-rpc` and `tari-wallet`. The
+redactor is built around the credentials and addresses services print when they start, and the
+wallet daemons are the two most likely to print key or address material in some other shape. The
+support bundle may still collect them, because it lands on the host as a file you review before
+sharing it; this panel streams to a browser, which is not the same thing. To debug a wallet
+daemon, use the support bundle or the console.
+
+If you pick a service the host will not read logs for, the host refuses and the panel shows its
+reason as-is rather than guessing at one.
+
 ## Upgrading from the dashboard
 
 With `dashboard.control.enabled: true` (the same flag as the Configuration view) and a newer

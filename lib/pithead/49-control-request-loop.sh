@@ -26,7 +26,11 @@ control_process_request() { # <claimed-file> <control-dir>
         warn "Control request has a malformed id — discarded (no result can be addressed)."
         return 0
     fi
-    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor" and . != "version" and . != "worker" and . != "changes" and . != "confirm")] | length' "$file")" != "0" ]; then
+    # `container` and `lines` ride the read-only diagnostics verbs (#943). They widen this closed
+    # schema for EVERY action, exactly as `worker`/`changes` already do — the check is a shape
+    # guard, and the value guard is per-verb: control_diag_logs takes the container name only if it
+    # matches a member of its own fixed allowlist, and clamps the count host-side.
+    if [ "$(jq -r '[keys[] | select(. != "id" and . != "action" and . != "config" and . != "actor" and . != "version" and . != "worker" and . != "changes" and . != "confirm" and . != "container" and . != "lines")] | length' "$file")" != "0" ]; then
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unexpected keys in request",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "" "invalid" "rejected"
         return 0
@@ -51,6 +55,10 @@ control_process_request() { # <claimed-file> <control-dir>
     os-verify) control_os_verify "$file" "$id" "$actor" "$cdir" ;;
     os-install) control_os_install "$file" "$id" "$actor" "$cdir" ;;
     os-reboot) control_os_reboot "$file" "$id" "$actor" "$cdir" ;;
+    # Read-only diagnostics for a shell-less appliance operator: report, never mutate. Both are
+    # bounded host-side and the log tail is redacted by bundle_redact_log before it is written.
+    diag-doctor) control_diag_doctor "$id" "$actor" "$cdir" ;;
+    diag-logs) control_diag_logs "$file" "$id" "$actor" "$cdir" ;;
     *)
         control_write_result "$cdir/results" "$id" "$(jq -n '{status:"rejected",error:"unknown action",ts:(now|floor)}')"
         control_audit "$cdir/audit/control.log" "$id" "$actor" "${action:-none}" "rejected"
