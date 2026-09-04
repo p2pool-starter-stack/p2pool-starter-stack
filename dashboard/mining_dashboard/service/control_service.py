@@ -19,6 +19,7 @@ import time
 import uuid
 
 from mining_dashboard.config import config
+from mining_dashboard.service import request_spool
 
 logger = logging.getLogger("ControlService")
 
@@ -319,11 +320,7 @@ def submit(action, cfg=None, actor="", intent_id=None, version=None, confirm=Non
         request["version"] = version
     if confirm is not None:
         request["confirm"] = confirm
-    tmp = os.path.join(config.CONTROL_REQUESTS_DIR, f".{rid}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(request, f)
-    os.replace(tmp, os.path.join(config.CONTROL_REQUESTS_DIR, f"{rid}.json"))
-    return rid
+    return request_spool.write(request)
 
 
 def submit_worker_apply(worker, changes, actor="", intent_id=None):
@@ -340,11 +337,7 @@ def submit_worker_apply(worker, changes, actor="", intent_id=None):
         "worker": worker,
         "changes": changes,
     }
-    tmp = os.path.join(config.CONTROL_REQUESTS_DIR, f".{rid}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(request, f)
-    os.replace(tmp, os.path.join(config.CONTROL_REQUESTS_DIR, f"{rid}.json"))
-    return rid
+    return request_spool.write(request)
 
 
 def submit_worker_upgrade(worker, version, actor="", intent_id=None):
@@ -361,11 +354,7 @@ def submit_worker_upgrade(worker, version, actor="", intent_id=None):
         "worker": worker,
         "version": version,
     }
-    tmp = os.path.join(config.CONTROL_REQUESTS_DIR, f".{rid}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(request, f)
-    os.replace(tmp, os.path.join(config.CONTROL_REQUESTS_DIR, f"{rid}.json"))
-    return rid
+    return request_spool.write(request)
 
 
 # The config keys the Worker Inspect editor may change — the exact writable allowlist the rig's
