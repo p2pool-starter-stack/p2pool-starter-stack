@@ -280,11 +280,16 @@ vd_interp_names() { # <file...> -> "<basename>|<name>", once per distinct interp
 # THE NUMBERED ENTRIES ARE A DIFFERENT CLASS AND CARRY A DIFFERENT PROOF (#1767). A label built from
 # a POSITIONAL is a WRAPPER's label: what actually prints is whatever its callers pass, which this
 # file cannot see. So the sweep flags the wrapper and the review has to go to the callers. Done
-# mechanically at the commit that added these rows — every call of the eight wrappers, with
-# backslash continuations joined, argument extracted by a shell-grammar parser rather than by eye:
-# 55 calls, 54 passing a bare string literal, and one passing `${ev}` from
-# test-control-editable-allowlist.sh's loop over 25 spelled-out event names. That one is a loop
-# variable over a fixed list, so the whole class is run-invariant today.
+# mechanically — every call of the ELEVEN wrappers, with backslash continuations joined, argument
+# extracted by a shell-grammar parser rather than by eye: 73 calls, 72 passing a bare string
+# literal, and one passing `${ev}` from test-control-editable-allowlist.sh's loop over 25
+# spelled-out event names. That one is a loop variable over a fixed list, so the whole class is
+# run-invariant today.
+#   * COUNT THE WRAPPERS, NOT THE ROWS. The first pass said "eight wrappers, 55 calls" because it
+#     counted ROWS: a row is <file>|<index>, so test-config.sh|2 collapses three wrappers and
+#     test-rig-worker.sh|3 collapses three more. Eleven and 73 are the numbers the imperative below
+#     is about; auditing eight misses three. The verdict held at the wider scope, the sentence
+#     supporting it did not.
 #   * `lib.sh|1` is not a call site at all — it is assert_eq/assert_contains/assert_not_contains/
 #     assert_rc forwarding their own <label> parameter to ok(). Every label in the suite funnels
 #     through it, so it is listed for completeness and says nothing about any one domain.
@@ -292,9 +297,9 @@ vd_interp_names() { # <file...> -> "<basename>|<name>", once per distinct interp
 # caller handing one of these wrappers a measured value keeps the set identical and the row green —
 # the caller audit above is a point-in-time reading, not a standing instrument. Re-run it when a
 # wrapper gains callers; that is the residual #1740 could not close and this row does not either.
-# AND the special-parameter class is wider than its control: the alternation takes $@, $* and $#,
-# but no label in tests/stack uses $* or $#, so only $@ has a live site and a seed. Those two
-# branches are covered by construction, not by a firing control — seed them if a label adopts one.
+# The special-parameter class has no live site beyond $@ — no label in tests/stack uses $* or $#.
+# They are seeded anyway, below, so all three characters have a control that can fail rather than
+# two branches that pass by construction.
 vd_expected="$(
     cat <<'VDEXP'
 lib.sh|1
@@ -346,6 +351,7 @@ ok "a label carrying a brand new interpolation $vd_fresh_name"
 ok "an escaped \$PWD is prose in a label, not an interpolation"
 ok "a wrapper label built from a positional $1 and a braced one ${2}"
 ok "a label splicing all of its arguments $@"
+ok "a label naming $* and $# — no live site, seeded so the branch has a control"
 bad "a bad-only label naming $vd_failure_only"
 VDSEED
 vd_ctl="$(vd_interp_names "$vd_seed/test-vd-seed.sh")"
@@ -357,5 +363,7 @@ assert_not_contains "a bad-only label is not held to the PASS-line rule" "$vd_ct
 assert_contains "the sweep reports a positional interpolation (#1767 firing control)" "$vd_ctl" "|1"
 assert_contains "the sweep reports a braced positional too" "$vd_ctl" "|2"
 assert_contains "the sweep reports \$@, which splices every argument" "$vd_ctl" "|@"
+assert_contains "the sweep reports \$*, the other splicing parameter" "$vd_ctl" "|*"
+assert_contains "the sweep reports \$#, the argument count" "$vd_ctl" "|#"
 unset -f vd_interp_names
 unset vd_expected vd_seed vd_ctl
