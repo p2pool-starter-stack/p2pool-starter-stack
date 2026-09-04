@@ -12,7 +12,10 @@
 // redactor is keyed to the launch-line leak class and the wallet daemons are the two whose
 // ordinary output most easily carries key material outside it. If this list ever drifts from the
 // host's, the host refuses and the panel shows that refusal verbatim rather than reinterpreting
-// it. Publishing the list from the host so the two CANNOT drift is filed as a follow-up.
+// it. Publishing the list from the host so the two CANNOT drift is still open as #1731 — both
+// shapes it proposes need a host-side change. Until then a drift test in
+// tests/frontend/diagview.test.mjs holds this list to the host's by exact membership, so a
+// divergence reds in CI rather than reaching an operator as a service the host then refuses.
 
 import { pollResult } from "./configview.mjs";
 import { Component, html } from "./preact.mjs";
