@@ -245,8 +245,12 @@ check_monotonic() {
     local base old_lines new_lines fail=0 path old_ceiling new_ceiling actual
     base=$(resolve_base_ref)
     if [ -z "$base" ]; then
-        echo "file-budget: NOTE — no base ref (origin/develop or develop) resolvable; skipping the" \
-            "monotonic-ceiling check. This never happens in CI." >&2
+        # It DID happen in CI — on every pull_request run, until lint-surfaces was given
+        # fetch-depth: 0 (#1452, #1608). A depth-1 checkout resolves none of the four candidates,
+        # so the ratchet skipped here while the gate went on to print "file budget OK".
+        echo "file-budget: NOTE — no base ref (origin/develop-v2, develop-v2, origin/develop or" \
+            "develop) resolvable; skipping the monotonic-ceiling check. A checkout without the base" \
+            "branch refs does this; in CI it means the job has lost its fetch-depth: 0 (#1452)." >&2
         return 0
     fi
     [ -f "$BUDGET_FILE" ] || return 0
