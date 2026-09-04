@@ -292,6 +292,9 @@ vd_interp_names() { # <file...> -> "<basename>|<name>", once per distinct interp
 # caller handing one of these wrappers a measured value keeps the set identical and the row green —
 # the caller audit above is a point-in-time reading, not a standing instrument. Re-run it when a
 # wrapper gains callers; that is the residual #1740 could not close and this row does not either.
+# AND the special-parameter class is wider than its control: the alternation takes $@, $* and $#,
+# but no label in tests/stack uses $* or $#, so only $@ has a live site and a seed. Those two
+# branches are covered by construction, not by a firing control — seed them if a label adopts one.
 vd_expected="$(
     cat <<'VDEXP'
 lib.sh|1
