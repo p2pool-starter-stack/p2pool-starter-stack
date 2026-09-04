@@ -17,13 +17,16 @@
 # guards BOTH verbs — the log tail and the doctor document. It is reused rather than reimplemented
 # on purpose: that function's own header records the ruling that a second list is how the two
 # drift apart, and it carries #1585's per-form address rows. Anything either verb must newly
-# redact belongs in bundle_redact_log, where the support bundle gets it too.
+# redact belongs in bundle_redact_log, where the support bundle gets it too — which is how #1750
+# was fixed, and it is the reason this slice has no rule of its own to read.
 #
 # THE ALLOWLIST IS NARROWER THAN THE COMPOSE SET, AND THAT IS THE POINT. `wallet-rpc` and
-# `tari-wallet` are compose services this verb deliberately REFUSES. bundle_redact_log is keyed to
-# the launch-line leak class — the credential flags and addresses services echo in argv on startup
-# — and the wallet daemons are precisely the two whose ordinary output is most likely to carry key
-# and address material in shapes outside that class. The support bundle may collect them because
+# `tari-wallet` are compose services this verb deliberately REFUSES. bundle_redact_log reaches the
+# launch-line leak class — the credential flags and addresses services echo in argv on startup —
+# plus the two values it can also recognise ANYWHERE by shape, the onion and (since #1750) the
+# Monero address. The wallet daemons are precisely the two whose ordinary output is most likely to
+# carry key and address material in shapes outside all of that: a Tari address in body text has
+# three valid forms and no shape rule reaches them all, which is #1585's standing ruling. The support bundle may collect them because
 # it lands as a chmod-600 tarball the operator reviews before sharing; this verb streams to a
 # browser over the network, which is a different trust context for the same bytes. An operator
 # debugging a crash-looping wallet still has the support bundle and the console.

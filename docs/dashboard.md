@@ -1150,12 +1150,19 @@ on the host, or check the emergency kit, when you need the address itself.
 
 **Show recent log** returns the last 200 lines from one service, redacted on the host by the same
 redactor the [support bundle](operations.md) uses — so a credential a service echoed on its
-launch line does not reach the browser. Pick the service from the list; the host caps the line
-count and the total size itself, whatever the page asks for.
+launch line does not reach the browser. Neither does a Monero payout address written into ordinary
+log text, which p2pool does every time it reports a payout. Pick the service from the list; the
+host caps the line count and the total size itself, whatever the page asks for.
+
+One gap is worth knowing about rather than assuming away: a **Tari** address in log text is
+scrubbed on a launch line and nowhere else. Its three valid forms are 91, 48 and 67 characters
+long and one of them is not even alphanumeric, so nothing recognises it by shape the way the
+Monero address and the onion are recognised. Read a tail before you paste it somewhere public.
 
 Two services are deliberately missing from that list: `wallet-rpc` and `tari-wallet`. The
-redactor is built around the credentials and addresses services print when they start, and the
-wallet daemons are the two most likely to print key or address material in some other shape. The
+redactor is built around the credentials and addresses services print when they start, plus the
+two values it can recognise anywhere by shape, and the wallet daemons are the two most likely to
+print key or address material in some other shape. The
 support bundle may still collect them, because it lands on the host as a file you review before
 sharing it; this panel streams to a browser, which is not the same thing. To debug a wallet
 daemon, use the support bundle or the console.
