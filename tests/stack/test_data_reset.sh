@@ -36,7 +36,7 @@ for tool in mkfs.ext4 e2fsck mke2fs debugfs; do
     }
 done
 
-WORK="$(mktemp -d)"
+mk_tmpdir WORK
 # One trap, both dirs: bash traps replace rather than stack, so a bare "$WORK" trap here would
 # silently disarm lib.sh's cleanup of $SANDBOX and leak a temp dir per run.
 trap 'rm -rf "$WORK" "${SANDBOX:-}"' EXIT
