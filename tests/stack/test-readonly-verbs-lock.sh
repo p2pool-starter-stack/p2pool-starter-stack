@@ -154,7 +154,16 @@ rov_cmds="$(
     source "$STACK" 2>/dev/null
     printf '%s' "${PITHEAD_COMMANDS:-}"
 )"
-assert_not_contains "totality: the command list came from the script, not from this file" "${rov_cmds:-EMPTY}" "EMPTY"
+# The read is what every row below rests on, so it is asserted as a MEASUREMENT rather than as the
+# absence of a sentinel. A size is the only shape here that cannot pass on an empty read: the
+# `unsorted` row iterates $rov_cmds, so an empty read makes it PASS with nothing compared, and the
+# phantom-appending control at the foot of this block adds its probe verb to the literal rather
+# than to the read, so it reports non-empty either way. The `phantom` row does red on an empty
+# read, but the headline claim resting on a sibling row catching the case by accident is not the
+# same as the headline claim being checked.
+rov_n_read="$(printf '%s' "$rov_cmds" | wc -w)"
+rov_n_sets="$(printf '%s' "$ROV_PROVEN $ROV_UNCLAIMED" | wc -w)"
+assert_eq "totality: the dispatch verb list was read from the script, and holds as many verbs as the two sets" "$rov_n_read" "$rov_n_sets"
 
 rov_unsorted=""
 for c in $rov_cmds; do
@@ -174,10 +183,20 @@ for c in $ROV_PROVEN; do
 done
 assert_eq "totality: a verb is never both proven and out of scope" "${rov_both# }" ""
 
-# The three empty results above are only evidence once the comparison behind them has been shown
-# able to say something else. Same loop, same sets, one verb the dispatch does not have.
+# The empty results above are only evidence once the comparison behind them has been shown able to
+# say something else. Same loop, same sets, one verb the dispatch does not have. Its limit, stated
+# because it is the weak point: the probe verb is a literal, so this control fires even on an
+# empty read — it shows the comparison can speak, never that the read contributed to it. The
+# control for THAT case is the second one below.
 rov_probe=""
 for c in $rov_cmds pithead-verb-that-does-not-exist; do
     case " $ROV_PROVEN $ROV_UNCLAIMED " in *" $c "*) ;; *) rov_probe="$rov_probe $c" ;; esac
 done
 assert_eq "control: the totality check does report a verb that is in neither set" "${rov_probe# }" "pithead-verb-that-does-not-exist"
+
+# The control the one above cannot be: the size comparison, run over an empty read. This is the
+# case the headline totality row is weakest on, so the row is only evidence once the comparison
+# has been shown to come apart there.
+rov_n_empty="$(printf '%s' "" | wc -w)"
+if [ "$rov_n_empty" = "$rov_n_sets" ]; then rov_empty_verdict="SAME"; else rov_empty_verdict="DIFFERS"; fi
+assert_eq "control: on an empty read the totality size comparison comes apart, so that row can fail" "$rov_empty_verdict" "DIFFERS"
