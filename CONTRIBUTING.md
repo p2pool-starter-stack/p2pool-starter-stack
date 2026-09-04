@@ -150,6 +150,18 @@ The Dependabot equivalent of the first check is to group its PRs by `baseRefName
 - Make sure `make test` passes; CI runs the same checks.
 - PRs require review before merging; reviewers are requested automatically via
   [CODEOWNERS](.github/CODEOWNERS).
+- Green checks are not permission to merge. Read the merge fields directly, before reviewing a
+  diff and again before merging it:
+
+  ```bash
+  gh pr view <N> --json mergeable,mergeStateStatus
+  ```
+
+  `mergeable: CONFLICTING` or `mergeStateStatus: DIRTY` means the branch cannot merge as it
+  stands, whatever the check rollup says: those checks passed against a base the branch no longer
+  targets, so the diff under review is not the diff that would land. Rebase, then read the field
+  again. A conflicting PR does not necessarily show an empty rollup — #1359 records one that
+  reported 16 of 16 checks SUCCESS while conflicting.
 
 ## Style
 
