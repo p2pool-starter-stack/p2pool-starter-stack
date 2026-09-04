@@ -51,30 +51,8 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
      generic class, not a trace of whoever's actual box; `tests/` and `docs/` are an accepted
      exemption boundary for illustrative/fixture content, and each class also carries a small,
      explicit value-level allowlist — see the script's own header — never a per-file exemption
-     comment), `lint-file-budget` (the file-budget ratchet, issue #1105 Phase 0 — a new tracked
-     file has a hard ceiling of 800 lines, target 400; an existing offender's current line count
-     is its personal ceiling in `docs/dev/file-budget.tsv`, and a PR may not grow it past that —
-     ceilings only ever move down, and the gate rejects a budget edit that raises one. A
-     deliberate, justified addition to a budgeted file therefore has exactly one legal path:
-     split or shrink the file so the addition fits under a ceiling that stays put or drops —
-     see issue #1258 for the worked example, where a security test that outgrew its file moved
-     into its own — and note that two same-wave merges can each pass alone and fail together, so
-     re-run `make lint` after merging onto the tip. The ratchet half is fatal in CI when it
-     cannot run at all: a job that resolves none of the base-ref candidates has lost its
-     `fetch-depth: 0`, which is a misconfigured job rather than a clean tree, so the gate
-     fails there instead of printing a note into a log nobody reads (issue #1739). A local
-     checkout without those refs still gets the note and still passes. Generated
-     code, vendored files, data/config, and prose docs are exempt by glob — see `is_exempt()` in
-     the script — and so is the shipped `pithead` artifact itself: it is generated, and the gate
-     governs its `lib/pithead/*.sh` sources instead, now that Phase 2 has begun splitting it.
-     One row was exempt from the ceilings-only-move-down half, and only that half:
-     `lib/pithead/99-remainder.sh` measured how much of that generated artifact Phase 2 had not
-     split out yet, not the size of a file anyone writes. Without that, `pithead`'s own exemption
-     became a freeze — the CLI could not gain a line, because the row refused to rise and the file
-     refused to grow past it (issue #1464). That row has retired, and not by reaching the 400
-     target: Phase 2 split the remainder out completely, so the file was deleted at 949 lines and
-     nothing in `docs/dev/file-budget.tsv` names it now. `monotonic_exempt()` in the script still
-     carries the arm and the reasoning behind it),
+     comment), `lint-file-budget` (the file-budget ratchet, issue #1105 Phase 0 — see
+     [File budget gate](#file-budget-gate)),
      `lint-pithead-parity` (the shipped `pithead` must be exactly what `lib/pithead/*.sh`
      concatenate to: edit a slice, run `scripts/build-pithead.sh`, and commit both — issue #1105
      Phase 2), `lint-trivy-parity` (the CVE
@@ -107,6 +85,35 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
 5. Update the docs in [`docs/`](docs/) (and the README, if relevant) for any
    user-facing change. To see what the suites cover, `make test-inventory` writes a
    generated (git-ignored) inventory you can read locally.
+
+### File budget gate
+
+The file-budget ratchet (issue #1105 Phase 0). A new tracked file has a hard ceiling of 800 lines, target
+400; an existing offender's current line count is its personal ceiling in `docs/dev/file-budget.tsv`, and a
+PR may not grow it past that — ceilings only ever move down, and the gate rejects a budget edit that raises
+one.
+
+A deliberate, justified addition to a budgeted file therefore has exactly one legal path: split or shrink
+the file so the addition fits under a ceiling that stays put or drops — see issue #1258 for the worked
+example, where a security test that outgrew its file moved into its own — and note that two same-wave merges
+can each pass alone and fail together, so re-run `make lint` after merging onto the tip.
+
+The ratchet half is fatal in CI when it cannot run at all: a job that resolves none of the base-ref
+candidates has lost its `fetch-depth: 0`, which is a misconfigured job rather than a clean tree, so the gate
+fails there instead of printing a note into a log nobody reads (issue #1739). A local checkout without those
+refs still gets the note and still passes.
+
+Generated code, vendored files, data/config, and prose docs are exempt by glob — see `is_exempt()` in the
+script — and so is the shipped `pithead` artifact itself: it is generated, and the gate governs its
+`lib/pithead/*.sh` sources instead, now that Phase 2 has begun splitting it.
+
+One row was exempt from the ceilings-only-move-down half, and only that half: `lib/pithead/99-remainder.sh`
+measured how much of that generated artifact Phase 2 had not split out yet, not the size of a file anyone
+writes. Without that, `pithead`'s own exemption became a freeze — the CLI could not gain a line, because the
+row refused to rise and the file refused to grow past it (issue #1464). That row has retired, and not by
+reaching the 400 target: Phase 2 split the remainder out completely, so the file was deleted at 949 lines
+and nothing in `docs/dev/file-budget.tsv` names it now. `monotonic_exempt()` in the script still carries the
+arm and the reasoning behind it.
 
 ### The two lanes, and what that means for CI config
 
