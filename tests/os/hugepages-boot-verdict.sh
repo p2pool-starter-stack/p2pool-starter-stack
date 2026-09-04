@@ -42,6 +42,14 @@ hugepages_boot_verdict() {
 # say WHY it is at 4608 (the sizer may legitimately land there), the drop-in alone proves what
 # was shipped and not what systemd loaded, and the 1 GiB pool is the write the sizer never makes
 # at all — non-zero there can only be the miner, whatever the 2 MiB count reads.
+#
+# ARMING — read this before quoting a clean verdict from this function. xmrig only writes the pool
+# when it actually ALLOCATES, and on a guest the product's own sync gate (#35) holds the stratum,
+# so the miner may never get a job and never attempt a write. A passing verdict then says the unit
+# is fenced, which is true and checkable from the unit's loaded settings, but says NOTHING about a
+# write having been refused: it is the fence UNEXERCISED, not the fence proven. The success line
+# below is the strongest claim in this area and goes straight into the battery log, so the
+# qualification belongs here, next to it, and not only in the strategy table.
 HUGEPAGES_CEILING_PAGES=4608
 
 # $1 = HugePages_Total from /proc/meminfo   $2 = `systemctl show xmrig -p ReadOnlyPaths --value`

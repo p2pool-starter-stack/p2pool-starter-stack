@@ -321,7 +321,7 @@ assert_eq "fenced + pool exactly AT the ceiling: passes (the sizer may legitimat
 assert_contains "fenced but one page OVER the ceiling: fails" "$(hmv 4609 "$RO" 0)" "1 the hugepage pool grew past the ceiling"
 # The #1724 measurement itself: 4608 pages with NOTHING fencing the unit is the state the issue
 # was filed from, and a pool-only check reads it as fine. Both halves of the fence are separate
-# rows because ProtectKernelTunables alone left /sys writable on the systemd this ships against.
+# rows because ProtectKernelTunables alone left /sys writable on the systemd measured (255).
 assert_contains "the #1724 state — 4608 pages, unit unfenced: fails on the fence, not the count" \
     "$(hmv 4608 "" "")" "1 the miner unit can still write the per-node hugepage pools (ReadOnlyPaths: unset)"
 assert_contains "per-node subtree named, global one missing: fails" \

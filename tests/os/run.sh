@@ -2194,7 +2194,7 @@ phase_provision() {
     # #1724: the pool has a SECOND writer — xmrig runs as root and grows nr_hugepages through sysfs
     # before a large-page allocation, so the declared ceiling bounds the sizer alone. verify-image
     # pins the drop-in that SHIPPED; this reads what systemd LOADED, the pool, and the 1 GiB pool the
-    # sizer never writes. The verdict and its arming caveat: tests/os/hugepages-boot-verdict.sh.
+    # sizer never writes. Verdict + the ARMING caveat on it: tests/os/hugepages-boot-verdict.sh.
     if [ "$miner_up" -eq 1 ]; then
         local mhp mro m1g mv
         mhp=$(_ssh "awk '/^HugePages_Total/{print \$2}' /proc/meminfo" | tr -d '\r\n') || mhp=""

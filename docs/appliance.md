@@ -154,9 +154,9 @@ miner on top. The two mining workloads on that one box do not compete for HugePa
 appliance reserves a RandomX pool sized to its RAM at boot (6 GiB on the supported 16 GB
 machine), and the built-in miner is told to leave the coordinator's share alone
 (`hugepages_reserve_extra_mb` in its own config) rather than the two halves independently
-growing into each other's reservation. The miner cannot resize that pool itself, either: its
-service is fenced off the kernel files that would let it, so the reservation the appliance sized at
-boot is the one the machine keeps.
+growing into each other's reservation. The miner is not allowed to resize that pool itself,
+either: its service is fenced off the kernel files that would let it, so the reservation the
+appliance sized at boot is the one the machine keeps.
 
 Switching back to plain **Pithead** after trying one of the others resets the local-miner switch
 to its documented default (off) and, on the installation medium, clears a disk choice of "run

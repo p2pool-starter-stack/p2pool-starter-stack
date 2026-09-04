@@ -290,9 +290,9 @@ global one, never the sysctl. The #1103 bench watched the pool go from the baked
 with the sizer out of the path, and every miner start also asks for a 1 GiB pool the sizer never
 touches. The image now ships a systemd drop-in for the miner unit that makes both hugepage subtrees
 read-only to it, so a refused write leaves the miner to fall back to the next page size, which it
-already does when the kernel declines. The two subtrees are named on purpose: on the systemd this
-image carries, the blanket kernel-tunable protection left `/sys` writable, and so did a read-only
-path over `/sys` as a whole. The node and hugepage counters stay readable, because the miner reads
+already does when the kernel declines. The two subtrees are named on purpose: on the systemd
+measured (255; this image ships 257), the blanket kernel-tunable protection left `/sys` writable,
+and so did a read-only path over `/sys` as a whole. The node and hugepage counters stay readable, because the miner reads
 that tree to detect NUMA nodes.
 
 **Fixed — a restored coordinator strands dark instead of provisioning itself (#1239).**
