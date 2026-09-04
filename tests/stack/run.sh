@@ -337,6 +337,9 @@ assert_eq "no plain doctor verdict still names a CLI verb (#1213)" \
     "$(printf '%s' "$dr_verb_leaks" | grep -c . || true)" "0"
 [ -n "$dr_verb_leaks" ] && printf '    leaked: %s\n' "$dr_verb_leaks" | head -12 || true
 
+# shellcheck source=tests/stack/test-lock-reinvoke-wiring.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-lock-reinvoke-wiring.sh" && domain_ran test-lock-reinvoke-wiring.sh "$_d0" "$?" || domain_ran test-lock-reinvoke-wiring.sh "$_d0" "$?"
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"
