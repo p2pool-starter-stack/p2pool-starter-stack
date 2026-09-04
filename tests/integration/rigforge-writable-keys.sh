@@ -14,10 +14,12 @@
 # derive a probe from it, and assert the rig's OWN reported value changed and was restored — no new
 # env var, no direct rig dial, no new port, and no reliance on a record of what we last pushed.
 #
-# The settle reasoning is rigforge-apply-settle.sh's, unchanged: `.rig_config` rides the same
-# per-rig poll tick as the enriched feed (data_service step 3b), which runs strictly AFTER the #185
-# history reconcile (step 3a), so seeing the rig report the new value also means that change_id's
-# history row is already terminal.
+# The settle reasoning is rigforge-apply-settle.sh's: `.rig_config` rides the same per-rig poll
+# tick as the enriched feed (data_service step 3b), which runs strictly AFTER the #185 history
+# reconcile (step 3a). That ordering is real, but it does NOT make the row terminal by the time
+# the readback lands — the rig publishes its config before it has decided the outcome, so the
+# settle ends at the start of that gap (#1471, derived in full on that module). The history
+# assertion below therefore waits for the row itself, through _settle_history_row.
 #
 # Sourced by run.sh, which supplies wait_for (lib.sh), the assert_* helpers, rx/quote_arg, and
 # _worker_apply. Every function here is drivable standalone against stubs — that is the tier the
@@ -77,10 +79,11 @@ _writable_key_round_trip() { # <rig> <key> <orig-json> <probe-json>
     IFS='|' read -r status ckeys change_id <<<"$(_settle_worker_apply_key "$rig" "$key" "$probe" "$res")"
     assert_eq "$key edit applied on the rig (#1236)" "$status" "applied"
     assert_contains "the rig's own config confirms $key changed (#1236)" "$ckeys" "$key"
-    # Matched by change_id, not "the newest row" — #579/#604's reconciler, as the #513 leg does.
-    assert_eq "$key worker-apply recorded in the per-worker history (#185/#1236)" \
-        "$(_worker_detail "$rig" | jq -r --arg c "$change_id" \
-            'first(.history[]? | select(.change_id == $c)) | .status // empty' 2>/dev/null)" "applied"
+    # Matched by change_id, not "the newest row" — #579/#604's reconciler, as the #513 leg does —
+    # and waited to terminal first, because the settle above returns before the rig has published
+    # its outcome (#1471). Read unwaited, this raced a window of up to ~90s.
+    assert_eq "$key worker-apply recorded in the per-worker history (#185/#1236/#1471)" \
+        "$(_settle_history_row "$rig" "$change_id")" "applied"
     it_step "reverting $key $probe -> $orig…"
     res="$(_worker_apply "$rig" "$(jq -nc --arg k "$key" --argjson v "$orig" '{($k): $v}')")"
     IFS='|' read -r status _ _ <<<"$(_settle_worker_apply_key "$rig" "$key" "$orig" "$res")"

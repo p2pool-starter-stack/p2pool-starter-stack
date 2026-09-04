@@ -549,6 +549,29 @@ first hardware run to exercise the wait hit precisely that
 self-test that covers the settle now runs the real wait rather than a silent stub, because a stub
 that prints nothing cannot see this class at all.
 
+The same leg then asserts that the change reached the dashboard's `#185` per-worker history, and
+that readback needed a settle of its own
+([#1471](https://github.com/p2pool-starter-stack/pithead/issues/1471)). The two surfaces converge
+at different moments, and the harness used to argue that they did not. The argument's first half
+holds: the reconcile step does run before the enriched-feed merge, on the same poll. Its second
+half does not, because both of those read a rig file that RigForge writes at the *start* of a
+control-apply, before it has decided the outcome at all. The terminal status goes to a second file
+at the end, after the apply, an xmrig restart and a bounded wait for the miner to come back, and
+the reconciler cannot move the row off `accepted` until it has read that one. Settling on the
+config therefore ends at the start of that window rather than after it, and reading the row there
+raced it by up to ninety seconds. The claim survived because the only two keys that ever reached it
+are on the fast path, where the window is too small to see.
+
+The row is now waited to a terminal status before it is read, on the same ninety-second bound the
+window itself has. Terminal rather than `applied`, which is what keeps the assertion honest in both
+directions: a rig that genuinely rejected a change publishes its terminal row at once, so the leg
+reds on the real status instead of spending the whole bound on a verdict already known, and a row
+that never settles stays `accepted` and reds as well. The one answer the wait must never invent is
+`applied` for a row nobody has confirmed. Terminal is written as the complement of `accepted` and
+"no row yet", not as a list of the six outcomes the rig can report today, so a status added
+upstream reads as terminal and gets named by the assertion rather than timing out and being
+reported as a row that never settled.
+
 ### The abort-safe unwind
 
 Every leg above restores what it changed when it finishes. That covers a leg that *fails*; it does
