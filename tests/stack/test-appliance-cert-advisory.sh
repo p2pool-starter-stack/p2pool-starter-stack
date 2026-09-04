@@ -26,6 +26,7 @@ ar_run() { # <PITHEAD_APPLIANCE 0|1> <what the stubbed render moves: none|cert|c
         # shellcheck disable=SC1090
         source "$STACK"
         set +e
+        # shellcheck disable=SC2034  # read by the sourced is_appliance guard, unseen here
         PITHEAD_APPLIANCE=$1
         PITHEAD_TLS_DIR="$CA/tls"
         AR_MOVE=$2
