@@ -125,25 +125,23 @@ HARNESS_WALLET="44MnN1f3Eto8DZYUWuE5XZNUtE3vcRzt2j6PzqWpPau34e6Cf4fAxt6X2MBmrm6F
 # handoff. Same throwaway address the stack suite uses.
 HARNESS_TARI="126J92Yow5y9UoRFd1DNujPmVFq9C1ZeiYWT95UKxz5Y1rzbfjtHg4SCZS1dk83ivzt3m2XRQHTaYUk9SwmyeCvy5BJ"
 
-# Every remote call is bounded. CORRECTION (this comment used to claim Debian socket-activates
-# sshd — disproven): os/rootfs/Dockerfile only ever `systemctl enable`/`disable`s the plain
-# ssh.service; no ssh.socket unit is ever enabled. What actually gates it is
-# os/overlay/pithead-ssh-host-keys.conf, a drop-in that adds RequiresMountsFor=/data plus an
-# ExecStartPre chain (generate the host key onto /data, then `sshd -t`) — so ssh.service cannot
-# even begin starting until data.mount is active, and /data is freshly mkfs'd and grown by
-# systemd-repart (os/rootfs/repart.d/40-data.conf) on every first boot. A guest whose sshd has
-# not started yet therefore just refuses the connection (nothing is listening); it does not stall
-# the handshake. The five-hour stall this bound exists for (2026-08-15: one boot-phase probe held
-# for five hours against a guest that answered ssh normally the whole time, and the phase reported
-# "SSH never came up" the instant that probe was killed) was an unbounded remote call outliving
-# its own caller's deadline, not sshd's start order — bounding every call here is what fixed it,
-# regardless of which cause produces the next stall. SSH_TIMEOUT is the per-call ceiling. The
-# default is deliberately far larger than any legitimate call (the longest here is the 1800 s
-# local-miner wait; a slot copy on slow storage is the other long one): this exists ONLY to stop
-# an infinite hang, so it must never be the thing that ends real work — if a call is legitimately
-# slower than this, raise it rather than let the ceiling arbitrate.
-# ponytail: polling loops lower it to a few seconds — a stalled handshake must read as "not ready
-# yet" so the loop re-evaluates its own deadline, which is the whole point of having one.
+# Every remote call is bounded. CORRECTION (this comment used to claim Debian socket-activates sshd —
+# disproven): os/rootfs/Dockerfile only ever `systemctl enable`/`disable`s the plain ssh.service; no
+# ssh.socket unit is ever enabled. What actually gates it is os/overlay/pithead-ssh-host-keys.conf, a drop-in
+# that adds RequiresMountsFor=/data plus an ExecStartPre chain (generate the host key onto /data, then `sshd
+# -t`) — so ssh.service cannot even begin starting until data.mount is active, and /data is freshly mkfs'd and
+# grown by systemd-repart (os/rootfs/repart.d/40-data.conf) on every first boot. A guest whose sshd has not
+# started yet therefore just refuses the connection (nothing is listening); it does not stall the handshake.
+# The five-hour stall this bound exists for (2026-08-15: one boot-phase probe held for five hours against a
+# guest that answered ssh normally the whole time, and the phase reported "SSH never came up" the instant that
+# probe was killed) was an unbounded remote call outliving its own caller's deadline, not sshd's start order —
+# bounding every call here is what fixed it, regardless of which cause produces the next stall. SSH_TIMEOUT is
+# the per-call ceiling. The default is deliberately far larger than any legitimate call (the longest here is
+# the 1800 s local-miner wait; a slot copy on slow storage is the other long one): this exists ONLY to stop an
+# infinite hang, so it must never be the thing that ends real work — if a call is legitimately slower than
+# this, raise it rather than let the ceiling arbitrate. ponytail: polling loops lower it to a few seconds — a
+# stalled handshake must read as "not ready yet" so the loop re-evaluates its own deadline, which is the whole
+# point of having one.
 _ssh() {
     timeout "${SSH_TIMEOUT:-5400}" ssh -i "$KEY" -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 "root@$ip" "$@" 2>"$SSH_ERR"
@@ -2110,17 +2108,16 @@ phase_provision() {
     fi
 
     # ---- Tor-only egress backstop (#855): the fail-closed firewall must actually DROP -------
-    # The whole product is Tor-first; the guarantee is that nothing CAN bypass Tor even if an app
-    # is misconfigured, compromised, or dials a raw public IP. On the appliance the engine is
-    # podman+netavark, and the old DOCKER-USER rules land in a chain no forwarded packet traverses
-    # — the firewall was fail-OPEN while doctor and the boot log called it enforced. This leg dials
-    # clearnet FROM a mining-net container by raw IP and asserts the drop. It is the check whose
-    # absence let a leaking appliance ship green: it FAILS against the orphaned-chain code and
-    # PASSES once the nft table is installed. monerod sits on mining_net (172.28.0.x) and syncs
-    # regardless of the mining hold, so it is the honest origin for the dial.
-    # monerod's baked archive is the largest and loads last — dashboard+caddy answering (above)
-    # does not mean monerod exists yet. A `podman exec` against a missing container fails exactly
-    # like a missing curl binary, which used to blame the wrong thing (#887). Wait for it first.
+    # The whole product is Tor-first; the guarantee is that nothing CAN bypass Tor even if an app is
+    # misconfigured, compromised, or dials a raw public IP. On the appliance the engine is podman+netavark,
+    # and the old DOCKER-USER rules land in a chain no forwarded packet traverses — the firewall was fail-OPEN
+    # while doctor and the boot log called it enforced. This leg dials clearnet FROM a mining-net container by
+    # raw IP and asserts the drop. It is the check whose absence let a leaking appliance ship green: it FAILS
+    # against the orphaned-chain code and PASSES once the nft table is installed. monerod sits on mining_net
+    # (172.28.0.x) and syncs regardless of the mining hold, so it is the honest origin for the dial. monerod's
+    # baked archive is the largest and loads last — dashboard+caddy answering (above) does not mean monerod
+    # exists yet. A `podman exec` against a missing container fails exactly like a missing curl binary, which
+    # used to blame the wrong thing (#887). Wait for it first.
     local monerod_deadline=$(($(date +%s) + 300)) monerod_present=0
     while [ "$(date +%s)" -lt "$monerod_deadline" ]; do
         case "$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null)" in
@@ -2170,16 +2167,15 @@ phase_provision() {
     # come up without any hands: setup renders its config, runs its appliance-mode setup, and
     # the miner dials the machine's own stratum.
     #
-    # The leg used to demand an accepted share, and that end of the chain cannot exist here:
-    # on a fresh machine the product itself HOLDS p2pool and xmrig-proxy until the local
-    # chains sync (#35 — the dashboard logs the hold and stops both), and a KVM guest
-    # syncing Monero over Tor onto a 40 GiB scratch disk never clears that gate. No budget
-    # fixes a state the product enforces on purpose. The share assertion lives where a synced
-    # node exists — the release e2e on the bench, which accepted in under two minutes the day
-    # this leg was rewritten. What the harness CAN prove, it now does, link by link: the
-    # miner runs, the hold is the deliberate one (p2pool stopped CLEAN — a crash-looping
-    # p2pool, the #829 failure this leg first caught, dies non-zero under the same gate), and
-    # the rendered worker config points at this machine's own stratum.
+    # The leg used to demand an accepted share, and that end of the chain cannot exist here: on a
+    # fresh machine the product itself HOLDS p2pool and xmrig-proxy until the local chains sync
+    # (#35 — the dashboard logs the hold and stops both), and a KVM guest syncing Monero over Tor
+    # onto a 40 GiB scratch disk never clears that gate. No budget fixes a state the product
+    # enforces on purpose. The share assertion lives where a synced node exists — the release e2e
+    # on the bench. What the harness CAN prove, it now does, link by link: the miner runs, the hold
+    # is the deliberate one (p2pool stopped CLEAN — a crash-looping p2pool, the #829 failure this
+    # leg first caught, dies non-zero under the same gate), and the rendered worker config points
+    # at this machine's own stratum.
     local mtries=0 miner_up=0
     while [ "$mtries" -lt 36 ]; do
         if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
@@ -2194,6 +2190,17 @@ phase_provision() {
     else
         bad "the built-in miner never came up (unit: $(_ssh 'systemctl is-active xmrig' 2>/dev/null || echo unknown))"
         info "  local-miner journal tail: $(_ssh "journalctl -u pithead-firstboot -n 5 --no-pager -o cat" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+    fi
+    # #1724: the pool has a SECOND writer — xmrig runs as root and grows nr_hugepages through sysfs
+    # before a large-page allocation, so the declared ceiling bounds the sizer alone. verify-image
+    # pins the drop-in that SHIPPED; this reads what systemd LOADED, the pool, and the 1 GiB pool the
+    # sizer never writes. The verdict and its arming caveat: tests/os/hugepages-boot-verdict.sh.
+    if [ "$miner_up" -eq 1 ]; then
+        local mhp mro m1g mv
+        mhp=$(_ssh "awk '/^HugePages_Total/{print \$2}' /proc/meminfo" | tr -d '\r\n') || mhp=""
+        mro=$(_ssh "systemctl show xmrig -p ReadOnlyPaths --value" | tr -d '\r\n') || mro=""
+        m1g=$(_ssh "cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages" | tr -d '\r\n') || m1g=""
+        if mv=$(hugepages_miner_verdict "$mhp" "$mro" "$m1g"); then ok "$mv"; else bad "$mv"; fi
     fi
     # The deliberate pre-sync state: the dashboard's sync gate (#35) holds mining until the
     # chains catch up, and says so. Its absence would mean mining died some OTHER way.
@@ -2233,12 +2240,12 @@ phase_provision() {
     fi
 
     # ---- reboot leg: the provisioned stack must return UNAIDED ---------------------------
-    # pithead-boot owns recovery (#792): render the derived layer, compose up, health-gated slot
-    # commit. Nothing may drive it here: no pithead command, no wizard. The failure mode this
-    # guards is a mining appliance that sits dark after every power blip until a human logs in.
-    # The Caddyfile is corrupted FIRST (#790): derived files are regenerated on every boot by
-    # construction, so a stale or broken one must not survive — this is the defect that shipped
-    # new code against a days-old Caddyfile on hardware and killed TLS.
+    # pithead-boot owns recovery (#792): render the derived layer, compose up, health-gated slot commit.
+    # Nothing may drive it here: no pithead command, no wizard. The failure mode this guards is a mining
+    # appliance that sits dark after every power blip until a human logs in. The Caddyfile is corrupted FIRST
+    # (#790): derived files are regenerated on every boot by construction, so a stale or broken one must not
+    # survive — this is the defect that shipped new code against a days-old Caddyfile on hardware and killed
+    # TLS.
     info "reboot leg — the stack must come back on its own (pithead-boot)"
     _ssh "echo '# corrupted by the harness — a regenerated boot must not serve this' > /data/pithead/Caddyfile" 2>/dev/null ||
         bad "could not corrupt the Caddyfile before the reboot"
@@ -2369,13 +2376,13 @@ phase_provision() {
     fi
 
     # ---- commit-gate honesty (#852): the gate must REFUSE a mining-dead slot ----------------
-    # The slot self-committed above off a HEALTHY stack. But "the dashboard answers" is a subset
-    # of "the stack is alive": a slot whose monerod/p2pool crashed while caddy+dashboard keep
-    # serving is exactly the healthy-looking-but-dead slot a curl-only gate committed. The real
-    # gate is `pithead doctor --json` (os/overlay/pithead-boot); assert its DECISION both ways on
-    # this running stack. Reboot/fallback can't show it here — RAUC's commit is sticky, so the
-    # already-committed slot won't re-arm — so we drive the gate command the boot path runs and
-    # check its exit code. This is the assertion whose absence let the curl-only gate ship green.
+    # The slot self-committed above off a HEALTHY stack. But "the dashboard answers" is a subset of "the stack
+    # is alive": a slot whose monerod/p2pool crashed while caddy+dashboard keep serving is exactly the
+    # healthy-looking-but-dead slot a curl-only gate committed. The real gate is `pithead doctor --json`
+    # (os/overlay/pithead-boot); assert its DECISION both ways on this running stack. Reboot/fallback can't
+    # show it here — RAUC's commit is sticky, so the already-committed slot won't re-arm — so we drive the
+    # gate command the boot path runs and check its exit code. This is the assertion whose absence let the
+    # curl-only gate ship green.
     _gate() { _ssh "cd /data/pithead && PITHEAD_ENGINE=podman ./pithead doctor --json >/dev/null 2>&1"; }
     # Healthy, mid initial sync with mining held (#35): the gate must COMMIT. A gate that rejected
     # this would never commit a fresh box — the over-tightening the sync-tolerant rule guards.
@@ -2398,12 +2405,11 @@ phase_provision() {
     unset -f _gate
 
     # ---- migration hold (#851): a data_migration update starts the chain only POST-commit ----
-    # The deadlock rule's automatic-fallback half: on the first boot of a flagged bundle,
-    # pithead-boot must bring the stack up WITHOUT the chain services, commit on that reduced
-    # stack, and only then start monerod — so a failed health check still falls back onto /data
-    # the old OS can read. The journal lines are the race-free evidence (the hold and the
-    # release are both logged); the podman poll additionally proves monerod never ran while the
-    # slot was uncommitted.
+    # The deadlock rule's automatic-fallback half: on the first boot of a flagged bundle, pithead-boot must
+    # bring the stack up WITHOUT the chain services, commit on that reduced stack, and only then start monerod
+    # — so a failed health check still falls back onto /data the old OS can read. The journal lines are the
+    # race-free evidence (the hold and the release are both logged); the podman poll additionally proves
+    # monerod never ran while the slot was uncommitted.
     info "migration leg — build a data_migration bundle, install via os-update, boot it"
     local mig_bundle
     mig_bundle=$(PITHEAD_DATA_MIGRATION=true PITHEAD_MIN_OS_VERSION="$(tr -d ' \n' <VERSION)" _build_bundle vmig) || {
@@ -2528,9 +2534,8 @@ _detach_media_stick() {
     virsh detach-device "$VM" "$DISK.stick.xml" --config --live >/dev/null 2>&1
 }
 
-# Does $1 (a raw disk with one FAT partition) still carry pithead-config.json at its root? Used
-# after a boot to prove the applied stick was consumed. Host-side, so the disk must already be
-# detached from the guest.
+# Does $1 (a raw disk with one FAT partition) still carry pithead-config.json at its root? Used after a boot
+# to prove the applied stick was consumed. Host-side, so the disk must already be detached from the guest.
 _media_stick_has_config() {
     local path="$1" loop mnt tries=0 rc=1
     loop=$(losetup -Pf --show "$path")
@@ -2655,13 +2660,12 @@ phase_media() {
         ok "the node credentials do not churn on a media apply" ||
         bad "monero node credentials were regenerated by a stick that never named them"
 
-    # The end-to-end proof the issue asks for: after the minimal-stick apply, the served
-    # dashboard still DEMANDS a login, and the pre-apply credentials still open it. Poll until
-    # caddy answers — the pool change restarts the stack, so the front door lags the reboot.
-    # One readiness deadline covers BOTH probes: a post-apply boot re-loads every baked image
-    # before compose up, and under bench load that runs past 10 minutes with caddy up (401)
-    # while the dashboard behind it still answers 502. The bench proved every intermediate
-    # (000/000, 401/502, late-2xx) is the same slow settle — so poll each probe to its OWN
+    # The end-to-end proof the issue asks for: after the minimal-stick apply, the served dashboard still
+    # DEMANDS a login, and the pre-apply credentials still open it. Poll until caddy answers — the pool change
+    # restarts the stack, so the front door lags the reboot. One readiness deadline covers BOTH probes: a
+    # post-apply boot re-loads every baked image before compose up, and under bench load that runs past 10
+    # minutes with caddy up (401) while the dashboard behind it still answers 502. The bench proved every
+    # intermediate (000/000, 401/502, late-2xx) is the same slow settle — so poll each probe to its OWN
     # success within a shared 900 s window instead of judging a settling stack once.
     local http_deadline=$(($(date +%s) + 900)) code=000 authed=000
     while [ "$(date +%s)" -lt "$http_deadline" ]; do
@@ -2765,13 +2769,12 @@ phase_rig() {
         return
     }
 
-    # The pool: the guest's OWN sshd. The host-side gate dials the address before it commits
-    # anything, and a KVM guest has no Pithead on its LAN to dial — so this stands in for one.
-    # It is a real TCP listener and nothing more, which is exactly what the gate checks; what it
-    # deliberately does NOT prove is an accepted share, the same limit the coordinator's
-    # local-miner leg documents. XMRig will dial it, get no stratum and retry forever, and that
-    # is the point: the miner must come up and STAY up on a pool that does not answer, or a rig
-    # whose coordinator is late would fail its own boot and roll its slot back.
+    # The pool: the guest's OWN sshd. The host-side gate dials the address before it commits anything, and a
+    # KVM guest has no Pithead on its LAN to dial — so this stands in for one. It is a real TCP listener and
+    # nothing more, which is exactly what the gate checks; what it deliberately does NOT prove is an accepted
+    # share, the same limit the coordinator's local-miner leg documents. XMRig will dial it, get no stratum
+    # and retry forever, and that is the point: the miner must come up and STAY up on a pool that does not
+    # answer, or a rig whose coordinator is late would fail its own boot and roll its slot back.
     body="role=rig&rig_pool=127.0.0.1:22&rig_worker=kvm-rig"
     scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
@@ -2941,14 +2944,13 @@ phase_rig() {
     done
     [ "$miner_v2" -eq 1 ] && ok "the rig mines again on the updated slot" ||
         bad "the rig stopped mining after the A/B update"
-    # No harness mark-good: the boot that just brought the miner up must have COMMITTED — a rig
-    # commits on the miner running, the same event this leg just waited for. That coupling is
-    # also why an "uncommitted revert" is not observable here: on a provisioned rig the commit
-    # window closes the moment the miner is up (seconds), which is the property itself, not a
-    # gap. The generic uncommitted-fallback machinery — same grub.cfg, same RAUC — is proven by
-    # the update phase on an unprovisioned box, where no boot path self-commits. This leg's
-    # first run asserted the revert anyway and refuted ITSELF: the rig had already committed,
-    # the reboot stayed v2, and a follow-up install then targeted the wrong slot.
+    # No harness mark-good: the boot that just brought the miner up must have COMMITTED — a rig commits on the
+    # miner running, the same event this leg just waited for. That coupling is also why an "uncommitted
+    # revert" is not observable here: on a provisioned rig the commit window closes the moment the miner is up
+    # (seconds), which is the property itself, not a gap. The generic uncommitted-fallback machinery — same
+    # grub.cfg, same RAUC — is proven by the update phase on an unprovisioned box, where no boot path
+    # self-commits. This leg's first run asserted the revert anyway and refuted ITSELF: the rig had already
+    # committed, the reboot stayed v2, and a follow-up install then targeted the wrong slot.
     local genv2 tries4=0
     while [ "$tries4" -lt 24 ]; do
         genv2=$(_ssh "grub-editenv /boot/efi/grub/grubenv list" 2>/dev/null | tr '\n' ' ')
@@ -3079,9 +3081,8 @@ phase_fault() {
         return
     fi
 
-    # Operator-initiated rollback: a release can be bad without failing its health check, so the
-    # operator must be able to put the previous version back on demand — not only wait for an
-    # automatic fallback.
+    # Operator-initiated rollback: a release can be bad without failing its health check, so the operator must
+    # be able to put the previous version back on demand — not only wait for an automatic fallback.
     info "operator-initiated rollback"
     marker=$(_marker)
     _ssh "$(_rollback_cmd)" >/dev/null 2>&1 || true
@@ -3248,20 +3249,19 @@ phase_reset() {
     else
         ok "the provisioned config is gone"
     fi
-    # #1092: a post-boot `test -d` here is true by construction, not a check of the reseed. The
-    # overlay/var + var-work upperdirs cannot be observed missing at this point — with no `nofail`
-    # on that fstab line (os/rauc/populate-slot.sh), a missing upperdir fails local-fs.target on
-    # this read-only root and the box never answers SSH, so the leg would already have bailed
-    # above at "guest never returned after factory-reset — BRICKED". And /data/pithead is
-    # recreated by pithead-sync's own `mkdir -p` on every boot (os/overlay/pithead-sync) whether
-    # or not repart seeded it, so its presence here proves the sync script ran, not that the seed
-    # worked. The seeding mechanism itself — systemd-repart's MakeDirectories= for all three dirs
-    # — is asserted statically against the built image in tests/os/verify-image.sh, the one place
-    # that can actually observe a dropped entry. What THIS leg proves is the pair above: the
-    # reformat+reboot cycle didn't brick, and it landed back at an unprovisioned wizard.
-    # The dashboard image is BAKED into the OS image (the wizard archive) and legitimately
-    # reloaded onto the fresh store by the post-reset wizard boot — its presence proves nothing.
-    # The wipe probe is an image that only ever arrives by PULL at provision time: monerod.
+    # #1092: a post-boot `test -d` here is true by construction, not a check of the reseed. The overlay/var +
+    # var-work upperdirs cannot be observed missing at this point — with no `nofail` on that fstab line
+    # (os/rauc/populate-slot.sh), a missing upperdir fails local-fs.target on this read-only root and the box
+    # never answers SSH, so the leg would already have bailed above at "guest never returned after
+    # factory-reset — BRICKED". And /data/pithead is recreated by pithead-sync's own `mkdir -p` on every boot
+    # (os/overlay/pithead-sync) whether or not repart seeded it, so its presence here proves the sync script
+    # ran, not that the seed worked. The seeding mechanism itself — systemd-repart's MakeDirectories= for all
+    # three dirs — is asserted statically against the built image in tests/os/verify-image.sh, the one place
+    # that can actually observe a dropped entry. What THIS leg proves is the pair above: the reformat+reboot
+    # cycle didn't brick, and it landed back at an unprovisioned wizard. The dashboard image is BAKED into the
+    # OS image (the wizard archive) and legitimately reloaded onto the fresh store by the post-reset wizard
+    # boot — its presence proves nothing. The wipe probe is an image that only ever arrives by PULL at
+    # provision time: monerod.
     local images_after
     images_after=$(_ssh "podman images --format '{{.Repository}}'" 2>/dev/null | tr '\n' ' ')
     if printf '%s' "$images_after" | grep -q monero; then
