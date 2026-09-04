@@ -136,7 +136,38 @@ rs_out=$(
     gate_remint_cert >/dev/null
     printf 'call4=%s' "$gate_remint_state"
 )
-assert_eq "the four outcomes, in order" "$rs_out" "call1=reminted call2=unchanged call3=failed call4=exhausted"
+assert_eq "the four outcomes, in order — a spent budget does NOT overwrite the failure before it" \
+    "$rs_out" "call1=reminted call2=unchanged call3=failed call4=failed"
+
+echo "== unit: three dead renders then a spent budget HOLDS the gate — the states composed, not asserted one by one (#1265) =="
+# The rows above are each true separately and were green while this was broken, which is the whole
+# point of driving them as a sequence: `gate_remint_cert` spends an attempt BEFORE it runs render,
+# so a render that dies every round exhausts the budget in about thirty seconds of a fifteen-minute
+# window, and a budget guard that recorded `exhausted` over `failed` handed gate_cert_advisory a
+# state it commits on — a slot that cannot render, committed. Found by a non-author review pass and
+# re-derived at the source before the fix. Mutation run: drop the stickiness in gate_remint_give_up
+# -> call4 reads exhausted and the advisory row flips to rc=0.
+rf_out=$(
+    cd "$RS" || exit 1
+    # shellcheck disable=SC1090
+    source "$ROOT/os/overlay/pithead-boot" 2>/dev/null
+    export STUB_MODE="$RS/mode" STUB_CRT="$RS/tls/wizard.crt"
+    PITHEAD_TLS_DIR="$RS/tls"
+    PITHEAD_CADDY_RESTART_CMD=true
+    BOOT_DOCTOR_JSON="$GA/doctor.json"
+    printf '%s\n' "$DJ_COVER" >"$GA/doctor.json"
+    printf 'seed\n' >"$RS/tls/wizard.crt"
+    echo fail >"$RS/mode"
+    for n in 1 2 3 4; do
+        gate_remint_cert >/dev/null
+        printf 'r%s=%s ' "$n" "$gate_remint_state"
+    done
+    gate_cert_advisory
+    adv_rc=$?
+    printf 'advisory_rc=%s' "$adv_rc"
+)
+assert_eq "render failing on every round: the state stays failed and the advisory REFUSES to commit" \
+    "$rf_out" "r1=failed r2=failed r3=failed r4=failed advisory_rc=1"
 
 echo "== unit: the gate loop commits on the advisory and the verdict carries it (#1265, static) =="
 # The loop and the commit block are below the sourcing boundary: asserted by ORDER — the re-mint,
@@ -158,4 +189,4 @@ assert_eq "the console line reports the advisory only when there is one, and nam
     "$(grep -c "doctor reports \${gate_advisory:-healthy}\${gate_advisory:+ as its only failing check} — booted slot committed\${gate_advisory:+ with that recorded as advisory; run './pithead apply' on the machine to re-mint}" "$BOOTSCRIPT")" "1"
 assert_eq "there is exactly ONE commit path — the advisory does not duplicate the commit block" "$(grep -c 'rauc status mark-good' "$BOOTSCRIPT")" "2"
 unset -f ar_run ap_line ga_run bl_line
-unset CA AP GA RS COVER DJ_COVER rs_out BOOTSCRIPT l_hold l_units l_refresh l_nothing l_release l_remint l_adv l_pass l_say l_verdict
+unset CA AP GA RS COVER DJ_COVER rs_out rf_out BOOTSCRIPT l_hold l_units l_refresh l_nothing l_release l_remint l_adv l_pass l_say l_verdict

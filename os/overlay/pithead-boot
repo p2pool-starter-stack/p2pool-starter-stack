@@ -161,19 +161,19 @@ gate_ready() { # <http_code> <size_download>
     ./pithead doctor --json >"$BOOT_DOCTOR_JSON" 2>/dev/null
 }
 
-# The certificate race and its two remedies (#1265). render mints the dashboard certificate BEFORE
-# `up`, from the address list as it stands; doctor re-checks coverage in the gate loop AFTER `up`,
-# so an address arriving in between (a SLAAC/ULA prefix) failed doctor on every round and a good
-# update rolled back. (1) The loop re-mints, narrowly: only when THIS round's doctor failed on
-# coverage and nothing else (any other FAIL is slot health this must not paper over), only from a
-# doctor run this round (a quiet round keeps last round's file on /run), at most BOOT_REMINT_MAX
-# times; the mint is render's own, idempotent by SAN set; a changed certificate gets `apply`'s
-# restart. (2) When that cannot clear it — render minted nothing (render and doctor disagree about
-# the names) or the budget is spent — the drift is this machine's addresses, not the slot: the
-# previous version carries the same certificate and the same race, so waiting out the window and
-# rolling back buys nothing. The slot commits with the drift as the verdict's `advisory` and the
-# remedy on the console (`apply` reaches the mint on an unchanged config now). A render that FAILED
-# is the slot's own health; the window keeps judging it. Interactive doctor keeps FAILing on
+# The certificate race and its two remedies (#1265). render mints the dashboard certificate BEFORE `up` from
+# the address list as it stands; doctor re-checks coverage in the gate loop AFTER `up`, so an address arriving
+# in between (a SLAAC/ULA prefix) failed doctor every round and a good update rolled back. (1) The loop
+# re-mints, narrowly: only when THIS round's doctor failed on coverage and nothing else (any other FAIL is
+# slot health this must not paper over), only from a doctor run this round (a quiet round keeps last round's
+# file on /run), at most BOOT_REMINT_MAX times; the mint is render's own, idempotent by SAN set, and a changed
+# certificate gets `apply`'s restart. (2) When that cannot clear it — render minted nothing, or the budget is
+# spent — the drift is this machine's addresses, not the slot, and the previous version carries the same
+# certificate and the same race, so rolling back buys nothing: the slot commits with the drift as the
+# `advisory` and the remedy on the console. A render that FAILED is the slot's own health and the window keeps
+# judging it, so `failed` is STICKY against the budget guard: three dead renders spend the budget in about
+# thirty seconds, and letting the fourth round overwrite it with `exhausted` would commit a slot that cannot
+# render, while a later successful render still records its own outcome. Interactive doctor keeps FAILing on
 # coverage: the policy lives here, at the commit decision, not in doctor's vocabulary.
 gate_remint_state="" gate_advisory="" # what the last re-mint did: reminted | unchanged | failed | exhausted
 BOOT_REMINT_MAX=3
@@ -184,7 +184,7 @@ gate_blocked_only_by_cert() { # -> 0 when the last doctor run's ONLY failing che
     jq -e '[.checks[]? | select(.status == "fail")] | length == 1 and (.[0].message | startswith("The dashboard certificate does not cover"))' \
         "$BOOT_DOCTOR_JSON" >/dev/null 2>&1
 }
-gate_remint_give_up() { gate_remint_state=$1 && return 1; }
+gate_remint_give_up() { [ "$gate_remint_state" = failed ] || gate_remint_state=$1 && return 1; }
 gate_remint_cert() { # re-mint via render; restart Caddy only if the certificate changed
     [ "$boot_remints" -lt "$BOOT_REMINT_MAX" ] || gate_remint_give_up exhausted || return 1
     boot_remints=$((boot_remints + 1))
