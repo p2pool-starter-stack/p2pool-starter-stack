@@ -52,7 +52,7 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
      exemption boundary for illustrative/fixture content, and each class also carries a small,
      explicit value-level allowlist — see the script's own header — never a per-file exemption
      comment), `lint-file-budget` (the file-budget ratchet, issue #1105 Phase 0 — see
-     [File budget gate](#file-budget-gate) below),
+     [File budget gate](#file-budget-gate)),
      `lint-pithead-parity` (the shipped `pithead` must be exactly what `lib/pithead/*.sh`
      concatenate to: edit a slice, run `scripts/build-pithead.sh`, and commit both — issue #1105
      Phase 2), `lint-trivy-parity` (the CVE
