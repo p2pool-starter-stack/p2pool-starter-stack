@@ -200,6 +200,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-control-telegram.sh" && domain_ran te
 # shellcheck source=tests/stack/test-control-backup.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-control-backup.sh" && domain_ran test-control-backup.sh "$_d0" "$?" || domain_ran test-control-backup.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-control-diagnostics.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-control-diagnostics.sh" && domain_ran test-control-diagnostics.sh "$_d0" "$?" || domain_ran test-control-diagnostics.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-wizard-setup.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-wizard-setup.sh" && domain_ran test-wizard-setup.sh "$_d0" "$?" || domain_ran test-wizard-setup.sh "$_d0" "$?"
 
