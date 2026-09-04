@@ -9,6 +9,113 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
+## [2.0.0] - 2026-09-04
+
+Pithead 2.0.0 is the first release of **Pithead OS**, the appliance: a bootable image that
+installs itself on a machine you dedicate to it, is set up from a browser, and updates as one
+signed image that goes back to the previous version on its own when an update does not boot.
+The Docker-Compose install (the DIY path) ships in the same release, with the same stack, the
+same dashboard and the same configuration. Entries below apply to both channels unless they say
+otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
+
+### Added
+
+- **Pithead OS, the appliance.** Write `pithead-os-v2.0.0.img` to a USB stick and boot the machine
+  from it: it installs itself and serves a one-page setup wizard to your browser. The page asks
+  what the machine is — a full coordinator, a remote node, or a mining rig ([#797](https://github.com/p2pool-starter-stack/pithead/issues/797)) — which disk
+  to use, and the same questions the DIY installer asks. A machine without a monitor can be set up
+  from a file dropped on the stick ([#924](https://github.com/p2pool-starter-stack/pithead/issues/924)), and settings can be changed later the same way; a
+  stick rewrite changes only the settings it names ([#910](https://github.com/p2pool-starter-stack/pithead/issues/910), [#965](https://github.com/p2pool-starter-stack/pithead/issues/965)).
+- **Updates that fall back on their own.** The appliance keeps two copies of the system and writes
+  an update to the idle one. It reboots into the new version, checks that the stack came up, and
+  returns to the previous copy by itself when it did not. Updates are signed with a release key
+  the machine verifies before installing; a release build refuses to run without an explicit key.
+  An update is checked for, downloaded and installed from the dashboard's OS-update control
+  ([#976](https://github.com/p2pool-starter-stack/pithead/issues/976)), or applied from a downloaded bundle with `pithead os-update`; the chain services start only
+  after the new slot has committed, so a forward-only database migration never runs on a slot that
+  might be rolled back.
+- **Backups and restores.** `pithead backup` exports an encrypted archive ([#908](https://github.com/p2pool-starter-stack/pithead/issues/908)), and the setup
+  wizard can restore one on a fresh machine ([#909](https://github.com/p2pool-starter-stack/pithead/issues/909)). A restored machine keeps its own identity:
+  the machine-id and SSH host keys live on the data partition ([#894](https://github.com/p2pool-starter-stack/pithead/issues/894), [#975](https://github.com/p2pool-starter-stack/pithead/issues/975)), and the
+  journal follows the machine rather than the boot ([#1659](https://github.com/p2pool-starter-stack/pithead/issues/1659)).
+- **Two resets instead of an uninstall.** A config reset clears the settings and reopens the setup
+  wizard, keeping the synced chain, the wallet and the Tor keys; a factory reset wipes the data
+  partition. A data partition damaged by a power cut is repaired rather than erased ([#1062](https://github.com/p2pool-starter-stack/pithead/issues/1062)),
+  and a container store left inconsistent by an interrupted write is rebuilt on the next boot
+  ([#1029](https://github.com/p2pool-starter-stack/pithead/issues/1029)).
+- **Host tuning baked into the image.** Hugepages are reserved at boot in proportion to the fitted
+  RAM ([#977](https://github.com/p2pool-starter-stack/pithead/issues/977)) up to a declared ceiling that neither the host nor the miner unit can grow past
+  ([#1103](https://github.com/p2pool-starter-stack/pithead/issues/1103), [#1724](https://github.com/p2pool-starter-stack/pithead/issues/1724)); the CPU governor is set to performance; a hardware watchdog resets a
+  box whose kernel or init has hung, with nobody present. The Tor-only egress firewall is enforced under the
+  appliance's own container engine, and IPv6 fails closed. The mining-rig role ships RigForge
+  v1.16.0.
+- **Service Diagnostics in the dashboard ([#913](https://github.com/p2pool-starter-stack/pithead/issues/913), [#943](https://github.com/p2pool-starter-stack/pithead/issues/943)):** the host doctor's detail and a
+  bounded, redacted tail of each service's log, without a shell.
+- **The dashboard says where a rig's running configuration came from ([#1345](https://github.com/p2pool-starter-stack/pithead/issues/1345)),** persists the
+  revision each rig serves ([#1551](https://github.com/p2pool-starter-stack/pithead/issues/1551)), detects a rig running something other than what was
+  applied ([#1367](https://github.com/p2pool-starter-stack/pithead/issues/1367)), and records a rig configuration change nothing else had recorded
+  ([#1558](https://github.com/p2pool-starter-stack/pithead/issues/1558)). Worker Inspect is prefilled from the rig's own configuration ([#1235](https://github.com/p2pool-starter-stack/pithead/issues/1235)), and each
+  node card says whether that node runs locally or remotely ([#1040](https://github.com/p2pool-starter-stack/pithead/issues/1040)). The XvB decision table is
+  rebuilt as per-tier blocks ([#1316](https://github.com/p2pool-starter-stack/pithead/issues/1316)).
+- **`pithead doctor --json` and `pithead support-bundle`:** a machine-readable doctor report, and a
+  redacted bundle for a support request that masks wallet and onion addresses as well as
+  credentials ([#1585](https://github.com/p2pool-starter-stack/pithead/issues/1585)).
+
+### Changed
+
+- **Every mutating `pithead` verb runs behind one mutation lock ([#1342](https://github.com/p2pool-starter-stack/pithead/issues/1342), [#1482](https://github.com/p2pool-starter-stack/pithead/issues/1482)).** Setup,
+  apply, upgrade, the resets, rotate-secrets and the OS-update verbs serialise; a second invocation
+  that arrives while one holds the lock is refused and told why, instead of two writers racing on
+  the same files.
+- **The Tari disk budget is 200 GiB ([#1011](https://github.com/p2pool-starter-stack/pithead/issues/1011)),** which raises the minimum disk the appliance
+  accepts.
+- **The appliance builds docker-compose and cosign from source in its rootfs** instead of
+  downloading release binaries.
+- **A failed setup keeps the machine's existing configuration ([#1059](https://github.com/p2pool-starter-stack/pithead/issues/1059))** rather than discarding
+  it, and the CLI degrades instead of aborting when the optional dashboard auth key is absent
+  ([#1246](https://github.com/p2pool-starter-stack/pithead/issues/1246)).
+
+### Fixed
+
+- **The boot health gate re-mints a TLS certificate that the machine's address outran
+  ([#1265](https://github.com/p2pool-starter-stack/pithead/issues/1265)),** `apply` reaches that re-mint on an unchanged configuration, and a rollback names
+  the check that held the gate instead of a generic message. A slot that fails its health gate
+  reboots once instead of stalling ([#1065](https://github.com/p2pool-starter-stack/pithead/issues/1065)), and the post-commit release of the chain services
+  retries a container caught mid-transition and alerts when it cannot start ([#1684](https://github.com/p2pool-starter-stack/pithead/issues/1684)).
+- **A failed data-migration fallback restores the data-partition floor ([#1393](https://github.com/p2pool-starter-stack/pithead/issues/1393))** from the
+  record the raise now leaves, instead of leaving it wrongly raised.
+- **The setup wizard's plain-port redirect ([#1118](https://github.com/p2pool-starter-stack/pithead/issues/1118)) and a provisioned machine's port-80 redirect
+  ([#1123](https://github.com/p2pool-starter-stack/pithead/issues/1123)) no longer trust the Host header;** the dashboard is kept off globally routable
+  addresses ([#1021](https://github.com/p2pool-starter-stack/pithead/issues/1021)); boot asks for the dashboard's own site and tells it apart from the default
+  virtual host ([#1140](https://github.com/p2pool-starter-stack/pithead/issues/1140)); a wizard retry keeps its TLS session ([#1063](https://github.com/p2pool-starter-stack/pithead/issues/1063)).
+- **The installer's remote-node preflight tests for a live ZMQ publisher ([#1497](https://github.com/p2pool-starter-stack/pithead/issues/1497)),** not just an
+  open port. A checksum-invalid Monero or Tari payout address is refused before anything launches.
+- **Slow image loads on USB media are narrated ([#1028](https://github.com/p2pool-starter-stack/pithead/issues/1028))** with a rising elapsed count, so a
+  working box no longer looks like a hung one, and setup states its stop reason on every console.
+- **The xmrig-proxy healthcheck no longer raises a false alarm on an image that predates its
+  healthcheck script ([#1098](https://github.com/p2pool-starter-stack/pithead/issues/1098)).**
+- **doctor's remedial text names what the operator can actually reach on the surface they are on
+  ([#1213](https://github.com/p2pool-starter-stack/pithead/issues/1213)),** and looks for the control units where `apply` writes them ([#1151](https://github.com/p2pool-starter-stack/pithead/issues/1151)).
+- **Dashboard:** the XvB Odds cell names what it is waiting for instead of showing a dash
+  ([#1231](https://github.com/p2pool-starter-stack/pithead/issues/1231)); an audit row id no longer collides with another rig's ([#1566](https://github.com/p2pool-starter-stack/pithead/issues/1566)); a failing payout
+  sync no longer skips the steps beneath it ([#1644](https://github.com/p2pool-starter-stack/pithead/issues/1644)); the poll counter advances through a
+  failed poll ([#1637](https://github.com/p2pool-starter-stack/pithead/issues/1637)); Monero clients validate the shape of a response body ([#1592](https://github.com/p2pool-starter-stack/pithead/issues/1592)); a
+  full history window no longer fails to settle who changed a configuration ([#1369](https://github.com/p2pool-starter-stack/pithead/issues/1369)), and a
+  failed history read is no longer shown as another dashboard's change ([#1409](https://github.com/p2pool-starter-stack/pithead/issues/1409)).
+
+### Security
+
+- **Secrets stay out of what the product prints.** A Monero address in log body text is redacted,
+  not only on the launch line ([#1750](https://github.com/p2pool-starter-stack/pithead/issues/1750)); the p2pool entrypoint's audit line masks secret values
+  and keeps flag names visible ([#1586](https://github.com/p2pool-starter-stack/pithead/issues/1586)); the pool credential is masked rather than stripped so
+  a dashboard Apply cannot wipe it ([#1548](https://github.com/p2pool-starter-stack/pithead/issues/1548)); the pool password is no longer kept in the
+  worker-change record ([#1543](https://github.com/p2pool-starter-stack/pithead/issues/1543)); an audit row's id is bounded and digested so an unauthenticated
+  rig cannot grow it without limit ([#1561](https://github.com/p2pool-starter-stack/pithead/issues/1561)); adopting a rig from the dashboard passes a
+  resolve-and-check gate against server-side request forgery.
+- **Shipped images carry current fixes.** openssl is patched past the digest-pinned base images
+  (CVE-2026-14456, [#1438](https://github.com/p2pool-starter-stack/pithead/issues/1438)); x/crypto and grpc are raised so the appliance rootfs scan is clean
+  ([#1649](https://github.com/p2pool-starter-stack/pithead/issues/1649)); a CVE in the appliance rootfs is fixed at its source ([#1153](https://github.com/p2pool-starter-stack/pithead/issues/1153)).
+
 ## [1.20.0] - 2026-08-22
 
 ### Added
