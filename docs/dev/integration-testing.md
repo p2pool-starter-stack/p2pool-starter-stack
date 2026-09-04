@@ -798,6 +798,28 @@ as survivors. A bare `AUTH` suffix would redact the pair and protect nothing, an
 would take every public endpoint while still missing the webhook key, which ends in `URLS`. Four
 onion addresses are listed apart again, because a shape rule rather than the name rule covers them
 and a name-shaped fixture would report them as leaking.
+`selftest-redact-paths.sh` holds the other classification against this one. The stack masks
+`config.json` by PATH, in `CONTROL_SECRET_PATHS` plus three jq stanzas for the variable-length
+arrays, while `selftest-redact.sh` classifies the same document by a name screen. Two hand-kept
+classifications of one document, and until [#1730](https://github.com/p2pool-starter-stack/pithead/issues/1730) nothing held them against each
+other, so they drifted: `xvb.standby.source` is masked by the product and was in none of the
+self-test's lists, because no suffix in either vocabulary carries the bare word `source`. It was
+found by someone happening to look, which is the thing this file replaces. The check is one-way
+by design — every path the product masks must be classified, never the reverse, because the
+self-test classifies more than the product masks and should: the public endpoints and routing
+ids are what a bundle exists to carry. The population is measured rather than parsed, since a
+read of the `CONTROL_SECRET_PATHS` literal sees twelve fixed paths and misses all three array
+stanzas; the file runs the real masker over a populated fixture and reads back the fifteen paths
+that became `{"__secret__": true}`. A path inside an array is satisfied by its enclosing `[]`
+path being classified, which is what `workers.list[].token` needs. The arming control is the
+load-bearing part: `render_masked_config` warns and returns 0 when its jq fails, so a test
+reading its return code greens over a document that was never written and every containment row
+then passes over an empty population. The file asserts the artifact exists and holds exactly
+the set of paths the fixture populated, named entry for entry, before it reads a single
+verdict. One more thing a populated fixture cannot tell you on its own: a jq assignment
+creates an absent path, so the presence of each populated leaf is checked against the shipped
+schema first — without that row, deleting `xvb.standby` from the reference leaves every other
+row green over a path the product no longer carries.
 `selftest-zmq-probe.sh` drives the ZMTP verdicts from captured and hand-built wire fixtures,
 so every failure class — a silent peer, a non-ZMQ listener, a ZMTP peer that is not a publisher, a
 READY frame carrying a decoy `Socket-Type` value — is reachable with no socket and no stack. It
