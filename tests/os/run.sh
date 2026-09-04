@@ -159,7 +159,7 @@ _boot_id() { _ssh cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d '\r\n'
 # to the still-running old boot whenever the shutdown outlasted the sleep (or the reboot command never landed) and
 # read the OLD marker as the verdict. Reports how many probes the old boot answered, so a near-miss is visible.
 _wait_new_boot() { # $1 = boot id before the reboot, $2 = seconds
-    local deadline=$(($(date +%s) + $2)) SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" now= stale=0
+    local deadline=$(($(date +%s) + $2)) SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" now='' stale=0
     while [ "$(date +%s)" -lt "$deadline" ]; do
         now=$(_boot_id)
         [ -n "$now" ] && [ "$now" != "$1" ] && break
