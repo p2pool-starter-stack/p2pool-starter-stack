@@ -257,6 +257,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-rotate-secrets-lock.sh" && 
 # shellcheck source=tests/stack/test-appliance-firstboot-install-lock.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-firstboot-install-lock.sh" && domain_ran test-appliance-firstboot-install-lock.sh "$_d0" "$?" || domain_ran test-appliance-firstboot-install-lock.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-readonly-verbs-lock.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-readonly-verbs-lock.sh" && domain_ran test-readonly-verbs-lock.sh "$_d0" "$?" || domain_ran test-readonly-verbs-lock.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-appliance-identity-boot.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-identity-boot.sh" && domain_ran test-appliance-identity-boot.sh "$_d0" "$?" || domain_ran test-appliance-identity-boot.sh "$_d0" "$?"
 # shellcheck source=tests/stack/test-appliance-machine-id-journal.sh disable=SC2015
