@@ -13,12 +13,40 @@
 # treated wallets and onions as secrets, so leaving them here shipped one artifact under two
 # policies. Per-form rows and the full derivation: tests/integration/selftest-bundle-redact-log.sh;
 # tests/integration/lib.sh's redact() keys on the same property (#1607) and the two stay in step.
+#
+# THE MONERO ADDRESS IS THE ONE VALUE THAT ALSO NEEDS A SHAPE RULE (#1750). Position is enough for
+# an artifact the operator reviews before sharing; #1736 gave this same and only redactor a second
+# consumer — `diag-logs` and `diag-doctor` stream its output to a browser over the network — and
+# p2pool writes the payout wallet in ORDINARY BODY TEXT as well as on its launch line ("Your wallet
+# <ADDR> got a payout of ..."), where there is no argv position to key on.
+#
+# This does NOT reopen #1585. That ruling is about a GENERAL address rule, and it stands: Tari has
+# three forms at 91, 48 and 67 characters, one of them non-alphanumeric, so no bar reaches them all.
+# Monero is the case it leaves open, because the Monero form is EXACT rather than approximate —
+# prefix `4` or `8`, length 95 or 106, over the 58-character base58 alphabet that excludes 0 O I l.
+# That is the same shape gate monero_address_type applies before it decodes (25-address-types.sh),
+# and the two are held in step by the "classifier agrees" rows in the self-test, which drive both
+# off the same real addresses. A TARI address in body text still survives; that gap is stated, not
+# closed.
+#
+# WHY THE RULE IS APPLIED TWICE. POSIX ERE has no lookaround and BSD sed — a supported host, see
+# safe_sed — has no \b, so the boundary characters either side have to be MATCHED, and matching
+# them consumes them. Two addresses one space apart therefore need two passes: the first eats the
+# space that is the second address's left boundary. Two is sufficient for any count, because after
+# one pass every survivor is preceded by the replacement text. The self-test's adjacency row is the
+# control: drop either -e and it reds alone.
 bundle_redact_log() {
+    # The Monero base58 alphabet — 58 characters, i.e. NOT 0, O, I or l.
+    local b58='[1-9A-HJ-NP-Za-km-z]'
+    local xmr_shape
+    xmr_shape="s/(^|[^0-9A-Za-z])([48]${b58}{94}(${b58}{11})?)([^0-9A-Za-z]|\$)/\1[redacted-address]\4/g"
     sed -E \
         -e 's/(--rpc-login|--http-access-token|--tls-fingerprint)[= ][^ ]+/\1 [redacted]/g' \
         -e 's/(--wallet[ =])[^-[:space:]][^[:space:]]*/\1[redacted-address]/g' \
         -e 's/(--merge-mine[ =][^[:space:]]+[[:space:]]+)[^-[:space:]][^[:space:]]*/\1[redacted-address]/g' \
-        -e 's/[a-z2-7]{56}\.onion/[redacted].onion/g'
+        -e 's/[a-z2-7]{56}\.onion/[redacted].onion/g' \
+        -e "$xmr_shape" \
+        -e "$xmr_shape"
 }
 
 stack_support_bundle() {
@@ -57,7 +85,8 @@ stack_support_bundle() {
     fi
 
     # Container state + recent logs, when an engine is reachable. bundle_redact_log guards the
-    # launch lines services echo: the credential flags, the wallet addresses and the service onion.
+    # launch lines services echo — the credential flags, the wallet addresses and the service
+    # onion — plus any Monero address and any onion in body text (#1750).
     if docker compose ps >"$tmp/bundle/compose-ps.txt" 2>/dev/null; then
         local svc
         for svc in $(docker compose ps --all --format '{{.Service}}' 2>/dev/null); do
