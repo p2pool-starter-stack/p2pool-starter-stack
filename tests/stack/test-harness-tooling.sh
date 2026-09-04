@@ -260,7 +260,7 @@ vd_interp_names() { # <file...> -> "<basename>|<name>", once per distinct interp
         }
         f = FILENAME
         sub(/^.*\//, "", f)
-        while (match(label, /\$\{?[A-Za-z_][A-Za-z0-9_]*|\$\(|`/)) {
+        while (match(label, /\$\{?[A-Za-z_][A-Za-z0-9_]*|\$\{?[0-9]+|\$[@*#]|\$\(|`/)) {
             tok = substr(label, RSTART, RLENGTH)
             label = substr(label, RSTART + RLENGTH)
             if (tok == "$(" || tok == "`") { print f "|$(cmd)"; continue }
@@ -276,24 +276,48 @@ vd_interp_names() { # <file...> -> "<basename>|<name>", once per distinct interp
 # RIS/RIJ are absolute paths that differ per WORKTREE, and test-secrets.sh's mem/host_ram_mb come
 # from /proc/meminfo MemTotal, so they differ per BOX. Both are stable across two runs in one place,
 # which is exactly why sampling never found them.
+#
+# THE NUMBERED ENTRIES ARE A DIFFERENT CLASS AND CARRY A DIFFERENT PROOF (#1767). A label built from
+# a POSITIONAL is a WRAPPER's label: what actually prints is whatever its callers pass, which this
+# file cannot see. So the sweep flags the wrapper and the review has to go to the callers. Done
+# mechanically at the commit that added these rows — every call of the eight wrappers, with
+# backslash continuations joined, argument extracted by a shell-grammar parser rather than by eye:
+# 55 calls, 54 passing a bare string literal, and one passing `${ev}` from
+# test-control-editable-allowlist.sh's loop over 25 spelled-out event names. That one is a loop
+# variable over a fixed list, so the whole class is run-invariant today.
+#   * `lib.sh|1` is not a call site at all — it is assert_eq/assert_contains/assert_not_contains/
+#     assert_rc forwarding their own <label> parameter to ok(). Every label in the suite funnels
+#     through it, so it is listed for completeness and says nothing about any one domain.
+# WHAT THIS ROW STILL DOES NOT PROVE: it pins the SET of interpolating labels, not the VALUES. A new
+# caller handing one of these wrappers a measured value keeps the set identical and the row green —
+# the caller audit above is a point-in-time reading, not a standing instrument. Re-run it when a
+# wrapper gains callers; that is the residual #1740 could not close and this row does not either.
 vd_expected="$(
     cat <<'VDEXP'
+lib.sh|1
 test-appliance-boot.sh|ph
 test-appliance-identity-boot.sh|cli_pages
 test-appliance-identity-boot.sh|u
+test-appliance-identity.sh|1
 test-appliance-identity.sh|f
 test-appliance-os-update.sh|RIJ
 test-appliance-os-update.sh|RIS
+test-config.sh|2
 test-config.sh|bad_port
 test-config.sh|checked
 test-config.sh|core_checked
+test-control-add-only-ssrf.sh|2
+test-control-add-only-ssrf.sh|3
 test-control-core.sh|reowned
 test-control-diagnostics.sh|_c
+test-control-editable-allowlist.sh|1
 test-doctor.sh|ip
 test-release.sh|comp
 test-release.sh|pin_rel
 test-release.sh|svc
 test-render-quadlet.sh|f
+test-rig-worker.sh|3
+test-secrets-masking.sh|1
 test-secrets.sh|ev
 test-secrets.sh|host_ram_mb
 test-secrets.sh|mem
@@ -317,11 +341,18 @@ mkdir -p "$vd_seed"
 cat >"$vd_seed/test-vd-seed.sh" <<'VDSEED'
 ok "a label carrying a brand new interpolation $vd_fresh_name"
 ok "an escaped \$PWD is prose in a label, not an interpolation"
+ok "a wrapper label built from a positional $1 and a braced one ${2}"
+ok "a label splicing all of its arguments $@"
 bad "a bad-only label naming $vd_failure_only"
 VDSEED
 vd_ctl="$(vd_interp_names "$vd_seed/test-vd-seed.sh")"
 assert_contains "the sweep reports a new interpolated PASS label (firing control)" "$vd_ctl" "vd_fresh_name"
 assert_not_contains "an escaped dollar in a label is not read as interpolation" "$vd_ctl" "PWD"
 assert_not_contains "a bad-only label is not held to the PASS-line rule" "$vd_ctl" "vd_failure_only"
+# #1767: the positional and special-parameter alternations are the two this extractor did NOT have.
+# Assert them separately from the $VAR row above, so a break says which class stopped matching.
+assert_contains "the sweep reports a positional interpolation (#1767 firing control)" "$vd_ctl" "|1"
+assert_contains "the sweep reports a braced positional too" "$vd_ctl" "|2"
+assert_contains "the sweep reports \$@, which splices every argument" "$vd_ctl" "|@"
 unset -f vd_interp_names
 unset vd_expected vd_seed vd_ctl
