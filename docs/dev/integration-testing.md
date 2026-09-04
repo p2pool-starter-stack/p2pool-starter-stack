@@ -849,6 +849,23 @@ a working `mktemp` holds the other side, so deleting the sandbox logic outright 
 last case drives the pre-fix expression against the same fixture and requires it to destroy the
 sentinel, so a row that is green because the fixture never armed fails rather than reads as proof.
 
+A second block in that file pins what the suite does *not* reach. The
+[#1705](https://github.com/p2pool-starter-stack/pithead/issues/1705) invariant reads
+`tests/stack/lib.sh` and the `test-*.sh` domain files and names `tests/stack/run.sh` and the
+standalone `test_*.sh` out of itself, because those belong to other lanes and the conversion to the
+fail-closed constructor stopped at that boundary. A list of names rots in silence: a fifth bare
+`mktemp -d` assignment added to `run.sh` would sit outside the invariant with nothing saying so,
+and that gap rather than the four known sites is what
+[#1725](https://github.com/p2pool-starter-stack/pithead/issues/1725) is about — none of the four
+has a downstream `rm -rf "$VAR/sub"`, so an empty value expands to `rm -rf ""`, which errors and
+removes nothing. The excluded population is therefore pinned to exactly those four, keyed on file
+and variable name rather than line number, because the line numbers the issue cites had already
+drifted by three when the pin was written. It reds in both directions: a new bare site fails it,
+and so does converting the four. That second red is expected, and it is the signal to delete the
+by-name exclusion, widen the invariant to those files, and drop the pin along with it. The
+conversion lands in `tests/stack/` and the pin lives in `tests/integration/`, so the two halves
+merge separately and the row is red in between.
+
 ---
 
 ## Release gate (#44)
