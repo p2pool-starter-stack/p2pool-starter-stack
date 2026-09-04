@@ -263,6 +263,15 @@ check_monotonic() {
     # count_lines is the gate's own counter (not wc -l, which undercounts a file with no
     # trailing newline) and falls back to 0 when the path can't be read, so a deleted or
     # unreadable path mismatches any ceiling and fails closed rather than passing.
+    # The complement of that case is #1375's construct, and it is unchecked BY CONSTRUCTION: a
+    # path with a row on $base and none here is never visited by this loop at all. It stays safe
+    # only because run_gate has already FAILed both of the other ways a path could go missing --
+    # an over-target file with no row (its own arm), and a row naming a file that is gone or now
+    # exempt (the loop above this one). So a base row absent here can only mean the file shrank
+    # to <= TARGET_LINES: the sanctioned removal. That argument leans on run_gate's candidate set
+    # being the WHOLE tree (list_candidates), never a diff -- narrow it to changed files and this
+    # skip fails open again, silently, because nothing here would change. #1430; the self-test
+    # covers the legitimate-removal PASS beside the still-listed-but-shrunk FAIL.
     while IFS=$'\t' read -r path new_ceiling; do
         [ -n "$path" ] || continue
         old_ceiling=$(printf '%s\n' "$old_lines" | awk -F'\t' -v p="$path" '$1==p {print $2; exit}')

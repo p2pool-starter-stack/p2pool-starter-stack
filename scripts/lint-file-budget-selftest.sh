@@ -123,6 +123,19 @@ self_test() {
     expect "a budgeted file dropped below target still listed FAILS (stale entry)" 1 "$rc"
     seq 1 500 >"$tmp/budgeted.sh"
 
+    # Complement of the case above, and the one #1430 found untested: the base entry is not just
+    # stale, it is GONE from the new tsv. check_monotonic walks the working-tree rows, so a base
+    # row absent here is never visited — the file legitimately shrank to <= target — and the gate
+    # must PASS, not FAIL. Without this case, a regression that made that skip fail open again
+    # (#1375's construct) would go uncaught by this suite.
+    seq 1 300 >"$tmp/budgeted.sh"
+    printf '# test budget\n' >"$tmp/$BUDGET_FILE"
+    rc=0
+    (cd "$tmp" && run_gate) >"$out" 2>&1 || rc=$?
+    expect "a shrunk file whose entry was correctly removed PASSES (legitimate removal, #1430)" 0 "$rc"
+    seq 1 500 >"$tmp/budgeted.sh"
+    printf '# test budget\nbudgeted.sh\t500\n' >"$tmp/$BUDGET_FILE"
+
     # Two-lane shape: a develop-v2 branch cut BEFORE the lane tip advanced must still
     # ratchet against develop-v2, not fall back to develop and read this lane's larger
     # ceiling as a raise — the false RED that bit two live PRs the day the tip moved.
