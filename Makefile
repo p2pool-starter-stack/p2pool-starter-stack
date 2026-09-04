@@ -1,5 +1,5 @@
 # Local test entry points (mirror the GitHub Actions CI jobs).
-.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml lint-topology lint-file-budget lint-pithead-parity lint-trivy-parity print-shellcheck-version release release-smoke
+.PHONY: test test-dashboard test-frontend test-patch-coverage test-stack test-compose test-integration test-integration-selftest test-fakes test-mini-stack lint lint-sh lint-py lint-js lint-yaml lint-md lint-proto lint-toml lint-topology lint-file-budget lint-pithead-parity lint-trivy-parity print-shellcheck-version print-shfmt-version release release-smoke
 
 test: lint test-dashboard test-frontend test-stack test-compose test-integration-selftest test-fakes ## Run everything that doesn't need a server/docker
 
@@ -48,11 +48,20 @@ test-integration: ## Run the live config-matrix integration suite (requires a te
 # `lint-sh` refuses to run on any other version, and ci.yml's installer derives its download URL
 # from this variable (`make -s print-shellcheck-version`), so the pin cannot drift between the two.
 # Bumping it here is most of the bump: ci.yml's sha256 line is tied to one tarball and fails loudly
-# until it is updated to match. shfmt is NOT covered — its pin is still a literal in ci.yml.
+# until it is updated to match.
 SHELLCHECK_VERSION := 0.11.0
+
+# shfmt, on the same terms and for the same reason (#1688): its formatting moves between releases,
+# so a skewed version reds `make lint` on the release box for diffs the merge gate never saw. Was a
+# literal in ci.yml until now. Bumping it here is likewise most of the bump — ci.yml's shfmt sha256
+# is tied to one binary and fails loudly until it matches.
+SHFMT_VERSION := 3.13.1
 
 print-shellcheck-version: ## Print the pinned shellcheck version (ci.yml's installer reads this)
 	@echo $(SHELLCHECK_VERSION)
+
+print-shfmt-version: ## Print the pinned shfmt version (ci.yml's installer reads this)
+	@echo $(SHFMT_VERSION)
 
 lint: lint-sh lint-py lint-js lint-yaml lint-md lint-docs-voice lint-operator-strings lint-topology lint-file-budget lint-pithead-parity lint-trivy-parity lint-proto lint-toml ## Lint/format-check every surface
 
@@ -72,6 +81,14 @@ lint-sh: ## shellcheck + shfmt over the CLI, build/* + dashboard/ container scri
 	@have=$$(shellcheck --version 2>/dev/null | awk '/^version:/ {print $$2}'); \
 		[ "$$have" = "$(SHELLCHECK_VERSION)" ] || { \
 			echo "lint-sh: shellcheck $${have:-not found} is not the pinned $(SHELLCHECK_VERSION) — its findings are not this gate's."; \
+			echo "lint-sh: install the pin (see docs/dev/release-server.md) or run the gate in CI."; exit 1; }
+	@# And shfmt, up here beside it rather than down at its own line: a wrong shfmt should not be
+	@# discovered AFTER the shellcheck pass, which is the expensive half. `shfmt --version` prints a
+	@# LEADING v on upstream release builds (v3.13.1) and a bare number on some distro builds
+	@# (3.8.0) — both measured — so the comparison strips it instead of pinning the printed form.
+	@have=$$(shfmt --version 2>/dev/null | sed 's/^v//'); \
+		[ "$$have" = "$(SHFMT_VERSION)" ] || { \
+			echo "lint-sh: shfmt $${have:-not found} is not the pinned $(SHFMT_VERSION) — its formatting is not this gate's."; \
 			echo "lint-sh: install the pin (see docs/dev/release-server.md) or run the gate in CI."; exit 1; }
 	shellcheck --severity=warning pithead pithead-completion.bash install.sh scripts/*.sh build/*/*.sh dashboard/*.sh \
 		tests/stack/lib.sh tests/stack/test-*.sh tests/stack/test_compose.sh tests/stack/test_data_reset.sh \

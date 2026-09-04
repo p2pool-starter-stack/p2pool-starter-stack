@@ -423,10 +423,10 @@ jobs:
       - name: "Install shellcheck + shfmt (pinned + sha256-verified, #286)"
         # Direct upstream-release downloads with a sha256 check (RigForge convention) instead of the
         # runner's preinstalled shellcheck / apt — reproducible, and immune to the apt-mirror
-        # flakiness of #64. shellcheck's version comes from the Makefile (#1679); shfmt's is hand-kept.
+        # flakiness of #64. Both versions come from the Makefile — shellcheck's since #1679, shfmt's since #1688.
         run: |
-          curl -fsSL -o /tmp/shfmt \
-            https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_linux_amd64
+          SF=$(make -s print-shfmt-version) # the Makefile is the pin; `make lint-sh` below refuses any other version (#1688)
+          curl -fsSL -o /tmp/shfmt "https://github.com/mvdan/sh/releases/download/v$SF/shfmt_v${SF}_linux_amd64"
           echo "fb096c5d1ac6beabbdbaa2874d025badb03ee07929f0c9ff67563ce8c75398b1  /tmp/shfmt" | sha256sum -c -
           sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
           SC=$(make -s print-shellcheck-version) # the Makefile is the pin; `make lint-sh` below refuses any other version (#1679)
