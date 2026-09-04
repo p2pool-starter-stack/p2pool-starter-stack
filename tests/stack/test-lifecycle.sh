@@ -525,9 +525,12 @@ assert_contains "a contending verb blocks rather than refusing on contact" "$(ca
 assert_contains "and proceeds once the holder leaves, instead of timing out" "$(cat "$LKWOUT")" "rc=0"
 assert_contains "the mutation it was waiting to make then actually runs" "$(cat "$LKLOG")" "compose down"
 
-# The re-invocation pair, and it is the load-bearing case. pithead re-invokes ITSELF for mutating
-# verbs (run_chain, control_lifecycle's `"$self" restart`, control_backup's `"$self" backup -y`),
-# so a lock that only knew about descriptors would deadlock a parent against its own child. fd 9
+# The re-invocation pair. pithead re-invokes ITSELF for mutating verbs (run_chain,
+# control_lifecycle's `"$self" restart`, control_backup's `"$self" backup -y`), so a lock that
+# only knew about descriptors would deadlock a parent against its own child — IF any of those
+# three ever ran inside a window an ancestor already held. #1391's own census of every
+# mutation_lock_acquire call site found that none currently does; the marker is defensive, not
+# load-bearing today. fd 9
 # is inherited across exec, but a child that opens its OWN descriptor on the same file blocks —
 # which is why the marker is EXPORTED rather than merely set. Stripping the marker is therefore
 # the mutation that proves the marker is what carries the hold across the re-invocation.
@@ -948,7 +951,7 @@ assert_eq "a backup that stops a running stack holds one window across the archi
     "$(lock_backup_running_probe)" "running|held"
 unset -f lock_backup_running_probe
 
-unset -f lock_hold_bg lock_await_record lock_state lock_held lock_reinvoke_probe lock_nest_probe
+unset -f lock_hold_bg lock_await_record lock_state lock_held lock_reinvoke_probe lock_nest_probe reinvoke_wiring_probe
 unset -f lock_sibling_probe lock_wiring_fixture lock_wiring_probe lock_wiring_pair lock_wiring_balance
 
 echo "== unit: the appliance boot leg tells lock contention from a bad slot (#1342) =="
