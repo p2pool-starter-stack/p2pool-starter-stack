@@ -6,6 +6,7 @@ file it was staged through does not survive. The callers' own tests cover what e
 this covers how it LANDS."""
 
 import json
+import os
 
 import pytest
 
@@ -34,6 +35,27 @@ class TestWrite:
         # The dotted temp is the staging name. A leftover would be read by nothing, but its
         # presence would mean the rename did not happen and the visible file is a second write.
         assert [p.name for p in spool.iterdir()] == ["abc.json"]
+
+    def test_the_visible_name_is_only_ever_created_by_a_rename(self, spool, monkeypatch):
+        # THE ATOMICITY PROPERTY, and the reason the cleanup test above is not enough: a direct
+        # in-place write leaves exactly ["abc.json"] too, so that test cannot tell the two shapes
+        # apart. What distinguishes them is that the name the host runner watches for is only ever
+        # brought into existence by a rename, so the runner can never observe a partial request.
+        #
+        # This matters more now than it did as four copies: one writer means a single future edit
+        # removes the property for every intent type at once. Without this assertion that edit
+        # leaves the suite green.
+        seen = []
+        real_replace = os.replace
+
+        def recording_replace(src, dst):
+            seen.append((os.path.basename(src), os.path.basename(dst), os.path.exists(dst)))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", recording_replace)
+        request_spool.write({"id": "abc", "action": "diag-doctor"})
+        # Staged under the dotted temp, and the final name did not exist before the rename made it.
+        assert seen == [(".abc.tmp", "abc.json", False)]
 
     def test_an_unwritable_spool_raises_rather_than_dropping_the_request(self, monkeypatch):
         monkeypatch.setattr(request_spool.config, "CONTROL_REQUESTS_DIR", "/nonexistent/requests")
