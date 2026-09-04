@@ -122,9 +122,9 @@ characters the machine refuses.</p>
 <p>The machine is still the authority. It re-checks everything at boot and refuses a file it does
 not accept, printing the reason on its console. This page never blocks the download: if a check
 here disagrees with you, you can still save the file and let the machine decide.</p>
-<p>A box you leave blank is left out of the file altogether, so it can never clear the setting on
-the machine: an empty password would otherwise merge in as &ldquo;no password&rdquo; and take the
-dashboard login away instead of replacing it.</p>
+<p>A box you leave blank is left out of the file altogether, so it can never clear the setting on the
+machine &mdash; an empty password would otherwise merge in as &ldquo;no password&rdquo; and take the dashboard
+login away. It also means the machine says nothing about a blank box: that setting is not in the file to object to.</p>
 <p>It cannot check what it cannot see &mdash; whether a wallet is yours, or what the machine&rsquo;s
 current settings are. Read the change list the console prints before the countdown runs out.</p>
 
@@ -280,7 +280,7 @@ var WEAK = ["passwordpassword", "0123456789", "qwertyuiop", "changeme", "letmein
 function checkAuth(user, pass, onion) {
   if (user !== "" && !/^[A-Za-z0-9._@-]{1,64}$/.test(user))
     return ["err", "The username must be 1–64 characters of letters, digits, and . _ @ -"];
-  if (pass === "") return ["err", "Enter the new password."];
+  if (pass === "") return ["err", "Enter the new password. Without one the file leaves this whole setting out, so the machine keeps the login it has."];
   if (Array.from(pass).some(function (c) { var n = c.codePointAt(0); return n < 32 || n > 126; }))
     return ["err", "The password must be plain printable characters — the machine refuses anything else."];
   if (pass.indexOf('"') >= 0) return ["err", "The password cannot contain a double-quote."];
@@ -302,7 +302,7 @@ function checkAuth(user, pass, onion) {
 }
 
 function checkXmr(a) {
-  if (a === "") return ["err", "Paste your Monero address."];
+  if (a === "") return ["err", "Paste your Monero address. While this is blank the file leaves it out, so the machine keeps the payout address it has."];
   if (/\s/.test(a)) return ["err", "That contains a space or a line break — an address has none."];
   switch (moneroAddressType(a)) {
     case "primary": return ["ok", "Valid primary address, checksum verified."];
@@ -314,7 +314,7 @@ function checkXmr(a) {
 }
 
 function checkTari(a) {
-  if (a === "") return ["err", "Paste your Tari address."];
+  if (a === "") return ["err", "Paste your Tari address. While this is blank the file leaves it out, so the machine keeps the payout address it has."];
   if (/\s/.test(a)) return ["err", "That contains a space or a line break — an address has none."];
   switch (tariAddressType(a)) {
     case "ok": return ["ok", "Valid mainnet address, checksum verified."];
@@ -341,7 +341,7 @@ function setMsg(el, verdict) {
 }
 
 function build() {
-  var cfg = {}, blocking = 0;
+  var cfg = {}, blocking = 0, omitted = 0;
 
   var on = function (name) {
     var c = $("on-" + name).checked;
@@ -353,27 +353,29 @@ function build() {
     var user = $("f-user").value.trim(), pass = $("f-pass").value;
     var v = checkAuth(user, pass, $("f-onion").checked);
     setMsg($("m-auth"), v);
-    if (v[0] === "err") blocking++;
-    var auth = {};
-    if (pass !== "") auth.password = pass;
-    if (user !== "") auth.username = user;
-    if (Object.keys(auth).length) cfg.dashboard = { auth: auth };
+    // The stick is DEEP-MERGED over the running config (os/overlay/pithead-media-config, `jq '.[0] * .[1]'`),
+    // which is what makes "left out" mean "keeps its running value" rather than "unset". So a username with
+    // no password promises no refusal: it merges onto the running password and RENAMES the login, keeping the
+    // password the operator came to replace. Emitting it alone buys nothing either — 28-parse-and-validate-
+    // config.sh gates the whole auth block, username regex included, behind a non-empty password.
+    if (pass === "") omitted++;
+    else { if (v[0] === "err") blocking++; cfg.dashboard = { auth: user !== "" ? { username: user, password: pass } : { password: pass } }; }
   }
 
   if (on("xmr")) {
     var xmr = $("f-xmr").value.trim();
     var vx = checkXmr(xmr);
     setMsg($("m-xmr"), vx);
-    if (vx[0] === "err") blocking++;
-    if (xmr !== "") cfg.monero = { wallet_address: xmr };
+    if (xmr === "") omitted++;
+    else { if (vx[0] === "err") blocking++; cfg.monero = { wallet_address: xmr }; }
   }
 
   if (on("tari")) {
     var tari = $("f-tari").value.trim();
     var vt = checkTari(tari);
     setMsg($("m-tari"), vt);
-    if (vt[0] === "err") blocking++;
-    if (tari !== "") cfg.tari = { wallet_address: tari };
+    if (tari === "") omitted++;
+    else { if (vt[0] === "err") blocking++; cfg.tari = { wallet_address: tari }; }
   }
 
   if (on("ssh")) {
@@ -391,14 +393,14 @@ function build() {
   $("btn-dl").disabled = !any;
   $("btn-copy").disabled = !any;
 
-  var out = $("m-out");
-  if (!any) { out.className = "msg"; out.textContent = ""; }
-  else if (blocking) {
-    out.className = "msg warn";
-    out.textContent = blocking === 1
-      ? "One setting above has a problem. You can still save the file — the machine will refuse it and say why."
-      : blocking + " settings above have problems. You can still save the file — the machine will refuse it and say why.";
-  } else { out.className = "msg ok"; out.textContent = "Ready."; }
+  var out = $("m-out"), say = [];
+  // Two failures, said separately: a BLOCKING field is IN the file and the machine really will refuse
+  // it; an OMITTED one never reaches the machine, so nothing is refused and that setting stays as it is.
+  if (blocking) say.push((blocking === 1 ? "One setting above has a problem" : blocking + " settings above have problems") + " the machine will catch. You can still save the file — the machine will refuse it and say why.");
+  if (omitted) say.push((omitted === 1 ? "One setting above is unfinished, so the file leaves it out" : omitted + " settings above are unfinished, so the file leaves them out") + " and the machine keeps what it has. There is nothing in the file for it to object to.");
+  if (say.length) { out.className = "msg warn"; out.textContent = say.join(" "); }
+  else if (!any) { out.className = "msg"; out.textContent = ""; }
+  else { out.className = "msg ok"; out.textContent = "Ready."; }
   return json;
 }
 
@@ -439,10 +441,11 @@ document.addEventListener("input", build);
 document.addEventListener("change", build);
 build();
 
-/* Exposed for the differential test in the PR that added this page: node loads this file, pulls
-   the two functions out, and compares their verdicts against lib/pithead/25-address-types.sh. */
+/* Exposed for tests/stack/test-recovery-address-gates.sh: it holds the two gates against
+   lib/pithead/25-address-types.sh, and build()'s output against what the out message promises. */
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { moneroAddressType: moneroAddressType, tariAddressType: tariAddressType };
+  module.exports = { moneroAddressType: moneroAddressType, tariAddressType: tariAddressType,
+    checkAuth: checkAuth, checkXmr: checkXmr, checkTari: checkTari, checkSsh: checkSsh, build: build };
 }
 </script>
 </body>
