@@ -204,7 +204,7 @@ grep -q "still loading" <<<"$hout" &&
     bad "a fast load stays quiet" "heartbeat fired anyway" ||
     ok "a fast load stays quiet — no heartbeat for work already done"
 [ "$hlen" -lt 3 ] &&
-    ok "a fast load does not wait on the heartbeat interval (${hlen}s)" ||
+    ok "a fast load does not wait on the heartbeat interval" ||
     bad "a fast load returns promptly" "took ${hlen}s"
 unset PITHEAD_IMAGES_DIR FAKE_GRAPHROOT PITHEAD_LOAD_HEARTBEAT_SECS FAKE_LOAD_SECS
 unset -f hbl

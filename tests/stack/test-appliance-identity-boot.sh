@@ -390,7 +390,7 @@ out=$(shk_run)
 assert_rc "first run on an empty /data generates the key" "$?" "0"
 assert_contains "generation is announced (a silent identity change is the bug class)" "$out" "generated a new host key"
 shk_fp1=$(ssh-keygen -lf "$shk_key" 2>/dev/null | awk '{print $2}')
-[ -n "$shk_fp1" ] && ok "the generated key is a loadable ed25519 key ($shk_fp1)" ||
+[ -n "$shk_fp1" ] && ok "the generated key is a loadable ed25519 key" ||
     bad "the generated key is a loadable ed25519 key" "ssh-keygen -lf failed on $shk_key"
 assert_eq "key dir is owner-only (700)" "$(stat -c '%a' "$SHK/data-ssh" 2>/dev/null || stat -f '%Lp' "$SHK/data-ssh")" "700"
 assert_eq "private key is owner-only (600)" "$(stat -c '%a' "$shk_key" 2>/dev/null || stat -f '%Lp' "$shk_key")" "600"

@@ -183,3 +183,25 @@ assert_eq "every tests/stack/test-*.sh refuses a direct run, naming run.sh" "$fr
 # prevent. They are not the same arm: a guard moved below a fixture-building line would still
 # refuse, and only this row would notice the files it wrote on the way there.
 assert_eq "no fragment writes into the caller's directory before refusing" "$(ls -A "$frag_probe")" ""
+
+echo "== unit: verdict-line determinism — no random/measured value in a PASS line (#1325) =="
+# The domain-split multiset proof diffs the sorted verdict lines of two suite runs to show a move
+# changed nothing; that proof only holds if a PASSING line reads the same every run. Two did not:
+# the ssh-host-keys PASS line embedded ssh-keygen's own random ed25519 fingerprint, and the
+# load_baked_images heartbeat PASS line embedded a $(date +%s) measurement (seen as (1s) vs (2s)
+# across two runs, same PASS both times). Each domain file runs for real below — a fresh key, a
+# fresh timing — and the captured PASS text is asserted to carry neither value. The capture keeps
+# only the ✓ line, and the arming row before each check asserts it is there: an empty capture (a
+# domain that died before its PASS line, a renamed label, a FAIL on that row) contains neither
+# value either, and would read as clean without it.
+vd_id_out=$(bash -c 'set -uo pipefail; source "'"$HERE"'/lib.sh" >/dev/null 2>&1; source "'"$HERE"'/test-appliance-identity-boot.sh" 2>&1' | grep "✓.*loadable ed25519 key" | head -1)
+assert_contains "the ed25519-key PASS line was captured at all (arming)" "$vd_id_out" "the generated key is a loadable ed25519 key"
+assert_not_contains "the ed25519-key PASS line carries no fingerprint bytes" "$vd_id_out" "SHA256:"
+
+vd_hb_out=$(bash -c 'set -uo pipefail; source "'"$HERE"'/lib.sh" >/dev/null 2>&1; source "'"$HERE"'/test-appliance-boot.sh" 2>&1' | grep "✓.*does not wait on the heartbeat interval")
+assert_contains "the heartbeat PASS line was captured at all (arming)" "$vd_hb_out" "a fast load does not wait on the heartbeat interval"
+case "$vd_hb_out" in
+*[0-9]s\)*) bad "the heartbeat PASS line carries no measured elapsed value" "$vd_hb_out" ;;
+*) ok "the heartbeat PASS line carries no measured elapsed value" ;;
+esac
+unset vd_id_out vd_hb_out
