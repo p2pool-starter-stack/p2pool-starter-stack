@@ -159,7 +159,7 @@ _boot_id() { _ssh cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d '\r\n'
 # to the still-running old boot whenever the shutdown outlasted the sleep (or the reboot command never landed) and
 # read the OLD marker as the verdict. Reports how many probes the old boot answered, so a near-miss is visible.
 _wait_new_boot() { # $1 = boot id before the reboot, $2 = seconds
-    local deadline=$(($(date +%s) + $2)) SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" now stale=0
+    local deadline=$(($(date +%s) + $2)) SSH_TIMEOUT="${SSH_PROBE_TIMEOUT:-20}" now= stale=0
     while [ "$(date +%s)" -lt "$deadline" ]; do
         now=$(_boot_id)
         [ -n "$now" ] && [ "$now" != "$1" ] && break
@@ -912,7 +912,7 @@ PYEOF
 # (os-update-test-base); RAUC signature verification still runs for real against the slot
 # keyring, so the bad-signature refusal is genuine, not simulated.
 phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-boot>
-    local good_bundle="$1" serial_mark="${2:-0}" marker
+    local good_bundle="$1" serial_mark="${2:-0}" marker before
     info "leg 4 — dashboard OS-update action end-to-end (provision, then check/download/verify/install/reboot)"
     if ! _wizard_provision_capture "$serial_mark"; then
         bad "leg 4: could not provision the stack through the wizard (${WIZ_FAIL_REASON:-no dashboard, no control channel})"
@@ -1121,9 +1121,9 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     marker=$(_ssh cat /etc/pithead-test-marker)
     [ "$marker" = "v1" ] && ok "leg 4: nothing auto-rebooted — still on v1 until the operator says so" ||
         bad "leg 4: expected to still be on v1 before the reboot intent, got '$marker'"
-    _os_step '{"action":"reboot"}' 30 >/dev/null 2>&1 || true # the machine goes away mid-poll
-    sleep 15
-    _wait_ssh 420 || {
+    before=$(_boot_id) || info "could not read the boot id before the reboot intent — a reconnect and a reboot would look alike"
+    [ -n "$before" ] && _os_step '{"action":"reboot"}' 30 >/dev/null 2>&1 || true # the machine goes away mid-poll; no id, no reboot
+    [ -n "$before" ] && _wait_new_boot "$before" 420 || {
         bad "leg 4: guest never returned after the dashboard reboot intent"
         kill "$srv_pid" 2>/dev/null
         rm -rf "$srv"
