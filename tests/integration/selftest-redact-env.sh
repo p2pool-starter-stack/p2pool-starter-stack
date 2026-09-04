@@ -96,7 +96,7 @@ case "$OUT" in
 esac
 
 echo "== redact: the KEY=value over-redaction guard — debugging value must survive =="
-# The same four fields selftest-redact.sh pins as JSON survivors, in the spelling `.env` uses.
+# The scalar fields selftest-redact.sh pins as JSON survivors, in the spelling `.env` uses.
 # Holding the two syntaxes to one vocabulary means holding them to the same survivors too: a
 # bundle with its endpoints and routing ids stripped is useless for the triage it exists for.
 # `XVB_URL` is the sharp one — only `PING_URL` is in the vocabulary, so a bare `_URL` survives.

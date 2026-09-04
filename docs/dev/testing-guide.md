@@ -133,7 +133,8 @@ structurally cannot.
 - Secrets: never print tokens, creds, or onions. The harness redacts artifacts and hashes secrets
   on the box. If you add a secret-bearing field to `config.reference.json`,
   `tests/integration/selftest-redact.sh` fails until you classify it — either `redact()` covers it,
-  or the file records why it is safe to keep.
+  or the file records why it is safe to keep. An array you add is classified as an array, whether
+  or not the reference populates it.
 
 ## Gotchas learned on real hardware
 
