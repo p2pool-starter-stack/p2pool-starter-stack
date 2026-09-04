@@ -191,6 +191,14 @@ Four properties, each earned:
    is the check nothing else derives. An unreadable certificate file WARNs instead — `doctor`
    is the second half of `pithead-boot`'s health gate, and a FAIL there reboots the box, so a
    read failure that doesn't prove the certificate is actually broken must not cause one.
+5. **The remedy is real, and the gate does not punish the update for it (#1265).** `apply`
+   reaches the mint even when `config.json` is unchanged: on an appliance the no-change branch
+   re-renders the Caddyfile — the mint inside it is idempotent — and restarts Caddy only when
+   the certificate or the Caddyfile moved, so the command `doctor` prints does what it names.
+   `pithead-boot`'s gate keeps the coverage FAIL as its re-mint trigger; once its bounded
+   re-mint cannot clear the gap (render mints nothing, or the budget is spent) the slot commits
+   with the gap recorded as the verdict's `advisory` instead of rolling back a good update for
+   a fact about the machine's addresses. Interactive `doctor` still FAILs on it.
 
 The SHA-256 fingerprint is printed on the console beside the token so the browser warning can
 actually be verified. A warning nobody can check is theatre.

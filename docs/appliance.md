@@ -326,7 +326,11 @@ version if the new one failed — and, when those health checks were what held i
 which check it was, so a return is never mistaken for a bad release. One thing the machine
 repairs on its own during that wait: a network address that arrived after the certificate
 was made gets a fresh certificate minted there and then, instead of failing the checks
-and returning to the previous version. The machine refuses images that are unsigned, built for
+and returning to the previous version. If the certificate still does not match after that,
+the machine keeps the new version and notes the gap in its boot log and with the update's
+recorded outcome: the mismatch is about this machine's addresses, not the update, and
+running `pithead apply` on the machine mints the certificate — that command now does so
+even when the configuration is unchanged. The machine refuses images that are unsigned, built for
 different hardware, or older than what it runs; there is no override. If another operation is changing the stack when you start an
 install, the install is not started at all: nothing is written to the idle copy and the
 dashboard says so rather than reporting a failed install. Start it again once that

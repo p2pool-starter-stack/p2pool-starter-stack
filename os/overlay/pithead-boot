@@ -15,28 +15,22 @@
 #   401 is a healthy, locked dashboard). Second `pithead doctor --json` must exit clean: it FAILs
 #   on a crashed revenue container (monerod/p2pool/tari), a dead Tor backbone, or a missing egress
 #   firewall — the mining-dead-but-serving slot a curl-only gate used to mark-good. doctor is
-#   sync-tolerant by construction: chain nodes report healthy from early in a days-long initial
-#   sync, and the deliberately sync-held miners (#35) never count as crashed, so a still-syncing
-#   box commits while a genuinely broken one does not. A slot that boots but is not healthy is left
-#   UNCOMMITTED on purpose: that is precisely the state A/B fallback exists for.
+#   sync-tolerant by construction (chain nodes report healthy early in a days-long sync; the
+#   sync-held miners, #35, never count as crashed), so a still-syncing box commits while a broken
+#   one does not; the one FAIL that may commit is certificate coverage the re-mint could not clear
+#   (#1265, below). A slot that boots but is not healthy stays UNCOMMITTED: that is what A/B is for.
 set -uo pipefail
 
-# A boot that fails is what A/B fallback exists for — but the fallback is a GRUB decision, and GRUB
-# only gets to make it at the NEXT boot. Leaving the slot uncommitted and exiting is therefore only
-# half of the promise docs/appliance.md makes: without a reboot the machine sits on the broken slot
-# with the stack down until somebody walks over and pulls the power (#1065). A kernel panic and a
-# wedged PID 1 already self-heal; a clean boot with a dead stack — a bad render, a bad image, a
-# crashed node, exactly what this gate is written to catch — did not.
-#
-# BOUNDED, because the fault is not always in the slot. A wedged /data survives the rollback, so
-# both slots fail the same way, and a box that reboots forever is worse than one that stops with a
-# console line an operator can read: it never holds still long enough to be diagnosed. One
-# automatic reboot per failure run — the next boot is the other slot, and if that fails too the
-# counter is spent and the machine stays up and says so.
-#
-# The counter lives on /data on purpose: it has to survive both the reboot and the slot switch,
-# which is the whole point of bounding. If it cannot be written, this refuses to reboot at all —
-# an unbounded reboot loop is the one outcome worse than a stranded box.
+# A boot that fails is what A/B fallback exists for — but the fallback is a GRUB decision made at
+# the NEXT boot, so leaving the slot uncommitted and exiting is only half of the promise
+# docs/appliance.md makes: without a reboot the machine sits on the broken slot with the stack
+# down until somebody pulls the power (#1065). A kernel panic and a wedged PID 1 self-heal; a clean
+# boot with a dead stack — a bad render, a bad image, a crashed node, what this gate catches — did not.
+# BOUNDED, because the fault is not always in the slot: a wedged /data survives the rollback, both
+# slots fail the same way, and a box that reboots forever never holds still long enough to be
+# diagnosed. One automatic reboot per failure run — the next boot is the other slot; if that fails
+# too the counter is spent and the machine stays up and says so. The counter lives on /data so it
+# survives the reboot and the slot switch; if it cannot be written this refuses to reboot at all.
 BOOT_FAIL_COUNT=.boot-gate-failures
 # Where doctor's verdicts land while this gate is looping: /run, so a gate that never passes leaves
 # the last failing run's exact blocking check behind without wearing /data. A plain variable for the
@@ -45,10 +39,8 @@ BOOT_DOCTOR_JSON=/run/pithead-boot-doctor.json
 boot_gate_passed() { rm -f "$BOOT_FAIL_COUNT"; }
 fail_boot() { # <what went wrong>
     echo "pithead-boot: $1 — slot left uncommitted so A/B fallback stays armed" >&2
-    # The rollback verdict names what held the gate (#1265): a good update that failed doctor on
-    # one check for the whole window used to reach the dashboard as "rolled back", implying a bad
-    # release. The last doctor run of this boot is still on /run here; the in-flight flag carries
-    # its failing checks to the fallback boot, where os_update_rollback_verdict reads them.
+    # The rollback verdict names what held the gate (#1265): the last doctor run is still on /run,
+    # and the in-flight flag carries its failing checks to the fallback boot's os_update_rollback_verdict.
     if [ -n "${OS_INFLIGHT:-}" ] && [ -f "$OS_INFLIGHT" ] && [ -s "$BOOT_DOCTOR_JSON" ] && command -v jq >/dev/null 2>&1; then
         jq --slurpfile d "$BOOT_DOCTOR_JSON" '.blocking = [$d[0].checks[]? | select(.status == "fail") | .message]' \
             "$OS_INFLIGHT" >"$OS_INFLIGHT.tmp" 2>/dev/null && mv -f "$OS_INFLIGHT.tmp" "$OS_INFLIGHT" || rm -f "$OS_INFLIGHT.tmp"
@@ -157,36 +149,33 @@ gate_answer_is_dashboard() { # <http_code> <size_download>
     [ "$1" = "401" ] || [ "${2:-0}" -gt 0 ]
 }
 
-# BOTH signals, in the one place they are paired (#852). This lives above the boundary on purpose:
-# while the pairing was a bare `&&` in the commit condition below, the only thing asserting it was a
-# grep of this file — and the doctor half of that grep matched the header COMMENT on line 15, so it
-# stayed green with the doctor call deleted outright. A gate that lies, inside the gate-honesty
-# machinery. As a function it is driven at tier 1 with a stubbed `pithead`, and deleting either half
-# turns an assertion red.
-#
-# doctor's verdicts land in /run (volatile, no /data wear): when this gate never passes, the LAST
-# failing run names the exact blocking check — without it a deadlock here was undiagnosable (the
-# battery hit exactly that).
+# BOTH signals, in the one place they are paired (#852). A function rather than a bare `&&` in the
+# commit condition: the only thing asserting that pairing was a grep of this file, whose doctor half
+# matched the header COMMENT on line 15 and stayed green with the doctor call deleted — a gate that
+# lies, inside the gate-honesty machinery. Driven at tier 1 with a stubbed `pithead`; deleting either
+# half turns an assertion red. doctor's verdicts land in /run (volatile, no /data wear): when this
+# gate never passes, the LAST failing run names the blocking check (the battery hit that deadlock).
 gate_ready() { # <http_code> <size_download>
     gate_answer_is_dashboard "$1" "$2" || return 1
     gate_doctor_ran=1 # this round's verdict file is fresh, so the re-mint below may read it
     ./pithead doctor --json >"$BOOT_DOCTOR_JSON" 2>/dev/null
 }
 
-# The certificate race (#1265): render mints the dashboard certificate BEFORE `up`, from the
-# box's address list as it stands then; doctor re-checks it inside the gate loop AFTER `up`, when
-# the list has settled — so an address that arrives in between (a SLAAC/ULA prefix is exactly this
-# shape) fails doctor's coverage check on every round, nothing on the boot path re-mints, and a
-# good update rolls back. The remedy doctor prints, `./pithead apply`, short-circuits on an
-# unchanged config before it reaches the mint, so it is not reachable here either.
-# So the loop re-mints, narrowly: only when THIS round's doctor failed on coverage and nothing
-# else (any other failing check is a slot-health question this must not paper over), only from a
-# doctor run this round (a round whose curl went quiet, e.g. during the Caddy restart below, keeps
-# last round's file on /run and must not act on it), and at most BOOT_REMINT_MAX times a boot. The
-# mint is render's own, idempotent by SAN-set comparison, so re-running it is conservative: an
-# unchanged certificate means render and doctor disagree about the names, which is not this
-# loop's to settle — it says so and keeps waiting. Caddy reads the files at start, so a changed
-# certificate is followed by the same restart `apply` uses; the next round re-judges.
+# The certificate race and its two remedies (#1265). render mints the dashboard certificate BEFORE
+# `up`, from the address list as it stands; doctor re-checks coverage in the gate loop AFTER `up`,
+# so an address arriving in between (a SLAAC/ULA prefix) failed doctor on every round and a good
+# update rolled back. (1) The loop re-mints, narrowly: only when THIS round's doctor failed on
+# coverage and nothing else (any other FAIL is slot health this must not paper over), only from a
+# doctor run this round (a quiet round keeps last round's file on /run), at most BOOT_REMINT_MAX
+# times; the mint is render's own, idempotent by SAN set; a changed certificate gets `apply`'s
+# restart. (2) When that cannot clear it — render minted nothing (render and doctor disagree about
+# the names) or the budget is spent — the drift is this machine's addresses, not the slot: the
+# previous version carries the same certificate and the same race, so waiting out the window and
+# rolling back buys nothing. The slot commits with the drift as the verdict's `advisory` and the
+# remedy on the console (`apply` reaches the mint on an unchanged config now). A render that FAILED
+# is the slot's own health; the window keeps judging it. Interactive doctor keeps FAILing on
+# coverage: the policy lives here, at the commit decision, not in doctor's vocabulary.
+gate_remint_state="" gate_advisory="" # what the last re-mint did: reminted | unchanged | failed | exhausted
 BOOT_REMINT_MAX=3
 boot_remints=0
 gate_doctor_ran=0
@@ -195,20 +184,29 @@ gate_blocked_only_by_cert() { # -> 0 when the last doctor run's ONLY failing che
     jq -e '[.checks[]? | select(.status == "fail")] | length == 1 and (.[0].message | startswith("The dashboard certificate does not cover"))' \
         "$BOOT_DOCTOR_JSON" >/dev/null 2>&1
 }
+gate_remint_give_up() { gate_remint_state=$1 && return 1; }
 gate_remint_cert() { # re-mint via render; restart Caddy only if the certificate changed
-    [ "$boot_remints" -lt "$BOOT_REMINT_MAX" ] || return 1
+    [ "$boot_remints" -lt "$BOOT_REMINT_MAX" ] || gate_remint_give_up exhausted || return 1
     boot_remints=$((boot_remints + 1))
     local crt before after
     crt="${PITHEAD_TLS_DIR:-data/tls}/wizard.crt"
     before=$(sha256sum "$crt" 2>/dev/null | cut -d' ' -f1)
-    ./pithead render >/dev/null 2>&1 || return 1
+    ./pithead render >/dev/null 2>&1 || gate_remint_give_up failed || return 1
     after=$(sha256sum "$crt" 2>/dev/null | cut -d' ' -f1)
     if [ "$before" = "$after" ]; then
-        echo "pithead-boot: doctor reports the dashboard certificate does not cover a served name, but render minted no new certificate ($boot_remints/$BOOT_REMINT_MAX) — render and doctor disagree about the names; the gate keeps waiting"
+        gate_remint_state=unchanged
+        echo "pithead-boot: doctor reports the dashboard certificate does not cover a served name, but render minted no new certificate ($boot_remints/$BOOT_REMINT_MAX) — render and doctor disagree about the names; that is this machine's address list, not the slot, so the gate records it and commits"
         return 1
     fi
+    gate_remint_state=reminted
     echo "pithead-boot: re-minted the dashboard certificate for an address that arrived after render ($boot_remints/$BOOT_REMINT_MAX) — restarting Caddy so it serves it"
     ${PITHEAD_CADDY_RESTART_CMD:-docker compose restart caddy} >/dev/null 2>&1 || true
+}
+
+gate_cert_advisory() { # -> 0 and doctor's coverage message in gate_advisory when the hold may commit
+    case "$gate_remint_state" in unchanged | exhausted) ;; *) return 1 ;; esac
+    gate_advisory=$(jq -r '[.checks[]? | select(.status == "fail")][0].message // ""' "$BOOT_DOCTOR_JSON" 2>/dev/null)
+    [ -n "$gate_advisory" ]
 }
 
 # OS-update verdict, rollback half (#1051): a dashboard-driven install leaves an in-flight flag
@@ -370,7 +368,7 @@ gate_resolve_args=()
 gate_rs=$(gate_resolve_spec "$gate_host" "$gate_port")
 [ -n "$gate_rs" ] && gate_resolve_args=(--resolve "$gate_rs")
 for _ in $(seq 90); do
-    gate_doctor_ran=0
+    gate_doctor_ran=0 gate_pass=0
     # SNI and the Host header carry the site's real name, so Caddy vhost-matches it; for a name the
     # --resolve above sends the connection to loopback, which the appliance binds unconditionally.
     # `read` clears both when curl prints nothing, so a silent curl cannot leave the previous
@@ -382,17 +380,23 @@ for _ in $(seq 90); do
     # doctor only has to pass ONCE — a chain node that is still 'starting' fails a pass and the loop
     # retries it, so the gate waits out a slow start without ever committing on partial evidence.
     if gate_ready "${code:-000}" "${size:-0}"; then
+        gate_pass=1
+    elif [ "$gate_doctor_ran" = 1 ] && gate_blocked_only_by_cert; then
+        gate_remint_cert || true # a bounded, narrow re-mint (#1265); the next round re-judges
+        gate_cert_advisory && gate_pass=1
+    fi
+    if [ "$gate_pass" = 1 ]; then
         command -v rauc >/dev/null 2>&1 && rauc status mark-good
         boot_gate_passed
-        echo "pithead-boot: stack is serving (HTTP $code) and doctor reports healthy — booted slot committed"
+        echo "pithead-boot: stack is serving (HTTP $code) and doctor reports ${gate_advisory:-healthy}${gate_advisory:+ as its only failing check} — booted slot committed${gate_advisory:+ with that recorded as advisory; run './pithead apply' on the machine to re-mint}"
         # OS-update verdict, success half: this slot just committed while an in-flight flag names
         # exactly this version — the dashboard-driven update landed and can no longer fall back.
         if [ -f "$OS_INFLIGHT" ] && command -v jq >/dev/null 2>&1; then
             to=$(jq -r '.to // ""' "$OS_INFLIGHT" 2>/dev/null)
             if [ -n "$to" ] && [ "$to" = "$(tr -d '[:space:]' <VERSION 2>/dev/null)" ]; then
                 mkdir -p "$OS_STATE_DIR" 2>/dev/null || true
-                jq -n --arg f "$(jq -r '.from // ""' "$OS_INFLIGHT" 2>/dev/null)" --arg t "$to" \
-                    '{step:"idle",verdict:{outcome:"updated",from:$f,to:$t,ts:(now|floor)}}' \
+                jq -n --arg f "$(jq -r '.from // ""' "$OS_INFLIGHT" 2>/dev/null)" --arg t "$to" --arg a "$gate_advisory" \
+                    '{step:"idle",verdict:{outcome:"updated",from:$f,to:$t,ts:(now|floor),advisory:(if $a == "" then [] else [$a] end)}}' \
                     >"$OS_STATE_DIR/os-update-state.json" 2>/dev/null || true
                 echo "pithead-boot: OS update to $to committed — verdict published to the dashboard"
             fi
@@ -403,17 +407,13 @@ for _ in $(seq 90); do
         [ "$hold_chain" = 1 ] && { release_held_chain_services || true; }
         # The on-box miner comes LAST, after the slot commit: it needs the stack's stratum
         # listening, and a miner that cannot start must never delay or block the commit — the
-        # stack serving is the product's health, the miner is a passenger. Idempotent every
-        # boot: RigForge's appliance mode re-renders its /run unit and re-tunes from the tree
-        # pithead-sync keeps on /data. No-op unless local_miner.enabled.
-        # timeout, not just || true: the boot unit runs with TimeoutStartSec=infinity, so a
-        # hung miner setup (a stalled native rebuild, a wedged mount) would otherwise leave the
-        # unit activating forever. 30 minutes clears a worst-case first native recompile; the
-        # prebuilt path finishes in seconds.
+        # stack serving is the product's health, the miner is a passenger. Idempotent every boot
+        # (RigForge's appliance mode re-renders its /run unit and re-tunes from the tree pithead-sync
+        # keeps on /data); no-op unless local_miner.enabled. timeout, not just || true: the unit runs
+        # with TimeoutStartSec=infinity, so a hung miner setup would otherwise leave it activating
+        # forever; 30 minutes clears a worst-case first native recompile, the prebuilt path is seconds.
         timeout 1800 ./pithead local-miner || true
         exit 0
-    elif [ "$gate_doctor_ran" = 1 ] && gate_blocked_only_by_cert; then
-        gate_remint_cert || true # a bounded, narrow re-mint (#1265); the next round re-judges
     fi
     sleep 10
 done
