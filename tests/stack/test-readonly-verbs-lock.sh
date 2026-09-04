@@ -1,4 +1,5 @@
-#!/usr/bin/env bash
+# shellcheck shell=bash
+: "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
 #
 # The other half of the mutation window (#1734, carried out of #1482). Every mutating verb has a
 # test proving it TAKES the window; nothing proved that a read-only verb takes nothing and never
