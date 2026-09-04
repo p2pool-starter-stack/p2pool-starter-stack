@@ -19,7 +19,6 @@ ROV="$SANDBOX/readonly-lock"
 ROVLK="$SANDBOX/readonly-lock-held.lock"
 mkdir -p "$ROV/bin"
 cp "$STACK" "$ROV/pithead"
-printf '9.9.9\n' >"$ROV/VERSION"
 printf 'DEPLOYMENT_COMPLETED=true\nCOMPOSE_PROFILES=local_node,local_tari\nHOST_IP=box.lan\n' >"$ROV/.env"
 
 # One docker stub for all three verbs. `info` fails so `doctor` reaches a critical FAIL and still
@@ -57,12 +56,14 @@ ROV_RC=""
 rov_run() { # <lockfile|""> <verb> [args...] -> sets ROV_OUT, ROV_RC
     local lk="$1"
     shift
+    # ONE invocation for both legs, and that is structural rather than tidy: the whole proof is
+    # "same fixture, same command, only the lock differs". Two invocation lines could be edited
+    # apart, and the contended leg would then be asserting against a different fixture.
+    local -a rov_env=("FAKE_STATES=$ROV_STATES" "PATH=$ROV/bin:$PATH")
     if [ -n "$lk" ]; then
-        ROV_OUT="$(cd "$ROV" && FAKE_STATES="$ROV_STATES" PATH="$ROV/bin:$PATH" \
-            PITHEAD_LOCK_FILE="$lk" PITHEAD_LOCK_TIMEOUT=1 ./pithead "$@" 2>&1)"
-    else
-        ROV_OUT="$(cd "$ROV" && FAKE_STATES="$ROV_STATES" PATH="$ROV/bin:$PATH" ./pithead "$@" 2>&1)"
+        rov_env+=("PITHEAD_LOCK_FILE=$lk" "PITHEAD_LOCK_TIMEOUT=1")
     fi
+    ROV_OUT="$(cd "$ROV" && env "${rov_env[@]}" ./pithead "$@" 2>&1)"
     ROV_RC=$?
 }
 
