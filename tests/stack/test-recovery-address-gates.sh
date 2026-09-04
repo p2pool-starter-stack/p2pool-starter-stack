@@ -51,22 +51,22 @@ _rag_mon_overflow="4$(printf '1%.0s' $(seq 10))$(printf 'z%.0s' $(seq 11))$(prin
 # fixture change cannot leave a stale hand-typed near-copy behind claiming to be its mutant.
 _rag_cases=$(
     printf '%s\t%s\t%s\n' \
-        "monero primary"            monero "$VALID_PRIMARY" \
-        "monero subaddress"         monero "$VALID_SUBADDR" \
-        "monero integrated"         monero "$VALID_INTEGRATED" \
-        "monero one char flipped"   monero "${VALID_PRIMARY:0:50}B${VALID_PRIMARY:51}" \
+        "monero primary" monero "$VALID_PRIMARY" \
+        "monero subaddress" monero "$VALID_SUBADDR" \
+        "monero integrated" monero "$VALID_INTEGRATED" \
+        "monero one char flipped" monero "${VALID_PRIMARY:0:50}B${VALID_PRIMARY:51}" \
         "monero shape ok checksum bad" monero "4$(printf 'A%.0s' $(seq 94))" \
-        "monero truncated"          monero "${VALID_PRIMARY:0:94}" \
-        "monero not an address"     monero "1abc" \
-        "monero block overflows"    monero "$_rag_mon_overflow" \
-        "tari base58"               tari   "$VALID_TARI" \
-        "tari emoji"                tari   "$VALID_TARI_EMOJI" \
-        "tari single"               tari   "$VALID_TARI_SINGLE" \
-        "tari one char flipped"     tari   "${VALID_TARI:0:20}B${VALID_TARI:21}" \
-        "tari wrong network"        tari   "$_rag_tari_net" \
-        "tari truncated"            tari   "${VALID_TARI:0:44}" \
-        "tari not an address"       tari   "notanaddress" \
-        "tari unknown feature bits" tari   "$_rag_tari_bits"
+        "monero truncated" monero "${VALID_PRIMARY:0:94}" \
+        "monero not an address" monero "1abc" \
+        "monero block overflows" monero "$_rag_mon_overflow" \
+        "tari base58" tari "$VALID_TARI" \
+        "tari emoji" tari "$VALID_TARI_EMOJI" \
+        "tari single" tari "$VALID_TARI_SINGLE" \
+        "tari one char flipped" tari "${VALID_TARI:0:20}B${VALID_TARI:21}" \
+        "tari wrong network" tari "$_rag_tari_net" \
+        "tari truncated" tari "${VALID_TARI:0:44}" \
+        "tari not an address" tari "notanaddress" \
+        "tari unknown feature bits" tari "$_rag_tari_bits"
 )
 
 # The page's verdicts, one per corpus line. Loads the shipped HTML, runs its WHOLE script under a
