@@ -174,9 +174,18 @@ echo "== the by-name exclusion above is PINNED to the four sites #1725 documente
 
 # A by-name exclusion rots silently. run.sh and the standalone test_*.sh are named out of the
 # invariant above, so a FIFTH bare site added to either would sit outside it with nothing saying
-# so — that gap, rather than the four known sites, is what #1725 is about (none of the four has a
-# downstream `rm -rf "$VAR/sub"`, so an empty value gives `rm -rf ""`, which errors and removes
-# nothing; re-derived at ef3942d0). Pinning the excluded population makes the exclusion a ratchet
+# so — that gap, rather than the four known sites, is what #1725 is about.
+#
+# The four are NOT inert, and an earlier draft of this comment said they were. It argued from the
+# absence of a downstream `rm -rf "$VAR/sub"`, which is the wrong operator: the hazard is any
+# `"$VAR/sub"` expansion, and all four have one. run.sh writes `"$XPTLS/cert.pem"` and
+# `"$XPTLS/key.pem"` and then `rm -f "$XPTLS/key.pem"`; both `local d` helpers write
+# `"$d/xmrig-proxy"`; test_data_reset.sh runs `mkdir -p "$WORK/bin"` and writes under it. Under an
+# empty value each of those is an absolute path at the filesystem ROOT, and `set -u` does not
+# catch it because a failed `mktemp -d` leaves the variable SET and empty. The writes fail for an
+# unprivileged user — the CI shell job runs as the runner, not root — and would land under / as
+# root. Only the trailing `rm -rf "$VAR"` is genuinely inert. Pinning the excluded population
+# makes the exclusion a ratchet
 # in both directions: a new bare site reds this row, and so does converting the four, which is the
 # signal to delete the exclusion and widen the invariant above to cover these files too.
 #

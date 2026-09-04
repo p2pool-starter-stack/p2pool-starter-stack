@@ -856,9 +856,14 @@ standalone `test_*.sh` out of itself, because those belong to other lanes and th
 fail-closed constructor stopped at that boundary. A list of names rots in silence: a fifth bare
 `mktemp -d` assignment added to `run.sh` would sit outside the invariant with nothing saying so,
 and that gap rather than the four known sites is what
-[#1725](https://github.com/p2pool-starter-stack/pithead/issues/1725) is about — none of the four
-has a downstream `rm -rf "$VAR/sub"`, so an empty value expands to `rm -rf ""`, which errors and
-removes nothing. The excluded population is therefore pinned to exactly those four, keyed on file
+[#1725](https://github.com/p2pool-starter-stack/pithead/issues/1725) is about. The four sites are
+not inert: the hazard is any `"$VAR/sub"` expansion, not a recursive `rm`, and all four have one —
+`run.sh` writes `"$XPTLS/cert.pem"` and `"$XPTLS/key.pem"` and then removes the second, both
+`local d` helpers write `"$d/xmrig-proxy"`, and `test_data_reset.sh` runs `mkdir -p "$WORK/bin"`.
+Under an empty value each is an absolute path at the filesystem root, and `set -u` does not catch
+it because a failed `mktemp -d` leaves the variable set and empty. Those writes fail for an
+unprivileged user and would land under `/` as root; only the trailing `rm -rf "$VAR"` is inert.
+The excluded population is therefore pinned to exactly those four, keyed on file
 and variable name rather than line number, because the line numbers the issue cites had already
 drifted by three when the pin was written. It reds in both directions: a new bare site fails it,
 and so does converting the four. That second red is expected, and it is the signal to delete the
