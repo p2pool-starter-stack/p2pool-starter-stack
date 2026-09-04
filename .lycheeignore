@@ -8,3 +8,7 @@ https?://example\.(com|org).*
 # gitlab.torproject.org returns 403 to non-browser clients (the link is valid — verified by hand
 # 2026-07). Ignore the host, not a global --accept 403 that would mask real dead links. #415.
 https://gitlab\.torproject\.org.*
+# www.gnu.org rate-limits and times out non-browser clients (measured 2026-09-03: [TIMEOUT] and
+# [429] on the same link four minutes apart). The link is valid — the GPL-3.0 text, cited from a
+# license notice. Ignore the host, not a global --accept 429 that would mask real dead links. #1726.
+https://www\.gnu\.org.*
