@@ -1142,6 +1142,30 @@ checks the CLI prints, failures first, with the host's summary counts above them
 that matters on a [Pithead OS appliance](appliance.md), where there is no shell to run `doctor`
 from: before it, the dashboard could tell you *that* a service was unhealthy and never *why*.
 
+A check that fails tells you what to do about it in the terms of the machine you are on. On an
+appliance there is no shell, so where the DIY stack says to run `./pithead apply` or
+`./pithead setup`, this panel names a surface you can actually reach instead — the update button,
+the log view, or the setup page while the machine is still unprovisioned.
+
+Where the appliance offers nothing that would fix it, the report says so and stops, rather than
+naming a command you cannot run or a page that is no longer there. Three cases are worth knowing,
+because each is a real dead end rather than an oversight:
+
+- **A payout address is not editable from the dashboard at all**, so the report tells you that
+  correcting it needs console access.
+- **The setup page closes permanently once the machine is provisioned.** Setup that did not finish
+  can only be reported after that point, so the report does not send you back to a page that is
+  gone.
+- **The dashboard certificate is re-minted only when the set of names this machine answers to
+  changes.** An expiring or expired certificate whose name list is still correct will not renew
+  itself, and replacing it needs console access.
+
+A missing Tor hidden service is the case that goes the other way, and the report tells you which one
+you are looking at. Saving any change from the dashboard re-runs this machine's own apply, and that
+regenerates a missing hidden service for the Monero node, the Tari node, or the dashboard itself — so
+those verdicts ask you to save a change rather than to find a console. P2Pool's is the exception:
+apply refuses to finish while that one is missing, so no dashboard surface can regenerate it.
+
 One thing reads differently here than at a terminal: the report is redacted on its way to the
 browser, so where `pithead doctor` prints your dashboard onion address in full, this panel shows
 it as `[redacted].onion`. The CLI prints it because you asked for it at your own terminal; this copy crosses

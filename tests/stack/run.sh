@@ -275,6 +275,62 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-rauc-loop-wait.sh" && domain_ran test
 # shellcheck source=tests/stack/test-lifecycle.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-lifecycle.sh" && domain_ran test-lifecycle.sh "$_d0" "$?" || domain_ran test-lifecycle.sh "$_d0" "$?"
 
+echo "== unit: doctor's remedial strings are surface-aware (#1213) =="
+# Doctor's verdicts reach the dashboard verbatim now that the diagnostics verbs ship them
+# (control_diag_doctor runs `doctor --json`; doctor_json emits every message as {status, message}),
+# so a remedial string naming a CLI verb is a dead end on an appliance, which has no shell. Two
+# instruments, because either one alone passes for the wrong reason: the switch has to actually
+# FLIP, and no verdict may be left behind it.
+#
+# 1. The mechanism. Argument one is the DIY/host wording, argument two the appliance's; each side
+#    must print its own and NOT the other's -- asserting only that the right text appears would
+#    stay green if both were printed.
+for _s in fail warn info; do
+    out=$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" "dr_${_s}_surface" "DIYSIDE" "APPLIANCESIDE" 2>&1)
+    assert_contains "dr_${_s}_surface off the appliance prints the host wording" "$out" "DIYSIDE"
+    case "$out" in
+    *APPLIANCESIDE*) bad "dr_${_s}_surface off the appliance withholds the appliance wording" "both sides printed: $out" ;;
+    *) ok "dr_${_s}_surface off the appliance withholds the appliance wording" ;;
+    esac
+    out=$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" "dr_${_s}_surface" "DIYSIDE" "APPLIANCESIDE" 2>&1)
+    assert_contains "dr_${_s}_surface on the appliance prints the appliance wording" "$out" "APPLIANCESIDE"
+    case "$out" in
+    *DIYSIDE*) bad "dr_${_s}_surface on the appliance withholds the host wording" "both sides printed: $out" ;;
+    *) ok "dr_${_s}_surface on the appliance withholds the host wording" ;;
+    esac
+done
+
+# 2. Totality over the SHIPPED artifact. The SITES are enumerated mechanically out of the built
+#    `pithead` rather than from a list kept by hand -- a hand list is blind to the site nobody
+#    remembered, and this sweep found nine of those. A PLAIN dr_fail/dr_warn/dr_info literal is one
+#    with no appliance side at all, so if it names a CLI verb an appliance operator is told to run
+#    it. `dr_*_surface` calls do not match the pattern: their host argument is supposed to keep the
+#    verb. The one exemption carries its reason in the source line itself.
+#
+#    KNOW WHAT THIS DOES NOT COVER. The site enumeration is mechanical; the NEEDLE list below is
+#    not. It catches the verb forms doctor uses today, so a verdict phrased with a token nobody
+#    listed -- a `systemctl` this file never learned, a new console noun -- passes it clean. A green
+#    result here means "none of the KNOWN verb forms leaked", never "no verb leaked". Extend the
+#    alternation when doctor learns a new way to tell someone to do something.
+#
+#    AND IT IS LITERAL-ONLY, which is the blind spot extending the alternation does NOT close. The
+#    site pattern needs a quoted message on the same line, so a verdict whose text arrives in a
+#    VARIABLE can never be reached by any needle: 05-doctor-checks.sh:111 (dr_warn "$(head -n 1
+#    ...)", appliance-only by construction, text from the hugepages helper), 20-doctor-install-
+#    checks.sh:28 (dr_warn "$msg") and 21-doctor-stack-checks.sh:261 (dr_fail "${verdict#fail:}").
+#    Those three are unguarded here today and cannot be guarded here — read them by hand. One of
+#    them is not merely unguarded but LEAKING: 20-doctor-install-checks.sh:28 builds a message at
+#    :27 naming three remedies (firewall it to your LAN, set p2pool.stratum_bind, require a
+#    p2pool.stratum_password) and an appliance operator can reach none of them — neither key is in
+#    CONTROL_DASHBOARD_EDITABLE_KEYS or CONTROL_DASHBOARD_CONFIRM_KEYS. Pre-existing, not this
+#    change's doing, and narrow; recorded here so the hand-read starts with the one that is wrong.
+dr_verb_leaks=$(grep -nE '(dr_fail|dr_warn|dr_info) "' "$STACK" |
+    grep -E "\./pithead |docker compose |docker pull |docker-compose-v2|Start the Docker daemon|sudo |systemctl|git pull" |
+    grep -v "appliance-unreachable" || true)
+assert_eq "no plain doctor verdict still names a CLI verb (#1213)" \
+    "$(printf '%s' "$dr_verb_leaks" | grep -c . || true)" "0"
+[ -n "$dr_verb_leaks" ] && printf '    leaked: %s\n' "$dr_verb_leaks" | head -12 || true
+
 # ---------------------------------------------------------------------------
 echo ""
 printf 'pithead tests: \033[1;32m%d passed\033[0m, ' "$PASS"

@@ -22,9 +22,9 @@ check_tor_running() {
     if container_is_running tor; then
         dr_ok "Tor container is running — the privacy backbone is up."
     elif mining_stack_running; then
-        dr_fail "The Tor container is DOWN while the mining stack is still running — the privacy backbone is dead: clearnet dials are no longer fail-closed and off-box connections (Healthchecks, Telegram, XvB, peers) have lost their Tor path. Restart it ('./pithead restart tor'; set tor.auto_heal:true to self-heal), or bring the stack down ('./pithead down')."
+        dr_fail_surface "The Tor container is DOWN while the mining stack is still running — the privacy backbone is dead: clearnet dials are no longer fail-closed and off-box connections (Healthchecks, Telegram, XvB, peers) have lost their Tor path. Restart it ('./pithead restart tor'; set tor.auto_heal:true to self-heal), or bring the stack down ('./pithead down')." "The Tor container is DOWN while the mining stack is still running — the privacy backbone is dead: clearnet dials are no longer fail-closed and off-box connections (Healthchecks, Telegram, XvB, peers) have lost their Tor path. There is no dashboard control that restarts Tor on its own."
     else
-        dr_info "Tor container isn't running — the stack is down (expected after './pithead down')."
+        dr_info_surface "Tor container isn't running — the stack is down (expected after './pithead down')." "Tor container isn't running — the mining stack is down, which is expected while it is stopped."
     fi
     return 0
 }
@@ -70,14 +70,14 @@ check_egress_firewall_nft() {
     # cheap `list tables` probe (succeeds whether or not our table exists) tells the two apart, so a
     # sudo refusal can't masquerade as a missing firewall (a false FAIL).
     if ! sudo -n nft list tables >/dev/null 2>&1; then
-        dr_info "Tor-egress firewall check skipped — reading nftables needs passwordless sudo. Verify manually: 'sudo nft list table inet $TOR_EGRESS_NFT_TABLE'."
+        dr_info_surface "Tor-egress firewall check skipped — reading nftables needs passwordless sudo. Verify manually: 'sudo nft list table inet $TOR_EGRESS_NFT_TABLE'." "Tor-egress firewall check skipped — the nftables rules could not be read on this machine."
         return 0
     fi
     ruleset=$(sudo -n nft list table inet "$TOR_EGRESS_NFT_TABLE" 2>/dev/null) || ruleset=""
     if printf '%s\n' "$ruleset" | grep -q 'hook forward' && printf '%s\n' "$ruleset" | grep -qw drop; then
         dr_ok "Tor-only egress firewall is installed — clearnet dials from the stack are fail-closed via nftables (inet $TOR_EGRESS_NFT_TABLE)."
     else
-        dr_fail "Tor-only egress firewall is MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them."
+        dr_fail_surface "Tor-only egress firewall is MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them." "Tor-only egress firewall is MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a reboot in which the rules were lost but the containers came back. Restarting this machine reinstalls them."
     fi
 }
 
@@ -89,13 +89,13 @@ check_egress_firewall_iptables() {
         return 0
     fi
     if ! rules=$(sudo -n iptables -S DOCKER-USER 2>/dev/null); then
-        dr_info "Tor-egress firewall check skipped — reading iptables needs passwordless sudo. Verify manually: 'sudo iptables -S DOCKER-USER | grep $TOR_EGRESS_TAG'."
+        dr_info_surface "Tor-egress firewall check skipped — reading iptables needs passwordless sudo. Verify manually: 'sudo iptables -S DOCKER-USER | grep $TOR_EGRESS_TAG'." "Tor-egress firewall check skipped — the iptables rules could not be read on this machine."
         return 0
     fi
     if printf '%s\n' "$rules" | grep -qF -- "$TOR_EGRESS_TAG"; then
         dr_ok "Tor-only egress firewall rules are installed — clearnet dials from the stack are fail-closed."
     else
-        dr_fail "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them."
+        dr_fail_surface "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a host reboot (the rules are gone but the containers auto-restarted). Run './pithead up' to reinstall them." "Tor-only egress firewall rules are MISSING while the stack runs — clearnet egress is NOT fail-closed. This happens after a reboot in which the rules were lost but the containers came back. Restarting this machine reinstalls them."
     fi
 }
 
@@ -117,7 +117,7 @@ check_stratum_listening() {
     if ss -Hltn 2>/dev/null | grep -q ":$port "; then
         dr_ok "Stratum :$port is listening — workers can connect."
     else
-        dr_fail "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and $DOCS_URL/docs/workers.md."
+        dr_fail_surface "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Check './pithead logs xmrig-proxy' and $DOCS_URL/docs/workers.md." "xmrig-proxy is running but NOTHING is listening on :$port — workers can't connect. Read the xmrig-proxy log from the dashboard's diagnostics view, and see $DOCS_URL/docs/workers.md."
     fi
     return 0
 }
@@ -145,7 +145,7 @@ check_dashboard_answers() {
     if curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:8000/api/state" 2>/dev/null; then
         dr_ok "Dashboard app answers on 127.0.0.1:8000."
     else
-        dr_warn "Dashboard container is running but the app isn't answering on 127.0.0.1:8000 — check './pithead logs dashboard'."
+        dr_warn_surface "Dashboard container is running but the app isn't answering on 127.0.0.1:8000 — check './pithead logs dashboard'." "The dashboard container is running but the app isn't answering on its own port."
     fi
     return 0
 }
@@ -292,7 +292,7 @@ check_tor_clearnet_egress() {
         "https://www.google.com/generate_204" 2>/dev/null; then
         dr_ok "Tor clearnet egress works — Healthchecks, Telegram, and XvB can reach their services."
     else
-        dr_warn "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself."
+        dr_warn_surface "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this). Fix: './pithead restart tor' picks fresh guards; set tor.auto_heal:true in config.json to have the stack do this itself." "Tor is up but a clearnet request through its SOCKS timed out — Healthchecks pings, Telegram, and XvB stats are likely down while mining still works (a failing Tor guard does this). There is no dashboard control that restarts Tor on its own."
     fi
     return 0
 }
@@ -328,7 +328,7 @@ check_monerod_synchronized() {
     if printf '%s' "$body" | jq -e '(.status == "OK") and (.synchronized == true)' >/dev/null 2>&1; then
         dr_ok "monerod reports synchronized with the Monero network."
     else
-        dr_warn "monerod is running but reports NOT synchronized — normal during initial sync; if it stays like this on a previously-synced node (peers lost after a Tor restart), './pithead restart monerod' re-dials and recovers in about a minute."
+        dr_warn_surface "monerod is running but reports NOT synchronized — normal during initial sync; if it stays like this on a previously-synced node (peers lost after a Tor restart), './pithead restart monerod' re-dials and recovers in about a minute." "monerod is running but reports NOT synchronized — normal during initial sync. If it stays like this on a node that was synced before, its peers were lost after a Tor restart; there is no dashboard control that restarts monerod on its own."
     fi
     return 0
 }

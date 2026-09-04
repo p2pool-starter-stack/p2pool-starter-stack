@@ -32,6 +32,19 @@ dr_info() {
     dr_record info "$1"
     printf '  %b•%b      %s\n' "$C_YELLOW" "$C_RESET" "$1"
 }
+# One verdict, worded for the surface the operator is actually on (#1213). Doctor's messages reach
+# the dashboard verbatim since the diagnostics verbs landed -- control_diag_doctor runs
+# `doctor --json` and every dr_fail/dr_warn message ships as {status, message} -- so a remedial
+# string naming a CLI verb is a dead end on an appliance, which has no shell. That is the defect
+# class the refusal strings were already fixed for; these are the same treatment for doctor.
+# First argument is the DIY/host wording, byte for byte what it always was. The second is what an
+# appliance operator is told instead, and it NEVER invents a remedy: it names a dashboard surface
+# only where one exists (the setup page, the one-click upgrade, the per-container log view) and
+# otherwise states the diagnosis and stops -- the same choice describe_change makes when there is
+# no remedy to offer. is_appliance resolves at call time, as it already does elsewhere here.
+dr_fail_surface() { if is_appliance; then dr_fail "$2"; else dr_fail "$1"; fi; }
+dr_warn_surface() { if is_appliance; then dr_warn "$2"; else dr_warn "$1"; fi; }
+dr_info_surface() { if is_appliance; then dr_info "$2"; else dr_info "$1"; fi; }
 # `doctor --json` capture (#77 phase 1): every check verdict lands as a status<TAB>message line in
 # DR_JSON_FILE when set; doctor assembles the machine report from it. TSV keeps this a plain
 # append — messages are prose and never carry tabs.
@@ -126,11 +139,11 @@ cpu_has_avx2() {
 # upgrade" BEFORE one is attempted rather than during it (#1108). Read-only: nothing is pulled.
 check_release_verification() {
     if is_source_checkout; then
-        dr_info "Source checkout — images build locally and are not signature-verified, and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'."
+        dr_info "Source checkout — images build locally and are not signature-verified, and the dashboard's one-click upgrade does not apply: upgrade with 'git pull' then './pithead upgrade'." # appliance-unreachable: is_source_checkout excludes is_appliance
     elif [ ! -f cosign.pub ]; then
         dr_warn "No cosign.pub next to pithead — image pulls are NOT signature-verified. Release bundles ship the key from the first signed release."
     elif ! cosign_available; then
-        dr_warn "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon."
+        dr_warn_surface "cosign.pub is present but docker is not available to run the verifier — 'up'/'upgrade' refuse to pull until it is. Start the Docker daemon." "The container engine is not available to run the release verifier, so no image can be pulled until it is back. The appliance image ships that engine, so this system copy is faulty."
     elif docker image inspect "$COSIGN_IMAGE" >/dev/null 2>&1; then
         dr_ok "'up' and 'upgrade' verify the release images against cosign.pub; the pinned verifier image is already here, nothing to install."
     else
@@ -138,6 +151,6 @@ check_release_verification() {
         # does not have it yet. Worth saying plainly: if that one fetch fails, the operation reports a
         # *signature* failure — which reads as a tampered release rather than as an image this host
         # could not pull (#1084).
-        dr_warn "The pinned release verifier image is not on this host yet — the next 'up' or 'upgrade' fetches it. If that fetch fails, the operation reports a signature failure even though nothing was tampered with. Pre-fetch it with: docker pull $COSIGN_IMAGE"
+        dr_warn_surface "The pinned release verifier image is not on this host yet — the next 'up' or 'upgrade' fetches it. If that fetch fails, the operation reports a signature failure even though nothing was tampered with. Pre-fetch it with: docker pull $COSIGN_IMAGE" "The pinned release verifier image is not on this machine yet — the next update fetches it. If that fetch fails, the update reports a signature failure even though nothing was tampered with."
     fi
 }
