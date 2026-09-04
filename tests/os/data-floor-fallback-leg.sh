@@ -58,14 +58,16 @@ _floor_state() {
 }
 
 # Reboot into the just-installed slot and wait until the guest is back on the slot carrying marker
-# $1 with its boot gate PASSED (the commit line in this boot's journal). SSH answers on the failing
-# slot too, while it loads images and tries to bring the stack up, so the marker is what tells the
-# two apart. $2 = seconds: a failed `up` reboots within minutes, a gate that loops 90 rounds
-# takes ~15 min, and the fallback boot then re-loads images — allow for all three.
+# $1 with its boot gate PASSED (the commit line in this boot's journal). The reboot is OBSERVED
+# before anything is polled (#1651): the boot that issued it still carries marker $1 and a
+# committed line in its own journal, so a probe it answered while shutting down satisfied the
+# predicate off the OLD boot — and `-b -1` in the caller then named the wrong boot. SSH answers
+# on the failing slot too, while it loads images and tries to bring the stack up, so the marker
+# is what tells the two apart. $2 = seconds: a failed `up` reboots within minutes, a gate that
+# loops 90 rounds takes ~15 min, and the fallback boot then re-loads images — allow for all three.
 _floor_fallback_wait() {
     local deadline=$(($(date +%s) + $2)) got
-    _ssh reboot || true
-    sleep 10
+    _reboot_wait reboot "$2" || return 1
     while [ "$(date +%s)" -lt "$deadline" ]; do
         got=$(SSH_TIMEOUT=20 _ssh "cat /etc/pithead-test-marker 2>/dev/null; journalctl -u pithead-boot -b 2>/dev/null | grep -c 'booted slot committed'" 2>/dev/null | tr -d '\r' | tr '\n' ' ')
         case "$got" in "$1 "[1-9]*) return 0 ;; esac
