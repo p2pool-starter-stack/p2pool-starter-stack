@@ -14,12 +14,10 @@ round-trip; deciding whether a WELL-FORMED name may be read is the host's, and i
 back as a "rejected" result the panel shows verbatim.
 """
 
-import json
-import os
 import re
 import uuid
 
-from mining_dashboard.config import config
+from mining_dashboard.service import request_spool
 
 # Compose service names: the charset docker-compose itself allows. Not an allowlist — a shape
 # check. Anything passing this still has to survive the host's membership test.
@@ -36,22 +34,9 @@ def valid_container(name) -> bool:
     return isinstance(name, str) and bool(_CONTAINER_RE.match(name))
 
 
-def _spool(request: dict) -> str:
-    """Atomic write into the requests spool: temp + rename, so the host runner never reads a
-    half-written file. The same four lines appear in control_service.submit* — folding all four
-    into one writer is a worthwhile change and a different one; it is filed, not done here,
-    because control_service.py has no line budget left to receive it."""
-    rid = request["id"]
-    tmp = os.path.join(config.CONTROL_REQUESTS_DIR, f".{rid}.tmp")
-    with open(tmp, "w") as f:
-        json.dump(request, f)
-    os.replace(tmp, os.path.join(config.CONTROL_REQUESTS_DIR, f"{rid}.json"))
-    return rid
-
-
 def submit_diag_doctor(actor: str = "") -> str:
     """Spool a `doctor --json` request (#913). Takes no operator input at all."""
-    return _spool({"id": str(uuid.uuid4()), "action": "diag-doctor", "actor": actor})
+    return request_spool.write({"id": str(uuid.uuid4()), "action": "diag-doctor", "actor": actor})
 
 
 def submit_diag_logs(container: str, lines: int, actor: str = "") -> str:
@@ -60,7 +45,7 @@ def submit_diag_logs(container: str, lines: int, actor: str = "") -> str:
     ``lines`` is a REQUEST, not a bound: the host clamps it to its own cap and falls back to that
     cap on anything non-numeric, so a tampered intent can at most ask for what the host was
     already willing to give."""
-    return _spool(
+    return request_spool.write(
         {
             "id": str(uuid.uuid4()),
             "action": "diag-logs",
