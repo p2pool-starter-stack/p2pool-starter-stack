@@ -59,7 +59,11 @@ runs `ruff` (plus a few hygiene hooks) on your changed files. If you change depe
      split or shrink the file so the addition fits under a ceiling that stays put or drops —
      see issue #1258 for the worked example, where a security test that outgrew its file moved
      into its own — and note that two same-wave merges can each pass alone and fail together, so
-     re-run `make lint` after merging onto the tip. Generated
+     re-run `make lint` after merging onto the tip. The ratchet half is fatal in CI when it
+     cannot run at all: a job that resolves none of the base-ref candidates has lost its
+     `fetch-depth: 0`, which is a misconfigured job rather than a clean tree, so the gate
+     fails there instead of printing a note into a log nobody reads (issue #1739). A local
+     checkout without those refs still gets the note and still passes. Generated
      code, vendored files, data/config, and prose docs are exempt by glob — see `is_exempt()` in
      the script — and so is the shipped `pithead` artifact itself: it is generated, and the gate
      governs its `lib/pithead/*.sh` sources instead, now that Phase 2 has begun splitting it.
