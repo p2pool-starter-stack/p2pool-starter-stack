@@ -96,13 +96,24 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
 - **The xmrig-proxy healthcheck no longer raises a false alarm on an image that predates its
   healthcheck script ([#1098](https://github.com/p2pool-starter-stack/pithead/issues/1098)).**
 - **doctor's remedial text names what the operator can actually reach on the surface they are on
-  ([#1213](https://github.com/p2pool-starter-stack/pithead/issues/1213)),** and looks for the control units where `apply` writes them ([#1151](https://github.com/p2pool-starter-stack/pithead/issues/1151)).
+  ([#1213](https://github.com/p2pool-starter-stack/pithead/issues/1213)),** and looks for the control units where `apply` writes them ([#1151](https://github.com/p2pool-starter-stack/pithead/issues/1151)). The
+  stratum-exposure warning names the one remedy an appliance operator has and stops printing the
+  host's public address ([#1772](https://github.com/p2pool-starter-stack/pithead/issues/1772)); the missing-data-dir warning is worded the same way
+  ([#1776](https://github.com/p2pool-starter-stack/pithead/issues/1776)); and a failed configuration save in the dashboard labels the host's `apply` log as
+  the machine's own log and names only the controls on that page ([#1769](https://github.com/p2pool-starter-stack/pithead/issues/1769)).
 - **Dashboard:** the XvB Odds cell names what it is waiting for instead of showing a dash
   ([#1231](https://github.com/p2pool-starter-stack/pithead/issues/1231)); an audit row id no longer collides with another rig's ([#1566](https://github.com/p2pool-starter-stack/pithead/issues/1566)); a failing payout
   sync no longer skips the steps beneath it ([#1644](https://github.com/p2pool-starter-stack/pithead/issues/1644)); the poll counter advances through a
   failed poll ([#1637](https://github.com/p2pool-starter-stack/pithead/issues/1637)); Monero clients validate the shape of a response body ([#1592](https://github.com/p2pool-starter-stack/pithead/issues/1592)); a
   full history window no longer fails to settle who changed a configuration ([#1369](https://github.com/p2pool-starter-stack/pithead/issues/1369)), and a
   failed history read is no longer shown as another dashboard's change ([#1409](https://github.com/p2pool-starter-stack/pithead/issues/1409)).
+- **The confirm countdown for settings applied from the stick stays bounded when a login prompt
+  contends for the console ([#1823](https://github.com/p2pool-starter-stack/pithead/issues/1823));** the console read that could park forever now runs under a
+  timeout, at the cost of a countdown up to twice its length on a contended console.
+- **The persistent journal has one home ([#1791](https://github.com/p2pool-starter-stack/pithead/issues/1791)):** its bind onto `/var/log/journal` is ordered
+  after the `/var` overlay, so `journalctl --list-boots` lists every boot instead of the ones that
+  won a race. On a mining rig the bind stands down, and the rig's write-minimising reclaim no
+  longer fails the boot when it meets a journal bind that is still mounted ([#1817](https://github.com/p2pool-starter-stack/pithead/issues/1817)).
 
 ### Security
 
@@ -113,6 +124,11 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
   worker-change record ([#1543](https://github.com/p2pool-starter-stack/pithead/issues/1543)); an audit row's id is bounded and digested so an unauthenticated
   rig cannot grow it without limit ([#1561](https://github.com/p2pool-starter-stack/pithead/issues/1561)); adopting a rig from the dashboard passes a
   resolve-and-check gate against server-side request forgery.
+- **A rig's own input cannot stop or grow the dashboard.** The out-of-band change audit's flood
+  cap bounds how many device-chosen names hold a window at once, so a rig that varies its name
+  cannot grow the dashboard's memory without limit ([#1695](https://github.com/p2pool-starter-stack/pithead/issues/1695)); during a flood a name with no live
+  window is refused and one marker records the episode. A change id, reason or worker name that
+  sqlite cannot encode is handled at the bind instead of ending the poll step ([#1696](https://github.com/p2pool-starter-stack/pithead/issues/1696)).
 - **Shipped images carry current fixes.** openssl is patched past the digest-pinned base images
   (CVE-2026-14456, [#1438](https://github.com/p2pool-starter-stack/pithead/issues/1438)); x/crypto and grpc are raised so the appliance rootfs scan is clean
   ([#1649](https://github.com/p2pool-starter-stack/pithead/issues/1649)); a CVE in the appliance rootfs is fixed at its source ([#1153](https://github.com/p2pool-starter-stack/pithead/issues/1153)).
