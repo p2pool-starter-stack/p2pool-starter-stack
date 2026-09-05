@@ -281,14 +281,18 @@ who can sniff or MITM the mining LAN and capture the token can push config to yo
 mining LAN isolated from untrusted devices, and treat the token as a secret (it lives only in the
 owner-only `config.json`/`.env`, never in the dashboard container).
 
-NOTE: a rig provisioned by the appliance (the installer's RigForge choice) ships with control
-**off**. Its rendered RigForge config carries the `pools` entry — pool, worker name, stratum
-password — and nothing else: no `control` flag, no `ACCESS_TOKEN`. The appliance's built-in
-miner ships without control the same way. Such a rig mines and reports like any other, but
-Worker Inspect's config push and the [one-click rig upgrade](#one-click-rig-upgrade) cannot
-reach it. To make it editable, enable control on the rig itself (RigForge's `control` flag plus
-an `ACCESS_TOKEN`), then add its `host` + `token` entry to `workers.list[]` here, like any
-other rig.
+NOTE: a rig provisioned by the appliance (the setup page's RigForge choice) ships with control
+**on**, pinned to the Pithead it was pointed at. Its rendered RigForge config carries the `pools`
+entry — pool, worker name, stratum password — plus an `ACCESS_TOKEN` minted at setup, `api:
+enabled` and `control: enabled` with `api_allow_from` set to that Pithead's IPv4 address.
+`control_upgrade` stays off: an appliance rig updates through its own signed image, never through
+RigForge's upgrade path. The token is shown once, on the setup page's rig card, beside the rig's
+address. Until you adopt the rig — paste both into Worker Inspect's adopt form, or add its
+`host` + `token` entry to `workers.list[]` by hand — the dashboard's probe is refused (the feed
+wants the token) and the rig's row reads as an API error, though it mines all the while. A rig
+pointed at a pool with no IPv4 address (an onion address) renders with control off and the feed
+on. The appliance's built-in miner (the **Pithead + RigForge** choice) still ships without
+control: it sits on the same machine as the dashboard.
 
 Entries are matched by `name` — the rig's stratum worker name (the part before any `+` suffix).
 On a name miss the dashboard falls back to matching by the rig's connecting IP against an

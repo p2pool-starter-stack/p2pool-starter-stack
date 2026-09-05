@@ -52,6 +52,7 @@ dashboard/tests/web/test_worker_detail_meta.py	425
 dashboard/tests/web/test_xvb_views.py	1243
 .github/workflows/ci.yml	513
 lib/pithead/12-firstboot-wizard.sh	556
+lib/pithead/14-local-miner.sh	414
 lib/pithead/28-parse-and-validate-config.sh	485
 lib/pithead/33-render-env.sh	494
 lib/pithead/39-describe-change.sh	428
@@ -76,6 +77,7 @@ tests/stack/test-appliance-identity.sh	483
 tests/stack/test-appliance-media.sh	409
 tests/stack/test-appliance-os-update.sh	457
 tests/stack/test-appliance-os-update-verbs.sh	454
+tests/stack/test-appliance-rig-miner.sh	466
 tests/stack/test-backup.sh	523
 tests/stack/test-cli.sh	410
 tests/stack/test_compose.sh	462
