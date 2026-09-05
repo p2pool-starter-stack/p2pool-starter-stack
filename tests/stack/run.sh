@@ -306,6 +306,46 @@ for _s in fail warn info; do
     esac
 done
 
+# 3. The #1776 site, named because the sweep below could not see it. Its verdict prescribed two
+#    host-only remedies ("Move the data here" and the verb as the bare quoted word 'apply'), and
+#    the literal alternation carries `\./pithead ` but no token for that quoting -- so the sweep
+#    returned 0 matches over a site it fully covers, and #1213 closed with this string still plain.
+#    Read off the SHIPPED artifact, the same instrument the sweep uses, so a lib/ edit that never
+#    reaches `pithead` cannot pass this.
+#
+#    THE CONTROL IS NOT OPTIONAL. Both assertions below are ABSENCE claims over a grep, and an
+#    absence claim goes green when the needle simply stops matching -- rename the message and this
+#    passes forever while proving nothing. So the same two predicates run against a synthetic
+#    PRE-FIX line first and must FAIL there.
+_dd_pred_plain() { case "$1" in *dr_warn_surface*) return 1 ;; *) return 0 ;; esac; }
+_dd_pred_verb() { case "$1" in *"run 'apply'"*) return 0 ;; *) return 1 ;; esac; }
+_dd_seed="            dr_warn \"Data dir from .env not found: X=Y — a relocated/copied install re-syncs from scratch. Move the data here, or set the data_dir in config.json and run 'apply'.\""
+if _dd_pred_plain "$_dd_seed" && _dd_pred_verb "$_dd_seed"; then
+    ok "control: the pre-fix data-dir verdict is caught as plain AND as naming a verb (#1776)"
+else
+    bad "control: the pre-fix data-dir verdict was NOT caught" "instrument cannot fail; the assertions below prove nothing"
+fi
+
+_dd_line=$(grep -n 'Data dir from .env not found' "$STACK" | head -1)
+if [ -z "$_dd_line" ]; then
+    bad "the data-dir verdict is present in the shipped artifact (#1776)" "no line matched -- the message was renamed and the assertions below are vacuous"
+else
+    ok "the data-dir verdict is present in the shipped artifact (#1776)"
+    if _dd_pred_plain "$_dd_line"; then
+        bad "the data-dir verdict is surface-aware (#1776)" "still a plain dr_warn: $_dd_line"
+    else
+        ok "the data-dir verdict is surface-aware (#1776)"
+    fi
+    # The host side KEEPS the verb by design (it is the DIY wording); only the appliance side must
+    # not. Take the second quoted argument, the way the helper's own contract orders them.
+    _dd_appl=$(printf '%s' "$_dd_line" | awk -F'"' '{print $4}')
+    if _dd_pred_verb "$_dd_appl"; then
+        bad "the data-dir verdict's appliance wording names no host verb (#1776)" "appliance side still says run 'apply': $_dd_appl"
+    else
+        ok "the data-dir verdict's appliance wording names no host verb (#1776)"
+    fi
+fi
+
 # 2. Totality over the SHIPPED artifact. The SITES are enumerated mechanically out of the built
 #    `pithead` rather than from a list kept by hand -- a hand list is blind to the site nobody
 #    remembered, and this sweep found nine of those. A PLAIN dr_fail/dr_warn/dr_info literal is one
