@@ -69,15 +69,16 @@ n_mini=$(grep -cE 'log "scenario [0-9]' tests/integration/mini-stack/run-mini-st
 total=$((n_py_dash + n_py_fake + n_node + n_stack + n_selftest + n_scen + n_mini))
 
 # --- drift gate -----------------------------------------------------------
-# The gathering above is grep-based, so a suite that moves, renames, or changes shape
-# enumerates as zero without erroring. Fail loudly instead of emitting an inventory that
-# silently under-counts — CI runs this on every PR (#981).
-# ponytail: zero-count is the only drift detectable since #414 untracked the generated file;
-# per-suite freshness would need the file back under git and its merge conflicts with it.
-for c in n_py_dash n_py_fake n_node n_stack n_selftest n_scen n_axes n_mini; do
-    if [ "${!c:-0}" -eq 0 ]; then # :-0 — grep -c on a deleted file emits nothing, not 0
-        echo "inventory drift: $c counted 0 tests — a suite moved or its shape changed;" \
-            "update the matching pattern in tests/inventory.sh" >&2
+# The gathering above is grep-based, so a suite that moves, renames or changes shape enumerates
+# as zero — or, just as quietly, as a handful — without erroring. CI runs this on every PR (#981).
+# These are FLOORS, not emptiness tests (#1420): a counter falling from hundreds to one passes a
+# zero check, the very defect min_expected fixes further down this same file. Each floor is about
+# half of today's count, so ordinary churn never reaches it; never lower one to pass a real drop.
+for pair in n_py_dash:1200 n_py_fake:12 n_node:250 n_stack:180 n_selftest:80 n_scen:8 n_axes:10 n_mini:6; do
+    c=${pair%%:*} f=${pair##*:} # :-0 — grep -c on a deleted file emits nothing, not 0
+    if [ "${!c:-0}" -lt "$f" ]; then
+        echo "inventory drift: $c counted ${!c:-0}, floor $f — at 0 its pattern stopped matching;" \
+            "above 0 a suite moved or shrank. Fix it, or lower this floor in tests/inventory.sh" >&2
         exit 1
     fi
 done
