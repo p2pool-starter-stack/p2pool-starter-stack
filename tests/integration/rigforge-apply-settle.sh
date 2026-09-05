@@ -25,8 +25,11 @@
 # terminal status.json only at the END, after the apply, an xmrig restart and a `_wait_miner_live`
 # bounded at 20 tries x 3s; the reconciler cannot move the row off "accepted" until it has read
 # that second file, which costs up to one further UPDATE_INTERVAL. A settle on the readback
-# surface therefore ends at the START of that gap, not after it. The claim survived because the
-# only two keys that ever reached it are on the fast path, where the gap is too small to see.
+# surface therefore ends at the START of that gap, not after it. The claim survived because two of
+# the three keys that reach the row, max_temp_c and watchdog_interval_min, are on RigForge's
+# restart-free fast path (CONTROL_FAST_PATH_KEYS, rigforge.sh:4203 at v1.16.0), where the gap is
+# too small to see. The third, DONATION, is off that list and takes the full path — which is where
+# the 90s bound below comes from, and where a hardware run would have hit this.
 # Callers asserting on the row go through _settle_history_row below, which waits for it.
 # Fails loudly (leaves status/ckeys at their dial-time "accepted"/empty) on a real
 # rejected/failed/timeout, exactly like a "the change never actually happened" bug would.

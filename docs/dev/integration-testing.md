@@ -559,8 +559,10 @@ control-apply, before it has decided the outcome at all. The terminal status goe
 at the end, after the apply, an xmrig restart and a bounded wait for the miner to come back, and
 the reconciler cannot move the row off `accepted` until it has read that one. Settling on the
 config therefore ends at the start of that window rather than after it, and reading the row there
-raced it by up to ninety seconds. The claim survived because the only two keys that ever reached it
-are on the fast path, where the window is too small to see.
+raced it by up to ninety seconds. The claim survived because two of the three keys that reach that
+assertion, `max_temp_c` and `watchdog_interval_min`, are on RigForge's restart-free fast path, where
+the window is too small to see. The third, `DONATION`, is off that list and takes the full path —
+which is where the ninety-second bound comes from, and where a hardware run would have hit this.
 
 The row is now waited to a terminal status before it is read, on the same ninety-second bound the
 window itself has. Terminal rather than `applied`, which is what keeps the assertion honest in both
