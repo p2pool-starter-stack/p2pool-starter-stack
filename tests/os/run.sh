@@ -517,10 +517,9 @@ phase_boot() {
         bad "$verdict"
     fi
 
-    # #895: machine-id must be assigned once and then STAY — an empty-baked image with no restore
-    # unit regenerates a transient id on EVERY boot. #1659 rides the same reboot: journald starts on
-    # the transient id and, before the fix, kept it all boot — a new journal directory per boot and
-    # `journalctl -b` empty on every boot but the first. journal_boot_verdict is fixture-tested (tier 1).
+    # #895: machine-id must be assigned once and then STAY. #1659 and #1791 ride the same reboot:
+    # journald keeping the transient id (a new journal dir per boot), and the /var overlay racing the
+    # #1030 bind for /var/log/journal (a split boot list). Both verdicts are fixture-tested (tier 1).
     local id_before id_after jd_before jd_after jb
     id_before=$(_ssh cat /etc/machine-id)
     jd_before=$(_ssh 'ls /var/log/journal | wc -l' | tr -d '\r\n ')
@@ -533,6 +532,7 @@ phase_boot() {
             jb=$(_ssh 'journalctl -b -q --no-pager -u pithead-machine-id 2>/dev/null | wc -l' | tr -d '\r\n ')
             printf '     · journal dirs %s -> %s; journalctl -b: %s kernel lines, %s from pithead-machine-id\n' "$jd_before" "$jd_after" "$(_ssh 'journalctl -b -k -q --no-pager 2>/dev/null | wc -l' | tr -d '\r\n ')" "$jb"
             verdict=$(journal_boot_verdict "$jd_before" "$jd_after" "$jb") && ok "$verdict" || bad "$verdict"
+            verdict=$(journal_home_verdict "$(_ssh "$JOURNAL_HOME_PROBE" 2>/dev/null | tr -d '\r')") && ok "$verdict" || bad "$verdict"
         else
             bad "guest never returned after the machine-id reboot check"
         fi

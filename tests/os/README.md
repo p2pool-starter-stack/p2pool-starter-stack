@@ -27,7 +27,11 @@ runbook in [`docs/dev/release-server.md`](../../docs/dev/release-server.md).
 - **boot** — flash the image to a scratch disk, boot it under OVMF, assert the kernel/systemd
   banner reaches the serial console, the first-boot wizard announces its URL + one-time token,
   and the token gate answers. Also asserts machine-id is stable across a plain reboot (#895) —
-  the empty-baked image with no restore mechanism would regenerate a new one every boot.
+  the empty-baked image with no restore mechanism would regenerate a new one every boot — and,
+  across that same reboot, that journald follows the restored id (#1659) and writes the one
+  persistent journal home, the `/data/pithead/journal` bind, with the boot list intact (#1791:
+  the `/var` overlay used to race the bind for `/var/log/journal`, and a boot that lost was
+  missing from `journalctl --list-boots`).
 - **update** — build a v2 bundle, `rauc install` it, boot the spare slot, and assert the whole
   A/B contract: an uncommitted slot auto-rolls-back, `rauc status mark-good` makes the update
   stick across a reboot, and `rauc status mark-bad booted` still rolls off a committed version.
