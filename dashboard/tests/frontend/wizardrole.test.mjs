@@ -55,6 +55,17 @@ test("a machine whose config keeps the miner off opens on Pithead (#1830 control
   assert.doesNotMatch(out, /Nothing to install/);
 });
 
+test("the (default) marker names the option an unconfigured machine opens on (#1830)", () => {
+  // wizard.py:246 publishes local_miner.enabled true for a machine with no previous config, so
+  // the marker belongs on Yes. Nothing else on this page pins any marker's POSITION: the row in
+  // wizard.test.mjs asserts option text that survives moving the marker back, so a straight
+  // revert of the fix ships green (measured by the non-author reviewer at this head).
+  const out = renderToString(appOn(cfgFor(true)).render());
+  assert.match(out, /Yes — this machine also mines[^<]*, default\)/);
+  // The load-bearing half: matching on Yes alone still passes if the marker is re-added to No.
+  assert.doesNotMatch(out, /coordinates the miners \(default\)/);
+});
+
 test("the miner switch moves the role select, and so does the JSON pane (#1831)", () => {
   const inst = appOn(cfgFor(false));
   // The switch is the plain field edit the rendered <select> is bound to (FIELDS.localMiner).
