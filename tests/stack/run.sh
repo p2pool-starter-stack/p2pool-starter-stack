@@ -306,7 +306,7 @@ for _s in fail warn info; do
     esac
 done
 
-# 3. The #1776 site, named because the sweep below could not see it. Its verdict prescribed two
+# 2. The #1776 site, named because the sweep below could not see it. Its verdict prescribed two
 #    host-only remedies ("Move the data here" and the verb as the bare quoted word 'apply'), and
 #    the literal alternation carries `\./pithead ` but no token for that quoting -- so the sweep
 #    returned 0 matches over a site it fully covers, and #1213 closed with this string still plain.
@@ -346,7 +346,7 @@ else
     fi
 fi
 
-# 2. Totality over the SHIPPED artifact. The SITES are enumerated mechanically out of the built
+# 3. Totality over the SHIPPED artifact. The SITES are enumerated mechanically out of the built
 #    `pithead` rather than from a list kept by hand -- a hand list is blind to the site nobody
 #    remembered, and this sweep found nine of those. A PLAIN dr_fail/dr_warn/dr_info literal is one
 #    with no appliance side at all, so if it names a CLI verb an appliance operator is told to run
