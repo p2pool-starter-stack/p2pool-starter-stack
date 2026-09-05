@@ -2717,8 +2717,8 @@ phase_media() {
     # boot's console (no-clobber, as cleanup does) and quote the channel's last line, so the red carries it.
     wait_serial "Media configuration channel: cancelled" 90 &&
         ok "removing the media mid-countdown cancels the change, and says so on the console" || {
-        [ -f "$SERIAL.failed" ] || cp "$SERIAL" "$SERIAL.failed" 2>/dev/null
-        bad "no cancellation confirmation on the console within 90 s of the pull — the channel's last line: '$(grep -o 'Media configuration channel: .*' "$SERIAL" | tail -1)'; console kept at $SERIAL.failed"
+        [ -f "$SERIAL.failed" ] || [ ! -s "$SERIAL" ] || cp "$SERIAL" "$SERIAL.failed" 2>/dev/null
+        bad "no cancellation confirmation on the console within 90 s of the pull — the channel's last line: '$(tr -d '\r' 2>/dev/null <"$SERIAL" | grep -o 'Media configuration channel: .*' | tail -1)'; console kept at $SERIAL.failed"
     }
     _wait_ssh 180 || {
         bad "guest never came back after the cancelled change"
