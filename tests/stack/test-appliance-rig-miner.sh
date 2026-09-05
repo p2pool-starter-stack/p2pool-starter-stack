@@ -206,6 +206,7 @@ assert_eq "journald lets go first, then the bind comes off, then the miner is se
 run_rig_errexit() { (
     cd "$RIGL" || exit 99
     export PITHEAD_APPLIANCE=1 PATH="$RIGL/bin:$PATH"
+    # shellcheck disable=SC1090
     source "$STACK"
     "$@"
 ); }
