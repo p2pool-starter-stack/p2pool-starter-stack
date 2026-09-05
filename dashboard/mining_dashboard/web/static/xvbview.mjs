@@ -4,17 +4,8 @@
 import { EstTable } from "./esttable.mjs";
 import { coinFiat, fmtHashrate, formatFiat, formatXmr } from "./logic.mjs";
 import { html } from "./preact.mjs";
+import { StatCard } from "./statcards.mjs";
 import { computeXvbTier, xvbDecisionRows } from "./xvblogic.mjs";
-
-// --- Small shared pieces (local copies of components.mjs's private helpers; see components.mjs
-// for the shared convention — kept private there too, so each caller gets its own small copy
-// rather than a shared export, following workerview.mjs's InfoCard precedent) ---------------
-
-const StatCard = ({ label, value, cls, span, title }) => html`
-    <div class=${"stat-card" + (span ? " col-span-2" : "")} title=${title || ""}>
-        <h5>${label}</h5>
-        <p class=${cls || ""}>${value}</p>
-    </div>`;
 
 // XvB tier decision block (#872, study-final): the analytical tool a miner decides with. Every
 // donor tier gets a block — the two net verdicts (what XvB says, and what the study says) as

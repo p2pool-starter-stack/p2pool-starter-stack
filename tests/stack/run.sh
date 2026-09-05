@@ -104,7 +104,7 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-monero-tari.sh" && domain_ran test-mo
 XP_ENTRY="$ROOT/build/xmrig-proxy/entrypoint.sh"
 xp_argv() { # <password value> -> the argv the wrapper would exec
     local d
-    d="$(mktemp -d)"
+    mk_tmpdir d
     printf '#!/bin/sh\nfor a in "$@"; do printf "[%%s]" "$a"; done\n' >"$d/xmrig-proxy"
     chmod +x "$d/xmrig-proxy"
     PATH="$d:$PATH" PROXY_STRATUM_PASSWORD="$1" sh "$XP_ENTRY" --http-no-restricted --donate-level=0
@@ -118,13 +118,13 @@ assert_eq "xmrig-proxy entrypoint: set password appends --access-password (#152)
 # mount (PROXY_TLS_MOUNT overrides the fixed /tls so the suite can use a temp dir).
 xp_tls_argv() { # <PROXY_STRATUM_TLS value> <tls dir>
     local d
-    d="$(mktemp -d)"
+    mk_tmpdir d
     printf '#!/bin/sh\nfor a in "$@"; do printf "[%%s]" "$a"; done\n' >"$d/xmrig-proxy"
     chmod +x "$d/xmrig-proxy"
     PATH="$d:$PATH" PROXY_STRATUM_PASSWORD='' PROXY_STRATUM_TLS="$1" PROXY_TLS_MOUNT="$2" sh "$XP_ENTRY" -b 0.0.0.0:3333
     rm -rf "$d"
 }
-XPTLS="$(mktemp -d)"
+mk_tmpdir XPTLS
 printf 'cert' >"$XPTLS/cert.pem"
 printf 'key' >"$XPTLS/key.pem"
 assert_eq "xmrig-proxy entrypoint: TLS on + keypair appends the cert flags (#261)" \
