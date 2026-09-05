@@ -87,6 +87,8 @@ out=$(jhv "")
 assert_rc "unreadable probe: fail, never a vacuous pass" "$?" "1"
 out=$(jhv $'/var/log/journal 1310722\nmissing\next2/ext3\nyes\n2')
 assert_rc "the /data directory missing: fail" "$?" "1"
+out=$(jhv $'/var/log/journal 999\n1310722\next2/ext3\nyes\n2')
+assert_rc "something else is bound at /var/log/journal (the two inodes differ): fail" "$?" "1"
 # The probe and the verdict agree on field ORDER: run the real probe on this host (no appliance
 # /data here, so it must fail) and check the failure names the fields it read, not garbage.
 out=$(jhv "$(bash -c "$(source "$ROOT/tests/os/journal-boot-verdict.sh" && printf '%s' "$JOURNAL_HOME_PROBE")" 2>/dev/null)")
