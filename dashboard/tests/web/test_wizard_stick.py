@@ -12,11 +12,27 @@ A new file rather than rows in test_wizard.py: that file is at its file-budget c
 import json
 
 import pytest
+from aiohttp import FormData
 from aiohttp.test_utils import TestClient, TestServer
 
 from mining_dashboard import wizard
 
 RIG = {"role": "rig", "rig_pool": "10.0.0.5:3333"}
+
+
+def _archive_form(**extra):
+    """A restore submission: the archive is a FILE, so this door is multipart, not urlencoded."""
+    form = FormData()
+    form.add_field(
+        "archive",
+        b"Salted__fixture-ciphertext",
+        filename="backup.tar.gz.enc",
+        content_type="application/octet-stream",
+    )
+    form.add_field("passphrase", "hunter2")  # noqa: S106 — a fixture, not a secret
+    for k, v in extra.items():
+        form.add_field(k, v)
+    return form
 
 
 @pytest.fixture
@@ -165,3 +181,60 @@ async def test_an_applied_disk_install_is_still_installing(client, installer):
     )
     (installer / "applied").write_text("1")
     assert wizard.wizard_stage() == "installing"
+
+
+async def test_a_restore_after_a_stick_attempt_gets_the_install_narration_back(client, installer):
+    """The SECOND install door. /submit is the choke point for every ROLE, not for every INSTALL:
+    /submit-restore reaches the same _gate_install_request. Stick attempt, host refuses, operator
+    toggles "Restore from a backup" and picks the internal disk — a real install, which must
+    narrate as one. Before the fix the marker kept the "1" the stick attempt left."""
+    await _auth(client)
+    await client.post("/submit", data={**RIG, "disk": "usb"})
+    assert (installer / "stick").read_text() == "1"
+    # The host fails the dial and drops the request; the page returns to the form with the error.
+    (installer / "error.txt").write_text("pool unreachable")
+    (installer / "rig-request.json").unlink()
+
+    r = await client.post(
+        "/submit-restore", data=_archive_form(disk="nvme0n1", confirm="nvme0n1", wipe="all")
+    )
+    assert r.status == 200
+    assert (installer / "stick").read_text() == "0"
+    assert "Copying the system to the disk" in await _status(client)
+    (installer / "installed").write_text("1")
+    body = await _status(client)
+    assert body.startswith("Installed")
+    assert "remove the USB stick" in body
+    assert wizard.wizard_stage() == "installing"
+
+
+async def test_a_stale_marker_from_another_machine_does_not_mute_a_first_action_restore(
+    client, installer
+):
+    """The variant that needs no pivot inside one session: nothing on the host clears $spool/stick,
+    so a stick carried to a second machine boots with the first machine's "1" still on it. Restore
+    is the operator's FIRST action here — /submit is never reached, so only this door can restate
+    it."""
+    (installer / "stick").write_text("1")
+    await _auth(client)
+
+    r = await client.post(
+        "/submit-restore", data=_archive_form(disk="nvme0n1", confirm="nvme0n1", wipe="keep")
+    )
+    assert r.status == 200
+    assert (installer / "stick").read_text() == "0"
+    assert "Copying the system to the disk" in await _status(client)
+
+
+async def test_a_refused_restore_still_leaves_the_marker_true_of_a_disk_install(client, installer):
+    """Narrowness: the restate sits ahead of the archive and disk gates on purpose. A restore that
+    the gate refuses has still chosen a disk, never the stick, so "0" is the honest reading — and
+    the refusal itself must survive the extra write."""
+    (installer / "stick").write_text("1")
+    await _auth(client)
+
+    r = await client.post("/submit-restore", data=_archive_form(disk="sdz", confirm="sdz"))
+    assert r.status == 400
+    assert (await r.json())["error"] == "choose a disk from the list"
+    assert (installer / "stick").read_text() == "0"
+    assert not (installer / "restore-archive").exists()

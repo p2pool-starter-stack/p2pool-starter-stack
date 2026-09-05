@@ -172,6 +172,8 @@ A rig has one more choice: **run from this USB stick**. Nothing is written to an
 of the erase questions below apply — the machine mines from the stick and stops when you unplug
 it. The page says the rig's settings are saved and that it appears in your Pithead's Workers
 view once it connects. It never shows the install progress, because nothing is being installed.
+Choosing a disk on a later attempt — including through **Restore from a backup** — puts the
+install progress back, so a machine that really is being installed always says so.
 
 A disk that already holds a Pithead install is the exception, and the page asks what to do
 with what is on it:

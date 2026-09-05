@@ -464,16 +464,16 @@ async def submit(request: web.Request) -> web.Response:
 
 async def submit_restore(request: web.Request) -> web.Response:
     """Restore-at-setup (#909, #786 sub-issue B): an uploaded encrypted backup archive + its
-    emergency-kit passphrase, in place of the config form. This server only asks — the archive
-    and passphrase cross the SAME spool the rest of the wizard uses, and the HOST decrypts,
-    validates and extracts (firstboot_consume_restore, reusing stack_restore's own machinery).
-    A rejected archive falls back to the form with the reason, exactly like a rejected config;
-    the passphrase is written once and the host deletes it immediately either way."""
+    emergency-kit passphrase, in place of the config form. This server only asks — both cross the
+    SAME spool the rest of the wizard uses, and the HOST decrypts, validates and extracts
+    (firstboot_consume_restore). The passphrase is written once, deleted immediately either way."""
     if not _authed(request):
         raise web.HTTPFound("/")
     # aiohttp enforces client_max_size (set in make_app) itself, answering 413 before this
     # body even finishes reading — no try/except needed to turn that into a response.
     form = await request.post()
+    # Restated like /submit (#1835): a restore installs to a DISK — the gate below refuses "usb".
+    _spool_write_text("stick", "0")
     upload = form.get("archive")
     if not isinstance(upload, web.FileField):
         return web.json_response({"error": "choose a backup archive to upload"}, status=400)
