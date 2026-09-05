@@ -1041,7 +1041,7 @@ function DashboardView({
         <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />
         ${
           configView
-            ? html`<div class="card-stack"><${ConfigView} /><${BackupPanel} enabled=${state.control_enabled} /><${DiagnosticsPanel} enabled=${state.control_enabled} /><${SecurityPanel} /></div>`
+            ? html`<div class="card-stack"><${ConfigView} appliance=${!!state.os_update} /><${BackupPanel} enabled=${state.control_enabled} /><${DiagnosticsPanel} enabled=${state.control_enabled} /><${SecurityPanel} /></div>`
             : null
         }
         ${

@@ -21,6 +21,7 @@
 // sentinels, render blank with a keep-hint, and an untouched or re-blanked secret keeps its
 // sentinel — "blank means keep" survives the model change.
 
+import { applyFailure } from "./applyfailure.mjs";
 import {
   buildSections,
   isSecretSentinel,
@@ -442,9 +443,7 @@ export class ConfigView extends Component {
           ${
             ok
               ? html`<p class="status-ok">Changes applied — only the affected containers were recreated.</p>`
-              : html`<p class="status-bad">Apply failed. The previous config is kept at
-                  <code>${result.backup || "config.json.bak-control"}</code> on the host.</p>
-                  ${result.error ? html`<pre class="config-error-tail">${result.error}</pre>` : null}`
+              : applyFailure(result, this.props.appliance)
           }
           <button class="btn-toggle" onClick=${() => this.load()}>Back to the form</button>
       </div>`;

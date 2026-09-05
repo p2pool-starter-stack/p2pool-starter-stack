@@ -1048,6 +1048,12 @@ records its action as `commit-confirmed`, so a confirm-gated apply reads distinc
 ordinary commit in the log. The container cannot forge results,
 alter a staged config between preview and commit, or rewrite the audit log. A failed apply keeps
 the previous config at `config.json.bak-control` and surfaces pithead's error in the view.
+On an appliance that view is worded differently
+([#1769](https://github.com/p2pool-starter-stack/pithead/issues/1769)): the operator has no
+shell, so it says the backup was kept without naming a host path they cannot reach, and it
+labels pithead's error as the machine's own apply log rather than leaving its `./pithead`
+commands to read as instructions. The log itself is shown either way — it is the only
+diagnostic detail either operator gets.
 Operational details:
 [Operations › Editing config from the dashboard](operations.md#editing-config-from-the-dashboard).
 
