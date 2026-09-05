@@ -82,12 +82,15 @@ def _escape_id_part(part):
     is inside ``_SAFE_CHARS``, so an escaped id survives ``_clean`` verbatim.
 
     ``errors="surrogatepass"`` for the same reason ``clean_event_id``'s digest uses it, and it is
-    load-bearing on one half specifically. A rig's JSON can carry U+D800 and ``json.loads`` hands it
+    load-bearing on BOTH parts now. A rig's JSON can carry U+D800 and ``json.loads`` hands it
     back as a lone surrogate, which ``quote``'s default strict UTF-8 encode REFUSES — a raise inside
-    the poll loop, where the old bare join never encoded anything at all. Measured per position: a
-    surrogate in the WORKER NAME reaches here and is escaped to ``%ED%A0%80``; one in a
-    ``change_id`` never arrives, because ``worker_config_change_known`` passes it to sqlite first
-    and sqlite refuses it. That upstream raise predates this and is #1696, not this function's."""
+    the poll loop, where the old bare join never encoded anything at all. A surrogate in the WORKER
+    NAME reaches here and is escaped to ``%ED%A0%80``. One in a ``change_id`` used to stop short of
+    this function on an upstream raise inside ``worker_config_change_known``, which ended the poll
+    step; #1696 fixed that, and the fix routes the value HERE instead — an id sqlite could never
+    have written reads as a change this dashboard never sent, so the rig is flagged and its
+    change_id is escaped like any other part. This escape now carries the position it was
+    previously only argued to cover."""
     return quote(str(part), safe="", errors="surrogatepass").replace("~", "%7E").replace("-", "%2D")
 
 

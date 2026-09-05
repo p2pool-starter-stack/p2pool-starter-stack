@@ -48,6 +48,31 @@ _RECONCILE_TERMINAL = ("applied", "rejected", "rolled_back", "failed", "noop", "
 _SELECT_CHANGE = "SELECT change_id, ts, status, changes, reason, type FROM worker_config"
 
 
+# A rig names its own ``change_id``, ``reason`` and worker ``name`` on the unauthenticated enriched
+# feed, and ``json.loads`` hands a lone surrogate (U+D800) straight back as a ``str``. sqlite3
+# encodes a TEXT parameter as strict UTF-8 and raises ``UnicodeEncodeError`` on one — a
+# ``ValueError``, NOT a ``sqlite3.Error``, so it walks through every fail-closed handler in this
+# file and out through the caller's ``asyncio.to_thread``, aborting the poll step rather than being
+# handled (#1696). Refusing the bind up front lets each method answer its OWN contract, which is
+# the part a uniform fix gets wrong: widening every ``except`` to the same tuple would route this
+# input into ``worker_config_change_known``'s deliberate fail-OPEN and hand a rogue rig a way to
+# opt out of being audited by putting one character in its ``change_id``.
+#
+# The encode is sqlite's own operation rather than a charset test that could disagree with it. The
+# verdict accumulates instead of returning from inside the handler, which keeps this predicate's
+# ``False`` an ANSWER about the input rather than an error path hidden in a success type.
+def _bindable(*values: object) -> bool:
+    """Whether sqlite3 can bind every string in ``values`` as a TEXT parameter (#1696)."""
+    ok = True
+    for value in values:
+        if isinstance(value, str):
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError:
+                ok = False
+    return ok
+
+
 def _shaped(row: sqlite3.Row) -> dict:
     """One ``worker_config`` row as the rest of the app reads it: ``changes`` parsed back to a
     dict (unparseable JSON reads as ``{}`` rather than raising), credentials stripped out of it,
@@ -179,9 +204,19 @@ class WorkerConfigStoreMixin:
         duplicate report for the same ``change_id``. ``status`` is recorded as-is: it becomes the
         row's outcome verbatim, and the frontend's ``STATUS_META`` already renders every member of
         this vocabulary (``workerview.mjs``).
+
+        Both rig-chosen fields go through ``_bindable`` (#1696), in the two directions their own
+        roles ask for. A ``change_id`` sqlite cannot bind could match no row anyway — nothing
+        non-encodable was ever written — so it returns. A ``reason`` it cannot bind is recorded as
+        ``None`` instead of refusing the call: ``reason`` is display prose beside the outcome, and
+        the terminal ``status`` is the thing this exists to catch up. Refusing on the prose would
+        strand the row on ``accepted`` for as long as the rig kept resending it, which is the very
+        state #579 was written to clear.
         """
-        if status not in _RECONCILE_TERMINAL or not change_id:
+        if status not in _RECONCILE_TERMINAL or not change_id or not _bindable(change_id):
             return
+        if not _bindable(reason):
+            reason = None
         try:
             with self._db_lock:
                 if not self._conn:
@@ -252,8 +287,15 @@ class WorkerConfigStoreMixin:
         `EXPLAIN QUERY PLAN`, and `_reconcile_worker_config` calls this once per reporting rig per
         poll. What the two genuinely must share is the ROW SHAPE, and only the reads that return a
         row have that in common; ``_SELECT_CHANGE`` is where they share it.
+
+        A ``change_id`` sqlite cannot bind answers ``False``, and that is the CORRECT answer rather
+        than this method's fail-open direction applied to a new input (#1696).
+        ``add_worker_config_version`` is the only writer to this table and its own bind of the same
+        value would have raised, so a non-encodable id has never been a row here and "never spooled
+        by this dashboard" is the true answer. The rig is then flagged for an out-of-band edit, which is
+        what a terminal report for a change this dashboard never sent IS.
         """
-        if not change_id:
+        if not change_id or not _bindable(change_id):
             return False
         try:
             with self._db_lock:
@@ -294,9 +336,16 @@ class WorkerConfigStoreMixin:
         accuses nobody. A missed detection is a poll's delay — the next poll compares against the
         same stored row, because a failed write leaves it unchanged — whereas a false accusation is
         a permanent audit row naming an operator's rig for something it did not do.
+
+        ``worker`` is the one field here a rig still chooses freely — ``meta`` arrives through
+        ``parse_config_meta``, whose ``_token`` charset a lone surrogate cannot match — so it is the
+        member checked by ``_bindable`` (#1696). A name sqlite cannot bind says nothing, in the same
+        closed direction: a name we cannot store is one we cannot compare against. That cost is
+        disclosed and is NOT the poll's delay above — a rig naming itself with a lone surrogate goes
+        unchecked for drift for as long as it keeps that name.
         """
         revision = (meta or {}).get("revision")
-        if not worker or not revision:
+        if not worker or not revision or not _bindable(worker):
             return None
         last_change_id = meta.get("last_change_id")
         try:
