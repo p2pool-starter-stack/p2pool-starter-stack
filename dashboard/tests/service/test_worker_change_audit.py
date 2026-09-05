@@ -314,12 +314,14 @@ class TestRowIdsSeparateOneDetectionFromAnother:
         """The id is now BUILT in the poll loop rather than only cleaned at the sink, which puts an
         encode where there was none, and nothing upstream rejects a lone surrogate in a worker name.
 
-        The WORKER NAME is the position deliberately: measured per position, a surrogate
-        ``change_id`` never reaches the escape at all — ``worker_config_change_known`` hands it to
-        sqlite first and sqlite refuses it — a separate pre-existing raise on this path, filed as
-        #1696, and not what this test is about. Written against the reachable half, this goes RED without
-        ``errors="surrogatepass"``; written against the other it would have gone red for sqlite's
-        reason and proved nothing about the escape."""
+        The WORKER NAME was the position deliberately: when this was written a surrogate
+        ``change_id`` never reached the escape at all — ``worker_config_change_known`` handed it to
+        sqlite first and sqlite refused it, a separate raise on this path filed as #1696. Written
+        against the reachable half, this goes RED without ``errors="surrogatepass"``; written
+        against the other it would have gone red for sqlite's reason and proved nothing about the
+        escape. #1696 has since landed and a surrogate ``change_id`` DOES now reach the escape, so
+        the reasoning is kept in the past tense rather than deleted: it is what makes the choice of
+        position here a measurement rather than an arbitrary pick."""
         svc, sm = _svc()
         try:
             _rig_edit(svc, "\ud800", "chg1")
