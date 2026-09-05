@@ -246,8 +246,10 @@ Two harness rules worth knowing before you lose an afternoon to them:
   account at `/tmp/pithead-os-serial.log.leg4-install`: the root runner's own journal
   (`pithead-control.service`, where its "OS install failed" warning and log tail land),
   the boot journal's rauc and OS-install lines, `rauc status`, disk and memory, and any
-  OOM kill. The runner deletes its install log on failure and the dashboard result
-  carries only rauc's last line, so this file is the only place the cause survives.
+  OOM kill. It reads the current boot only: if the install took the guest down, the
+  serial log above spans the reboot. The runner deletes its install log on failure and
+  the dashboard result carries at most rauc's last error line, or nothing, so this file
+  is the only place the cause survives.
 
 ## The automated battery
 
