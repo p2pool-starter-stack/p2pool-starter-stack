@@ -179,10 +179,17 @@ publish_disk_inventory() { # <spool-dir>
 # and hosts, the pool tier stay: those are the answers the operator came back for, and none of
 # them is a secret. Errs toward stripping more — a lost convenience beats a leaked credential.
 # rc non-zero when the file is not a usable config object; callers treat that as "no pre-fill".
+#
+# .dashboard.workers STAYS in the del list although 2.0.0 removed that alias (#1832), and this is
+# the one site where that distinction is load-bearing: prefill_from_previous_install reads a
+# FOREIGN disk's config.json directly, so it never passes through parse_and_validate_config and
+# the 1.x migration NEVER runs on it. A machine reinstalled from a pre-2.0 disk would otherwise
+# publish its per-rig API tokens onto the setup page. A redaction predicate is not alias
+# acceptance — the same ruling os/overlay/pithead-media-config:163 already carries.
 strip_config_secrets() { # <config-file> -> stripped JSON on stdout
     jq -e --argjson paths "$CONTROL_SECRET_PATHS" '
         delpaths($paths)
-        | del(.dashboard.auth, .workers, .telegram,
+        | del(.dashboard.auth, .dashboard.workers, .workers, .telegram,
               .healthchecks, .notifications, .ssh, .tari.spend_public_key)' "$1" 2>/dev/null
 }
 

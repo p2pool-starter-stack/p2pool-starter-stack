@@ -101,9 +101,8 @@ class TestConfig:
 
 class TestWorkerEndpoints:
     """Per-worker endpoint descriptor validation (#172), read from the read-only config.json
-    mount. Exercised here via the deprecated dashboard.workers[] fallback shape — the field
-    validation below is shared code, identical for the current workers.list[] shape (dual-read
-    precedence is covered separately in TestWorkerEndpointsDualRead, #506). Every field bar
+    mount, at workers.list[] (#506) — the only shape since 2.0.0 removed the dashboard.workers[]
+    alias (#1832), whose absence is covered separately in TestWorkerEndpointsLegacyKeyIsNotRead. Every field bar
     `name` is optional; an entry with any invalid field is dropped WHOLE (fail closed — a typo'd
     host must not leave its token attached to the miner-IP fallback path)."""
 
@@ -118,8 +117,8 @@ class TestWorkerEndpoints:
         got = self._load(
             tmp_path,
             {
-                "dashboard": {
-                    "workers": [
+                "workers": {
+                    "list": [
                         {"name": "rig1", "host": "10.0.0.5", "port": 18088, "token": "s3cr3t"},
                         {"name": "rig2"},
                     ]
@@ -135,8 +134,8 @@ class TestWorkerEndpoints:
         got = self._load(
             tmp_path,
             {
-                "dashboard": {
-                    "workers": [{"name": "rig1", "port": 1111}, {"name": "rig1", "port": 2222}]
+                "workers": {
+                    "list": [{"name": "rig1", "port": 1111}, {"name": "rig1", "port": 2222}]
                 }
             },
         )
@@ -146,8 +145,8 @@ class TestWorkerEndpoints:
         got = self._load(
             tmp_path,
             {
-                "dashboard": {
-                    "workers": [
+                "workers": {
+                    "list": [
                         "not-a-dict",
                         {"port": 8080},  # no name
                         {"name": ""},  # empty name
@@ -175,8 +174,8 @@ class TestWorkerEndpoints:
         got = self._load(
             tmp_path,
             {
-                "dashboard": {
-                    "workers": [
+                "workers": {
+                    "list": [
                         {
                             "name": "rig1",
                             "host": "10.0.0.5",
@@ -202,7 +201,7 @@ class TestWorkerEndpoints:
         from mining_dashboard.config.config import load_worker_endpoints
 
         assert load_worker_endpoints(str(tmp_path / "absent.json")) == []
-        assert self._load(tmp_path, {"dashboard": {}}) == []
+        assert self._load(tmp_path, {"workers": {}}) == []
 
     def test_valid_control_port_loads_and_bad_drops_entry(self, tmp_path):
         # control_port (#185) is validated like port: an out-of-range or non-int value drops the
@@ -210,8 +209,8 @@ class TestWorkerEndpoints:
         got = self._load(
             tmp_path,
             {
-                "dashboard": {
-                    "workers": [
+                "workers": {
+                    "list": [
                         {"name": "rig1", "host": "10.0.0.5", "control_port": 8082},
                         {"name": "bad", "control_port": 70000},
                         {"name": "boolcp", "control_port": True},
@@ -231,8 +230,8 @@ class TestWorkerEndpoints:
         got = self._load(
             tmp_path,
             {
-                "dashboard": {
-                    "workers": [
+                "workers": {
+                    "list": [
                         {"name": "rig1", "watts": 142.5},
                         {"name": "zero", "watts": 0},  # not positive
                         {"name": "neg", "watts": -5},  # negative
@@ -246,12 +245,12 @@ class TestWorkerEndpoints:
         assert got == [{"name": "rig1", "watts": 142.5}, {"name": "ok", "port": 8081}]
 
 
-class TestWorkerEndpointsDualRead:
-    """workers.list[] (#506) is the current sub-key; dashboard.workers[] (#172) is read as a
-    deprecated fallback when workers.list is unset or an empty array. pithead's apply-time
-    validation refuses a config that populates both, but an empty array is a schema default
-    (config.reference.json ships both keys as []) and must never shadow the populated shape
-    (#679)."""
+class TestWorkerEndpointsLegacyKeyIsNotRead:
+    """workers.list[] (#506) is the only sub-key. dashboard.workers[] (#172) was read as a
+    deprecated fallback until 2.0.0 removed it (#1832): pithead migrates a pre-2.0 config into
+    workers.list[] before this mount is ever written, so the loader needs no fallback and a stale
+    mount still carrying the alias reads as no descriptors at all — fail-closed, rather than a
+    silent read of a key pithead no longer validates."""
 
     def _load(self, tmp_path, payload):
         from mining_dashboard.config.config import load_worker_endpoints
@@ -267,9 +266,9 @@ class TestWorkerEndpointsDualRead:
         )
         assert got == [{"name": "rig1", "host": "10.0.0.5", "port": 18088}]
 
-    def test_new_shape_wins_when_both_present(self, tmp_path):
-        # pithead's apply-time validation refuses a config that sets both, but the loader must
-        # still resolve deterministically for a stale/hand-edited mount: new shape wins.
+    def test_legacy_key_beside_the_new_shape_is_ignored(self, tmp_path):
+        # A stale or hand-edited mount can still carry both. pithead refuses that config at apply
+        # when the two differ; the loader must resolve deterministically regardless.
         got = self._load(
             tmp_path,
             {
@@ -279,13 +278,12 @@ class TestWorkerEndpointsDualRead:
         )
         assert got == [{"name": "new-rig"}]
 
-    def test_legacy_fallback_used_when_new_shape_unset(self, tmp_path):
-        got = self._load(tmp_path, {"dashboard": {"workers": [{"name": "legacy-rig"}]}})
-        assert got == [{"name": "legacy-rig"}]
+    def test_legacy_key_alone_reads_empty(self, tmp_path):
+        # Inverted at 2.0.0: this returned the legacy entries while the fallback existed.
+        assert self._load(tmp_path, {"dashboard": {"workers": [{"name": "legacy-rig"}]}}) == []
 
-    def test_legacy_fallback_used_when_new_shape_empty(self, tmp_path):
-        # The editor round-trip shape (#679): config.reference.json's workers.list: [] merged
-        # beside a populated legacy key — the empty schema default must not shadow the entries.
+    def test_legacy_key_beside_an_empty_new_shape_reads_empty(self, tmp_path):
+        # Also inverted: the #679 editor round-trip shape no longer un-shadows the legacy key.
         got = self._load(
             tmp_path,
             {
@@ -293,11 +291,9 @@ class TestWorkerEndpointsDualRead:
                 "dashboard": {"workers": [{"name": "legacy-rig"}]},
             },
         )
-        assert got == [{"name": "legacy-rig"}]
+        assert got == []
 
-    def test_empty_legacy_default_beside_populated_new_shape_reads_new(self, tmp_path):
-        # The mirror round-trip shape (#679): dashboard.workers: [] injected by the reference
-        # merge beside a populated workers.list.
+    def test_empty_legacy_key_beside_populated_new_shape_reads_new(self, tmp_path):
         got = self._load(
             tmp_path,
             {
@@ -307,18 +303,13 @@ class TestWorkerEndpointsDualRead:
         )
         assert got == [{"name": "new-rig"}]
 
-    def test_legacy_fallback_logs_a_deprecation_notice(self, tmp_path, caplog):
-        import logging
-
-        with caplog.at_level(logging.INFO, logger="Config"):
-            self._load(tmp_path, {"dashboard": {"workers": [{"name": "legacy-rig"}]}})
-        assert any("deprecated" in r.message for r in caplog.records)
-
-    def test_new_shape_logs_no_deprecation_notice(self, tmp_path, caplog):
+    def test_no_deprecation_notice_for_either_shape(self, tmp_path, caplog):
+        # The one-time fallback notice went with the alias, so neither shape may log one.
         import logging
 
         with caplog.at_level(logging.INFO, logger="Config"):
             self._load(tmp_path, {"workers": {"list": [{"name": "rig1"}]}})
+            self._load(tmp_path, {"dashboard": {"workers": [{"name": "legacy-rig"}]}})
         assert not any("deprecated" in r.message for r in caplog.records)
 
     def test_neither_shape_set_reads_empty(self, tmp_path):

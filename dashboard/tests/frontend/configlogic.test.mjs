@@ -33,8 +33,8 @@ const CFG = {
   p2pool: { pool: "mini", stratum_password: "" },
   dashboard: {
     auth: { username: "admin", password: { __secret__: true } },
-    workers: [{ name: "rig1", host: "10.0.0.5", token: { __secret__: true } }],
   },
+  workers: { list: [{ name: "rig1", host: "10.0.0.5", token: { __secret__: true } }] },
 };
 
 test("isSecretSentinel: only the exact sentinel shape", () => {
@@ -48,7 +48,7 @@ test("buildSections: LOGICAL sections (#611), not one per top-level config key; 
   const sections = buildSections(CFG);
   // monero.wallet_address -> Wallets & payout; monero.mode/prune/node_password/remote.* -> Monero
   // node; p2pool.pool/stratum_password -> Mining; dashboard.auth.* -> Dashboard & access;
-  // dashboard.workers is an array (skipped, #172) so it never pulls "Workers" into the list.
+  // workers.list is an array (skipped, #172) so it never pulls "Workers" into the list.
   assert.deepEqual(
     sections.map((s) => s.name),
     ["Wallets & payout", "Monero node", "Mining", "Dashboard & access"],
@@ -109,12 +109,14 @@ test("classifyGroup + buildSections: an unclaimed path renders in the catch-all 
 });
 
 test("buildSections: nested underscore-prefixed docs keys (any depth) are skipped, not rendered as fields", () => {
-  const cfg = { ...CFG, xmrig_proxy: { _docs: "legacy alias notes", enabled: true } };
+  // A synthetic block: the two real nested docs keys (xmrig_proxy._docs, dashboard._workers_docs)
+  // went with the deprecated aliases in 2.0.0 (#1832), and the rule outlived them.
+  const cfg = { ...CFG, some_future_block: { _docs: "block notes", enabled: true } };
   const keys = buildSections(cfg)
     .flatMap((s) => s.fields)
     .map((f) => f.key);
-  assert.ok(!keys.includes("xmrig_proxy._docs"));
-  assert.ok(keys.includes("xmrig_proxy.enabled"));
+  assert.ok(!keys.includes("some_future_block._docs"));
+  assert.ok(keys.includes("some_future_block.enabled"));
 });
 
 // buildSections must claim EVERY leaf path in the real config.reference.json — a new config key
@@ -161,13 +163,13 @@ test("buildSections: high-consequence fields carry their inline warning", () => 
 });
 
 test("array values are not form fields (#172)", () => {
-  // dashboard.workers is a list of per-rig descriptors — there is no form rendering for it, so
+  // workers.list is a list of per-rig descriptors — there is no form rendering for it, so
   // buildSections must skip it (a text field would mangle it into a string). Survival through
   // an edit is the candidate model's property now: untouched keys ride the candidate verbatim,
   // asserted in configview.test.mjs.
   const sections = buildSections(CFG);
   const keys = sections.flatMap((s) => s.fields.map((f) => f.key));
-  assert.ok(!keys.some((k) => k.startsWith("dashboard.workers")));
+  assert.ok(!keys.some((k) => k.startsWith("workers.list")));
 });
 
 // --- Core-vs-sections regroup (#529, RATIFIED Wave-0) ---------------------------------------

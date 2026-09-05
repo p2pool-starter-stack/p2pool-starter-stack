@@ -232,8 +232,10 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
     # Per-worker token sentinels (#172) get the same swap, but out of the fixed-path walk: they
     # live in the variable-length descriptor array at workers.list[] (#506) — so restore each from
     # the LIVE token matched by worker name (first-declared wins on duplicate names, matching the
-    # container's probe). A sentinel for a rig with no live token collapses to "" too. The
-    # deprecated dashboard.workers[] shape was restored here as well until 2.0.0 removed it (#1832).
+    # container's probe). A sentinel for a rig with no live token collapses to "" too.
+    # dashboard.workers[] is restored too, and MUST be: 30's masker still masks that shape after
+    # 2.0.0 removed the alias (#1832, see the note there), and mask and restore are one mechanism.
+    # Keeping the mask without the restore would let a sentinel be committed as a literal token.
     (umask 077 && jq --argjson paths "$CONTROL_SECRET_PATHS" --slurpfile live "$CONFIG_FILE" "$WORKER_LIST_JQ"'
         (reduce (($live[0] | worker_list) | reverse | .[]) as $w ({};
             if ($w | type) == "object" and ($w.name | type) == "string"
@@ -249,7 +251,12 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
               then .token = (if (.name | type) == "string" then ($livetok[.name] // "") else "" end)
               else . end)
           else . end
-        ' "$file" >"$staged")
+        | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
+          then .dashboard.workers |= map(
+              if (.token | type) == "object" and .token.__secret__ == true
+              then .token = (if (.name | type) == "string" then ($livetok[.name] // "") else "" end)
+              else . end)
+          else . end' "$file" >"$staged")
     chmod 600 "$staged" 2>/dev/null || true
     if out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>"$errf"); then
         result=$(printf '%s\n' "$out" | jq -R -s '
