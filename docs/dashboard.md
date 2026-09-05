@@ -571,20 +571,19 @@ How it stays safe:
   against its prefill, table mode only ever emits a key you changed. The change record never gets
   a chance to hold the value either way — it strips the password and the TLS fingerprint out
   before writing, and strips them again out of every read.
-  **Editing a pool entry is a different story, and it is not fully solved yet.** RigForge deletes
-  `pass` and `tls-fingerprint` before serving its enriched feed (`rigforge.sh`'s
-  `_api_config_json`), so on a stock rig `pools` reaches this dashboard with no password key at
-  all — no `{__secret__: true}` sentinel, nothing for the editor to recognise as "a credential
-  lives here." (The sentinel and the scrub chain that removes a stray one before it reaches the
-  rig do exist and do fire, but only for a rig running an older or patched build that still serves
-  `pass`.) **Edit a pool entry's URL or any other field on a stock rig, in either mode, and the
-  submitted entry carries no password — RigForge accepts it: a missing `pass` defaults to the
-  literal string `x` (`parse_config`), and `_control_commit` replaces the array wholesale, so the
-  rig starts running with password `x`, silently.** Fixing this needs a change on the RigForge
-  side — a marker for "a password is set" that `_control_commit` can honour when an incoming entry
-  omits `pass` — tracked as rigforge#415; this dashboard's sentinel machinery becomes the real
-  defence once that lands. Until then, re-supply a pool's password whenever you edit anything else
-  on that pool.
+  **Editing a pool entry keeps its password, with one exception.** RigForge serves a stored
+  `pass` or `tls-fingerprint` as the `{__secret__: true}` sentinel and never the value
+  (`rigforge.sh`'s `_api_config_json`, rigforge#415, in the build this appliance bakes); a pool that
+  stores no password arrives with no `pass` key at all, so "not set" stays distinguishable from
+  "set but hidden". The editor keeps the sentinel in its prefill, the scrub chain drops it again
+  before the request reaches the rig, and `_control_commit` restores the stored value for an
+  incoming entry that omits `pass` or carries the sentinel — matched on the entry's `url` and
+  `user`. **Change a pool's URL or its user and that match finds nothing: the entry commits as a
+  brand-new pool with no password, which `parse_config` defaults to the literal string `x`, and the
+  rig starts running with password `x`, silently.** Re-supply the password whenever you change a
+  pool's URL or user; editing any other field on the pool keeps it. A rig on a RigForge build older
+  than 1.17.0 still deletes `pass` outright before serving it, and there every pool edit needs the
+  password re-supplied.
 
 RigForge keeps no config history on the rig, so Pithead owns it: every change the dashboard applies is
 recorded with its keys, outcome, and time. The editor prefills from the rig's own current writable
