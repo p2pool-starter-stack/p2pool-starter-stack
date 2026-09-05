@@ -229,10 +229,10 @@ async def auth(request: web.Request) -> web.Response:
 
 
 async def wizard_state(request: web.Request) -> web.Response:
-    """Everything the SPA needs to render: which flow, the effective config (defaults with the
-    last attempt merged over them — a rejected config comes back for editing rather than making
-    someone retype a 95-character address), the reference for type coercion, the host's error,
-    and the disk inventory in installer mode."""
+    """Everything the SPA needs to render: which flow, the effective config (the defaults with a
+    previous configuration merged over them — a pre-seed, a reinstall pre-fill or a rejected
+    submission, each of which WINS WHOLE; a machine that has never been configured gets this
+    page's own default instead), the reference, the host's error, and the disk inventory."""
     if not _authed(request):
         return web.json_response({"error": "unauthenticated"}, status=401)
     ref = _reference()
@@ -243,7 +243,7 @@ async def wizard_state(request: web.Request) -> web.Response:
             "stage": stage,
             # Kept for the field's original meaning; `stage` is what the client renders from.
             "mode": "installer" if installer_mode() else "setup",
-            "config": _deep_merge(ref, _last_attempt()),
+            "config": _deep_merge(ref, _last_attempt() or {"local_miner": {"enabled": True}}),
             "reference": ref,
             "error": _spool_read("error.txt"),
             "disks": _disks(),

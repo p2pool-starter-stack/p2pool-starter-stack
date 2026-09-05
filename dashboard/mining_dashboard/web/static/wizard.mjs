@@ -260,10 +260,9 @@ export class WizardApp extends Component {
     jsonText: "",
     jsonError: "",
     authMode: "auto", // auto | set | none — travels beside the config (see wizard.py submit)
-    // What this machine IS — the first disclosure, above the disk. pithead | both | rig.
-    // "both" rides the existing local_miner switch; "rig" collapses the form to three answers
-    // that travel beside the config exactly like authMode does.
-    role: "pithead",
+    // What this machine IS, asked above the disk. ONLY "rig" is stored — it is the one answer
+    // that carries no config; the two coordinators are read back out of one (see renderSetup).
+    role: "",
     rigPool: "",
     rigWorker: "",
     rigPassword: "",
@@ -372,13 +371,12 @@ export class WizardApp extends Component {
   };
 
   // The role reshapes the page the way the disk choice does. "Both" IS the existing
-  // local_miner switch — the role presets it and the switch below stays live; back to plain
-  // Pithead resets it to the documented default so the submitted config is byte-for-byte
-  // today's. The rig role never touches the config at all.
+  // local_miner switch: picking it turns that switch on, plain Pithead turns it off, and the
+  // switch below stays live either way. Neither is stored; a rig never touches the config.
   setRole = (e) => {
     const role = e.target.value;
     const cfg = this.state.cfg;
-    const next = { role, cfg };
+    const next = { role: role === "rig" ? "rig" : "", cfg };
     if (role !== "rig") {
       pathSet(cfg, "local_miner.enabled", role === "both");
       // "usb" only exists for rigs — a coordinator switching back must re-pick a real disk.
@@ -598,7 +596,9 @@ export class WizardApp extends Component {
     const remoteMonero = v("moneroMode") === "remote";
     const remoteTari = v("tariMode") === "remote";
     const { installer, disks, chosen, confirm, wipe, dataWiped } = this.state;
-    const rig = this.state.role === "rig";
+    // The select is stored for a rig and read out of the config for the two coordinators.
+    const role = this.state.role || (v("localMiner") ? "both" : "pithead");
+    const rig = role === "rig";
     // Keep-everything reinstall: the machine's settings, wallets, login and chains all survive,
     // so there is nothing to ask — the config half of the page would collect answers the
     // machine will ignore (its preserved config wins). Only the disk half renders.
@@ -643,7 +643,7 @@ export class WizardApp extends Component {
         <${Err}>${error}<//>
         <form onSubmit=${this.submit}>
             <${Field} label="What is this machine?">
-                <select value=${this.state.role} onChange=${this.setRole}>
+                <select value=${role} onChange=${this.setRole}>
                     <option value="pithead">Pithead</option>
                     <option value="both">Pithead + RigForge</option>
                     <option value="rig">RigForge</option>
