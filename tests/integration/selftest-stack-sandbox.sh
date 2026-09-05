@@ -144,10 +144,15 @@ echo "== every tests/stack sandbox is built through mk_tmpdir, not a bare assign
 # guarded expression, never as a bare `VAR=$(mktemp -d)` whose failure leaves VAR set-but-empty
 # for a later `rm -rf "$VAR/store"` to expand against /store.
 #
-# tests/stack/run.sh and the standalone tests/stack/test_*.sh are NOT covered and still carry the
-# old form. They belong to other lanes, so #1705's conversion stopped at the grant boundary. They
-# are excluded by name rather than by silence, so that this row says what it does not check —
-# and the row after the next one PINS that excluded population, so the exclusion cannot rot.
+# #1705's conversion stopped at a grant boundary: tests/stack/run.sh and the standalone
+# tests/stack/test_*.sh belonged to another lane and kept the old form, so this row named them out
+# of itself and a second row PINNED that excluded population against the four known sites, keeping
+# the exclusion from rotting. #1725 converted those four, so both halves are gone: the glob below
+# covers every file the constructor reaches, and the pin has nothing left to hold. That pin reddens
+# on exactly this change, which is why the two halves cannot merge one at a time — they land here
+# together or the row is red in between. The glob is lib.sh, run.sh and both test-file spellings,
+# which today is every .sh under tests/stack except fixtures/rauc-info/capture.sh — a capture
+# helper the suite does not source, named here so the one file outside is stated, not implied.
 BARE='^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*="?\$\(mktemp -d\)"?[[:space:]]*$'
 STACK_DIR="$HERE/../stack"
 
@@ -161,77 +166,38 @@ else
         "it matched nothing, so the absence checked below proves nothing"
 fi
 
-found=$(grep -El "$BARE" "$STACK_DIR/lib.sh" "$STACK_DIR"/test-*.sh 2>/dev/null | tr '\n' ' ')
+# Every entry goes through the same existence filter, the two fixed names included. Seeding those
+# in unconditionally would make the check below a tautology — it would read back the list it had
+# just been handed, and a stack directory missing run.sh entirely would still report it as covered.
+COVERED=()
+for f in "$STACK_DIR/lib.sh" "$STACK_DIR/run.sh" "$STACK_DIR"/test-*.sh "$STACK_DIR"/test_*.sh; do
+    [ -f "$f" ] && COVERED+=("$f")
+done
+
+# The deleted pin was not only a pin: it was the only thing proving this row read real files. With
+# it gone, a file set that resolved to nothing would report the same clean absence as a fully
+# converted tree. So the set is measured before the absence below is read as evidence, and this
+# refuses rather than records — a vacuous invariant row is worse than no row, it reads as proof.
+covered_names=" ${COVERED[*]##*/} "
+missing=""
+for want in lib.sh run.sh test_data_reset.sh; do
+    case "$covered_names" in *" $want "*) ;; *) missing="$missing $want" ;; esac
+done
+if [ "${#COVERED[@]}" -ge 4 ] && [ -z "$missing" ]; then
+    it_pass "the invariant's file set resolves and reaches run.sh and test_*.sh (control arms)"
+else
+    it_fail "the invariant's file set resolves and reaches run.sh and test_*.sh" \
+        "the absence below would be vacuous — ${#COVERED[@]} files, missing:${missing:- none}"
+    echo "selftest-stack-sandbox: $IT_PASS passed, $IT_FAIL failed"
+    exit 1
+fi
+
+found=$(grep -El "$BARE" "${COVERED[@]}" 2>/dev/null | tr '\n' ' ')
 if [ -z "$found" ]; then
-    it_pass "no bare mktemp -d assignment survives in lib.sh or the test-*.sh domain files"
+    it_pass "no bare mktemp -d assignment survives in any tests/stack suite file"
 else
-    it_fail "no bare mktemp -d assignment survives in lib.sh or the test-*.sh domain files" \
+    it_fail "no bare mktemp -d assignment survives in any tests/stack suite file" \
         "still bare in: $found"
-fi
-
-echo ""
-echo "== the by-name exclusion above is PINNED to the four sites #1725 documented =="
-
-# A by-name exclusion rots silently. run.sh and the standalone test_*.sh are named out of the
-# invariant above, so a FIFTH bare site added to either would sit outside it with nothing saying
-# so — that gap, rather than the four known sites, is what #1725 is about.
-#
-# The four are NOT inert, and an earlier draft of this comment said they were. It argued from the
-# absence of a downstream `rm -rf "$VAR/sub"`, which is the wrong operator: the hazard is any
-# `"$VAR/sub"` expansion, and all four have one. run.sh writes `"$XPTLS/cert.pem"` and
-# `"$XPTLS/key.pem"` and then `rm -f "$XPTLS/key.pem"`; both `local d` helpers write
-# `"$d/xmrig-proxy"`; test_data_reset.sh runs `mkdir -p "$WORK/bin"` and writes under it. Under an
-# empty value each of those is an absolute path at the filesystem ROOT, and `set -u` does not
-# catch it because a failed `mktemp -d` leaves the variable SET and empty. The writes fail for an
-# unprivileged user — the CI shell job runs as the runner, not root — and would land under / as
-# root. Only the trailing `rm -rf "$VAR"` is genuinely inert. Pinning the excluded population
-# makes the exclusion a ratchet
-# in both directions: a new bare site reds this row, and so does converting the four, which is the
-# signal to delete the exclusion and widen the invariant above to cover these files too.
-#
-# ⛔ THAT SECOND RED IS EXPECTED AND IS NOT A DEFECT — DO NOT SWITCH THIS ROW OFF TO CLEAR IT.
-# The conversion lives in tests/stack/ (the tests lane) and this pin lives here (e2e), so the
-# two halves of #1725 merge separately and the pin reds in between. The remedy is in the
-# failure message: delete the by-name exclusion above, widen the invariant to these files,
-# and delete this row with it. Deleting only this row leaves run.sh covered by nothing.
-#
-# Keyed on file and VARIABLE NAME, never line numbers: #1725's body cites run.sh 104/118/124 and
-# the sites had already drifted to 107/121/127 by the time this row was written.
-# C collation fixes the order, and uniq -c leaves each file+var key unique, so nothing after it
-# can reorder the result.
-gap_census() { # <stack dir> -> "<file> <var> <count>" per line
-    local f b
-    for f in "$1/run.sh" "$1"/test_*.sh; do
-        [ -f "$f" ] || continue
-        b="$(basename "$f")"
-        grep -E "$BARE" "$f" 2>/dev/null | sed -E "s|^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*|$b \1|"
-    done | LC_ALL=C sort | uniq -c | awk '{print $2, $3, $1}'
-}
-
-EXPECTED_GAP='run.sh XPTLS 1
-run.sh d 2
-test_data_reset.sh WORK 1'
-
-# The census has to be shown able to report a set OTHER than the pin, or "it equalled the pin" is
-# not a measurement — a census that silently returned nothing would agree with an all-converted
-# population just as loudly. This fixture carries one bare site under a name that appears nowhere
-# in the real population, so only a census that actually reads the file can produce it.
-mkdir -p "$TMP/gapctl"
-printf 'ZCTL="$(mktemp -d)"\nrm -rf "$ZCTL"\n' >"$TMP/gapctl/run.sh"
-ctl_census="$(gap_census "$TMP/gapctl")"
-if [ "$ctl_census" = "run.sh ZCTL 1" ]; then
-    it_pass "the excluded-population census reports a site the pin does not contain (control arms)"
-else
-    it_fail "the excluded-population census reports a site the pin does not contain" \
-        "expected 'run.sh ZCTL 1', got: ${ctl_census:-<empty>}"
-fi
-
-actual_gap="$(gap_census "$STACK_DIR")"
-if [ "$actual_gap" = "$EXPECTED_GAP" ]; then
-    it_pass "the excluded files carry exactly the four bare sites #1725 documented"
-else
-    it_fail "the excluded files carry exactly the four bare sites #1725 documented" \
-        "#1725: the excluded population moved, which this row exists to announce — it is not a defect in this file. If the four were CONVERTED (tests lane, tests/stack/), the fix is to delete the by-name exclusion above, widen the invariant to run.sh and test_*.sh, and delete this row with it; do not delete this row alone, that leaves run.sh covered by nothing. If a NEW bare site appeared, it is outside every check in this suite. Expected [$(printf '%s' "$EXPECTED_GAP" | tr '\n' '|')] got [$(printf '%s' "${actual_gap:-<empty>}" | tr '\n' '|')]"
 fi
 
 echo ""
