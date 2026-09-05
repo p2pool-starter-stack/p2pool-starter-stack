@@ -335,7 +335,7 @@ test("one surface: the form AND the JSON pane render together, pane collapsed (#
   const out = renderToString(readyView().render());
   assert.match(out, /config-section-core/); // the form
   assert.match(out, /worker-edit/); // the pane's textarea, same class as Worker Inspect
-  assert.match(out, /the exact configuration this will apply/);
+  assert.match(out, /the configuration this page can change/); // #1850 retitled the pane
   assert.doesNotMatch(out, /<details[^>]*\bopen\b/); // pane and sections all start collapsed
 });
 

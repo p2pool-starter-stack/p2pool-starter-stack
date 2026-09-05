@@ -929,9 +929,10 @@ button sits next to the Simple/Advanced toggle whether or not the channel is on;
 view explains how to turn it on and nothing else.
 
 One editing surface: the form on top and, beneath it, a collapsed **Advanced** pane holding
-the exact configuration that will be applied — both live views of a single candidate. Editing
+the configuration this page can change — both live views of a single candidate. Editing
 a field rewrites the pane; editing the pane refills the fields; what the pane shows is
-byte-for-byte what Save previews. (This is the setup wizard's pattern — the first page and
+byte-for-byte what Save previews, apart from the developer-only keys named below, which the
+machine keeps and this page never touches. (This is the setup wizard's pattern — the first page and
 the config tab now behave identically.) The pieces:
 ([#529](https://github.com/p2pool-starter-stack/pithead/issues/529)):
 
@@ -953,7 +954,8 @@ the config tab now behave identically.) The pieces:
   different keys; a single-key section keeps the shorter relative label — its heading names the rest.
   A config path no logical section claims still renders, in a catch-all
   **Other** group — a new schema key can't silently vanish from the editor, and a frontend test
-  fails loudly if one ever would. `workers.list[]` (the per-rig descriptors) isn't a form field
+  fails loudly if one ever would. A hidden key is the one exception: `ssh.*` (below) is dropped
+  before the grouping runs, so it reaches neither a section nor **Other**. `workers.list[]` (the per-rig descriptors) isn't a form field
   here — a variable-length list has no single form control for it, and the host gate refuses a
   change to it in either edit mode, since it carries each rig's host and token. Edit it in
   `config.json` and run `./pithead apply`. [Worker Inspect](#worker-inspect) is a different thing:
@@ -972,13 +974,23 @@ the config tab now behave identically.) The pieces:
   enforces (see below) and surfaced on `GET /api/config` as `_editable_keys` and `_confirm_keys`,
   so neither can drift from what the gate actually accepts; a greyed field never enters the staged
   edit set at all.
-- **The Advanced pane** is the whole candidate as one text block, for operators who'd rather
+- **The Advanced pane** is the whole editable candidate as one text block, for operators who'd rather
   paste than click through fields. A **Load from file** control (`FileReader`, no upload) fills
   it from a saved `config.json`, the same pattern [Worker Inspect's JSON mode](#worker-inspect)
   uses. A malformed edit is flagged inline, keeps the last good candidate as what Save would
   send, and blocks Save until fixed. The pane edits the whole config as text, so grouping and
   the host-only grey-out (both display-layer, form-only) don't constrain it — the gate still
-  validates and gates it identically.
+  validates and gates it identically. The hidden keys below are the exception: they are not in
+  the text, and typing one in does not put it there.
+- **`ssh.*` is not in this view at all**
+  ([#1850](https://github.com/p2pool-starter-stack/pithead/issues/1850)). SSH on the appliance is a
+  developer feature — a user never shells into the machine, and the ways in are a configuration
+  stick and the `--ssh` debug image. The host's approval channel refuses those keys whatever
+  sends them, so the page used to offer a control that could not work: an operator who set
+  `ssh.enabled` and pressed **Save & preview changes** was told "No configuration changes
+  detected", because the host had dropped the only key they had changed. The form and the pane
+  both hide them now, and the view puts the machine's own values back into whatever it sends —
+  so a save from here leaves SSH exactly as it was, on or off.
 
 The flow mirrors the CLI's `apply`:
 
