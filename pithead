@@ -1540,7 +1540,7 @@ doctor() {
     _stale=$(missing_data_dirs)
     if [ -n "$_stale" ]; then
         while IFS= read -r _l; do
-            dr_warn "Data dir from .env not found: ${_l%%=*}=${_l#*=} — a relocated/copied install re-syncs from scratch. Move the data here, or set the data_dir in config.json and run 'apply'."
+            dr_warn_surface "Data dir from .env not found: ${_l%%=*}=${_l#*=} — a relocated/copied install re-syncs from scratch. Move the data here, or set the data_dir in config.json and run 'apply'." "Data dir from .env not found: ${_l%%=*}=${_l#*=} — this machine re-syncs that data from scratch, and the dashboard history recorded against it is orphaned. With the dashboard control channel on, the monero, tari, p2pool and dashboard data dirs can be repointed from the config page behind its type-to-confirm box. The tor data dir cannot, and moving the data itself back is not a dashboard action either: both need console access to this machine."
         done <<<"$_stale"
     elif [ "$(env_get DEPLOYMENT_COMPLETED 2>/dev/null)" = "true" ]; then
         dr_ok "Data directories named in .env are present."

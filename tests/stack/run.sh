@@ -306,7 +306,97 @@ for _s in fail warn info; do
     esac
 done
 
-# 2. Totality over the SHIPPED artifact. The SITES are enumerated mechanically out of the built
+# 2. The #1776 site, named because the sweep below could not see it. Its verdict prescribed two
+#    host-only remedies ("Move the data here" and the verb as the bare quoted word 'apply'), and
+#    the literal alternation carries `\./pithead ` but no token for that quoting -- so the sweep
+#    returned 0 matches over a site it fully covers, and #1213 closed with this string still plain.
+#    Read off the SHIPPED artifact, the same instrument the sweep uses, so a lib/ edit that never
+#    reaches `pithead` cannot pass this.
+#
+#    AND THIS BLOCK IS NOW THE SITE'S ONLY VERB GUARD. Converting it to dr_warn_surface takes it
+#    OUT of block 3's sweep by construction -- that sweep's site pattern is `dr_warn "`, which a
+#    `dr_warn_surface "` call does not match, and the exclusion is deliberate because a host
+#    argument is SUPPOSED to keep its verb. So the single literal in _dd_pred_verb is all that
+#    stands behind the appliance side of this one verdict. Widen it here, not there.
+#
+#    THE CONTROL IS NOT OPTIONAL. Both assertions below are ABSENCE claims over a grep, and an
+#    absence claim goes green when the needle simply stops matching -- rename the message and this
+#    passes forever while proving nothing. So the same two predicates run against a synthetic
+#    PRE-FIX line first and must FAIL there.
+_dd_pred_plain() { case "$1" in *dr_warn_surface*) return 1 ;; *) return 0 ;; esac }
+_dd_pred_verb() { case "$1" in *"run 'apply'"*) return 0 ;; *) return 1 ;; esac }
+_dd_seed="            dr_warn \"Data dir from .env not found: X=Y — a relocated/copied install re-syncs from scratch. Move the data here, or set the data_dir in config.json and run 'apply'.\""
+if _dd_pred_plain "$_dd_seed" && _dd_pred_verb "$_dd_seed"; then
+    ok "control: the pre-fix data-dir verdict is caught as plain AND as naming a verb (#1776)"
+else
+    bad "control: the pre-fix data-dir verdict was NOT caught" "instrument cannot fail; the assertions below prove nothing"
+fi
+
+_dd_line=$(grep -n 'Data dir from .env not found' "$STACK" | head -1)
+if [ -z "$_dd_line" ]; then
+    bad "the data-dir verdict is present in the shipped artifact (#1776)" "no line matched -- the message was renamed and the assertions below are vacuous"
+else
+    ok "the data-dir verdict is present in the shipped artifact (#1776)"
+    if _dd_pred_plain "$_dd_line"; then
+        bad "the data-dir verdict is surface-aware (#1776)" "still a plain dr_warn: $_dd_line"
+    else
+        ok "the data-dir verdict is surface-aware (#1776)"
+    fi
+    # The host side KEEPS the verb by design (it is the DIY wording); only the appliance side must
+    # not. Take the second quoted argument, the way the helper's own contract orders them.
+    _dd_appl=$(printf '%s' "$_dd_line" | awk -F'"' '{print $4}')
+    # ...and prove the field EXISTS before reading an absence out of it. On the pre-fix shape --
+    # one quoted argument -- $4 is the empty string, _dd_pred_verb "" returns rc 1, and the row
+    # below would print ok having examined nothing. Only its sibling reds that case today.
+    if [ -z "$_dd_appl" ]; then
+        bad "the data-dir verdict's appliance wording names no host verb (#1776)" "no second quoted argument on: $_dd_line"
+    elif _dd_pred_verb "$_dd_appl"; then
+        bad "the data-dir verdict's appliance wording names no host verb (#1776)" "appliance side still says run 'apply': $_dd_appl"
+    else
+        ok "the data-dir verdict's appliance wording names no host verb (#1776)"
+    fi
+
+    # The appliance wording NAMES which of these dirs the dashboard can repoint, so it is a claim
+    # about CONTROL_DASHBOARD_CONFIRM_KEYS -- and the first draft of it ("no dashboard control
+    # relocates a data directory") was false for four of the five keys the check fires on. Derive
+    # both sets from the shipped artifact rather than restating them, so an allowlist change reds
+    # HERE and names the string to rewrite, instead of leaving an operator a remedy they lack.
+    _dd_in_set() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac }
+    _dd_repointable() {
+        local _k _out=''
+        for _k in $1; do _dd_in_set "$_k" "$2" && _out="${_out:+$_out }$_k"; done
+        printf '%s' "$_out"
+    }
+    _dd_sites=$(sed -n 's/^ *for var in \(.*_DATA_DIR\); do$/\1/p' "$STACK")
+    _dd_all=${_dd_sites%%$'\n'*}
+    # THE GUARD THAT EARNS ITS PLACE, replacing one that could not: reseeding TOR_DATA_DIR was
+    # strictly REDUNDANT, its pass condition being exactly what the CANNOT row asserts, so it could
+    # never red alone. This closes what those rows cannot see -- a second `for var in ..._DATA_DIR;
+    # do` above missing_data_dirs would feed them, through head -1, a set the shipped code no longer
+    # uses, every row still green. The awk keeps a narrower gap: a trailing comment after its
+    # closing quote makes it over-read. Wrong input, no wrong output today, so NAMED not guarded.
+    assert_eq "the data-dir key list comes from exactly one site (#1776)" "$(printf '%s\n' "$_dd_sites" | grep -c .)" "1"
+    _dd_conf=$(awk "/^CONTROL_DASHBOARD_CONFIRM_KEYS='/{f=1} f{print} f && /'[[:space:]]*\$/{exit}" "$STACK" |
+        tr -d "\n'" | sed "s/^CONTROL_DASHBOARD_CONFIRM_KEYS=//;s/  */ /g;s/^ //")
+    assert_eq "the dirs doctor warns about that the dashboard CAN repoint (#1776)" \
+        "$(_dd_repointable "$_dd_all" "$_dd_conf")" \
+        "MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR"
+    assert_eq "the dirs doctor warns about that it CANNOT (#1776)" \
+        "$(_dd_repointable "$_dd_all" "$(printf '%s' "$_dd_all" | tr ' ' '\n' | grep -vxF -f <(printf '%s' "$_dd_conf" | tr ' ' '\n') | tr '\n' ' ')")" \
+        "TOR_DATA_DIR"
+    # ...and that the wording actually carries both halves. If either row above reds, THIS is the
+    # string that has to be rewritten, so name it here rather than only in the assertion text.
+    case "$_dd_appl" in
+    *"repointed from the config page"*) ok "the appliance wording offers the dashboard route (#1776)" ;;
+    *) bad "the appliance wording offers the dashboard route (#1776)" "no config-page route in: $_dd_appl" ;;
+    esac
+    case "$_dd_appl" in
+    *"tor data dir cannot"*) ok "the appliance wording excepts the one dir that cannot (#1776)" ;;
+    *) bad "the appliance wording excepts the one dir that cannot (#1776)" "TOR_DATA_DIR is on neither allowlist and the wording does not say so: $_dd_appl" ;;
+    esac
+fi
+
+# 3. Totality over the SHIPPED artifact. The SITES are enumerated mechanically out of the built
 #    `pithead` rather than from a list kept by hand -- a hand list is blind to the site nobody
 #    remembered, and this sweep found nine of those. A PLAIN dr_fail/dr_warn/dr_info literal is one
 #    with no appliance side at all, so if it names a CLI verb an appliance operator is told to run
