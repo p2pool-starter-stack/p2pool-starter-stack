@@ -2712,14 +2712,14 @@ phase_media() {
     _ssh reboot >/dev/null 2>&1 || true
     wait_serial "staged configuration differs from the running one" 180 || bad "no diff banner on the abort leg"
     # Pull the medium mid-countdown — the deliberate physical act that cancels a pending change.
-    _detach_media_stick
-    # Full expected text, matching the apply leg's own precision above (#1061): a bare
-    # "cancelled" would also match unrelated boot noise, and it is exactly the console's own
-    # wording that went missing when this issue was filed — the weak match could not have told
-    # "the right line appeared" from "some other word did".
+    _detach_media_stick || info "detach-device returned rc $? — the guest may still see the stick"
+    # Full expected text (#1061): a bare "cancelled" would also match boot noise. On a miss, keep this
+    # boot's console (no-clobber, as cleanup does) and quote the channel's last line, so the red carries it.
     wait_serial "Media configuration channel: cancelled" 90 &&
-        ok "removing the media mid-countdown cancels the change, and says so on the console" ||
-        bad "no cancellation confirmation ever appeared on the console after the media was pulled"
+        ok "removing the media mid-countdown cancels the change, and says so on the console" || {
+        [ -f "$SERIAL.failed" ] || cp "$SERIAL" "$SERIAL.failed" 2>/dev/null
+        bad "no cancellation confirmation on the console within 90 s of the pull — the channel's last line: '$(grep -o 'Media configuration channel: .*' "$SERIAL" | tail -1)'; console kept at $SERIAL.failed"
+    }
     _wait_ssh 180 || {
         bad "guest never came back after the cancelled change"
         return
