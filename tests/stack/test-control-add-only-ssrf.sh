@@ -154,16 +154,18 @@ jq '.telegram.events={node_down:false}' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
 assert_eq "allowlisted alert toggle still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
 assert_eq "alert toggle landed in config.json" "$(jq -r '.telegram.events.node_down' "$C/config.json")" "false"
-# dashboard.workers (#172) never renders to .env, so the env-diff allowlist can't see it — yet it
-# carries per-rig hosts and API tokens (a committed attacker host would point token-bearing probes
-# at it). The gate must refuse it via its explicit config-level check.
+# dashboard.workers (#172) was the alias removed in 2.0.0 (#1832). It never rendered to .env, so
+# the env-diff allowlist cannot see it, yet a committed attacker host would point token-bearing
+# probes at it. Its explicit refusal went with the alias and the closed-schema check now refuses it
+# as an unknown key — the same outcome by a different door, so the row is kept, not deleted.
 jq '.dashboard.workers=[{name:"rig1",host:"attacker.example",token:"stolen"}]' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
-assert_eq "dashboard.workers change commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
-assert_contains "workers refusal names dashboard.workers" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "dashboard.workers"
+assert_eq "a removed 1.x alias commit is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
+assert_contains "the refusal names dashboard.workers as a schema-unknown key" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "dashboard.workers"
+assert_contains "the refusal is the closed-schema door, not the descriptor door" "$(jq -r '.error' "$RESULTS/$UUID5.json" 2>/dev/null)" "not in the schema"
 assert_eq "config.json keeps no worker descriptors" "$(jq -r '.dashboard.workers // "unset"' "$C/config.json")" "unset"
 
-# workers.list[] (#506): same descriptors as dashboard.workers[] above, but with ONE add-only
+# workers.list[] (#506): the same descriptors, but with ONE add-only
 # exception — a commit may APPEND a new descriptor; every live entry must reappear byte-for-byte.
 # Seed one from the host CLI (never the gate) as the baseline to protect.
 jq '.workers.list=[{name:"rig1",host:"10.0.0.9",control_port:8082,token:"tok_rig1"}]' "$C/config.json" >"$C/cand.json" && mv "$C/cand.json" "$C/config.json"
@@ -359,11 +361,9 @@ jq '.dashboard.energy={cost_per_kwh:0.18,__evil:{x:1}}' "$C/config.json" >"$C/ca
 gate_try "$C/cand.json"
 assert_eq "a nested unknown key under a known block is refused" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "rejected"
 
-# NO FALSE-REJECT on legacy configs: config.reference.json must be a COMPLETE superset of every path
-# pithead READS, or the closed-schema guard refuses a legit config on EVERY commit. A config.json
-# predating the xvb rename still carries a legacy xmrig_proxy.* block (read as an alias at pithead
-# ~L3245). Seed it into the live baseline, then prove a normal on-allowlist commit
-# (xvb.donation_level -> XVB_DONATION_LEVEL) still passes the gate and the legacy block round-trips.
+# A 1.x config is MIGRATED, not round-tripped (#1832) — this row asserted the opposite until 2.0.0,
+# when config.reference.json listed xmrig_proxy.* so the block survived a commit untouched. Seed the
+# legacy block, then prove a normal on-allowlist commit still passes AND that the apply moved it.
 jq '.xmrig_proxy={enabled:true,url:"na.xmrvsbeast.com:4247",donor_id:"auto"}' "$C/config.json" >"$C/config.json.tmp" &&
     mv "$C/config.json.tmp" "$C/config.json"
 (cd "$C" && DOCKER_LOG="$CTRL_LOG" PATH="$C/bin:$PATH" ./pithead apply -y >/dev/null 2>&1)
@@ -371,7 +371,9 @@ jq '.xvb.donation_level="whale"' "$C/config.json" >"$C/cand.json"
 gate_try "$C/cand.json"
 assert_eq "a commit on a config carrying a legacy xmrig_proxy block still applies" "$(jq -r '.status' "$RESULTS/$UUID5.json" 2>/dev/null)" "applied"
 assert_eq "the allowlisted xvb tier landed in config.json" "$(jq -r '.xvb.donation_level' "$C/config.json")" "whale"
-assert_eq "the legacy xmrig_proxy block round-trips untouched" "$(jq -r '.xmrig_proxy.url' "$C/config.json")" "na.xmrvsbeast.com:4247"
+assert_eq "the legacy xmrig_proxy block is GONE after the migrating apply" "$(jq -r 'has("xmrig_proxy")' "$C/config.json")" "false"
+assert_eq "its url landed under the current xvb name" "$(jq -r '.xvb.url' "$C/config.json")" "na.xmrvsbeast.com:4247"
+assert_eq "the pre-migration copy is kept beside the config" "$(jq -r '.xmrig_proxy.url' "$C/config.json.bak-1x" 2>/dev/null)" "na.xmrvsbeast.com:4247"
 
 # Forged-flag bypass: the container tampers its visible copy of the preview result to
 # destructive:false AND sends a commit request carrying its own destructive:false field. The

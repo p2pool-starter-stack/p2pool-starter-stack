@@ -185,7 +185,7 @@ EDITABLE_ENV_KEY_PATHS = {
 # dashboard.energy.* is config.json-only — it never renders to .env (control_approval_gate reads
 # it straight off config.json, pithead ~L4879), so it can never appear in the map above — but the
 # gate explicitly ALLOWS it (#504). Fold it in as the map's one special-case addition. Worker
-# descriptors (workers.list[] / dashboard.workers[]) are the gate's OTHER config.json-only special
+# descriptors (workers.list[], #506) are the gate's OTHER config.json-only special
 # case, but they're REFUSED outright (per-rig hosts/tokens), so they never get an editable path —
 # and buildSections never renders them as a form field anyway (arrays, #172).
 _ENERGY_PATHS = (
@@ -326,7 +326,7 @@ def submit(action, cfg=None, actor="", intent_id=None, version=None, confirm=Non
 def submit_worker_apply(worker, changes, actor="", intent_id=None):
     """Spool a worker-config change intent (#185). Carries ONLY the worker NAME and the writable-key
     ``changes`` — never a host, port, or token: the host-side runner resolves the rig's real address
-    and bearer from its own config.json (dashboard.workers[]), so a tampered intent can at most target
+    and bearer from its own config.json (workers.list[]), so a tampered intent can at most target
     another already-configured rig, never an arbitrary host, and the rig token — masked out of this
     container (#440) — never crosses the mount. Returns the request id (always a UUID)."""
     rid = str(uuid.UUID(intent_id)) if intent_id else str(uuid.uuid4())

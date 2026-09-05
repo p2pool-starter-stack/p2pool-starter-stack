@@ -21,7 +21,7 @@ from mining_dashboard.config.config import (
 from mining_dashboard.helper.http import ResponseTooLarge, bounded_read
 from mining_dashboard.service.control_service import SECRET_SENTINEL, WORKER_WRITABLE_KEYS
 
-# Per-worker endpoint descriptors (#172): the validated dashboard.workers[] list from config.json.
+# Per-worker endpoint descriptors (#172): the validated workers.list[] list from config.json.
 # Module-level (not from-import at call sites) so tests can swap it per case. Fleets are small, so
 # the per-poll lookups below are linear scans — no index to keep in sync.
 WORKER_ENDPOINTS = DASHBOARD_WORKERS
@@ -289,7 +289,7 @@ def _safe_probe_host(ip) -> str | None:
 
 
 def _worker_override(name_token, safe_ip):
-    """The dashboard.workers[] entry for this worker, or None (#172).
+    """The workers.list[] entry for this worker, or None (#506).
 
     Matched by the rig's stratum name first; on a name miss, by the validated connecting IP
     against an operator-set ``host`` (covers a renamed rig that still connects from its declared
@@ -382,7 +382,7 @@ class XMRigWorkerClient:
         hint, rather than silently trying alternatives or swallowing the error. On success the parsed
         summary is returned with ``api_ok`` set to ``True``.
 
-        Per-worker overrides (#172, ``dashboard.workers[]``) merge on top: per-worker field >
+        Per-worker overrides (#506, ``workers.list[]``) merge on top: per-worker field >
         fleet default > inherit. An operator-set ``host`` replaces the connecting IP as the probe
         target; a per-worker ``token`` becomes the Bearer for that worker only.
 

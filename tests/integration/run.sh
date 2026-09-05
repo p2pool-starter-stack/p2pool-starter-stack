@@ -145,8 +145,8 @@ MATRIX:
   --rigforge-control     also run the RigForge control phase (#513/#514/#516/#517/#1002b/#1236), local
                          mode only: with dashboard.control ON and workers.list[] populated for the
                          borrowed rig (masked-token descriptor, #440/#506 — the box's pre-existing
-                         dashboard.workers[] legacy descriptor is honored as-is if that's what the
-                         baseline already carries), assert the enriched read path survives populated
+                         dashboard.workers[] alias was removed in 2.0.0, #1832, so a pre-2.0
+                         baseline is migrated to workers.list[] by this leg's apply), assert the enriched read path survives populated
                          descriptors (#514) and the rig is editable (#508/#513), drive a reversible
                          Worker Inspect edit end-to-end to the rig's control API on max_temp_c (#513),
                          DONATION and watchdog_interval_min (#1236, read back from the rig's own
@@ -2162,13 +2162,12 @@ _worker_apply() { # <worker> <changes-json>  -> echoes the dashboard result JSON
 # DESTRUCTIVE-then-restored (enables control + pins the descriptor, reverted at the end). Local mode
 # only; each leg self-skips LOUDLY without its prerequisites so a bench without the rig never fails.
 #
-# Descriptor shape (#506): workers.list[] is PRIMARY and the shape this leg injects by default (the
-# fresh-inject path a borrowed bench rig usually takes, since it has no standing baseline descriptor).
-# If the box's baseline already pins the rig under the deprecated dashboard.workers[] fallback instead
-# (a box not yet migrated), that baseline is honored as-is rather than force-migrated — a cheap,
-# no-extra-apply way this leg also exercises the legacy fallback, which must keep working through
-# v1.9. Every read below therefore resolves whichever shape is actually populated, exactly matching
-# pithead's own `.workers.list // .dashboard.workers` precedence.
+# Descriptor shape (#506): workers.list[] is the only shape, and the one this leg injects. The
+# deprecated dashboard.workers[] fallback this leg used to honor as-is — cheap extra coverage of the
+# legacy read, kept "through v1.9" — was removed in 2.0.0 (#1832), so every read below resolves
+# workers.list[] alone. A box whose baseline still carries the old key is migrated in place by this
+# leg's own apply; the pre-apply probe below reads workers.list[] only, so on such a box the FIRST
+# run skips for want of a descriptor and a re-run finds the migrated one.
 run_rigforge_control() {
     # shellcheck disable=SC2034  # read by lib.sh:it_fail to label captured failures
     IT_CURRENT_SCENARIO="rigforge-control"
@@ -2193,19 +2192,18 @@ run_rigforge_control() {
         return 0
     fi
 
-    # The write path resolves the rig's host + token from workers.list[] (#506), or the deprecated
-    # dashboard.workers[] fallback if that's what the box's baseline already carries. Use the
-    # baseline's descriptor if it already pins this rig's host (the live-box case, whichever shape);
-    # otherwise inject one into workers.list[] from --rig-host + IT_RIG_TOKEN (local-only, so the token
-    # never leaves the bench). No source for either -> skip: we won't drive an edit we can't address,
-    # nor mutate what we can't restore.
+    # The write path resolves the rig's host + token from workers.list[] (#506) — the deprecated
+    # dashboard.workers[] fallback was removed in 2.0.0 (#1832). Use the baseline's descriptor if it
+    # already pins this rig's host (the live-box case); otherwise inject one into workers.list[] from
+    # --rig-host + IT_RIG_TOKEN (local-only, so the token never leaves the bench). No source for
+    # either -> skip: we won't drive an edit we can't address, nor mutate what we can't restore.
     local have_host inject=0
-    have_host="$(printf '%s' "$BASELINE_CONFIG" | jq -r --arg n "$rig" 'first((.workers.list // .dashboard.workers // [])[] | select(.name==$n) | .host) // empty' 2>/dev/null)"
+    have_host="$(printf '%s' "$BASELINE_CONFIG" | jq -r --arg n "$rig" 'first((.workers.list // [])[] | select(.name==$n) | .host) // empty' 2>/dev/null)"
     if [ -z "$have_host" ]; then
         if [ -n "$RIG_HOST" ] && [ -n "${IT_RIG_TOKEN:-}" ]; then
             inject=1
         else
-            it_skip_phase "rigforge-control" "rig '$rig' has no workers.list[] (or legacy dashboard.workers[]) descriptor and no --rig-host + IT_RIG_TOKEN to inject one (#513/#514/#516/#517)"
+            it_skip_phase "rigforge-control" "rig '$rig' has no workers.list[] descriptor and no --rig-host + IT_RIG_TOKEN to inject one (#513/#514/#516/#517)"
             return 0
         fi
     fi
@@ -2223,10 +2221,10 @@ run_rigforge_control() {
             it_fail "--rig-control-port is a port number" "got [$RIG_CONTROL_PORT]"
             return 0
         fi
-        # Inject into workers.list[] (#506), the primary shape — never dashboard.workers[], since
-        # pithead hard-refuses a config that sets both (validate_worker_endpoints). del() drops any
-        # stray legacy key first so a baseline that predates the migration doesn't trip that refusal;
-        # the baseline is restored verbatim at the end regardless.
+        # Inject into workers.list[] (#506), the only shape since 2.0.0 removed the alias (#1832).
+        # del() stays load-bearing: it drops a stray legacy key so a pre-2.0 baseline cannot trip
+        # migrate_legacy_workers' both-set-to-different-values refusal on the apply below. The
+        # baseline is restored verbatim at the end regardless.
         ctrl_config="$(printf '%s' "$ctrl_config" | jq \
             --arg n "$rig" --arg h "$RIG_HOST" --argjson cp "$RIG_CONTROL_PORT" --arg tok "${IT_RIG_TOKEN:-}" '
             del(.dashboard.workers)
@@ -2236,7 +2234,7 @@ run_rigforge_control() {
 
     local fails_before="$IT_FAIL"
     push_config "$ctrl_config"
-    it_step "apply with dashboard.control on + the rig pinned in workers.list[] (or its baseline legacy dashboard.workers[])…"
+    it_step "apply with dashboard.control on + the rig pinned in workers.list[]…"
     if ! pithead apply -y >"$OUT_DIR/rigforge-control.apply.log" 2>&1; then
         it_fail "apply (control on + rig descriptor) succeeded" "see $OUT_DIR/rigforge-control.apply.log"
         push_config "$BASELINE_CONFIG"
@@ -2248,7 +2246,7 @@ run_rigforge_control() {
     wait_for 120 5 "dashboard to re-read the rig after the control apply" _pred_rig_present "$rig" || true
 
     # ---- #514: the enriched READ path survives a populated (masked) descriptor ----
-    # With a token in workers.list[] (or its baseline legacy dashboard.workers[]), the container reads it ONLY as {"__secret__":true}. The
+    # With a token in workers.list[], the container reads it ONLY as {"__secret__":true}. The
     # v1.5.2 regression stringified that sentinel into `Authorization: Bearer {'__secret__': True}`
     # and every :8081 probe 401'd -> api_ok=false, feed gone. Assert both still resolve.
     st="$(api_state)"
@@ -2338,26 +2336,23 @@ run_rigforge_reverse() { # <rig-name> <orig-max_temp_c-or-empty>
 
     # Prefill leg (always runs): the masked prefill copy (#440) must carry the descriptor host and
     # mask the token to the sentinel — the exact surface #508 broke. render_masked_config re-runs on
-    # every apply, so a hand-edit to config.json shows up in the editor form. Reads/writes dual-resolve
-    # workers.list[] (#506) vs. its baseline legacy dashboard.workers[] fallback, since run_rigforge_control
-    # only migrates to workers.list[] on a fresh inject — an already-descriptored baseline keeps
-    # whichever shape it arrived in (see the shape note on run_rigforge_control above).
+    # every apply, so a hand-edit to config.json shows up in the editor form. Reads and the watts
+    # write below resolve workers.list[] alone: the dashboard.workers[] fallback was removed in 2.0.0
+    # (#1832), and the apply above has already migrated a pre-2.0 baseline into workers.list[].
     cdir="$(env_on_box CONTROL_DIR)"
     if [ -n "$cdir" ]; then
         masked="$(rx "cat $(quote_arg "$cdir/masked/config.json") 2>/dev/null")"
         assert_ne "masked prefill carries the rig descriptor host (#516/#440)" \
-            "$(printf '%s' "$masked" | jq -r --arg n "$rig" 'first((.workers.list // .dashboard.workers // [])[] | select(.name==$n) | .host) // empty' 2>/dev/null)" ""
+            "$(printf '%s' "$masked" | jq -r --arg n "$rig" 'first((.workers.list // [])[] | select(.name==$n) | .host) // empty' 2>/dev/null)" ""
         assert_eq "masked prefill masks the per-worker token to the sentinel (#516/#440)" \
-            "$(printf '%s' "$masked" | jq -r --arg n "$rig" 'first((.workers.list // .dashboard.workers // [])[] | select(.name==$n) | .token."__secret__") // empty' 2>/dev/null)" "true"
+            "$(printf '%s' "$masked" | jq -r --arg n "$rig" 'first((.workers.list // [])[] | select(.name==$n) | .token."__secret__") // empty' 2>/dev/null)" "true"
         # A benign hand-edit to config.json must surface in the freshly re-rendered prefill (#516).
         local probe_watts=123
         push_config "$(printf '%s' "$(rx 'cat config.json')" | jq --arg n "$rig" --argjson w "$probe_watts" \
-            'if ((.workers.list // []) | any(.name == $n))
-             then (.workers.list[] | select(.name==$n) | .watts) = $w
-             else (.dashboard.workers[] | select(.name==$n) | .watts) = $w end')"
+            '(.workers.list[] | select(.name==$n) | .watts) = $w')"
         pithead apply -y >/dev/null 2>&1 || true
         assert_eq "config.json hand-edit shows up in the masked prefill (#516 render_masked_config claim)" \
-            "$(rx "cat $(quote_arg "$cdir/masked/config.json") 2>/dev/null" | jq -r --arg n "$rig" 'first((.workers.list // .dashboard.workers // [])[] | select(.name==$n) | .watts) // empty' 2>/dev/null)" "$probe_watts"
+            "$(rx "cat $(quote_arg "$cdir/masked/config.json") 2>/dev/null" | jq -r --arg n "$rig" 'first((.workers.list // [])[] | select(.name==$n) | .watts) // empty' 2>/dev/null)" "$probe_watts"
     else
         it_skip_leg "masked prefill (#516)" "CONTROL_DIR not set"
     fi

@@ -17,10 +17,10 @@
 # outside the drift alarm entirely: nothing reds when it changes.
 #
 # THE POPULATION IS MEASURED, NOT LISTED. A parse of the CONTROL_SECRET_PATHS literal would see 12
-# fixed paths and miss all three variable-length array stanzas (workers.list[].token, the
-# deprecated dashboard.workers[].token, notifications.webhooks[]), which are masked in jq rather
-# than in the list. So this runs the REAL masker over a populated fixture and reads back which
-# paths became {"__secret__": true} — 15 of them. The four classification lists are likewise read
+# fixed paths and miss both variable-length array stanzas (workers.list[].token,
+# notifications.webhooks[]), which are masked in jq rather than in the list. So this runs the REAL
+# masker over a populated fixture and reads back which paths became {"__secret__": true} — 14 of
+# them. (dashboard.workers[].token was a third stanza until 2.0.0 removed the alias, #1832.) The four classification lists are likewise read
 # out of selftest-redact.sh rather than restated here; restating them is what drifts.
 #
 # ⛔ THREE THINGS THAT COST ATTEMPTS — each one silently produces a GREEN.
@@ -30,10 +30,9 @@
 #    a document that was never written, and every "is classified" row below then passes
 #    vacuously over an empty population. THE ARMING CONTROL BELOW IS NOT OPTIONAL: assert the
 #    ARTIFACT exists and carries the expected number of masked paths, never the rc.
-# 2. THE FIXTURE MUST GIVE EACH ARRAY THE ELEMENT TYPE ITS STANZA EXPECTS. workers.list[] and
-#    dashboard.workers[] are arrays of OBJECTS — the stanzas do `.token` on each element, so a
-#    string element makes jq fail, and per (1) it fails quietly. notifications.webhooks[] is an
-#    array of STRINGS. config.reference.json ships all of them EMPTY and so cannot tell you this;
+# 2. THE FIXTURE MUST GIVE EACH ARRAY THE ELEMENT TYPE ITS STANZA EXPECTS. workers.list[] is an
+#    array of OBJECTS — the stanza does `.token` on each element, so a string element makes jq
+#    fail, and per (1) it fails quietly. notifications.webhooks[] is an array of STRINGS. config.reference.json ships all of them EMPTY and so cannot tell you this;
 #    it has to be hand-specified, which is the same limitation #1723 hit from the other side.
 # 3. DO NOT PIPE THE `source`. `source ./pithead 2>&1 | tail` runs it in a SUBSHELL, so
 #    render_masked_config is undefined and CONFIG_FILE reads empty afterwards — which looks
@@ -62,7 +61,7 @@ CLASSIFIER="$HERE/selftest-redact.sh"
 FIXTURE_PATHS="monero.node_username monero.node_password monero.view_key tari.view_key
 p2pool.stratum_password xvb.standby.source dashboard.auth.password workers.api_token
 healthchecks.ping_url telegram.bot_token notifications.ntfy.url notifications.ntfy.token
-workers.list[].token dashboard.workers[].token notifications.webhooks[]"
+workers.list[].token notifications.webhooks[]"
 
 echo "== render_masked_config's masked paths are all classified by selftest-redact.sh (#1730) =="
 
@@ -114,7 +113,6 @@ jq '
   | .notifications.ntfy.url   = "https://ntfy.example.invalid/fixture"
   | .notifications.ntfy.token = "fixture-ntfy-token"
   | .workers.list      = [{"name": "w1", "token": "fixture-worker-token"}]
-  | .dashboard.workers = [{"name": "w2", "token": "fixture-depr-token"}]
   | .notifications.webhooks = ["https://hook.example.invalid/fixture"]
 ' "$REF" >"$BOX/config.json" || {
     it_fail "fixture renders" "jq could not populate the fixture from $REF"

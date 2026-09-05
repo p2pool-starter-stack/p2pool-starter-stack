@@ -16,7 +16,7 @@
 #   "rotate-secrets failure path" (#378) is a side-effect check of THAT test group, not this
 #   domain — it stays with it, and that group now lives in test-secrets.sh.
 # - The per-worker token-mask pair ("per-worker token mask + host-side restore", legacy
-#   dashboard.workers[] and workers.list[], #172/#679/#506) was a NAMED leave-behind here,
+#   workers.list[], #172/#679/#506 — the 1.x alias is gone) was a NAMED leave-behind here,
 #   deferred to a future $C-sandbox-cluster pass. It has since moved to test-worker-config.sh,
 #   and the control-core cluster it was waiting on was cut into test-control-core.sh by #1105
 #   R12 — so this bullet survives only for the episode below, and for the RETRACTION of it.
@@ -133,7 +133,7 @@ WA="$SANDBOX/ctrl185"
 mkdir -p "$WA/staged" "$WA/results" "$WA/audit"
 # config.json: rig1 fully addressable (host+token), rig2 has a host but no token (bearer-mandatory).
 cat >"$WA/config.json" <<'EOF'
-{ "dashboard": { "workers": [
+{ "workers": { "list": [
     { "name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-rig1" },
     { "name": "rig2", "host": "10.0.0.8" }
 ] } }
@@ -173,29 +173,16 @@ else
     ok "worker-apply never leaks a token to results/audit"
 fi
 # Per-drain dial budget (#185 hardening): with the budget exhausted, a fully-valid apply (rig1 has a
-# host + token) is refused BEFORE any rig dial, so a flood can't starve the root runner.
+# host + token) is refused BEFORE any rig dial, so a flood can't starve the root runner. The budget
+# rejection doubles as the proof that resolution SUCCEEDED: getting "too many worker config changes"
+# rather than "no configured host"/"no token" means the descriptor above resolved before the pre-dial
+# gate, without needing to stub the network dial. That is why no separate resolution case is needed
+# now that workers.list[] is the only shape (#1832 removed the 1.x alias this block used to mirror).
 u7="99999999-7777-4777-8777-777777777777"
 printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","changes":{"DONATION":2}}\n' "$u7" >"$WA/req.json"
 CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA/config.json" run_sourced "$SANDBOX" control_process_request "$WA/req.json" "$WA" >/dev/null 2>&1
 assert_contains "worker-apply over the dial budget is rejected (no dial)" \
     "$(jq -r '.error // ""' "$WA/results/$u7.json")" "too many worker config changes"
-
-# workers.list[] (#506): control_worker_apply resolves the rig's host/token the same way from the
-# CURRENT shape. Reuses the budget=0 technique above — a "too many worker config changes" rejection
-# (instead of "no configured host"/"no token") proves resolution succeeded BEFORE the pre-dial
-# budget gate, without needing to stub the actual network dial.
-WA2="$SANDBOX/ctrl506"
-mkdir -p "$WA2/staged" "$WA2/results" "$WA2/audit"
-cat >"$WA2/config.json" <<'EOF'
-{ "workers": { "list": [
-    { "name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-rig1" }
-] } }
-EOF
-u8="88888888-9999-4999-8999-888888888888"
-printf '{"id":"%s","action":"worker-apply","actor":"admin","worker":"rig1","changes":{"DONATION":2}}\n' "$u8" >"$WA2/req.json"
-CONTROL_WA_BUDGET=0 PITHEAD_CONFIG_FILE="$WA2/config.json" run_sourced "$SANDBOX" control_process_request "$WA2/req.json" "$WA2" >/dev/null 2>&1
-assert_contains "workers.list worker-apply resolves the rig (budget rejection proves pre-dial success)" \
-    "$(jq -r '.error // ""' "$WA2/results/$u8.json")" "too many worker config changes"
 
 echo "== control channel: worker config apply ACCEPT path succeeds + is audited (#185) =="
 # Mirrors the reject-path setup above, but with a stub curl standing in for the rig's control API so a
@@ -205,7 +192,7 @@ echo "== control channel: worker config apply ACCEPT path succeeds + is audited 
 WA3="$SANDBOX/ctrl185-accept"
 mkdir -p "$WA3/staged" "$WA3/results" "$WA3/audit" "$WA3/bin"
 cat >"$WA3/config.json" <<'EOF'
-{ "dashboard": { "workers": [
+{ "workers": { "list": [
     { "name": "rig1", "host": "10.0.0.9", "control_port": 8082, "token": "tok-rig1" }
 ] } }
 EOF

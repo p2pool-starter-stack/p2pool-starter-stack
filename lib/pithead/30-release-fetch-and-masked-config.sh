@@ -124,11 +124,19 @@ render_masked_config() { # <control-dir>
     local mdir="$1/masked" tmp
     mkdir -p "$mdir" 2>/dev/null || true
     tmp="$mdir/.config.json.tmp"
-    # Per-worker tokens (#172) live in the variable-length descriptor array, out of reach of the
-    # fixed-path walk above — mask each SET .token entry by entry. workers.list[] is current
-    # (#506); dashboard.workers[] is the deprecated fallback — mask BOTH shapes unconditionally
-    # (validate_worker_endpoints refuses a config that populates both, but empty schema defaults
-    # may sit alongside the populated one, #679, and masking an empty array is a no-op).
+    # Per-worker tokens (#172) live in the variable-length descriptor array at workers.list[]
+    # (#506), out of reach of the fixed-path walk above — mask each SET .token entry by entry.
+    # Masking an empty array is a no-op.
+    #
+    # dashboard.workers[] STAYS masked although 2.0.0 removed that alias (#1832), for the reason
+    # os/overlay/pithead-media-config:163 stays: a masking predicate is not alias acceptance. "The
+    # migration ran first" is FALSE at two of this function's three callers — 49:81 re-renders the
+    # prefill before draining PRECISELY so a hand-edit since the last apply shows up, and 07:75
+    # renders straight off $CONFIG_FILE for a support bundle. Neither runs parse_and_validate_config,
+    # and migrate_legacy_workers returns early on a dry run in any case. A machine upgraded to 2.0.0
+    # but not yet applied would otherwise put a raw per-rig token into the editor prefill and into a
+    # support bundle — the artifact operators hand to strangers. Masking a key nothing reads costs
+    # one no-op jq branch; not masking one that is still on disk is a credential leak.
     if jq --argjson paths "$CONTROL_SECRET_PATHS" '
         reduce $paths[] as $p (.;
             if ((try getpath($p) catch null) // "") == "" then .

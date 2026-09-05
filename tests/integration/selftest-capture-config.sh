@@ -12,8 +12,9 @@
 #
 # THE FIX IS ROUTING, NOT NEW MACHINERY. The stack already classifies this document by PATH:
 # `render_masked_config` (lib/pithead/30-release-fetch-and-masked-config.sh) walks
-# CONTROL_SECRET_PATHS *plus* three variable-length array cases the fixed-path walk cannot reach
-# (workers.list[].token, the deprecated dashboard.workers[].token, and notifications.webhooks[]).
+# CONTROL_SECRET_PATHS *plus* two variable-length array cases the fixed-path walk cannot reach
+# (workers.list[].token and notifications.webhooks[]; the deprecated dashboard.workers[].token was
+# a third until 2.0.0 removed that alias, #1832).
 # The capture now SOURCES the box's own `./pithead` and calls that function, so there is ONE
 # classification source and this harness restates neither the list nor the jq program. Sourcing is
 # the shipped contract, not a trick: 00-prelude.sh sets `_STACK_SOURCED=1` when BASH_SOURCE[0]

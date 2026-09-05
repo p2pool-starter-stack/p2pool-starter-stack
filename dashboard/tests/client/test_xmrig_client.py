@@ -281,7 +281,7 @@ async def test_long_name_token_is_capped(monkeypatch):
 
 
 # --- Per-worker endpoint descriptors (#172) ------------------------------------------------------
-# dashboard.workers[] entries override the fleet defaults per rig. Merge rule: per-worker field >
+# workers.list[] entries override the fleet defaults per rig. Merge rule: per-worker field >
 # fleet default > inherit. Matched by stratum name first, then by connecting IP against an
 # operator-set host; a per-worker token implies token-auth for that worker only.
 
