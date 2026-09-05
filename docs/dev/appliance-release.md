@@ -242,6 +242,11 @@ Two harness rules worth knowing before you lose an afternoon to them:
 - On failure it keeps the guest console at `/tmp/pithead-os-serial.log.failed`. Read it
   first. `/dev/console` is whichever `console=` came **last** on the kernel cmdline, so
   check which one you are reading before concluding a component is silent.
+- A failed dashboard-driven install (update phase, leg 4) also keeps the guest's own
+  account at `/tmp/pithead-os-serial.log.leg4-install`: the boot journal's rauc and
+  OS-install lines, `rauc status`, disk and memory, and any OOM kill. The runner deletes
+  its install log on failure and the dashboard result carries only rauc's last line, so
+  this file is the only place the cause survives.
 
 ## The automated battery
 
