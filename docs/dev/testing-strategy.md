@@ -300,7 +300,8 @@ Every scenario, at every tier, holds to the same rules.
   hashing on the box; all artifacts pass a redactor.
 - Reproducible. The live run records a manifest (stack `VERSION`, git rev, image digests).
 - Test code is real code. The same lint (shellcheck) and coverage gate apply to the tests
-  themselves, and the inventory generator fails CI if it stops enumerating a suite.
+  themselves, and the inventory generator fails CI if a suite stops enumerating or shrinks past
+  its floor.
 - An assertion reads its haystack directly, never through a pipe. `grep -q` exits at its first
   match, so under `pipefail` the writer's broken pipe becomes the pipeline's exit status and the
   match is thrown away: a directive that was present read as missing, and — in the direction

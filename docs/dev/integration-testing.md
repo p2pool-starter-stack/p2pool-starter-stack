@@ -549,6 +549,31 @@ first hardware run to exercise the wait hit precisely that
 self-test that covers the settle now runs the real wait rather than a silent stub, because a stub
 that prints nothing cannot see this class at all.
 
+The same leg then asserts that the change reached the dashboard's `#185` per-worker history, and
+that readback needed a settle of its own
+([#1471](https://github.com/p2pool-starter-stack/pithead/issues/1471)). The two surfaces converge
+at different moments, and the harness used to argue that they did not. The argument's first half
+holds: the reconcile step does run before the enriched-feed merge, on the same poll. Its second
+half does not, because both of those read a rig file that RigForge writes at the *start* of a
+control-apply, before it has decided the outcome at all. The terminal status goes to a second file
+at the end, after the apply, an xmrig restart and a bounded wait for the miner to come back, and
+the reconciler cannot move the row off `accepted` until it has read that one. Settling on the
+config therefore ends at the start of that window rather than after it, and reading the row there
+raced it by up to ninety seconds. The claim survived because two of the three keys that reach that
+assertion, `max_temp_c` and `watchdog_interval_min`, are on RigForge's restart-free fast path, where
+the window is too small to see. The third, `DONATION`, is off that list and takes the full path —
+which is where the ninety-second bound comes from, and where a hardware run would have hit this.
+
+The row is now waited to a terminal status before it is read, on the same ninety-second bound the
+window itself has. Terminal rather than `applied`, which is what keeps the assertion honest in both
+directions: a rig that genuinely rejected a change publishes its terminal row at once, so the leg
+reds on the real status instead of spending the whole bound on a verdict already known, and a row
+that never settles stays `accepted` and reds as well. The one answer the wait must never invent is
+`applied` for a row nobody has confirmed. Terminal is written as the complement of `accepted` and
+"no row yet", not as a list of the six outcomes the rig can report today, so a status added
+upstream reads as terminal and gets named by the assertion rather than timing out and being
+reported as a row that never settled.
+
 ### The abort-safe unwind
 
 Every leg above restores what it changed when it finishes. That covers a leg that *fails*; it does
@@ -849,27 +874,34 @@ a working `mktemp` holds the other side, so deleting the sandbox logic outright 
 last case drives the pre-fix expression against the same fixture and requires it to destroy the
 sentinel, so a row that is green because the fixture never armed fails rather than reads as proof.
 
-A second block in that file pins what the suite does *not* reach. The
+A second block in that file holds the invariant that keeps the constructor honest. The
 [#1705](https://github.com/p2pool-starter-stack/pithead/issues/1705) invariant reads
-`tests/stack/lib.sh` and the `test-*.sh` domain files and names `tests/stack/run.sh` and the
-standalone `test_*.sh` out of itself, because those belong to other lanes and the conversion to the
-fail-closed constructor stopped at that boundary. A list of names rots in silence: a fifth bare
-`mktemp -d` assignment added to `run.sh` would sit outside the invariant with nothing saying so,
-and that gap rather than the four known sites is what
-[#1725](https://github.com/p2pool-starter-stack/pithead/issues/1725) is about. The four sites are
-not inert: the hazard is any `"$VAR/sub"` expansion, not a recursive `rm`, and all four have one —
+`tests/stack/lib.sh` and the `test-*.sh` domain files, and for a while it named `tests/stack/run.sh`
+and the standalone `test_*.sh` out of itself, because those belonged to other lanes and the
+conversion to the fail-closed constructor stopped at that boundary. A list of names rots in
+silence: a fifth bare `mktemp -d` assignment added to `run.sh` would have sat outside the invariant
+with nothing saying so, and that gap rather than the four known sites is what
+[#1725](https://github.com/p2pool-starter-stack/pithead/issues/1725) was about. The four sites were
+not inert: the hazard is any `"$VAR/sub"` expansion, not a recursive `rm`, and all four had one —
 `run.sh` writes `"$XPTLS/cert.pem"` and `"$XPTLS/key.pem"` and then removes the second, both
 `local d` helpers write `"$d/xmrig-proxy"`, and `test_data_reset.sh` runs `mkdir -p "$WORK/bin"`.
 Under an empty value each is an absolute path at the filesystem root, and `set -u` does not catch
 it because a failed `mktemp -d` leaves the variable set and empty. Those writes fail for an
 unprivileged user and would land under `/` as root; only the trailing `rm -rf "$VAR"` is inert.
-The excluded population is therefore pinned to exactly those four, keyed on file
-and variable name rather than line number, because the line numbers the issue cites had already
-drifted by three when the pin was written. It reds in both directions: a new bare site fails it,
-and so does converting the four. That second red is expected, and it is the signal to delete the
-by-name exclusion, widen the invariant to those files, and drop the pin along with it. The
-conversion lands in `tests/stack/` and the pin lives in `tests/integration/`, so the two halves
-merge separately and the row is red in between.
+While that gap stood it was pinned to exactly those four, keyed on file and variable name rather
+than line number, because the line numbers the issue cites had already drifted by three when the
+pin was written. The pin reds in both directions: a new bare site fails it, and so does converting
+the four. #1725 converted them, so the second red is the signal the pin was built to give, and the
+by-name exclusion, the pin, and the split between the two halves are gone together. Both halves land
+in one merge, because neither order keeps the branch green on its own: converting first empties the
+pin, and widening first makes the invariant's own match set non-empty against sites that are still
+bare. The glob now covers `lib.sh`, `run.sh` and both test-file spellings, which is every suite file
+under `tests/stack`; the one file outside it, `fixtures/rauc-info/capture.sh`, is a capture helper
+the suite does not source and is named in the code rather than left implied. What replaces the pin
+is a file-set control: the invariant asserts that its own list resolves and reaches `run.sh` and
+`test_data_reset.sh` before it reads an absence of matches as evidence, and refuses rather than
+records when it does not, because a glob that quietly stopped matching would report the same clean
+result as a fully converted tree.
 
 ---
 
