@@ -6599,7 +6599,7 @@ validate_worker_endpoints() {
 # because this write happens mid-apply, before that reown runs.
 readonly XVB_ALIAS_KEYS_JQ='["enabled", "url", "donor_id"]'
 migrate_legacy_workers() {
-    local conflict owner tmp="${CONFIG_FILE}.tmp"
+    local conflict owner populated tmp="${CONFIG_FILE}.tmp"
     [ -f "$CONFIG_FILE" ] || return 0
     # The refusal is checked on EVERY run, dry or not: a config that sets an old and a new name to
     # different values must fail the apply it was handed to, not just the one that would rewrite it.
@@ -6616,7 +6616,25 @@ migrate_legacy_workers() {
     [ "$PITHEAD_DRY_RUN" -eq 1 ] && return 0
     # Nothing to move is the common case — do not touch the file, and do not leave a backup.
     jq -e 'has("xmrig_proxy") or ((.dashboard // {}) | has("workers"))' "$CONFIG_FILE" >/dev/null 2>&1 || return 0
+    # Is there 1.x DATA here, or only names to drop? An empty dashboard.workers[] and an
+    # xmrig_proxy block xvb already mirrors lose nothing if the move fails. Populated ones are
+    # lost SILENTLY once the fallback reads are gone: the validator sees an empty workers.list[]
+    # and passes, render reads .xvb.* and falls back to defaults, and the apply REPORTS SUCCESS
+    # while dropping the operator's XvB endpoint and per-rig hosts and tokens. So the two
+    # best-effort branches below fail CLOSED whenever losing the move would lose settings, and
+    # stay best-effort when it would not — a blanket error would break `backup` and
+    # `release-verify`, which call parse_and_validate_config on paths that write nothing. The
+    # same answer picks the success line: only a populated config had anything to migrate.
+    populated=1
+    jq -e --argjson ks "$XVB_ALIAS_KEYS_JQ" '. as $r
+        | (((.dashboard // {}) | .workers // []) != [])
+          or ([ $ks[] as $k | select((($r.xmrig_proxy // {}) | has($k))
+                                     and ((($r.xvb // {}) | has($k)) | not)) ] | length > 0)' \
+        "$CONFIG_FILE" >/dev/null 2>&1 || populated=0
     if ! cp -p "$CONFIG_FILE" "${CONFIG_FILE}.bak-1x" 2>/dev/null; then
+        if [ "$populated" -eq 1 ]; then
+            error "Could not back up $CONFIG_FILE before migrating its 1.x config keys, and it carries 1.x settings 2.0.0 no longer reads. Refusing: applying now would report success while dropping your XvB settings and per-rig hosts and tokens. Free space or fix the permissions on the config directory, then re-run."
+        fi
         warn "Could not back up $CONFIG_FILE before migrating the 1.x config keys — leaving them in place; they are no longer read."
         return 0
     fi
@@ -6635,9 +6653,16 @@ migrate_legacy_workers() {
         mv "$tmp" "$CONFIG_FILE"
         chmod 600 "$CONFIG_FILE"
         if [ -n "$owner" ]; then chown "$owner" "$CONFIG_FILE" 2>/dev/null || true; fi
-        log "Migrated the 1.x config keys (dashboard.workers[] to workers.list[], xmrig_proxy.* to xvb.*) — the old copy is at ${CONFIG_FILE}.bak-1x."
+        if [ "$populated" -eq 1 ]; then
+            log "Migrated the 1.x config keys (dashboard.workers[] to workers.list[], xmrig_proxy.* to xvb.*) — the old copy is at ${CONFIG_FILE}.bak-1x."
+        else
+            log "Deleted the empty 1.x config keys — they carried nothing to move. The old copy is at ${CONFIG_FILE}.bak-1x."
+        fi
     else
         rm -f "$tmp"
+        if [ "$populated" -eq 1 ]; then
+            error "Could not migrate the 1.x config keys in $CONFIG_FILE, and it carries 1.x settings 2.0.0 no longer reads. Refusing: applying now would report success while dropping your XvB settings and per-rig hosts and tokens. The pre-migration copy is at ${CONFIG_FILE}.bak-1x."
+        fi
         warn "Could not migrate the 1.x config keys in $CONFIG_FILE — they are no longer read (backup left at ${CONFIG_FILE}.bak-1x)."
     fi
 }

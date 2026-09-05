@@ -11,32 +11,13 @@
 # translated into (#180).
 # Sourced by tests/stack/run.sh.
 #
-# Why the source line sits where it does:
-# The stanza replaces the "config validation" black-box at its ORIGINAL position, not at the first
-# vacated line. That block makes the suite's first call to lib.sh's build_val_sandbox(), which
-# creates $V and defines seed_env() for every later reader — in run.sh and in the domain files
-# sourced after it. Anchoring there leaves that call at exactly the global position it already had,
-# so the only sections whose execution order changes are the four read-only ones (describe_change,
-# explain_subnet_collision, the reference/core-key invariants, render), none of which creates,
-# consumes or mutates ambient state.
+# Why the source line sits where it does: this file makes the suite's FIRST build_val_sandbox()
+# call ($V, seed_env), so its stanza holds the ORIGINAL global position of the "config validation"
+# block. Only read-only sections move; nothing here touches $C or the ambient .env/Caddyfile.
 #
-# Re-derivations: none needed. $SANDBOX, $STACK, $ROOT, $CONFIG_FILE and the VALID_* address
-# fixtures come from lib.sh; $V, $WALLET and seed_env() come from the build_val_sandbox() call this
-# file makes itself, ahead of the only section below that reads them; $SUBADDR and $INTADDR are
-# assigned inside the validation block. Nothing here touches $C, $RESULTS, $MASKED, $REQS, $STAGED
-# or $AUDIT, and nothing writes the ambient .env or Caddyfile — render builds its own
-# $SANDBOX/render-sut tree.
-#
-# Left behind, code-checked (not markers):
-# - "unit: config_bool honours an explicit false (#294)" and "unit: env helpers": config-flavoured
-#   helper probes the #1252 domain map does not name for this module, and this PR moves exactly what
-#   the map names.
-# - "black-box: editable-allowlist commit round-trip, every key (#522)" — the multi-key
-#   describe_change exercise. A control-channel black-box against the ambient $C sandbox, so it was
-#   left for the $C-cluster pass; #1105 R14 has since cut it to test-control-editable-allowlist.sh.
-# - "unit: render-quadlet parity vs os/quadlet fixtures (#77 phase 1)" — a render test by name, but
-#   it checks the appliance's Quadlet unit set against the os/quadlet fixtures; it belongs to the
-#   appliance module, cut next.
+# Left behind, code-checked (not markers): the config_bool / env-helper probes (#294), unnamed for
+# this module by the #1252 domain map; the editable-allowlist round-trip (#522, cut to
+# test-control-editable-allowlist.sh by #1105 R14); and render-quadlet parity, an appliance test.
 
 echo "== unit: describe_change =="
 # Monero prune (#719): DISABLE (on → off) forces a full re-sync, host-only DEST; ENABLE (off → on)
@@ -403,6 +384,26 @@ assert_rc "invalid legacy config still fails apply" "$?" "1"
 assert_eq "the refused config was migrated first — the 1.x key is gone" "$(jq -r '.dashboard | has("workers")' "$V/config.json")" "false"
 assert_eq "the refused config's entries survive at the new path" "$(jq -r '.workers.list[0].host' "$V/config.json")" "attacker:8080"
 if [ -f "$V/config.json.bak-1x" ]; then ok "a refused config keeps its pre-migration copy"; else bad "a refused config keeps its pre-migration copy" "no .bak-1x"; fi
+
+# A migration that CANNOT run must fail closed when it would lose settings (#1832): with the
+# fallback reads gone, past a failed move the apply reads an empty workers.list[] and default
+# .xvb.* and REPORTS SUCCESS, dropping per-rig hosts, tokens and the XvB endpoint. The same answer
+# picks the success line. An unwritable backup TARGET blocks only the cp; a directory would not.
+mig_1x() { # <dashboard.workers-json> — seed a 1.x-only config and apply it; output lands in $out
+    seed_env
+    printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":%s} }\n' "$WALLET" "$1" >"$V/config.json"
+    out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
+}
+rm -f "$V/config.json.bak-1x" && mig_1x '[]'
+assert_rc "an empty 1.x key applies — it carries nothing to lose" "$?" "0"
+assert_not_contains "and the success line claims no move that never happened" "$out" "Migrated the 1.x config keys"
+: >"$V/config.json.bak-1x" && chmod 444 "$V/config.json.bak-1x" && mig_1x '[{"name":"legacy-rig","host":"worker-lan.local","token":"tok_lost99"}]'
+assert_rc "a 1.x config whose migration cannot back up is REFUSED, not applied" "$?" "1"
+assert_contains "the refusal says settings would be dropped" "$out" "dropping your XvB settings"
+assert_eq "the refused config is left exactly as the operator wrote it" "$(jq -r '.dashboard.workers[0].token' "$V/config.json")" "tok_lost99"
+mig_1x '[]'
+assert_rc "an EMPTY 1.x key whose backup fails still applies (nothing to lose)" "$?" "0"
+chmod 644 "$V/config.json.bak-1x" && rm -f "$V/config.json.bak-1x"
 
 # dashboard.energy (#260): malformed price/currency fails apply loudly, like the worker descriptors.
 en_case() { # <energy-json> <label> <expected-msg-fragment>
