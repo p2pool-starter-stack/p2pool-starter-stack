@@ -83,12 +83,13 @@ _RIGFORGE_BLOCK = {
         "strikes": 0,
     },
     # The rig's EFFECTIVE writable config (rigforge#253), what Worker Inspect prefills from (#1235).
-    # Exactly the six writable keys, and `pools` carries only what the producer leaves after its own
-    # `del(.pass, ."tls-fingerprint")` — a contract-shaped body cannot contain a credential, which
-    # is why the credential-strip defence is proven at tier 1 against a deliberately hostile body
-    # and not here. Testing it here too would be the same behaviour at two tiers.
+    # Exactly the six writable keys. `pools[].pass` is the {"__secret__": true} marker: since the
+    # ref PROVENANCE names, the producer serves a STORED pool password as that marker and omits the
+    # key when none is stored (rigforge#415), so a contract-shaped body still never carries a
+    # credential. The credential-strip defence is proven at tier 1 against a deliberately hostile
+    # body and not here; testing it here too would be the same behaviour at two tiers.
     "config": {
-        "pools": [{"url": "itest-proxy:3333"}],
+        "pools": [{"url": "itest-proxy:3333", "pass": {"__secret__": True}}],
         "DONATION": 1,
         "autotune": "disabled",
         "watchdog": "enabled",

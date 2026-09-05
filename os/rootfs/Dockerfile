@@ -186,7 +186,7 @@ RUN chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
 # The built-in miner (#796): a pinned RigForge tree plus everything it needs, baked at image
 # build because nothing can be installed later — apt cannot run on the read-only root, and even
 # a rw-remount install leaves its /etc state (alternatives, ld.so.cache) on the volatile overlay
-# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.16.0 release
+# where the first reboot breaks the compiler. RIGFORGE_REF pins rigforge's v1.17.0 release
 # (by commit, not tag name, so a moved tag cannot change the bake); bump it release by release.
 # v1.16.0 is the floor for the HugePages pool ceiling: hugepages_pool_ceiling_mb (rigforge#398,
 # filed from #1103) is absent from v1.15.1's tree entirely, and declaring it into one fails OPEN —
@@ -204,7 +204,7 @@ RUN chmod +x /usr/local/bin/docker-compose /usr/local/bin/cosign \
 RUN apt-get install -y --no-install-recommends \
         git build-essential cmake libuv1-dev libssl-dev libhwloc-dev gettext-base python3 \
         linux-cpupower msr-tools
-ARG RIGFORGE_REF=4ce29b3daf063fd1b45e050649e93aa9592618e1
+ARG RIGFORGE_REF=efd23e440ce8a160a9251f59f0ebcc5faa7ad4f1
 RUN curl -fsSL -o /tmp/rigforge.tar.gz \
         "https://github.com/p2pool-starter-stack/rigforge/archive/${RIGFORGE_REF}.tar.gz" \
     && mkdir -p /opt/rigforge \

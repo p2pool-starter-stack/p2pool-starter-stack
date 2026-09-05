@@ -403,9 +403,9 @@ def test_worker_config_prefill_parses_over_the_wire():
     with FakeWorkerApi(auth="none") as fake:
         payload = _probe_worker(fake, auth="none")
     cfg = parse_rigforge(payload)["config"]
-    # Exactly the writable keys, with the rig's own values — not our record of what we last pushed.
+    # Exactly the writable keys, with the rig's own values; pools[].pass is the producer's {"__secret__": true} marker, kept as-is (rigforge#415, #1548).
     assert cfg == {
-        "pools": [{"url": "itest-proxy:3333"}],
+        "pools": [{"url": "itest-proxy:3333", "pass": {"__secret__": True}}],
         "DONATION": 1,
         "autotune": "disabled",
         "watchdog": "enabled",
