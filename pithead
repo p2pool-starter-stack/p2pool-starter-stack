@@ -2375,6 +2375,16 @@ publish_disk_inventory() { # <spool-dir>
 # the fixed paths cannot reach), alert credentials, the ssh key. Wallet addresses, node modes
 # and hosts, the pool tier stay: those are the answers the operator came back for, and none of
 # them is a secret. Errs toward stripping more — a lost convenience beats a leaked credential.
+#
+# The two ENABLEMENTS go with the login, and that is the half this was missing (#1846). The
+# validator fails closed on dashboard.control.enabled and on dashboard.onion.enabled whenever
+# the password is empty — deliberately, since both are reachable control surfaces. Deleting the
+# login while leaving either switch on therefore publishes a pre-fill that CANNOT be submitted:
+# the page offers it back, "Generate a strong password for me" leaves the password empty because
+# the HOST generates one only AFTER the candidate has validated, and the first validation refuses
+# the operator's own answers. Dropping control.enabled costs nothing — apply_appliance_defaults
+# puts it back on any appliance whose password is non-empty. onion.enabled the operator re-ticks,
+# which is the same trade the paragraph above already makes.
 # rc non-zero when the file is not a usable config object; callers treat that as "no pre-fill".
 #
 # .dashboard.workers STAYS in the del list although 2.0.0 removed that alias (#1832), and this is
@@ -2387,7 +2397,8 @@ strip_config_secrets() { # <config-file> -> stripped JSON on stdout
     jq -e --argjson paths "$CONTROL_SECRET_PATHS" '
         delpaths($paths)
         | del(.dashboard.auth, .dashboard.workers, .workers, .telegram,
-              .healthchecks, .notifications, .ssh, .tari.spend_public_key)' "$1" 2>/dev/null
+              .healthchecks, .notifications, .ssh, .tari.spend_public_key,
+              .dashboard.control.enabled, .dashboard.onion.enabled)' "$1" 2>/dev/null
 }
 
 # Reinstall pre-fill (#794). When the offered targets include exactly one disk that already

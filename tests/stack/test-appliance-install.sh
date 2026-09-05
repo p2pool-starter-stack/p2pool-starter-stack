@@ -276,6 +276,8 @@ cat >"$SCS/prev.json" <<'PREV'
   "p2pool": {"pool": "main", "stratum_password": "LEAK-stratum"},
   "dashboard": {"timezone": "Europe/Berlin",
                 "auth": {"username": "LEAK-dashuser", "password": "LEAK-dashpw"},
+                "control": {"enabled": true},
+                "onion": {"enabled": true, "client_auth": true},
                 "workers": [{"name": "w0", "host": "h", "token": "LEAK-oldworker"}]},
   "workers": {"api_auth": true, "api_token": "LEAK-apitoken",
               "list": [{"name": "rig1", "host": "rig1.lan", "token": "LEAK-workertoken"}]},
@@ -294,6 +296,16 @@ assert_eq "remote node mode survives" "$(printf '%s' "$stripped" | jq -r '.tari.
 assert_eq "remote node host survives" "$(printf '%s' "$stripped" | jq -r '.tari.remote.host')" "tari.lan"
 assert_eq "pool tier survives" "$(printf '%s' "$stripped" | jq -r '.p2pool.pool')" "main"
 assert_eq "timezone survives" "$(printf '%s' "$stripped" | jq -r '.dashboard.timezone')" "Europe/Berlin"
+# Secret-free is not the same as SUBMITTABLE (#1846). parse_and_validate_config fails closed on
+# dashboard.control.enabled (:455) and dashboard.onion.enabled (:432) whenever the password is
+# empty — and this strip is what empties it. Leaving either switch on published a pre-fill the
+# page offers back and the first validation then refuses, which is how "Generate a strong
+# password for me" became unusable on a reinstall: the HOST generates one only AFTER validation.
+assert_eq "control.enabled goes with the login it needs" "$(printf '%s' "$stripped" | jq -r '.dashboard.control.enabled // "absent"')" "absent"
+assert_eq "onion.enabled goes with the login it needs" "$(printf '%s' "$stripped" | jq -r '.dashboard.onion.enabled // "absent"')" "absent"
+# The sibling that keeps the two above narrow: a dashboard answer that depends on NO credential is
+# still carried over, so this is not "strip the whole dashboard block and call it safe".
+assert_eq "client_auth, which needs no login, survives" "$(printf '%s' "$stripped" | jq -r '.dashboard.onion.client_auth')" "true"
 # Not-a-config shapes are refused, not partially stripped: rc != 0 means "no pre-fill".
 printf 'not json at all' >"$SCS/garbage.json"
 if run_sourced "$SANDBOX" strip_config_secrets "$SCS/garbage.json" >/dev/null 2>&1; then
