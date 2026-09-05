@@ -195,8 +195,11 @@ On either fresh start, the page opens with the previous install's answers alread
 wallet addresses, node locations, pool tier — read from the disk you are about to wipe, so you
 only change what you came to change. Its secrets never make the trip: the dashboard login,
 node passwords, view keys, worker tokens and alert credentials are left out, and anything the
-machine generates for itself is generated anew. If the old configuration cannot be read, the
-page opens blank.
+machine generates for itself is generated anew. The two switches that need that login come
+back at their defaults for the same reason: config editing from the dashboard, which the
+machine turns on again for you once a password exists, and publishing the dashboard as a Tor
+onion, which you tick again if you want it. If the old configuration cannot be read, the page
+opens blank.
 
 Type the disk's name to confirm.
 
