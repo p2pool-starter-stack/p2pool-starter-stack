@@ -134,8 +134,7 @@ The stack's defaults:
   That is disclosed rather than fixed: this feed carries no authenticated identity to key
   admission on instead. The refusal is as visible as the per-worker cap: one `rate-limited` marker
   for the episode, naming no rotated name, because a marker per name would be the flood the
-  ceiling exists
-  to stop. And it bounds how many rows arrive, not how large each one is, so the
+  ceiling exists to stop. And it bounds how many rows arrive, not how large each one is, so the
   row's own identifier is bounded separately (#1561): every audit row id
   is length-capped and whitelisted at the writer, the one field the trail's sanitizer used to skip,
   and `rig-drift`'s revision is validated to a short opaque token at the point it is read as well.

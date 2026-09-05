@@ -74,16 +74,23 @@ class TestTheNameSpaceIsBounded:
         # established rig": a rig whose config changes all go through the dashboard never enters
         # the map, so during a flood its FIRST detection is refused. The sibling above passes only
         # because its victim was armed first. SECURITY.md and docs/operations.md both state this
-        # case; this test is what stops that prose drifting back to "established rigs are alone".
+        # case. This pins the BEHAVIOUR; it cannot police the prose -- no test reds on a comment,
+        # and the admit_worker docstring drifted back to "established rigs" with this test green.
         monkeypatch.setattr(wca, "_WORKERS_MAX", 3)
         svc, sm = _svc()
         try:
             for i in range(10):
                 _rig_edit(svc, f"rogue-{i}", "cid")
+            # The flood ALREADY opened the episode and wrote the marker, so a bare "== 1" after
+            # quietrig polls is satisfied whether or not quietrig did anything. Take the count
+            # before and after: what this proves is that quietrig's refusal lands BEHIND the
+            # existing marker instead of minting a second one -- one marker per episode, not one
+            # per refused name.
+            before = len(_rows(sm, "rate-limited"))
+            assert before == 1
             _rig_edit(svc, "quietrig", "cid-first")
             assert [e for e in sm.get_audit_events() if e["actor"] == "quietrig"] == []
-            # Dropped, but not silently: it lands behind the one episode marker.
-            assert len(_rows(sm, "rate-limited")) == 1
+            assert len(_rows(sm, "rate-limited")) == before
         finally:
             sm.close()
 

@@ -33,7 +33,8 @@ logger = logging.getLogger("WorkerChangeAudit")
 # audit history out of any bounded table", and the mechanism is worth naming: under a trim-oldest
 # bound a flood EVICTS the oldest genuine rows rather than SPENDING a budget. Same harm, different
 # verb, which is why an admission ceiling and a retention trim are not interchangeable. #724's own
-# root cause -- ``audit_events`` is never pruned -- is untouched by this and stays open.
+# root cause -- ``audit_events`` is never pruned -- is untouched by this and still holds (the
+# ISSUE is closed; the condition is not).
 #
 # WHAT THIS PROTECTS IS NARROWER THAN "AN ESTABLISHED RIG", and the gap is the residual worth
 # knowing. Membership in ``_rig_edit_window`` means "this NAME produced an out-of-band detection
@@ -64,8 +65,10 @@ def admit_worker(svc, worker, now, window_sec):
     """Whether ``worker`` may hold a #724 flood-cap window, bounding the name space (#1695).
 
     Returns ``(admitted, first_over)``. A name already in ``svc._rig_edit_window`` is always
-    admitted -- this only ever refuses a name that holds no live budget yet, which is what keeps a
-    rotation flood off established rigs. Before refusing, every name whose own window has EXPIRED
+    admitted -- this only ever refuses a name that holds no live budget yet. What that protects is
+    NARROWER than "an established rig"; the ceiling comment above states the residual in full. A rig
+    whose config changes all go through the dashboard holds no window at all, so during a flood its
+    FIRST detection is refused too. Before refusing, every name whose own window has EXPIRED
     is evicted: those hold no live budget either, so dropping them is the same reset
     ``_rig_edit_within_cap`` already does lazily per worker, and it is what lets genuine fleet
     turnover keep admitting names.
@@ -108,9 +111,12 @@ async def record_cap_marker(svc, worker, cap, tipped_by):
     this worker's own exhausted budget -- see :func:`admit_worker` for why absence means exactly
     that. It gets ONE marker for the saturation episode instead of one per name, because a marker
     naming the rotating name would BE the flood the ceiling exists to stop: it names no worker,
-    states the ceiling itself, and keys its id on the episode start, so every further refusal
-    INSIDE that episode mints the same id and ``INSERT OR IGNORE`` keeps one row however many
-    names are rotated at it. Episodes RECUR and each gets its own row: the stamp clears the moment
+    states the ceiling itself, and keys its id on the episode start. What actually holds it to one
+    row is the ``first_over`` gate at BOTH call sites -- ``admit_worker`` returns it True only on
+    the refusal that OPENS the episode, so no later refusal in that episode reaches this function.
+    The episode-keyed id and the sink's ``INSERT OR IGNORE`` behind it are redundant defence rather
+    than the mechanism; they bite only if two episodes open inside one wall-clock second, which the
+    truncated stamp cannot tell apart. Episodes RECUR and each gets its own row: the stamp clears the moment
     a new name is admitted, and ``__init__`` clears it too, so after a process restart a later
     re-trip is a new episode and a new row -- the same reset the #724 window itself takes. Size
     marker volume off the episode count, never off the word "one". ``new-workers`` is a

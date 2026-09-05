@@ -336,8 +336,8 @@ holds a window keeps it. It does NOT leave every established rig alone: holding 
 having produced an out-of-band detection within the last hour, so a rig whose changes all go
 through the dashboard holds none, and during a flood its first detection is refused and dropped.
 Read the protection as "a name already being audited keeps its budget", and expect that residual.
-It surfaces the same way the per-worker cap does, as one `rate-limited`
-marker for the episode that names no rotated name. A genuine occasional rig change still records
+It surfaces the same way the per-worker cap does, as one `rate-limited` marker for the episode
+that names no rotated name. A genuine occasional rig change still records
 normally; only a flood is capped, and the cap is visible — the marker names which detection tipped
 it, and the dashboard logs a warning.
 
