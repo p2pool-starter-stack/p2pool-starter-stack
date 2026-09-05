@@ -104,11 +104,20 @@ export CONTROL_BACKUP_KIT_TTL_S=3
 printf '{"id":"%s","action":"backup","actor":"admin"}\n' "$bid2" >"$BKC/req2.json"
 run_sourced "$SANDBOX" control_process_request "$BKC/req2.json" "$BKC" >/dev/null 2>&1 &
 bg_pid=$!
-sleep 0.5 # well inside the 3s TTL — the stubbed child + write are effectively instant
-mid_pass="$(jq -r '.passphrase // "null"' "$BKC/results/$bid2.json" 2>/dev/null)"
-{ [ -n "$mid_pass" ] && [ "$mid_pass" != "null" ]; } &&
+# The mid-flight read races the background write, so it waits on the condition rather than on a
+# fixed budget; why a tick budget is wrong is #1495's lesson and lives on wait_while_alive itself.
+# What is specific to this row: when the old `sleep 0.5` lost, jq read a result file that was not
+# there yet and the row redded with `got: null`, the exact text a real TTL defect prints. The
+# writer cannot exit before it redacts (lib/pithead/45-control-backup.sh), so it outlives the
+# window by construction and a give-up means it published nothing at all.
+bkc_kit_published() { # #1495: see wait_while_alive in lib.sh
+    mid_pass="$(jq -r '.passphrase // "null"' "$BKC/results/$bid2.json" 2>/dev/null)"
+    [ -n "$mid_pass" ] && [ "$mid_pass" != "null" ]
+}
+wait_while_alive "$bg_pid" bkc_kit_published &&
     ok "the passphrase IS present while inside the TTL window" ||
-    bad "the passphrase IS present while inside the TTL window" "got: $mid_pass"
+    bad "the passphrase IS present while inside the TTL window" \
+        "got: ${mid_pass:-none} — the writer exited without publishing one: a broken write, not a slow box"
 assert_eq "the kit's passphrase is exactly what the child received (same secret both ends)" \
     "$mid_pass" "$(cat "$PASS_LOG")"
 wait "$bg_pid"
@@ -118,6 +127,7 @@ assert_eq "the passphrase is null once the TTL elapses" \
     ok "the archive file itself is untouched by the redaction" ||
     bad "the archive file itself is untouched by the redaction" "missing"
 unset bg_pid mid_pass
+unset -f bkc_kit_published
 
 echo "== control channel: backup verb — failure and throttle (#908) =="
 rm -f "$BKC/staged/.backup-stamp" # bid2 above already claimed the 10-minute throttle
