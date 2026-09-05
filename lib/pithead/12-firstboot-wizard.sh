@@ -287,14 +287,14 @@ firstboot_wizard() {
             fi
             if [ "$rrc" -eq 0 ]; then
                 log "Rig settings accepted."
-                local rig_worker rig_pool
+                local rig_worker rig_pool rig_token
                 rig_worker=$(jq -r '.worker // ""' "$PWD/rig.json" 2>/dev/null)
                 rig_pool=$(jq -r '.pool // ""' "$PWD/rig.json" 2>/dev/null)
-                # The rig's card: the worker name and where it points. No dashboard, no login —
-                # a rig serves neither, so there is nothing to save; the same ack still gates
-                # the erase on the installation medium.
-                jq -n --arg w "$rig_worker" --arg s "stratum+tcp://$rig_pool" \
-                    '{role: "rig", worker: $w, stratum: $s}' >"$spool/handoff.json"
+                rig_token=$(rig_access_token) || rig_token="" # empty here = the render leg refuses below
+                # The rig's card: worker, pool, the control token (#1836 — minted once, shown ONCE: a rig serves
+                # no page after this) and this box's address for the adopt form. No login. The same ack still gates the erase.
+                jq -n --arg w "$rig_worker" --arg s "stratum+tcp://$rig_pool" --arg t "$rig_token" --arg a "$(hostname -I 2>/dev/null | awk '{print $1}')" \
+                    '{role: "rig", worker: $w, stratum: $s, token: $t, address: $a}' >"$spool/handoff.json"
                 chown 1000:1000 "$spool/handoff.json" 2>/dev/null || true
                 local hwait=0
                 while [ ! -f "$spool/handoff-ack" ] && [ "$hwait" -lt 600 ]; do

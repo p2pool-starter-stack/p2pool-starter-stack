@@ -2730,15 +2730,23 @@ phase_media() {
     rm -f "$stick2"
 }
 
+_rig_mining_up() { # <tries>, 10 s apart — 0 once the xmrig unit is active with its process up
+    local n=0
+    while [ "$n" -lt "$1" ]; do
+        _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null" && return 0
+        sleep 10
+        n=$((n + 1))
+    done
+    return 1
+}
+
 phase_rig() {
     info "phase: rig (the OTHER machine this image installs — mines instead of coordinating)"
     # One image, two machines. Every other phase proves the coordinator; this one proves that
-    # answering "RigForge" on the same page produces a box with no stack at all, that it mines
-    # from the baked binary without compiling or reaching the network, and — the part that makes
-    # it a fleet member rather than a toy — that it takes an A/B update exactly like a
-    # coordinator does. A rig has no dashboard to complain through, so a rig that silently never
-    # starts is invisible to everything except an assertion like this one.
-    local img token jar body scode marker
+    # answering "RigForge" produces a box with no stack at all, mining the baked binary without
+    # compiling or reaching the network, that takes an A/B update exactly like a coordinator. A
+    # rig has no dashboard to complain through, so one that never starts is invisible otherwise.
+    local img token jar body scode marker card card_tok rtok pcode ptries=0
 
     img=$(_build_image v1) || {
         bad "image build failed (/tmp/os-fault-build.log)"
@@ -2777,12 +2785,10 @@ phase_rig() {
         return
     }
 
-    # The pool: the guest's OWN sshd. The host-side gate dials the address before it commits anything, and a
-    # KVM guest has no Pithead on its LAN to dial — so this stands in for one. It is a real TCP listener and
-    # nothing more, which is exactly what the gate checks; what it deliberately does NOT prove is an accepted
-    # share, the same limit the coordinator's local-miner leg documents. XMRig will dial it, get no stratum
-    # and retry forever, and that is the point: the miner must come up and STAY up on a pool that does not
-    # answer, or a rig whose coordinator is late would fail its own boot and roll its slot back.
+    # The pool: the guest's OWN sshd — a KVM guest has no Pithead on its LAN, and the host-side gate only
+    # dials a TCP listener before committing. It deliberately does NOT prove an accepted share (the same
+    # limit the coordinator's local-miner leg documents). XMRig dials it, gets no stratum and retries
+    # forever, which is the point: the miner must come up and STAY up on a pool that does not answer.
     body="role=rig&rig_pool=127.0.0.1:22&rig_worker=kvm-rig"
     scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
@@ -2793,9 +2799,8 @@ phase_rig() {
     ok "rig role submitted through the wizard"
     tries=0
     while [ "$tries" -lt 24 ]; do
-        if curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"worker"'; then
-            break
-        fi
+        card=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null)
+        case "$card" in *'"worker"'*) break ;; esac
         sleep 5
         tries=$((tries + 1))
     done
@@ -2804,26 +2809,16 @@ phase_rig() {
         rm -f "$jar"
         return
     }
-    # A rig's card carries the worker and where it points — and NO login, because a rig has none.
-    if curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null | grep -q '"password"'; then
-        bad "the rig card published a dashboard password — a rig serves no dashboard"
-    else
-        ok "the rig card is worker + pool, with no login (a rig has none)"
-    fi
+    case "$card" in
+    *'"password"'*) bad "the rig card published a dashboard password — a rig serves no dashboard" ;;
+    *) ok "the rig card is worker + pool, with no login (a rig has none)" ;;
+    esac
+    card_tok=$(printf '%s' "$card" | jq -r '.token // ""' 2>/dev/null)
     curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null || true
     rm -f "$jar"
 
     # ---- the machine that came out: a rig, not a small coordinator ------------------------
-    local mtries=0 miner_up=0
-    while [ "$mtries" -lt 36 ]; do
-        if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
-            miner_up=1
-            break
-        fi
-        sleep 10
-        mtries=$((mtries + 1))
-    done
-    if [ "$miner_up" -eq 1 ]; then
+    if _rig_mining_up 36; then
         ok "the rig mines (xmrig unit active, process running) with no reboot in between"
     else
         bad "the rig never started mining (unit: $(_ssh 'systemctl is-active xmrig' 2>/dev/null || echo unknown))"
@@ -2839,6 +2834,29 @@ phase_rig() {
     else
         bad "the rig's miner config does not match its answers ($(_ssh "jq -c '.pools' /data/rigforge/config.json 2>/dev/null" | cut -c1-100))"
     fi
+    # #1836: the rig's token guards every API, the sister feed the coordinator probes exists, and the
+    # writable control path is pinned to the pool host — 127.0.0.1 here, so the guest probes itself over
+    # loopback and this host, an unpinned source, is dropped (loopback answering proves the port is alive).
+    rtok=$(_ssh "jq -r '.ACCESS_TOKEN // \"\"' /data/rigforge/config.json" | tr -d '\r')
+    [[ "$rtok" =~ ^[0-9a-f]{32}$ ]] && ok "the miner's config carries a minted 32-hex control token" || bad "no control token in the rig's config (got '${rtok:0:8}')"
+    [ -n "$card_tok" ] && [ "$card_tok" = "$rtok" ] && ok "the rig card showed the SAME token the miner enforces" || bad "the card's token ('${card_tok:0:8}') is not the miner's ('${rtok:0:8}')"
+    _ssh "jq -e '.api == \"enabled\" and .control == \"enabled\" and .api_allow_from == \"127.0.0.1\" and (has(\"control_upgrade\") | not)' /data/rigforge/config.json >/dev/null" &&
+        ok "sister API + control enabled, pinned to the pool host; control_upgrade untouched" ||
+        bad "the rig's API keys are not what #1836 renders: $(_ssh "jq -c 'del(.pools, .ACCESS_TOKEN)' /data/rigforge/config.json" | cut -c1-120)"
+    _rig_http() { _ssh "curl -s -m 5 -o /dev/null -w '%{http_code}' $*" 2>/dev/null | tr -d '\r'; }
+    while [ "$ptries" -lt 12 ] && [ "$(_rig_http -H "'Authorization: Bearer $rtok'" http://127.0.0.1:8081/1/summary)" != "200" ]; do
+        sleep 5
+        ptries=$((ptries + 1))
+    done
+    [ "$ptries" -lt 12 ] && ok "the sister feed answers 200 with the token" || bad "the sister feed never answered 200 with the token"
+    pcode=$(_rig_http http://127.0.0.1:8081/1/summary)
+    [ "$pcode" = "401" ] && ok "the sister feed refuses without the token (401)" || bad "the sister feed answered '${pcode}' without a token"
+    pcode=$(_rig_http http://127.0.0.1:8080/1/summary)
+    case "$pcode" in 401 | 403) ok "XMRig's own API is closed without the token ($pcode)" ;; *) bad "XMRig's API on 8080 answered '${pcode}' with no token — still open on the LAN" ;; esac
+    pcode=$(_rig_http http://127.0.0.1:8082/)
+    [ -n "$pcode" ] && [ "$pcode" != "000" ] && ok "the control port listens (loopback answers $pcode)" || bad "the control port does not answer even on loopback ('${pcode}')"
+    pcode=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://$ip:8082/" 2>/dev/null)
+    [ "${pcode:-000}" = "000" ] && ok "the control port is unreachable from an unpinned source (this host)" || bad "the control port answered '$pcode' from an unpinned source"
     # THE assertion of this phase: no stack. Not a stopped stack, not a held one — none started.
     local names
     names=$(_ssh "podman ps -a --format '{{.Names}}'" 2>/dev/null | tr -d '\r' | tr '\n' ' ')
@@ -2866,16 +2884,7 @@ phase_rig() {
         bad "the rig never returned from the reboot"
         return
     }
-    local mtries2=0 miner_back=0
-    while [ "$mtries2" -lt 24 ]; do
-        if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
-            miner_back=1
-            break
-        fi
-        sleep 10
-        mtries2=$((mtries2 + 1))
-    done
-    [ "$miner_back" -eq 1 ] &&
+    _rig_mining_up 24 &&
         ok "the rig returned mining with no hands on it (its unit lives in /run and died with the reboot)" ||
         bad "the rig did not return after the reboot — its runtime unit was never re-rendered"
     # WHICH unit owns the boot is the whole R4 fork: the wizard's window is closed by rig.json,
@@ -2937,16 +2946,7 @@ phase_rig() {
     [ "$(_ssh 'cat /data/pithead/machine-role' | tr -d '\r\n')" = "rig" ] &&
         ok "the role survived the slot swap (it lives on /data, not in the image)" ||
         bad "the updated slot lost the rig role"
-    local mtries3=0 miner_v2=0
-    while [ "$mtries3" -lt 24 ]; do
-        if _ssh "systemctl is-active --quiet xmrig && pgrep -x xmrig >/dev/null"; then
-            miner_v2=1
-            break
-        fi
-        sleep 10
-        mtries3=$((mtries3 + 1))
-    done
-    [ "$miner_v2" -eq 1 ] && ok "the rig mines again on the updated slot" ||
+    _rig_mining_up 24 && ok "the rig mines again on the updated slot" ||
         bad "the rig stopped mining after the A/B update"
     # No harness mark-good: the boot that just brought the miner up must have COMMITTED — a rig commits on the
     # miner running, the same event this leg just waited for. That coupling is also why an "uncommitted

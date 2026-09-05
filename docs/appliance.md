@@ -145,9 +145,16 @@ Picking **RigForge** collapses the rest of the page to three questions — the p
 addresses, runs no node, and serves nothing to log into. If a Pithead already answers on the
 network at `pithead.local:3333`, its address is filled in for you; otherwise enter it by hand
 from that machine's own "Point miners at" line. Confirming shows a summary card with the worker
-name and where it mines — **not a login**, because a rig has none. It appears in that Pithead's
-dashboard, under Workers, once it connects; from then on its own console is the only place to
-look at it, the same way you would watch any other machine on the network.
+name, where it mines, this machine's address and a **control token** — **not a login**, because
+a rig has none. The token is shown once and never again: a rig serves no page after this, so copy
+it now. It is what lets that Pithead adopt the rig: in its dashboard, under Workers, the adopt
+form takes this rig's address, control port `8082` and the token. Until you do that, the rig
+still mines and still appears under Workers once it connects, but its row reads as an API error,
+because the token guards every API on the rig — the miner's own included, so nothing else on the
+network can read or change it. From then on its own console is the only place to look at it, the
+same way you would watch any other machine on the network. A rig pointed at a pool with no
+IPv4 address (an onion address, say) keeps the token and the read-only feed but runs with
+control off, since RigForge refuses a writable path it cannot pin to one source.
 
 **Pithead + RigForge** asks every coordinator question below, unchanged, and adds the built-in
 miner on top. The two mining workloads on that one box do not compete for HugePages: the
