@@ -253,7 +253,6 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-kernel-boot.sh" && domain_r
 
 # shellcheck source=tests/stack/test-appliance-reset.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-reset.sh" && domain_ran test-appliance-reset.sh "$_d0" "$?" || domain_ran test-appliance-reset.sh "$_d0" "$?"
-
 # shellcheck source=tests/stack/test-appliance-reset-lock.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-reset-lock.sh" && domain_ran test-appliance-reset-lock.sh "$_d0" "$?" || domain_ran test-appliance-reset-lock.sh "$_d0" "$?"
 
@@ -262,7 +261,6 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-caddyfile-optional-env.sh" 
 
 # shellcheck source=tests/stack/test-appliance-rotate-secrets-lock.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-rotate-secrets-lock.sh" && domain_ran test-appliance-rotate-secrets-lock.sh "$_d0" "$?" || domain_ran test-appliance-rotate-secrets-lock.sh "$_d0" "$?"
-
 # shellcheck source=tests/stack/test-appliance-firstboot-install-lock.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-firstboot-install-lock.sh" && domain_ran test-appliance-firstboot-install-lock.sh "$_d0" "$?" || domain_ran test-appliance-firstboot-install-lock.sh "$_d0" "$?"
 
@@ -276,6 +274,8 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-machine-id-journal.sh" && d
 
 # shellcheck source=tests/stack/test-appliance-media.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-media.sh" && domain_ran test-appliance-media.sh "$_d0" "$?" || domain_ran test-appliance-media.sh "$_d0" "$?"
+# shellcheck source=tests/stack/test-appliance-media-console.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-media-console.sh" && domain_ran test-appliance-media-console.sh "$_d0" "$?" || domain_ran test-appliance-media-console.sh "$_d0" "$?"
 
 # shellcheck source=tests/stack/test-rauc-loop-wait.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-rauc-loop-wait.sh" && domain_ran test-rauc-loop-wait.sh "$_d0" "$?" || domain_ran test-rauc-loop-wait.sh "$_d0" "$?"
