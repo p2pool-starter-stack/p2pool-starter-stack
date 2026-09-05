@@ -28,14 +28,27 @@ logger = logging.getLogger("WorkerChangeAudit")
 # exits. It lives beside the cap's marker for the reason the module docstring gives: one
 # implementation, so the two detections cannot drift apart.
 #
-# NOT one overall row ceiling, which is the tidier-looking fix: a rogue rig would spend THAT, and
-# #724 chose a per-worker cap precisely so one device could not crowd out genuine history. Here a
-# name already holding a live window keeps its whole budget and only an unseen name is refused, so
-# a rotation flood costs first sightings during the flood and never an established rig's
-# detections. Nor is it keyed on something the device does not choose: the feed carries exactly
-# ``name`` and ``ip`` per worker (``data_helpers._parse_proxy_list_worker`` and its legacy
-# sibling), a LAN device picks its own address as freely as its name, and the legacy shape defaults
-# a missing one to ``0.0.0.0`` -- so nothing here qualifies.
+# NOT one overall row ceiling, and not the retention trim #724 offered beside the per-worker cap.
+# #724 preferred the worker-keyed cap because "it also stops one rogue rig from crowding genuine
+# audit history out of any bounded table", and the mechanism is worth naming: under a trim-oldest
+# bound a flood EVICTS the oldest genuine rows rather than SPENDING a budget. Same harm, different
+# verb, which is why an admission ceiling and a retention trim are not interchangeable. #724's own
+# root cause -- ``audit_events`` is never pruned -- is untouched by this and stays open.
+#
+# WHAT THIS PROTECTS IS NARROWER THAN "AN ESTABLISHED RIG", and the gap is the residual worth
+# knowing. Membership in ``_rig_edit_window`` means "this NAME produced an out-of-band detection
+# inside the current window" -- the sole insert is ``data_service._rig_edit_within_cap``, reached
+# only from the two detection paths -- and NOT "this device is known to us". A rig whose config
+# changes all go through the dashboard holds no entry at all, so while a flood holds every slot
+# that rig's FIRST detection is refused and dropped behind the episode marker: the best-behaved
+# rig is the least protected, and a rogue does spend slots on its behalf. That is the price of
+# bounding a device-chosen name space with no authenticated identity to key admission on, and it
+# is DISCLOSED rather than fixed, the way #1696 disclosed its unstorable-name case. What a flood
+# cannot do is displace a name that is already holding a window. Nor is it keyed on something the
+# device does not choose: the feed carries exactly ``name`` and ``ip`` per worker
+# (``data_helpers._parse_proxy_list_worker`` and its legacy sibling), a LAN device picks its own
+# address as freely as its name, and the legacy shape defaults a missing one to ``0.0.0.0`` -- so
+# nothing here qualifies.
 #
 # The value is a judgement, not a measurement, and the arithmetic it turns on is: what a rotating
 # device can still make permanent is this ceiling times ``_RIG_EDIT_CAP_PER_HOUR``, so 64 x 12 =
@@ -95,8 +108,12 @@ async def record_cap_marker(svc, worker, cap, tipped_by):
     this worker's own exhausted budget -- see :func:`admit_worker` for why absence means exactly
     that. It gets ONE marker for the saturation episode instead of one per name, because a marker
     naming the rotating name would BE the flood the ceiling exists to stop: it names no worker,
-    states the ceiling itself, and keys its id on the episode start so a restart that re-trips it
-    writes the same row rather than a second one. ``new-workers`` is a
+    states the ceiling itself, and keys its id on the episode start, so every further refusal
+    INSIDE that episode mints the same id and ``INSERT OR IGNORE`` keeps one row however many
+    names are rotated at it. Episodes RECUR and each gets its own row: the stamp clears the moment
+    a new name is admitted, and ``__init__`` clears it too, so after a process restart a later
+    re-trip is a new episode and a new row -- the same reset the #724 window itself takes. Size
+    marker volume off the episode count, never off the word "one". ``new-workers`` is a
     display label and not a reserved name -- a device may present it, and the action and keys are
     what tell the two rows apart.
     """

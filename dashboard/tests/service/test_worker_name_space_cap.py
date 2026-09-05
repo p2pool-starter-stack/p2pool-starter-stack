@@ -52,8 +52,10 @@ class TestTheNameSpaceIsBounded:
             sm.close()
 
     def test_an_established_worker_keeps_its_own_budget_under_a_name_flood(self, monkeypatch):
-        # The #724 property a single overall row ceiling would have spent: a rogue rig must not be
-        # able to crowd out a genuine rig's detections. Only names not yet seen are refused.
+        # What the ceiling DOES protect: a name that already holds a live window. The fixture
+        # ARMS the victim on purpose -- goodrig's cid-1 detection below is what puts it in the
+        # map -- so read this as a claim about an ACTIVELY AUDITED name, never about "a genuine
+        # rig". Drop that first call and this test fails; the sibling below pins exactly that.
         monkeypatch.setattr(wca, "_WORKERS_MAX", 3)
         svc, sm = _svc()
         try:
@@ -64,6 +66,24 @@ class TestTheNameSpaceIsBounded:
             good = [e for e in sm.get_audit_events() if e["actor"] == "goodrig"]
             assert len(good) == 2
             assert {e["keys"] for e in good} == {"change_id=cid-1", "change_id=cid-2"}
+        finally:
+            sm.close()
+
+    def test_a_quiet_rig_holds_no_window_so_its_first_detection_is_dropped(self, monkeypatch):
+        # The RESIDUAL, pinned rather than described. "Holds a live window" is not "is an
+        # established rig": a rig whose config changes all go through the dashboard never enters
+        # the map, so during a flood its FIRST detection is refused. The sibling above passes only
+        # because its victim was armed first. SECURITY.md and docs/operations.md both state this
+        # case; this test is what stops that prose drifting back to "established rigs are alone".
+        monkeypatch.setattr(wca, "_WORKERS_MAX", 3)
+        svc, sm = _svc()
+        try:
+            for i in range(10):
+                _rig_edit(svc, f"rogue-{i}", "cid")
+            _rig_edit(svc, "quietrig", "cid-first")
+            assert [e for e in sm.get_audit_events() if e["actor"] == "quietrig"] == []
+            # Dropped, but not silently: it lands behind the one episode marker.
+            assert len(_rows(sm, "rate-limited")) == 1
         finally:
             sm.close()
 

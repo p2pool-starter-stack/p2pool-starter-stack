@@ -803,6 +803,10 @@ class DataService:
         start, count = self._rig_edit_window.get(worker, (now, 0))
         if now - start >= _RIG_EDIT_WINDOW_SEC:
             start, count = now, 0
+        # Load-bearing OUTSIDE this module: worker_change_audit.record_cap_marker reads a
+        # worker's ABSENCE from this map as the #1695 names-ceiling refusal, so this
+        # unconditional write is what makes a #724 per-worker trip present. Make it conditional
+        # and every per-worker trip silently writes the names-ceiling marker instead.
         self._rig_edit_window[worker] = (start, count + 1)
         return count < _RIG_EDIT_CAP_PER_HOUR, count == _RIG_EDIT_CAP_PER_HOUR
 

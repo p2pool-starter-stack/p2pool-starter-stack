@@ -125,12 +125,16 @@ The stack's defaults:
   that device can make permanent. The cap is keyed on the worker name the device presents, which a
   device chooses freely, so a second bound sits beside it (#1695): only a fixed number of worker
   names may hold a live window at once, and a name that holds none yet is refused once that
-  ceiling is reached, so a rotating device no longer draws a fresh budget per name. It is a
-  ceiling on names rather than one overall row budget on purpose — a rogue rig would spend an
-  overall budget on every other rig's behalf, where a name already holding a window keeps its own,
-  so a rotation flood costs first sightings while it runs and never an established rig's
-  detections. The refusal is as visible as the per-worker cap: one `rate-limited` marker for the
-  episode, naming no rotated name, because a marker per name would be the flood the ceiling exists
+  ceiling is reached, so a rotating device no longer draws a fresh budget per name. What a flood
+  cannot do is displace a name that already holds a live window. It does NOT leave every
+  established rig alone, and the difference is the residual: holding a window means having
+  produced an out-of-band detection within the last hour, not being a device we know, so a rig
+  whose changes all go through the dashboard holds none — and during a flood its FIRST detection
+  is refused and dropped behind the episode marker. The best-behaved rig is the least protected.
+  That is disclosed rather than fixed: this feed carries no authenticated identity to key
+  admission on instead. The refusal is as visible as the per-worker cap: one `rate-limited` marker
+  for the episode, naming no rotated name, because a marker per name would be the flood the
+  ceiling exists
   to stop. And it bounds how many rows arrive, not how large each one is, so the
   row's own identifier is bounded separately (#1561): every audit row id
   is length-capped and whitelisted at the writer, the one field the trail's sanitizer used to skip,
