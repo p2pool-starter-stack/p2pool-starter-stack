@@ -326,16 +326,10 @@ done
 #    site pattern needs a quoted message on the same line, so a verdict whose text arrives in a
 #    VARIABLE can never be reached by any needle: 05-doctor-checks.sh:111 (dr_warn "$(head -n 1
 #    ...)", appliance-only by construction, text from the hugepages helper) and
-#    21-doctor-stack-checks.sh:261 (dr_fail "${verdict#fail:}"). Those two are unguarded here and
-#    cannot be guarded here — read them by hand.
-#
-#    THE THIRD ONE IS GONE, and this note is the record of it. 20-doctor-install-checks.sh:28 was
-#    `dr_warn "$msg"` and was not merely unguarded but LEAKING: it named three remedies an appliance
-#    operator cannot reach, and interpolated the host's PUBLIC IP into text control_diag_doctor
-#    ships to the browser. #1772 converted it, so its text is now literal and surface-aware — which
-#    takes it out of THIS sweep by construction, since `dr_warn_surface "` does not match the site
-#    pattern and a host argument is supposed to keep its verbs. Its guard is behavioural instead and
-#    lives in test-doctor-exposure.sh. Do not read its disappearance from this list as a fix here.
+#    21-doctor-stack-checks.sh:261 (dr_fail "${verdict#fail:}"). Both are unguarded here and cannot
+#    be guarded here — read them by hand. A THIRD, 20-doctor-install-checks.sh:28, LEFT this list
+#    rather than being fixed here: #1772 made it dr_warn_surface, which the site pattern does not
+#    match, so its guard is behavioural now and lives in test-doctor-exposure.sh.
 dr_verb_leaks=$(grep -nE '(dr_fail|dr_warn|dr_info) "' "$STACK" |
     grep -E "\./pithead |docker compose |docker pull |docker-compose-v2|Start the Docker daemon|sudo |systemctl|git pull" |
     grep -v "appliance-unreachable" || true)

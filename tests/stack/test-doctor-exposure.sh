@@ -56,9 +56,9 @@ assert_contains "the host doctor verdict keeps its host remedies (#1772)" "$_xp_
 _xp_appl=$(_xp 1 doctor)
 assert_contains "the appliance verdict still reports the exposure (#1772)" "$_xp_appl" "public IP"
 assert_not_contains "the appliance verdict withholds the address (#1772)" "$_xp_appl" "8.8.8.8"
-for _xp_h in stratum_bind stratum_password "firewall it to your LAN"; do
-    assert_not_contains "the appliance verdict does not prescribe '$_xp_h' (#1772)" "$_xp_appl" "$_xp_h"
-done
+assert_not_contains "the appliance verdict does not prescribe stratum_bind (#1772)" "$_xp_appl" "stratum_bind"
+assert_not_contains "the appliance verdict does not prescribe stratum_password (#1772)" "$_xp_appl" "stratum_password"
+assert_not_contains "the appliance verdict does not prescribe the LAN firewall (#1772)" "$_xp_appl" "firewall it to your LAN"
 assert_contains "the appliance verdict names the one route that exists (#1772)" "$_xp_appl" "router"
 
 # NO SEPARATE "the two arms differ" ROW. It would be STRICTLY ENTAILED by the pair above -- the host
