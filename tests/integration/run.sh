@@ -2281,9 +2281,9 @@ run_rigforge_control() {
         IFS='|' read -r status ckeys change_id <<<"$(_settle_worker_apply_maxt "$rig" "$new_maxt" "$res")"
         assert_eq "Worker Inspect edit applied on the rig (#513)" "$status" "applied"
         assert_contains "the rig's /status confirms max_temp_c changed (#513)" "$ckeys" "max_temp_c"
-        # Matched by change_id, not "the newest row" — #579/#604's reconciler (rigforge-apply-settle.sh).
-        assert_eq "worker-apply recorded in the per-worker history (#185)" \
-            "$(_worker_detail "$rig" | jq -r --arg c "$change_id" 'first(.history[]? | select(.change_id==$c)) | .status // empty' 2>/dev/null)" "applied"
+        # By change_id, not "the newest row", and WAITED to terminal: the rig publishes its config
+        # before it decides the outcome, so reading the row straight after the settle raced it (#1471).
+        assert_eq "worker-apply recorded in the per-worker history (#185/#1471)" "$(_settle_history_row "$rig" "$change_id")" "applied"
         it_step "reverting max_temp_c $new_maxt -> $orig_maxt…"
         res="$(_worker_apply "$rig" "{\"max_temp_c\":$orig_maxt}")"
         IFS='|' read -r status _ _ <<<"$(_settle_worker_apply_maxt "$rig" "$orig_maxt" "$res")"
