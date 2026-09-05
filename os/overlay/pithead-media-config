@@ -200,7 +200,21 @@ media_read_key() {                      # $1: timeout seconds -> prints one char
         sleep "$1" 2>/dev/null
         return 1
     }
-    read -r -t "$1" -N 1 k <"$tty" 2>/dev/null || return 1
+    # Bound the read by an EXTERNAL wall clock as well as bash's own `read -t`: a getty sharing
+    # this console can leave the tty in a state where `-t` is not honoured and the read blocks
+    # indefinitely (#1823), which would freeze the poll loop in media_confirm_gate so it never
+    # re-checks for the media being pulled. The read itself stays bash's `read -N 1`, which borrows
+    # the tty in one-character mode so a bare keypress is delivered without Enter — a plain 1-byte
+    # read on a canonical console is not (it waits for a line), and 'n' alone would never cancel.
+    # It runs in a child under `timeout` with one second more budget than the inner `-t`: on a
+    # healthy console the inner timeout fires first and bash restores the tty itself; on a stuck
+    # one `timeout` kills the child (bash restores the tty on a terminating signal too, so the
+    # login prompt keeps a usable line), that iteration ends a second late, and the loop keeps
+    # polling — the media-removal signal (media_device_present, via lsblk) needs no console at
+    # all. Under contention the countdown can run up to twice as slow; it can no longer hang.
+    # shellcheck disable=SC2016 # the child's $1/$2 are its own positional parameters, by design
+    k=$(timeout "$(($1 + 1))" bash -c 'read -r -t "$1" -N 1 k <"$2" 2>/dev/null || exit 1; printf %s "$k"' _ "$1" "$tty" 2>/dev/null) || return 1
+    [ -n "$k" ] || return 1
     printf '%s' "$k"
 }
 
