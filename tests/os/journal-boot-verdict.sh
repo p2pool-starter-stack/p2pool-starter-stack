@@ -46,7 +46,9 @@ journal_boot_verdict() {
 # Run on the guest as root. Prints five lines: "<mountpoint> <inode>" of /var/log/journal, the inode
 # of /data/pithead/journal, the filesystem type seen through /var/log/journal, yes/no for this
 # machine-id's journal directory under the bind, and the number of boots the persistent journal
-# lists (0 when it finds none).
+# lists (0 when it finds none). Read by run.sh after it sources this file, which shellcheck cannot
+# see from here (the same shape as the verdict functions, which it does not flag).
+# shellcheck disable=SC2034
 JOURNAL_HOME_PROBE='stat -c "%m %i" /var/log/journal 2>/dev/null || echo "missing ?"; stat -c %i /data/pithead/journal 2>/dev/null || echo missing; stat -f -c %T /var/log/journal 2>/dev/null || echo unknown; test -d "/data/pithead/journal/$(cat /etc/machine-id)" && echo yes || echo no; journalctl --list-boots --no-pager 2>/dev/null | grep -cE "^ *-?[0-9]+ [0-9a-f]{32} "'
 
 # $1 = the probe's output. Prints the verdict line on stdout; exit 0 = pass, 1 = fail.
