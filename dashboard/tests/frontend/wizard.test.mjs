@@ -400,7 +400,7 @@ test("submit validates IN PLACE: no view swap, the button narrates, the server m
   restore();
 });
 
-test("the mine-on-this-box choice is a labeled select naming RigForge, default No", async () => {
+test("the mine-on-this-box choice is a labeled select naming RigForge, default Yes", async () => {
   const { inst, restore } = await appOn([stateFor("setup")]);
   const out = renderToString(inst.render());
   assert.match(out, /Mine on this machine too\?/);

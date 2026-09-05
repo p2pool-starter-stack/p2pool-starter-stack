@@ -136,8 +136,8 @@ the machine gets a dashboard at all.
 
 | Choice | What it produces |
 |---|---|
-| **Pithead** (default) | A coordinator: p2pool, xmrig-proxy, Tor and the dashboard, plus the Monero and Tari nodes for whichever of the two you keep on this machine (the setup page asks). Does not mine itself unless you turn on the built-in miner. |
-| **Pithead + RigForge** | The same coordinator, plus a built-in miner on this machine's own CPU, pointed at its own pool. Same as turning on "Mine with this machine's CPU" below. |
+| **Pithead** | A coordinator: p2pool, xmrig-proxy, Tor and the dashboard, plus the Monero and Tari nodes for whichever of the two you keep on this machine (the setup page asks). Does not mine itself unless you turn on the built-in miner. |
+| **Pithead + RigForge** (default) | The same coordinator, plus a built-in miner on this machine's own CPU, pointed at its own pool. It is the same switch as "Mine on this machine too?" below, pre-answered — most people who put one machine on this image want it to mine as well as coordinate. Pick **Pithead** for a box that should only coordinate. |
 | **RigForge** | A rig: just the miner, pointed at a Pithead you already have running. No coordinator, no containers, no chains, no dashboard. |
 
 Picking **RigForge** collapses the rest of the page to three questions — the pool address
@@ -213,7 +213,7 @@ Then a handful of choices, all with sensible defaults:
 | Telegram bot | — | Optional. Alerts and status commands; needs both the token and the chat id. |
 | Monero node | run it here | Point at a node you already run. It has to be on your own network — a private address (10.x, 172.16–31.x, 192.168.x) or one reached over a VPN — because the machine only lets the mining containers dial private ranges; everything else goes through Tor. |
 | Tari node | run it here | Same, over a network you trust, and the same private-address requirement. Pointing Tari elsewhere is the single biggest saving on a small disk: it takes about 200 GB out of the budget. |
-| Mine with this machine's CPU | off | On if this box should mine as well as coordinate. Nothing to install: the image carries its own [RigForge](https://github.com/p2pool-starter-stack/rigforge) miner, pointed at this machine's own pool. It starts by itself once the stack is up, comes back on every boot, and appears in the dashboard's Workers view. The box is tuned for hashrate either way — the CPU governor and the HugePages reservation are set on every boot whether or not this switch is on. |
+| Mine on this machine too? | on | Off if this box should only coordinate — it is the same answer as the **Pithead** role above. Nothing to install: the image carries its own [RigForge](https://github.com/p2pool-starter-stack/rigforge) miner, pointed at this machine's own pool. It starts by itself once the stack is up, comes back on every boot, and appears in the dashboard's Workers view. The box is tuned for hashrate either way — the CPU governor and the HugePages reservation are set on every boot whether or not this switch is on. |
 | First sync | private over Tor | Faster over the open internet if days of syncing is too slow; it uses Tor afterwards either way. |
 | Dashboard login | generate one for me | Or choose your own password. "No login" is offered but leaves the dashboard — payout addresses, hashrate — open to anyone on your network; never combine it with the Tor onion. It also leaves the machine **unconfigurable from the dashboard** — editing settings can change the payout address, so that stays behind a login — and on a machine with no shell that is permanent: changing it means a factory reset and setting up again. |
 
