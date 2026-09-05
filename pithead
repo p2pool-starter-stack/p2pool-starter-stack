@@ -10802,8 +10802,13 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
     # dashboard.workers[] is restored too, and MUST be: 30's masker still masks that shape after
     # 2.0.0 removed the alias (#1832, see the note there), and mask and restore are one mechanism.
     # Keeping the mask without the restore would let a sentinel be committed as a literal token.
+    # The LIVE lookup below therefore reads BOTH shapes, and that is the whole point: worker_list is
+    # workers.list[] alone since #1832, so resolving legacy sentinels against it would find nothing
+    # and blank every per-rig token to "" — a restore branch that cannot restore. workers.list[]
+    # wins a name present in both (it is the canonical key, and both-populated-and-different is
+    # already refused at apply); within one shape, first-declared still wins via the reverse.
     (umask 077 && jq --argjson paths "$CONTROL_SECRET_PATHS" --slurpfile live "$CONFIG_FILE" "$WORKER_LIST_JQ"'
-        (reduce (($live[0] | worker_list) | reverse | .[]) as $w ({};
+        (reduce (($live[0] | worker_list) + (($live[0].dashboard // {}) | .workers // []) | reverse | .[]) as $w ({};
             if ($w | type) == "object" and ($w.name | type) == "string"
             then .[$w.name] = ($w.token // "") else . end)) as $livetok
         | reduce $paths[] as $p (.config;
