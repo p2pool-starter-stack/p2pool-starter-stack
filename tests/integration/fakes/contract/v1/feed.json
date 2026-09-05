@@ -24,6 +24,9 @@
       "max_temp_c": 85,
       "pools": [
         {
+          "pass": {
+            "__secret__": true
+          },
           "url": "h:3333"
         }
       ],

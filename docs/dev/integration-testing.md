@@ -512,13 +512,15 @@ loudly without its prerequisite:
 - **Three writable keys are deliberately never driven, and this is a decision rather than a gap.**
   `autotune` would start a real tuning run — it moves hashrate and thermals and may not settle
   inside the leg. `watchdog` would remove thermal protection from a rig mining at its temperature
-  ceiling. `pools` cannot be round-tripped from the rig's own reading at all: RigForge strips `pass`
-  and `tls-fingerprint` before serving the config, and the dashboard strips them again, so the value
-  that comes back is lossy — and `pass` is the stack's stratum password
+  ceiling. `pools` cannot be round-tripped from the rig's own reading at all: RigForge serves a
+  stored `pass` or `tls-fingerprint` as the `{"__secret__": true}` marker and never the value, and
+  the dashboard drops the marker again on the way back, so the value that comes back is lossy — and
+  `pass` is the stack's stratum password
   ([#113](https://github.com/p2pool-starter-stack/pithead/issues/113)), which the proxy rejects a
-  login without. Worse, the harness cannot tell "this rig has no password" from "this rig's password
-  was stripped on the way to me": both arrive as `{"url": …}`. Writing that back would silently
-  strand a borrowed miner.
+  login without. The marker does let the harness tell "this rig has no password" (no `pass` key)
+  from "a password is stored here", but RigForge restores a stored password only for an entry whose
+  `url` and `user` still match what the rig holds, and a probe moves the URL. Writing the rig's own
+  reading back under a probe would silently strand a borrowed miner on password `x`.
 - `pools`, the operator-supplied route (the repoint-your-hashrate key): because the rig's own
   reading cannot be written back, the restore target is the dashboard's record of what *it* last
   pushed (`GET /api/worker`'s `.last_applied.pools`), which is un-stripped, and the probe is
