@@ -256,8 +256,8 @@ command to read it migrates it in place — the entries move to `workers.list`, 
 deleted, and the pre-migration file is kept beside the config as `config.json.bak-1x`. The same
 pass renames a `xmrig_proxy.*` block to `xvb.*`. Setting an old and a new key to *different*
 values is refused, so the migration never has to guess which one you meant; set to the same value,
-the old key is simply dropped. An empty array never refuses: `[]` is the schema default
-`config.reference.json` ships, and the dashboard's config editor round-trips it (#679).
+the old key is dropped. An empty array never refuses either — `[]` carries no descriptors, so there
+is nothing to conflict over — and the dashboard's config editor round-trips it (#679).
 
 The merge rule is: **per-worker field > fleet default > built-in default.** A rig with no entry (or
 an entry that only sets `port`) inherits everything else from `workers.*`. A per-worker `token`
