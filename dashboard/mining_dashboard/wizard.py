@@ -162,7 +162,7 @@ def wizard_stage() -> str:
     if _spool_read("applied") is not None or _spool_read("handoff-ack") is not None:
         # Same ack, two meanings: on the medium it releases the INSTALL, on an installed
         # machine provisioning. A stick run installs nothing, so it is "done" too (#1835).
-        return "installing" if installer_mode() and _spool_read("stick") is None else "done"
+        return "installing" if installer_mode() and _spool_read("stick") != "1" else "done"
     if installer_mode():
         return "installer"
     return "setup"
@@ -393,9 +393,7 @@ def _submit_rig(form: dict) -> web.Response:
     if password:
         rig["stratum_password"] = password
     _spool_clear_error()
-    # Role AND medium ride beside it: a stick run copies nothing, so nothing may narrate that.
-    if stick:
-        _spool_write_text("stick", "1")
+    # The role rides beside the request so /status can narrate honestly after it is consumed.
     _spool_write_text("role", "rig")
     _spool_write_text("rig-request.json", json.dumps(rig))
     return web.json_response({"status": "accepted"})
@@ -405,6 +403,8 @@ async def submit(request: web.Request) -> web.Response:
     if not _authed(request):
         raise web.HTTPFound("/")
     form = await request.post()
+    # Restated per SUBMISSION (#1835): a stale stick choice must not mute the install narration.
+    _spool_write_text("stick", "1" if str(form.get("disk", "")).strip() == "usb" else "0")
     raw = str(form.get("config", "")).strip()
     ref = _reference()
     # Keep-everything reinstall: the preserved config wins, so the submission carries NO config
@@ -523,7 +523,7 @@ async def handoff_ack(request: web.Request) -> web.Response:
 
 
 async def status(request: web.Request) -> web.Response:
-    if installer_mode() and _spool_read("stick") is None:
+    if installer_mode() and _spool_read("stick") != "1":
         if _spool_read("installed") is not None:
             return web.Response(
                 text="Installed — the machine is switching itself off. "

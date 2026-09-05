@@ -58,26 +58,49 @@ async def _status(client):
 # --- the marker ------------------------------------------------------------------------------
 
 
-async def test_the_stick_marker_is_written_only_when_the_stick_is_the_target(client, installer):
-    """disk=usb records the choice beside the request; a real install records no such thing."""
+async def test_the_marker_is_a_per_submission_fact_not_a_one_way_write(client, installer):
+    """Every submission RESTATES the medium. A one-way write is the whole bug in mirror image: a
+    stick choice left by an earlier attempt would mute the install narration on a later real
+    install. Nothing here clears the marker by hand — if it did, the second half could not fail."""
     await _auth(client)
     assert (await client.post("/submit", data={**RIG, "disk": "usb"})).status == 200
     assert (installer / "stick").read_text() == "1"
     assert json.loads((installer / "rig-request.json").read_text()) == {"pool": "10.0.0.5:3333"}
 
-    (installer / "stick").unlink()
     r = await client.post(
         "/submit", data={**RIG, "disk": "nvme0n1", "confirm": "nvme0n1", "wipe": "all"}
     )
     assert r.status == 200
-    assert not (installer / "stick").exists()
+    assert (installer / "stick").read_text() == "0"
 
 
-async def test_a_rig_off_the_medium_writes_no_marker(client, spool):
-    """Not on the installation medium at all: there is no medium to run from."""
+async def test_a_retarget_after_a_failed_stick_attempt_gets_the_install_narration_back(
+    client, installer
+):
+    """The reachable sequence, in one boot: the stick attempt is rejected by the host, the operator
+    retargets to the internal disk, and the real install must narrate as a real install — including
+    the remove-the-stick instruction, which the frontend gates on the "Installed" prefix."""
+    await _auth(client)
+    await client.post("/submit", data={**RIG, "disk": "usb"})
+    # The host fails the dial and drops the request; the page returns to the form with the error.
+    (installer / "error.txt").write_text("pool unreachable")
+    (installer / "rig-request.json").unlink()
+
+    await client.post(
+        "/submit", data={**RIG, "disk": "nvme0n1", "confirm": "nvme0n1", "wipe": "all"}
+    )
+    assert "Copying the system to the disk" in await _status(client)
+    (installer / "installed").write_text("1")
+    body = await _status(client)
+    assert body.startswith("Installed")
+    assert "remove the USB stick" in body
+
+
+async def test_a_rig_off_the_medium_leaves_the_marker_inert(client, spool):
+    """Not on the installation medium: the marker is written but can never read as a stick run."""
     await _auth(client)
     assert (await client.post("/submit", data=RIG)).status == 200
-    assert not (spool / "stick").exists()
+    assert (spool / "stick").read_text() == "0"
 
 
 # --- /status ---------------------------------------------------------------------------------
