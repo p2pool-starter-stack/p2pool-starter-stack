@@ -79,8 +79,8 @@ reshapes to the answer the same way the disk choice already reshapes the form:
 
 | Role | The form | What lands |
 |---|---|---|
-| Pithead | today's flow, byte for byte — the default, and the regression bar | `config.json` (the whole contract above) |
-| Pithead + RigForge | Pithead's form with the mine-on-this-machine switch preset to Yes. The role IS `local_miner.enabled` — the switch below stays live, and flipping it back submits today's config unchanged | `config.json` with `local_miner.enabled: true`; the boot contract's step 5 starts the miner |
+| Pithead | today's flow, byte for byte — the regression bar | `config.json` (the whole contract above) |
+| Pithead + RigForge | the default. Pithead's form, opening with the mine-on-this-machine switch already on. The role IS `local_miner.enabled` — the select and the switch are two views of ONE value, so moving either moves the other, and choosing Pithead submits today's config unchanged | `config.json` with `local_miner.enabled: true`; the boot contract's step 5 starts the miner |
 | RigForge | collapses to a pool address, a worker name and an optional stratum password. The pool field opens pre-filled when the host found a Pithead answering `pithead.local:3333` — dialed HOST-side and published to the spool as `rig-defaults.json`, the way the disk inventory travels, failing open to an empty field. The disk section gains **Run from this USB stick** as a first-class target: a rig holds almost no state, so the stick can BE the system — no erase, no commitment on machines whose disks belong to something else. The card shows the worker name and where it points; a rig has no dashboard and no login | `machine-role` + `rig.json` (below) |
 
 Validation-before-erase, the keep semantics, the card-then-ack gate, self-power-off and the
