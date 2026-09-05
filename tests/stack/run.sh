@@ -323,8 +323,8 @@ done
 #    absence claim goes green when the needle simply stops matching -- rename the message and this
 #    passes forever while proving nothing. So the same two predicates run against a synthetic
 #    PRE-FIX line first and must FAIL there.
-_dd_pred_plain() { case "$1" in *dr_warn_surface*) return 1 ;; *) return 0 ;; esac; }
-_dd_pred_verb() { case "$1" in *"run 'apply'"*) return 0 ;; *) return 1 ;; esac; }
+_dd_pred_plain() { case "$1" in *dr_warn_surface*) return 1 ;; *) return 0 ;; esac }
+_dd_pred_verb() { case "$1" in *"run 'apply'"*) return 0 ;; *) return 1 ;; esac }
 _dd_seed="            dr_warn \"Data dir from .env not found: X=Y — a relocated/copied install re-syncs from scratch. Move the data here, or set the data_dir in config.json and run 'apply'.\""
 if _dd_pred_plain "$_dd_seed" && _dd_pred_verb "$_dd_seed"; then
     ok "control: the pre-fix data-dir verdict is caught as plain AND as naming a verb (#1776)"
@@ -361,7 +361,7 @@ else
     # relocates a data directory") was false for four of the five keys the check fires on. Derive
     # both sets from the shipped artifact rather than restating them, so an allowlist change reds
     # HERE and names the string to rewrite, instead of leaving an operator a remedy they lack.
-    _dd_in_set() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+    _dd_in_set() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac }
     _dd_repointable() {
         local _k _out=''
         for _k in $1; do _dd_in_set "$_k" "$2" && _out="${_out:+$_out }$_k"; done
