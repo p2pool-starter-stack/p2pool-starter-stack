@@ -4,8 +4,11 @@
 // two of those five are legitimately empty at the moment the page renders it:
 //
 //   token   — rig_access_token could not mint or keep one. The card is written BEFORE the miner is
-//             configured, so the wizard shows this state first and 14-local-miner.sh's render leg
-//             refuses afterwards; the operator sees the card either way.
+//             configured, so the wizard shows this state first. What happens next DIVERGES, which
+//             is why the note promises neither half: run from the stick, render_rig_miner_config
+//             returns 1 and rigforge_setup_run never runs, so the machine does not even mine; on
+//             the installer path the target mints its own token and mines, but nothing prints that
+//             token after provisioning, so its console cannot tell the operator what to paste.
 //   address — hostname -I answered nothing, because the box has no IPv4 lease yet.
 //
 // A label with a blank beside it is the one thing this card must never show, so an empty value
@@ -39,8 +42,8 @@ export function rigCardFields(handoff) {
 export function rigCardNote(handoff) {
   if (!handoff.token) {
     return (
-      "This machine has no control token, so your Pithead cannot adopt it — its console says why. " +
-      "It still mines, and appears by this name in the Workers view."
+      "This machine could not create its control token. There is nothing to copy here, and no " +
+      "Pithead can adopt this rig until it has one — set this machine up again."
     );
   }
   const adopt = handoff.address

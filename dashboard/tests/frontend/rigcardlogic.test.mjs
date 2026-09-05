@@ -105,11 +105,16 @@ test("rigCardNote: with no address, it says to read the address off the console"
 
 test("rigCardNote: with no token, it never tells the operator to paste one", () => {
   const note = rigCardNote({ ...FULL, token: "" });
-  assert.match(note, /cannot adopt it/);
-  assert.match(note, /still mines/);
+  assert.match(note, /could not create its control token/);
+  assert.match(note, /no Pithead can adopt this rig/);
   assert.doesNotMatch(note, /Adopt form/);
   assert.doesNotMatch(note, /control port/);
   assert.doesNotMatch(note, /shown once/);
+  // Both halves of the pre-review wording were false, on OPPOSITE paths: run from the stick the
+  // machine does not mine at all, and on the installer path nothing ever prints the token. The
+  // note must promise neither, so these two pin the retracted claims rather than the new ones.
+  assert.doesNotMatch(note, /still mines/);
+  assert.doesNotMatch(note, /console says why/);
 });
 
 test("rigCardNote: the pre-token wording is gone from every case", () => {
@@ -146,6 +151,6 @@ test("rendered: an unminted token puts no empty 'Control token' row on the card"
   );
   assert.doesNotMatch(card, /Control token/);
   assert.doesNotMatch(card, /Workers → Adopt/);
-  assert.match(card, /cannot adopt it/);
+  assert.match(card, /could not create its control token/);
   assert.match(card, /This machine's address/); // the address it DOES have still shows
 });
