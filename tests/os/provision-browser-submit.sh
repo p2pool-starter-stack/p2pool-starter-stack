@@ -9,10 +9,13 @@
 # path the operator actually took — and the one that refused on Both — never ran through the
 # gate. A sibling, not rows in run.sh, which sits at its 3423-line ceiling.
 #
-# $1 ip, $2 authenticated cookie jar -> prints the HTTP status of /submit (or a short reason
-# when the page never served a config), the same contract the inline curl had.
-provision_browser_submit() { # <ip> <jar>
-    local ip="$1" jar="$2" served cfg
+# $1 ip, $2 authenticated cookie jar, then any extra form fields (`disk=vda`, `wipe=data` — the
+# installer's disk half rides beside the config) -> prints the HTTP status of /submit (or a short
+# reason when the page never served a config), the same contract the inline curl had.
+provision_browser_submit() { # <ip> <jar> [field=value]...
+    local ip="$1" jar="$2" served cfg extra=()
+    shift 2
+    for f in "$@"; do extra+=(--data-urlencode "$f"); done
     served=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/state" 2>/dev/null | jq -c '.config // empty' 2>/dev/null)
     [ -n "$served" ] || {
         printf 'no-served-config'
@@ -25,7 +28,7 @@ provision_browser_submit() { # <ip> <jar>
         printf 'jq-failed'
         return 1
     }
-    curl -sSk -b "$jar" --data-urlencode "config=$cfg" --data-urlencode "auth_mode=auto" \
+    curl -sSk -b "$jar" --data-urlencode "config=$cfg" --data-urlencode "auth_mode=auto" "${extra[@]}" \
         "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null
 }
 

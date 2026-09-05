@@ -59,6 +59,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/aged-version.sh"
 # shellcheck source=tests/os/provision-browser-submit.sh
 . "$SCRIPT_DIR/provision-browser-submit.sh"
+# shellcheck source=tests/os/reinstall-prefill-submit-leg.sh
+. "$SCRIPT_DIR/reinstall-prefill-submit-leg.sh"
 # shellcheck source=tests/os/setup-again-leg.sh
 . "$SCRIPT_DIR/setup-again-leg.sh"
 
@@ -1944,18 +1946,16 @@ phase_install() {
         [ -n "$new_onion" ] && [ -n "$tor_hostname" ] && break
         sleep 15
     done
-    # .env is itself an archive member that load_preserved_state replays verbatim whenever it is
-    # already non-empty (pithead:6155-6166) — new_onion == orig_onion here proves only that the
-    # CONFIG FILE made the round trip, which holds even if the Tor data dir (the actual onion
-    # PRIVATE KEYS) was dropped from the backup: the stale address string rides along in .env while
-    # Tor silently mints a fresh, unrelated hidden service underneath it (#1090). The only
-    # comparison that proves the keys themselves came back is against Tor's OWN hostname file,
-    # sourced from the restored key material rather than from the archived config.
+    # .env is an archive member load_preserved_state replays verbatim when non-empty (pithead:6155-6166),
+    # so new_onion == orig_onion proves only that the CONFIG FILE made the round trip — true even when
+    # the Tor data dir (the onion PRIVATE KEYS) was dropped and Tor mints a fresh service underneath
+    # (#1090). Only Tor's OWN hostname file, from the restored key material, proves the keys came back.
     if [ -n "$new_onion" ] && [ -n "$tor_hostname" ] && [ "$new_onion" = "$orig_onion" ] && [ "$tor_hostname" = "$orig_onion" ]; then
         ok "restore leg: restored machine kept the ORIGINAL Tor identity, not a regenerated one"
     else
         bad "restore leg: onion identity not restored (.env: $orig_onion -> ${new_onion:-none}, Tor's own hostname: ${tor_hostname:-none})"
     fi
+    phase_install_prefill_submit_leg "$target_disk" # #1846, last: nothing after it needs the disk
     rm -f "$target_disk" "$restore_archive" "$restore_target"
 }
 
