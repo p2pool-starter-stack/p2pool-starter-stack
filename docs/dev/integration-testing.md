@@ -898,10 +898,14 @@ pin, and widening first makes the invariant's own match set non-empty against si
 bare. The glob now covers `lib.sh`, `run.sh` and both test-file spellings, which is every suite file
 under `tests/stack`; the one file outside it, `fixtures/rauc-info/capture.sh`, is a capture helper
 the suite does not source and is named in the code rather than left implied. What replaces the pin
-is a file-set control: the invariant asserts that its own list resolves and reaches `run.sh` and
-`test_data_reset.sh` before it reads an absence of matches as evidence, and refuses rather than
-records when it does not, because a glob that quietly stopped matching would report the same clean
-result as a fully converted tree.
+is a file-set control: the invariant asserts that each of its four spellings — `lib.sh`, `run.sh`,
+`test-*.sh` and `test_*.sh` — matches at least one file before it reads an absence of matches as
+evidence, and refuses rather than records when one does not, because a glob that quietly stopped
+matching would report the same clean result as a fully converted tree. Counting matches per spelling
+rather than naming files is what lets the refusal say which spelling failed. The first form asserted
+`test_data_reset.sh` by name, which put one lane's filename inside another lane's assertion and gave
+the same red whether that file had been renamed or the whole spelling had drained away
+([#1796](https://github.com/p2pool-starter-stack/pithead/issues/1796)).
 
 ---
 

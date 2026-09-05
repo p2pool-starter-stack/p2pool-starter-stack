@@ -169,25 +169,40 @@ fi
 # Every entry goes through the same existence filter, the two fixed names included. Seeding those
 # in unconditionally would make the check below a tautology — it would read back the list it had
 # just been handed, and a stack directory missing run.sh entirely would still report it as covered.
+#
+# The set is built per SPELLING, not per filename. The deleted pin was not only a pin: it was the
+# only thing proving this row read real files, and with it gone a file set that resolved to nothing
+# would report the same clean absence as a fully converted tree. So the set is measured before the
+# absence below is read as evidence, and this refuses rather than records — a vacuous invariant row
+# is worse than no row, it reads as proof. Counting each spelling's matches is what lets the refusal
+# name the spelling that failed. The first form asserted three filenames instead, which put another
+# lane's test_data_reset.sh inside this lane's assertion and emitted the same red whether that one
+# file had been renamed or the whole test_*.sh spelling had drained away — two failures, one
+# message (#1796).
+#
+# The spellings are quoted in the list deliberately: unquoted, test-*.sh and test_*.sh would glob
+# against the working directory at this line rather than against $STACK_DIR below, and the control
+# would quietly stop meaning what it says.
 COVERED=()
-for f in "$STACK_DIR/lib.sh" "$STACK_DIR/run.sh" "$STACK_DIR"/test-*.sh "$STACK_DIR"/test_*.sh; do
-    [ -f "$f" ] && COVERED+=("$f")
+missing=""
+for spelling in "lib.sh" "run.sh" "test-*.sh" "test_*.sh"; do
+    n=0
+    # shellcheck disable=SC2086  # $spelling is a glob; quoting it would defeat the match
+    for f in "$STACK_DIR"/$spelling; do
+        [ -f "$f" ] || continue
+        COVERED+=("$f")
+        n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] || missing="$missing $spelling"
 done
 
-# The deleted pin was not only a pin: it was the only thing proving this row read real files. With
-# it gone, a file set that resolved to nothing would report the same clean absence as a fully
-# converted tree. So the set is measured before the absence below is read as evidence, and this
-# refuses rather than records — a vacuous invariant row is worse than no row, it reads as proof.
-covered_names=" ${COVERED[*]##*/} "
-missing=""
-for want in lib.sh run.sh test_data_reset.sh; do
-    case "$covered_names" in *" $want "*) ;; *) missing="$missing $want" ;; esac
-done
-if [ "${#COVERED[@]}" -ge 4 ] && [ -z "$missing" ]; then
-    it_pass "the invariant's file set resolves and reaches run.sh and test_*.sh (control arms)"
+# All four spellings matching means COVERED holds at least four entries, so the empty-expansion
+# guard the grep below needs is implied by this refusal rather than asserted separately beside it.
+if [ -z "$missing" ]; then
+    it_pass "the invariant's file set resolves for every spelling (control arms)"
 else
-    it_fail "the invariant's file set resolves and reaches run.sh and test_*.sh" \
-        "the absence below would be vacuous — ${#COVERED[@]} files, missing:${missing:- none}"
+    it_fail "the invariant's file set resolves for every spelling" \
+        "the absence below would be vacuous — ${#COVERED[@]} files, unmatched:$missing"
     echo "selftest-stack-sandbox: $IT_PASS passed, $IT_FAIL failed"
     exit 1
 fi
