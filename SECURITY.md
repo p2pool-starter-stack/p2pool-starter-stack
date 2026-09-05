@@ -123,8 +123,15 @@ The stack's defaults:
   rows per hour between them before the rest are dropped behind a single `rate-limited` marker that
   names which of the two tipped it. One budget rather than one each, because two would double what
   that device can make permanent. The cap is keyed on the worker name the device presents, which a
-  device chooses freely, so it bounds a NAME rather than a device: one rotating names draws a fresh
-  budget per name (#1566). And it bounds how many rows arrive, not how large each one is, so the
+  device chooses freely, so a second bound sits beside it (#1695): only a fixed number of worker
+  names may hold a live window at once, and a name that holds none yet is refused once that
+  ceiling is reached, so a rotating device no longer draws a fresh budget per name. It is a
+  ceiling on names rather than one overall row budget on purpose — a rogue rig would spend an
+  overall budget on every other rig's behalf, where a name already holding a window keeps its own,
+  so a rotation flood costs first sightings while it runs and never an established rig's
+  detections. The refusal is as visible as the per-worker cap: one `rate-limited` marker for the
+  episode, naming no rotated name, because a marker per name would be the flood the ceiling exists
+  to stop. And it bounds how many rows arrive, not how large each one is, so the
   row's own identifier is bounded separately (#1561): every audit row id
   is length-capped and whitelisted at the writer, the one field the trail's sanitizer used to skip,
   and `rig-drift`'s revision is validated to a short opaque token at the point it is read as well.

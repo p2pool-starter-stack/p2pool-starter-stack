@@ -21,6 +21,60 @@ from mining_dashboard.service import audit_service
 
 logger = logging.getLogger("WorkerChangeAudit")
 
+# Ceiling on how many worker names hold a live #724 window at once (#1695). That cap buckets on the
+# name the device presents on this same unauthenticated feed, so without a bound here a device that
+# varies its name draws a fresh budget per name over an unbounded name space -- bounding a NAME
+# rather than a device, and growing ``_rig_edit_window`` without limit in a process that never
+# exits. It lives beside the cap's marker for the reason the module docstring gives: one
+# implementation, so the two detections cannot drift apart.
+#
+# NOT one overall row ceiling, which is the tidier-looking fix: a rogue rig would spend THAT, and
+# #724 chose a per-worker cap precisely so one device could not crowd out genuine history. Here a
+# name already holding a live window keeps its whole budget and only an unseen name is refused, so
+# a rotation flood costs first sightings during the flood and never an established rig's
+# detections. Nor is it keyed on something the device does not choose: the feed carries exactly
+# ``name`` and ``ip`` per worker (``data_helpers._parse_proxy_list_worker`` and its legacy
+# sibling), a LAN device picks its own address as freely as its name, and the legacy shape defaults
+# a missing one to ``0.0.0.0`` -- so nothing here qualifies.
+#
+# The value is a judgement, not a measurement, and the arithmetic it turns on is: what a rotating
+# device can still make permanent is this ceiling times ``_RIG_EDIT_CAP_PER_HOUR``, so 64 x 12 =
+# 768 audit rows an hour, against a feed that was bounded before only by how many names one body
+# could carry times the poll rate. 64 stays several times clear of any pithead fleet (an
+# xmrig-proxy serving a home or small setup, single-digit to low-tens rigs) while a rotation flood
+# reaches it inside a single poll. Lower it and real fleets start losing first sightings; raise it
+# and that hourly product rises with it.
+_WORKERS_MAX = 64
+
+
+def admit_worker(svc, worker, now, window_sec):
+    """Whether ``worker`` may hold a #724 flood-cap window, bounding the name space (#1695).
+
+    Returns ``(admitted, first_over)``. A name already in ``svc._rig_edit_window`` is always
+    admitted -- this only ever refuses a name that holds no live budget yet, which is what keeps a
+    rotation flood off established rigs. Before refusing, every name whose own window has EXPIRED
+    is evicted: those hold no live budget either, so dropping them is the same reset
+    ``_rig_edit_within_cap`` already does lazily per worker, and it is what lets genuine fleet
+    turnover keep admitting names.
+
+    A refused name is deliberately NEVER inserted into that map, and ``record_cap_marker`` reads
+    exactly that: absence when a marker is written means this refusal and nothing else can produce
+    it. ``first_over`` is True only on the call that opens a saturation episode, so the episode
+    gets one marker rather than one per rotated name.
+    """
+    if worker in svc._rig_edit_window:
+        return True, False
+    for name, (start, _) in list(svc._rig_edit_window.items()):
+        if now - start >= window_sec:
+            del svc._rig_edit_window[name]
+    if len(svc._rig_edit_window) >= _WORKERS_MAX:
+        first_over = svc._rig_edit_names_over is None
+        if first_over:
+            svc._rig_edit_names_over = now
+        return False, first_over
+    svc._rig_edit_names_over = None
+    return True, False
+
 
 async def record_cap_marker(svc, worker, cap, tipped_by):
     """Record the single #724 rate-limited marker for ``worker``'s current window.
@@ -36,7 +90,37 @@ async def record_cap_marker(svc, worker, cap, tipped_by):
     RigForge, and knowing it was edits says look at who is driving changes. The marker keeps
     ``source="rig-edit"``: it describes the one shared per-worker budget on the one untrusted feed,
     not a second thing for the Security panel to filter on.
+
+    A worker ABSENT from ``svc._rig_edit_window`` is the #1695 names-ceiling refusal rather than
+    this worker's own exhausted budget -- see :func:`admit_worker` for why absence means exactly
+    that. It gets ONE marker for the saturation episode instead of one per name, because a marker
+    naming the rotating name would BE the flood the ceiling exists to stop: it names no worker,
+    states the ceiling itself, and keys its id on the episode start so a restart that re-trips it
+    writes the same row rather than a second one. ``new-workers`` is a
+    display label and not a reserved name -- a device may present it, and the action and keys are
+    what tell the two rows apart.
     """
+    if worker not in svc._rig_edit_window:
+        logger.warning(
+            "Out-of-band audit windows are held by %d distinct worker names (#1695), tipped by %s "
+            "-- a device on the unauthenticated feed may be rotating the name it presents. "
+            "rig-edit AND revision-drift rows for names not already seen are dropped until a "
+            "window frees.",
+            _WORKERS_MAX,
+            tipped_by,
+        )
+        await svc._record_audit_event(
+            "rig-edit",
+            "new-workers",
+            "rate-limited",
+            "dropped",
+            f"out-of-band audit windows held by {_WORKERS_MAX} worker names; rows for further NEW "
+            f"names dropped (tipped by {tipped_by})",
+            event_id=audit_service.build_event_id(
+                "rig-edit-namescap", int(svc._rig_edit_names_over or 0)
+            ),
+        )
+        return
     window_start = svc._rig_edit_window[worker][0]
     logger.warning(
         "Worker %s exceeded %d out-of-band audit rows this hour (#724), tipped by %s — a rig on "

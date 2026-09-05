@@ -201,10 +201,14 @@ class DataService:
         # spam a permanent audit row every poll; this bounds them to _RIG_EDIT_CAP_PER_HOUR per
         # worker per hour. In-memory like _flagged_rig_changes — a restart resets the window, which
         # at worst grants one extra window's budget, still bounded per wall-hour.
-        # ponytail: a rogue device rotating the worker NAME each poll sidesteps a per-worker cap;
-        # that's the broader unauth-feed vector (#235), out of scope here — cap keyed on worker per
-        # the issue, so one rogue rig can't crowd genuine rig-edit history out.
+        # A device rotating the worker NAME each poll used to sidestep this per-worker cap; the
+        # map is bounded to a fixed number of live names since #1695 (worker_change_audit.
+        # admit_worker). The broader unauth-feed vector this was once deferred to is still #235.
         self._rig_edit_window = {}
+        # Wall-clock of the first name that ceiling refused in the current saturation episode, None
+        # while a slot is free. Gives the refusal ONE marker per episode the way first_over does per
+        # worker, and is cleared the moment a new name is admitted again.
+        self._rig_edit_names_over = None
         # XvB raffle-winners mirror: wall-clock of the last successful winners-file read. Starts
         # at 0.0 so the first eligible poll reads it; NOT stamped on a failed fetch, so a failure
         # retries on the next 10th poll instead of waiting out the 30-min gate.
@@ -785,7 +789,17 @@ class DataService:
         is True while the worker is under ``_RIG_EDIT_CAP_PER_HOUR`` this window; ``first_over`` is
         True only on the single call that tips it over, so the caller logs + records the
         rate-limited marker exactly once per window rather than every poll. A handful of real edits
-        an hour never trips it; a rig spamming distinct change_ids does."""
+        an hour never trips it; a rig spamming distinct change_ids does.
+
+        A name this map has never admitted goes through ``worker_change_audit.admit_worker`` first
+        (#1695), which bounds the device-chosen name space; a refusal returns here with the same
+        ``(allowed, first_over)`` shape, so both callers stay unchanged and the marker for it is
+        written by the same ``record_cap_marker`` the per-worker case uses."""
+        admitted, first_names_over = worker_change_audit.admit_worker(
+            self, worker, now, _RIG_EDIT_WINDOW_SEC
+        )
+        if not admitted:
+            return False, first_names_over
         start, count = self._rig_edit_window.get(worker, (now, 0))
         if now - start >= _RIG_EDIT_WINDOW_SEC:
             start, count = now, 0

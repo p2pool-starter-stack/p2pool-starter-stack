@@ -327,9 +327,14 @@ before that identifier is assembled ([#1566](https://github.com/p2pool-starter-s
 so no rig can land a row on another rig's identifier — which used to drop the second detection
 rather than record it. Between these bounds, a rig holding one worker name is bounded in how many
 rows it adds, how large each one is, and whose rows it can displace. The cap is
-keyed on the name the device presents and a device chooses that freely, so one that rotates names
-draws a fresh budget per name ([#1566](https://github.com/p2pool-starter-stack/pithead/issues/1566)):
-read the bound as per name, not per device. A genuine occasional rig change still records
+keyed on the name the device presents and a device chooses that freely, so how many names may hold
+a live window at once is bounded as well ([#1695](https://github.com/p2pool-starter-stack/pithead/issues/1695)):
+past that ceiling a name not already holding a window is refused, which is what stops a device
+rotating names from drawing a fresh budget per name. A ceiling on names rather than one overall row
+budget, because a rogue rig would spend an overall budget on every other rig's behalf; a name that
+already holds a window keeps it, so a rotation flood costs first sightings while it runs and leaves
+established rigs alone. It surfaces the same way the per-worker cap does, as one `rate-limited`
+marker for the episode that names no rotated name. A genuine occasional rig change still records
 normally; only a flood is capped, and the cap is visible — the marker names which detection tipped
 it, and the dashboard logs a warning.
 
