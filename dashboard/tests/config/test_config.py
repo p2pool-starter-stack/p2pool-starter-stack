@@ -133,11 +133,7 @@ class TestWorkerEndpoints:
     def test_duplicate_names_first_declared_wins(self, tmp_path):
         got = self._load(
             tmp_path,
-            {
-                "workers": {
-                    "list": [{"name": "rig1", "port": 1111}, {"name": "rig1", "port": 2222}]
-                }
-            },
+            {"workers": {"list": [{"name": "rig1", "port": 1111}, {"name": "rig1", "port": 2222}]}},
         )
         assert got == [{"name": "rig1", "port": 1111}]
 
