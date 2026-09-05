@@ -367,17 +367,17 @@ else
         for _k in $1; do _dd_in_set "$_k" "$2" && _out="${_out:+$_out }$_k"; done
         printf '%s' "$_out"
     }
-    _dd_all=$(sed -n 's/^ *for var in \(.*_DATA_DIR\); do$/\1/p' "$STACK" | head -1)
-    _dd_conf=$(awk "/^CONTROL_DASHBOARD_CONFIRM_KEYS='/{f=1} f{print} f && /'[[:space:]]*\$/ && NR>1{exit}" "$STACK" |
+    _dd_sites=$(sed -n 's/^ *for var in \(.*_DATA_DIR\); do$/\1/p' "$STACK")
+    _dd_all=${_dd_sites%%$'\n'*}
+    # THE GUARD THAT EARNS ITS PLACE, replacing one that could not: reseeding TOR_DATA_DIR was
+    # strictly REDUNDANT, its pass condition being exactly what the CANNOT row asserts, so it could
+    # never red alone. This closes what those rows cannot see -- a second `for var in ..._DATA_DIR;
+    # do` above missing_data_dirs would feed them, through head -1, a set the shipped code no longer
+    # uses, every row still green. The awk keeps a narrower gap: a trailing comment after its
+    # closing quote makes it over-read. Wrong input, no wrong output today, so NAMED not guarded.
+    assert_eq "the data-dir key list comes from exactly one site (#1776)" "$(printf '%s\n' "$_dd_sites" | grep -c .)" "1"
+    _dd_conf=$(awk "/^CONTROL_DASHBOARD_CONFIRM_KEYS='/{f=1} f{print} f && /'[[:space:]]*\$/{exit}" "$STACK" |
         tr -d "\n'" | sed "s/^CONTROL_DASHBOARD_CONFIRM_KEYS=//;s/  */ /g;s/^ //")
-    # THE CONTROL. Both rows below are equality claims over that computation, and an extractor that
-    # silently returned nothing would make them agree on "" and score green. So run it once more
-    # against an allowlist that DOES carry the tor key: the answer must MOVE.
-    if [ "$(_dd_repointable "$_dd_all" "$_dd_conf TOR_DATA_DIR")" = "$(_dd_repointable "$_dd_all" "$_dd_conf")" ]; then
-        bad "control: the repointable-set computation can give another answer (#1776)" "seeding TOR_DATA_DIR onto the allowlist did not move it; keys='$_dd_all' allow='$_dd_conf'"
-    else
-        ok "control: the repointable-set computation can give another answer (#1776)"
-    fi
     assert_eq "the dirs doctor warns about that the dashboard CAN repoint (#1776)" \
         "$(_dd_repointable "$_dd_all" "$_dd_conf")" \
         "MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR"
