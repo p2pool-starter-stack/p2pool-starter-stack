@@ -911,6 +911,10 @@ PYEOF
 # bundle download are pointed at a bench-local server through the root-owned test seam
 # (os-update-test-base); RAUC signature verification still runs for real against the slot
 # keyring, so the bad-signature refusal is genuine, not simulated.
+_leg4_srv_stop() { # the bench release server and its dir, torn down at every leg-4 exit; reads the caller's locals
+    kill "$srv_pid" 2>/dev/null
+    rm -rf "$srv"
+}
 phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-boot>
     local good_bundle="$1" serial_mark="${2:-0}" marker before
     info "leg 4 — dashboard OS-update action end-to-end (provision, then check/download/verify/install/reboot)"
@@ -973,8 +977,7 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     fi
     _ssh "printf 'http://$host_addr:$port' > /data/pithead/os-update-test-base" || {
         bad "leg 4: could not plant the update-server seam on the guest"
-        kill "$srv_pid" 2>/dev/null
-        rm -rf "$srv"
+        _leg4_srv_stop
         return
     }
 
@@ -994,14 +997,12 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     local aged
     if ! aged=$(aged_version "${tag#v}"); then
         bad "leg 4: cannot age the running version ${tag#v} — nothing sorts below it (tests/os/aged-version.sh)"
-        kill "$srv_pid" 2>/dev/null
-        rm -rf "$srv"
+        _leg4_srv_stop
         return
     fi
     if ! _ssh "printf '%s\n' '$aged' > /data/pithead/VERSION"; then
         bad "leg 4: could not age the guest's running version to $aged"
-        kill "$srv_pid" 2>/dev/null
-        rm -rf "$srv"
+        _leg4_srv_stop
         return
     fi
 
@@ -1013,8 +1014,7 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
         ok "leg 4: check derived the published release ($tag, $(printf '%s' "$out" | jq -r '.size') bytes)"
     else
         bad "leg 4: check did not derive the release (got: $(printf '%s' "$out" | cut -c1-200))"
-        kill "$srv_pid" 2>/dev/null
-        rm -rf "$srv"
+        _leg4_srv_stop
         return
     fi
 
@@ -1093,8 +1093,7 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
         ok "leg 4: the good bundle verifies (signature + compatible + version)"
     else
         bad "leg 4: the good bundle failed verify (got: $(printf '%s' "$out" | cut -c1-200))"
-        kill "$srv_pid" 2>/dev/null
-        rm -rf "$srv"
+        _leg4_srv_stop
         return
     fi
     out=$(_os_step '{"action":"install"}' 900)
@@ -1102,8 +1101,11 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
         ok "leg 4: install wrote the spare slot through the dashboard action"
     else
         bad "leg 4: install did not complete (got: $(printf '%s' "$out" | cut -c1-200))"
-        kill "$srv_pid" 2>/dev/null
-        rm -rf "$srv"
+        # The runner deletes .install.log on a failed install and the result carries only a whitelisted last line
+        # (#1651: one gate red said "[ERROR] rauc install failed", guest gone) — keep the guest's own account.
+        SSH_TIMEOUT=120 _ssh "{ echo '== pithead-control.service (the root runner)'; journalctl -b -u pithead-control.service -o short-iso --no-pager -n 200; echo '== journal rauc/os-install lines'; journalctl -b -o short-iso --no-pager | grep -aiE 'rauc|os.install|os-update' | tail -300; echo '== rauc status'; rauc status; echo '== df'; df -h /data /tmp; echo '== free'; free -m; echo '== oom'; dmesg | grep -aiE 'oom|killed process'; } 2>&1" >"$SERIAL.leg4-install" || true
+        [ -s "$SERIAL.leg4-install" ] && info "install diagnostics kept at $SERIAL.leg4-install" || info "install diagnostics capture came back EMPTY (guest unreachable, or the 120 s cap hit) — read $SERIAL.failed"
+        _leg4_srv_stop
         return
     fi
     if [ "$(_ssh "jq -r '.to' /data/pithead/data/os-update/in-flight.json" 2>/dev/null)" = "${tag#v}" ]; then
@@ -1125,8 +1127,7 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     [ -n "$before" ] && _os_step '{"action":"reboot"}' 30 >/dev/null 2>&1 || true # the machine goes away mid-poll; no id, no reboot
     [ -n "$before" ] && _wait_new_boot "$before" 420 || {
         bad "leg 4: guest never returned after the dashboard reboot intent"
-        kill "$srv_pid" 2>/dev/null
-        rm -rf "$srv"
+        _leg4_srv_stop
         return
     }
     marker=$(_ssh cat /etc/pithead-test-marker)
@@ -1151,8 +1152,7 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
     else
         bad "leg 4: /api/state does not carry the updated verdict — the banner would never show"
     fi
-    kill "$srv_pid" 2>/dev/null
-    rm -rf "$srv"
+    _leg4_srv_stop
 }
 
 phase_install() {
