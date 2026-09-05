@@ -61,9 +61,19 @@ test("the (default) marker names the option an unconfigured machine opens on (#1
   // wizard.test.mjs asserts option text that survives moving the marker back, so a straight
   // revert of the fix ships green (measured by the non-author reviewer at this head).
   const out = renderToString(appOn(cfgFor(true)).render());
-  assert.match(out, /Yes — this machine also mines[^<]*, default\)/);
+  // Structure, not wording: read each option of THIS select and ask which one carries a default
+  // marker. Matching prose literals was BOTH too narrow and too brittle — it missed a marker
+  // duplicated onto No in the comma form, and it red on a pure reword of either label. Both
+  // needles are unique to their option; four other markers elsewhere on the page are why this is
+  // per-option rather than a page-wide count.
+  const label = (needle) => {
+    const m = out.match(new RegExp(`<option [^>]*>([^<]*${needle}[^<]*)<`));
+    assert.ok(m, `no rendered option matched ${needle}`); // a clean failure, not a TypeError
+    return m[1];
+  };
+  assert.match(label("also mines"), /\bdefault\b/);
   // The load-bearing half: matching on Yes alone still passes if the marker is re-added to No.
-  assert.doesNotMatch(out, /coordinates the miners \(default\)/);
+  assert.doesNotMatch(label("only coordinates"), /\bdefault\b/);
 });
 
 test("the miner switch moves the role select, and so does the JSON pane (#1831)", () => {
