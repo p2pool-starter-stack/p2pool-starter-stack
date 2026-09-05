@@ -702,8 +702,8 @@ services:
       # How the dashboard reads each worker's own xmrig /1/summary (config.json: workers.*). One
       # configured way, no auto-detection. Defaults = stock RigForge worker (open read-only API,
       # no token, port 8080). api_auth: none (default) | name (Bearer=worker name) | token.
-      # Per-worker overrides (dashboard.workers[], #172) are NOT env — the dashboard reads them
-      # from the read-only /host-config/config.json mount above (they carry per-rig tokens).
+      # Per-worker overrides (workers.list[], #506) are NOT env — they carry per-rig tokens, so
+      # they stay in the owner-only config.json; the dashboard reads the masked copy (#440).
       - XMRIG_API_PORT=${XMRIG_API_PORT:-8080}
       - XMRIG_API_AUTH=${XMRIG_API_AUTH:-none}
       - XMRIG_API_TOKEN=${XMRIG_API_TOKEN}
