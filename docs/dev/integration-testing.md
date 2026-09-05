@@ -874,27 +874,34 @@ a working `mktemp` holds the other side, so deleting the sandbox logic outright 
 last case drives the pre-fix expression against the same fixture and requires it to destroy the
 sentinel, so a row that is green because the fixture never armed fails rather than reads as proof.
 
-A second block in that file pins what the suite does *not* reach. The
+A second block in that file holds the invariant that keeps the constructor honest. The
 [#1705](https://github.com/p2pool-starter-stack/pithead/issues/1705) invariant reads
-`tests/stack/lib.sh` and the `test-*.sh` domain files and names `tests/stack/run.sh` and the
-standalone `test_*.sh` out of itself, because those belong to other lanes and the conversion to the
-fail-closed constructor stopped at that boundary. A list of names rots in silence: a fifth bare
-`mktemp -d` assignment added to `run.sh` would sit outside the invariant with nothing saying so,
-and that gap rather than the four known sites is what
-[#1725](https://github.com/p2pool-starter-stack/pithead/issues/1725) is about. The four sites are
-not inert: the hazard is any `"$VAR/sub"` expansion, not a recursive `rm`, and all four have one —
+`tests/stack/lib.sh` and the `test-*.sh` domain files, and for a while it named `tests/stack/run.sh`
+and the standalone `test_*.sh` out of itself, because those belonged to other lanes and the
+conversion to the fail-closed constructor stopped at that boundary. A list of names rots in
+silence: a fifth bare `mktemp -d` assignment added to `run.sh` would have sat outside the invariant
+with nothing saying so, and that gap rather than the four known sites is what
+[#1725](https://github.com/p2pool-starter-stack/pithead/issues/1725) was about. The four sites were
+not inert: the hazard is any `"$VAR/sub"` expansion, not a recursive `rm`, and all four had one —
 `run.sh` writes `"$XPTLS/cert.pem"` and `"$XPTLS/key.pem"` and then removes the second, both
 `local d` helpers write `"$d/xmrig-proxy"`, and `test_data_reset.sh` runs `mkdir -p "$WORK/bin"`.
 Under an empty value each is an absolute path at the filesystem root, and `set -u` does not catch
 it because a failed `mktemp -d` leaves the variable set and empty. Those writes fail for an
 unprivileged user and would land under `/` as root; only the trailing `rm -rf "$VAR"` is inert.
-The excluded population is therefore pinned to exactly those four, keyed on file
-and variable name rather than line number, because the line numbers the issue cites had already
-drifted by three when the pin was written. It reds in both directions: a new bare site fails it,
-and so does converting the four. That second red is expected, and it is the signal to delete the
-by-name exclusion, widen the invariant to those files, and drop the pin along with it. The
-conversion lands in `tests/stack/` and the pin lives in `tests/integration/`, so the two halves
-merge separately and the row is red in between.
+While that gap stood it was pinned to exactly those four, keyed on file and variable name rather
+than line number, because the line numbers the issue cites had already drifted by three when the
+pin was written. The pin reds in both directions: a new bare site fails it, and so does converting
+the four. #1725 converted them, so the second red is the signal the pin was built to give, and the
+by-name exclusion, the pin, and the split between the two halves are gone together. Both halves land
+in one merge, because neither order keeps the branch green on its own: converting first empties the
+pin, and widening first makes the invariant's own match set non-empty against sites that are still
+bare. The glob now covers `lib.sh`, `run.sh` and both test-file spellings, which is every suite file
+under `tests/stack`; the one file outside it, `fixtures/rauc-info/capture.sh`, is a capture helper
+the suite does not source and is named in the code rather than left implied. What replaces the pin
+is a file-set control: the invariant asserts that its own list resolves and reaches `run.sh` and
+`test_data_reset.sh` before it reads an absence of matches as evidence, and refuses rather than
+records when it does not, because a glob that quietly stopped matching would report the same clean
+result as a fully converted tree.
 
 ---
 
