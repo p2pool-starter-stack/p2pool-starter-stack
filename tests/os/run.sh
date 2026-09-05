@@ -57,6 +57,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/data-floor-fallback-leg.sh"
 # shellcheck source=tests/os/aged-version.sh
 . "$SCRIPT_DIR/aged-version.sh"
+# shellcheck source=tests/os/provision-browser-submit.sh
+. "$SCRIPT_DIR/provision-browser-submit.sh"
 # shellcheck source=tests/os/setup-again-leg.sh
 . "$SCRIPT_DIR/setup-again-leg.sh"
 
@@ -1959,7 +1961,7 @@ phase_install() {
 
 phase_provision() {
     info "phase: provision (wizard HTTP submit -> setup -> stack containers up)"
-    local img token jar body scode
+    local img token jar scode
 
     img=$(_build_image v1) || {
         bad "image build failed (/tmp/os-fault-build.log)"
@@ -1990,10 +1992,9 @@ phase_provision() {
     }
 
     jar=$(mktemp)
-    # https, and PROVE the cookie landed: auth against :80 once hit the new TLS redirect, whose
-    # 301 carries no cookie — curl -f called that success, the jar stayed empty, and the
-    # unauthenticated submit's redirect then ALSO read as success. Two phantom green checks in a
-    # row while nothing was written. Status codes and the jar are asserted now, not inferred.
+    # https, and PROVE the cookie landed: auth against :80 once hit the TLS redirect, whose 301
+    # carries no cookie — curl -f called that success, the jar stayed empty, and the unauthenticated
+    # submit's redirect ALSO read as success. Status codes and the jar are asserted, not inferred.
     curl -fsSk -c "$jar" -d "token=$token" "https://$ip/auth" -o /dev/null 2>/dev/null || {
         bad "token was not accepted"
         rm -f "$jar"
@@ -2004,27 +2005,19 @@ phase_provision() {
         rm -f "$jar"
         return
     }
-    # Minimal honest config: a checksum-valid primary Monero address (see HARNESS_WALLET — the
-    # old dummy crash-looped p2pool, #829). Tari's gate is deliberately format-free host-side
-    # and p2pool tolerates a bad merge-mine address, so a labelled dummy stays obviously fake.
-    # Everything else keeps its default — which is itself part of what this proves.
-    # local_miner=true: the Both role (#796) — the same submit must also light the built-in
-    # RigForge worker, asserted in the local-miner leg below.
-    body="monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini&local_miner=true"
-    scode=$(curl -sSk -b "$jar" --data "$body" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
+    # The browser's body (#1846): served config + HARNESS_WALLET (#829) + a dummy Tari address +
+    # local_miner on (Both, #796; the local-miner leg asserts it) + auth_mode=auto — see the sibling.
+    scode=$(provision_browser_submit "$ip" "$jar")
     [ "$scode" = "200" ] || {
         bad "config submit did not return 200 (got ${scode:-none} — a 30x means the session was not accepted)"
         rm -f "$jar"
         return
     }
-    # The jar lives on: the handoff below is authenticated too, and a real operator's session
-    # does not end at submit. (Deleting it here made the handoff poll silently unauthenticated,
-    # which read as "the appliance never published credentials" — it had.)
+    # The jar lives on: the handoff below is authenticated too (deleting it here once made the poll silently unauthenticated).
     ok "config submitted through the wizard"
-    # The credentials handoff: the host publishes the generated login and HOLDS provisioning
-    # until it is acknowledged — the page goes dark afterwards, so the card must come first.
-    # The login is kept: the OS-update presence check below drives the authenticated state API.
-    local handoff_body=""
+    # The credentials handoff: the host publishes the generated login and HOLDS provisioning until
+    # it is acknowledged (the page goes dark after). The login is kept for the OS-update check below.
+    local handoff_body="" page_err=""
     tries=0
     while [ "$tries" -lt 24 ]; do
         handoff_body=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/handoff" 2>/dev/null)
@@ -2032,14 +2025,21 @@ phase_provision() {
             ok "generated credentials published to the page"
             break
         fi
+        page_err=$(provision_page_error "$ip" "$jar")
+        [ -z "$page_err" ] || break # the host refused: say what it said, not that it timed out
         sleep 5
         tries=$((tries + 1))
     done
-    [ "$tries" -lt 24 ] || {
-        bad "no credentials handoff appeared on the page"
+    [ "$tries" -lt 24 ] && [ -z "$page_err" ] || {
+        bad "no credentials handoff appeared on the page${page_err:+ — the page says: $page_err}"
         rm -f "$jar"
         return
     }
+    if printf '%s' "$handoff_body" | jq -r '.password // ""' | grep -qE '^[A-Za-z0-9]{32}$'; then
+        ok "the card carries a generated 32-character password (auth_mode=auto, #1846)"
+    else
+        bad "the card's password is not a generated one: $(printf '%s' "$handoff_body" | jq -c '.password // null')"
+    fi
     scode=$(curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
         bad "handoff acknowledgement did not return 200 (got ${scode:-none})"
