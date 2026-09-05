@@ -70,3 +70,27 @@ out=$(jbv "" 1 3)
 assert_rc "unreadable before-count: fail, never a vacuous pass" "$?" "1"
 out=$(jbv 1 x 3)
 assert_rc "garbage after-count: fail" "$?" "1"
+
+echo "== unit: journal_home_verdict — one persistent home for the journal across the reboot (#1791) =="
+jhv() { (source "$ROOT/tests/os/journal-boot-verdict.sh" && journal_home_verdict "$@"); }
+out=$(jhv $'/var/log/journal 1310722\n1310722\next2/ext3\nyes\n2')
+assert_rc "the bind tops /var/log/journal, journald flushed under it, two boots listed: pass" "$?" "0"
+out=$(jhv $'/var 4\n1310722\noverlayfs\nno\n4')
+assert_rc "the /var overlay tops it (the kept guest's own reading): fail" "$?" "1"
+assert_contains "…naming the overlay" "$out" "overlay covered it"
+out=$(jhv $'/var/log/journal 1310722\n1310722\next2/ext3\nno\n2')
+assert_rc "the bind is up but journald flushed nothing under it: fail" "$?" "1"
+out=$(jhv $'/var/log/journal 1310722\n1310722\next2/ext3\nyes\n1')
+assert_rc "one boot listed after a reboot: fail" "$?" "1"
+assert_contains "…naming the split" "$out" "other home"
+out=$(jhv "")
+assert_rc "unreadable probe: fail, never a vacuous pass" "$?" "1"
+out=$(jhv $'/var/log/journal 1310722\nmissing\next2/ext3\nyes\n2')
+assert_rc "the /data directory missing: fail" "$?" "1"
+out=$(jhv $'/var/log/journal 999\n1310722\next2/ext3\nyes\n2')
+assert_rc "something else is bound at /var/log/journal (the two inodes differ): fail" "$?" "1"
+# The probe and the verdict agree on field ORDER: run the real probe on this host (no appliance
+# /data here, so it must fail) and check the failure names the fields it read, not garbage.
+out=$(jhv "$(bash -c "$(source "$ROOT/tests/os/journal-boot-verdict.sh" && printf '%s' "$JOURNAL_HOME_PROBE")" 2>/dev/null)")
+assert_rc "the probe's own output on a non-appliance host: fail" "$?" "1"
+assert_contains "…as unreadable, with the missing /data inode in the right field" "$out" "/missing"

@@ -61,10 +61,7 @@ for _xp_h in stratum_bind stratum_password "firewall it to your LAN"; do
 done
 assert_contains "the appliance verdict names the one route that exists (#1772)" "$_xp_appl" "router"
 
-# And the two arms must actually DIFFER. Asserting each one's content separately would stay green if
-# the surface switch never flipped and both reads returned the same text.
-if [ "$_xp_host" = "$_xp_appl" ]; then
-    bad "the surface switch actually flips this verdict (#1772)" "host and appliance produced identical text: $_xp_host"
-else
-    ok "the surface switch actually flips this verdict (#1772)"
-fi
+# NO SEPARATE "the two arms differ" ROW. It would be STRICTLY ENTAILED by the pair above -- the host
+# arm CONTAINS stratum_bind and the appliance arm does not -- so if the surface switch never flipped,
+# the appliance rows red on their own and the differ row could never be the only red. That is the
+# same redundant-control defect #1776's review found in this suite; not repeated here.

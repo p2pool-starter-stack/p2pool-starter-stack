@@ -328,9 +328,9 @@ chk "machine-id restore orders before networkd (DHCP DUID) and the journal flush
      grep -q "systemd-journal-flush.service" "$ROOT/etc/systemd/system/pithead-machine-id.service"'
 chk "machine-id restore re-points journald at the restored id (#1659)" \
     'grep -q "systemctl restart systemd-journald.service" "$ROOT/usr/local/sbin/pithead-machine-id"'
-# First-boot interrupt record (#1030): Storage=persistent (journald.conf.d/pithead.conf) has
-# nowhere real to write without this bind mount — /var/log/journal otherwise sits on the same
-# read-only root as /etc, so a hard reset mid-first-boot left no journal to diagnose it from.
+# First-boot interrupt record (#1030) and one journal home (#1791): Storage=persistent
+# (journald.conf.d/pithead.conf) lands on this bind, which must exist, be enabled, and be ordered
+# after the /var overlay it used to race for /var/log/journal and before the flush it feeds.
 chk "persistent-journald config baked" \
     'grep -q "^Storage=persistent" "$ROOT/etc/systemd/journald.conf.d/pithead.conf"'
 chk "the /data-backed journal mountpoint is baked (must pre-exist: a bind mount cannot mkdir a read-only root)" \
@@ -344,8 +344,8 @@ chk "journal-persist chowns the persisted directory to root:systemd-journal" \
     'grep -q "chown root:systemd-journal" "$ROOT/usr/local/sbin/pithead-journal-persist"'
 chk "journal-persist unit enabled" \
     'test -L "$ROOT/etc/systemd/system/sysinit.target.wants/pithead-journal-persist.service"'
-chk "journal-persist orders before the journal flush it exists to feed" \
-    'grep -q "systemd-journal-flush.service" "$ROOT/etc/systemd/system/pithead-journal-persist.service"'
+chk "journal-persist orders after the /var overlay (#1791) and before the journal flush it exists to feed" \
+    'grep -q "^After=var.mount" "$ROOT/etc/systemd/system/pithead-journal-persist.service" && grep -q "^Before=.*systemd-journal-flush.service" "$ROOT/etc/systemd/system/pithead-journal-persist.service"'
 # An empty machine-id makes systemd run FIRST-BOOT semantics on every power cycle (the volatile
 # /etc upper resets it), and first boot applies preset-all — with no preset files, systemd's
 # fallback is enable-everything, which would resurrect the deliberately-disabled ssh.service on

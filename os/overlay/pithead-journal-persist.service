@@ -1,15 +1,25 @@
 [Unit]
-Description=Bind the persistent journal onto /data before it is ever flushed there (#1030)
-# Ordering mirrors pithead-machine-id.service exactly, and for the same reasons:
+Description=Bind the persistent journal onto /data after the /var overlay, before the flush
+# Ordering mirrors pithead-machine-id.service, with one addition (#1030, #1791):
 #   - RequiresMountsFor=/data pulls in and orders after data.mount automatically.
+#   - After=var.mount (#1791): /var is an overlay whose upper dir is on /data (the fstab line in
+#     os/rauc/populate-slot.sh), mounted in the same transaction as this unit and, until this
+#     line, unordered against it. Both started within 5 ms of data.mount, and whichever finished
+#     LAST owned /var/log/journal: a boot's journal landed in EITHER /data/pithead/journal or
+#     the overlay's upper dir, and `journalctl --list-boots` silently omitted the boots that
+#     went the other way. Ordering the bind after the overlay makes it the top mount on every
+#     boot — one home. After= only, not Requires=: a bind needs its target to exist as a
+#     directory, which the baked /var/log/journal is on the read-only root too, so a boot whose
+#     overlay failed still persists its journal here.
 #   - DefaultDependencies=no + WantedBy=sysinit.target/Before=sysinit.target keeps this in the
 #     EARLY boot transaction, alongside pithead-data-reset and pithead-machine-id, rather than
-#     waiting for basic.target/multi-user.target.
+#     waiting for basic.target/multi-user.target. var.mount is Before=local-fs.target, which
+#     sysinit.target itself orders after, so After=var.mount adds no cycle.
 #   - Before=systemd-journal-flush.service: that unit is what promotes journald's runtime ring
 #     buffer (/run/log/journal, volatile) into persistent storage AND switches journald to write
-#     new entries there for the rest of the boot. Without this ordering it would run — and find
-#     /var/log/journal still on the read-only root — before /data, and therefore this unit's
-#     bind mount, ever existed.
+#     new entries there for the rest of the boot. It orders after var.mount on its own
+#     (RequiresMountsFor=/var/log/journal); this line keeps it after the bind as well, so the
+#     first flush never lands on a /var/log/journal the bind has not covered yet.
 # Deliberately NOT Before=systemd-journald.service itself: journald starts far earlier than
 # /data can be mounted, so its OWN early boot messages are unavoidably lost on a reset before
 # this point regardless of ordering — the same limit pithead-machine-id documents for the DHCP
@@ -17,6 +27,7 @@ Description=Bind the persistent journal onto /data before it is ever flushed the
 # crash-prone work (loading the container images) actually happens.
 DefaultDependencies=no
 RequiresMountsFor=/data
+After=var.mount
 Before=sysinit.target systemd-journal-flush.service
 Conflicts=shutdown.target
 Before=shutdown.target
