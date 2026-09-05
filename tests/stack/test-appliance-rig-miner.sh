@@ -176,16 +176,8 @@ assert_not_contains "already volatile -> journald is not restarted again" "$(cat
 # known (pithead-journal-persist), so the reclaim meets a MOUNTPOINT. The bind comes off
 # first — after journald has let go of the files under it, which is why the restart moves
 # ahead of the umount — and only then is the directory reclaimed.
-cat >"$RIGL/bin/mountpoint" <<EOF
-#!/usr/bin/env bash
-[ -f "$RIGL/bound" ] && exit 0
-exit 1
-EOF
-cat >"$RIGL/bin/umount" <<EOF
-#!/usr/bin/env bash
-echo "umount:\$*" >>"\${RF_LOG:?}"
-rm -f "$RIGL/bound"
-EOF
+printf '#!/usr/bin/env bash\n[ -f "%s/bound" ] && exit 0\nexit 1\n' "$RIGL" >"$RIGL/bin/mountpoint"
+printf '#!/usr/bin/env bash\necho "umount:$*" >>"${RF_LOG:?}"\nrm -f "%s/bound"\n' "$RIGL" >"$RIGL/bin/umount"
 chmod +x "$RIGL/bin/mountpoint" "$RIGL/bin/umount"
 mkdir -p "$RIGL/journal/abc"
 touch "$RIGL/bound"
@@ -201,8 +193,8 @@ assert_eq "journald lets go first, then the bind comes off, then the miner is se
 # `pithead local-miner` BARE under the CLI's errexit, while the wizard calls the same leg under
 # `|| true` — a failure inside the minimization passed first boot and killed every boot after
 # (the #1651 gate, BUILD_COMMIT 4fb4943a: the rig booted mining and never committed its slot).
-# Driven under errexit for real, with a control that the runner is armed; rm is stubbed to
-# refuse the journal path with the exact text the mountpoint case prints.
+# Driven under errexit for real. The armed-runner control is an ABSENCE row, paired with the
+# positive rows after it (rc 0 + console text); rm is stubbed to refuse the path as a mountpoint does.
 run_rig_errexit() { (
     cd "$RIGL" || exit 99
     export PITHEAD_APPLIANCE=1 PATH="$RIGL/bin:$PATH"
@@ -230,6 +222,14 @@ rigl_out=$(run_rig_errexit provision_local_miner 2>&1)
 assert_rc "a reclaim that cannot complete does not take the boot verb down (errexit armed)" "$?" "0"
 assert_contains "the miner is still set up behind it" "$(cat "$RF_LOG")" "rigforge:setup appliance=1"
 assert_contains "the console says the journal was not reclaimed" "$rigl_out" "could not be reclaimed"
+# Review (#1817): a bind that will not come off is LEFT ALONE — `rm -rf` through it would empty the
+# persistent home on /data. Real rm here, so a reclaim that reached it would empty the directory.
+printf '#!/usr/bin/env bash\necho "umount:$*" >>"${RF_LOG:?}"\nexit 32\n' >"$RIGL/bin/umount"
+rm -f "$RIGL/bin/rm" && mkdir -p "$RIGL/journal/abc" && touch "$RIGL/bound" && : >"$RF_LOG"
+rigl_out=$(run_rig_errexit provision_local_miner 2>&1)
+assert_rc "umount fails (busy) -> the verb still completes" "$?" "0"
+[ -d "$RIGL/journal/abc" ] && ok "a bind still up is not reclaimed through" || bad "a bind still up is not reclaimed through" "emptied"
+assert_contains "the console says the bind is still up" "$rigl_out" "bind is still up"
 rm -f "$RIGL/bin/rm" "$RIGL/bin/mountpoint" "$RIGL/bin/umount" "$RIGL/bound"
 rm -rf "$RIGL/journal"
 unset -f run_rig_errexit _errexit_probe
