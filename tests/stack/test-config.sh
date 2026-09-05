@@ -263,8 +263,8 @@ for bad_port in '"abc"' 0 65536; do
     assert_contains "stratum_port message ($bad_port)" "$out" "p2pool.stratum_port"
 done
 
-# dashboard.workers (#172): malformed per-worker descriptors fail apply loudly — a typo must not
-# be silently dropped at dashboard runtime. host charset is the #122 guard (no port/path/userinfo).
+# A 1.x dashboard.workers[] config is migrated to workers.list[] BEFORE validation (#1832), so its
+# malformed descriptors are still refused loudly — under the key the operator must now edit.
 dw_case() { # <workers-json> <label> <expected-msg-fragment>
     seed_env
     printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":%s} }\n' "$WALLET" "$1" >"$V/config.json"
@@ -273,33 +273,27 @@ dw_case() { # <workers-json> <label> <expected-msg-fragment>
     assert_rc "$2 rejected" "$rc" "1"
     assert_contains "$2 message" "$out" "$3"
 }
-dw_case '{"name":"rig1"}' "non-array dashboard.workers" "must be an array"
-dw_case '[{"host":"10.0.0.5"}]' "worker entry without a name" "name"
-dw_case '[{"name":"rig1","host":"10.0.0.5/path"}]' "worker host with URL structure" "dashboard.workers[rig1].host"
-dw_case '[{"name":"rig1","host":"attacker:8080"}]' "worker host smuggling a port" "dashboard.workers[rig1].host"
-dw_case '[{"name":"rig1","port":65536}]' "out-of-range worker port" "dashboard.workers[rig1].port"
-dw_case '[{"name":"rig1","port":"8080"}]' "string worker port" "dashboard.workers[rig1].port"
-dw_case '[{"name":"rig1","token":"has space"}]' "unsafe worker token" "dashboard.workers[rig1].token"
-dw_case '[{"name":"rig1","watts":0}]' "non-positive worker watts (#260)" "dashboard.workers[rig1].watts"
-dw_case '[{"name":"rig1","watts":"142"}]' "string worker watts (#260)" "dashboard.workers[rig1].watts"
+dw_case '{"name":"rig1"}' "non-array 1.x dashboard.workers" "must be an array"
+dw_case '[{"host":"10.0.0.5"}]' "1.x worker entry without a name" "name"
+dw_case '[{"name":"rig1","host":"attacker:8080"}]' "1.x worker host smuggling a port" "workers.list[rig1].host"
+dw_case '[{"name":"rig1","watts":0}]' "non-positive 1.x worker watts (#260)" "workers.list[rig1].watts"
 
-# Duplicate names are legal (first-declared wins) but warned about, and a valid dashboard.workers[]
-# list applies. Also proves the legacy fallback still validates + warns once (#506).
+# Duplicate names are legal (first-declared wins) but warned about, and a valid 1.x
+# dashboard.workers[] list applies — migrated once, with the duplicate warning naming the new key.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"rig1","port":1111},{"name":"rig1","port":2222},{"name":"rig2","host":"worker-lan.local","token":"tok_abc123"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "valid dashboard.workers applies" "$rc" "0"
 assert_contains "duplicate worker names are warned" "$out" "first-declared"
-assert_contains "legacy dashboard.workers is warned as deprecated (#506)" "$out" "dashboard.workers[] is deprecated"
+assert_contains "a 1.x dashboard.workers[] list is migrated on apply (#1832)" "$out" "Migrated the 1.x config keys"
 # Nothing from the list reaches .env: the dashboard reads it from its config.json mount, and the
 # per-worker token must not leak into a second secrets file.
 if grep -q 'tok_abc123' "$V/.env"; then bad "worker token stays out of .env" "token landed in .env"; else ok "worker token stays out of .env"; fi
 
-# workers.list[] (#506): the current sub-key validates with the same rules, at the new path — every
-# per-field error message above named its path via dashboard.workers[]; each case repeats here
-# named via workers.list[], proving the dynamic path label in validate_worker_endpoints tracks
-# whichever key is actually in use, not a hardcoded string.
+# workers.list[] is the only worker key 2.0.0 reads (#506/#1832), so this is the authoritative
+# per-field enumeration; the block above keeps only enough 1.x cases to prove the migrate-then-
+# validate order. The path label is built from the entry name in validate_worker_endpoints.
 wl_case() { # <workers-json> <label> <expected-msg-fragment>
     seed_env
     printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":%s} }\n' "$WALLET" "$1" >"$V/config.json"
@@ -313,51 +307,53 @@ wl_case '[{"host":"10.0.0.5"}]' "workers.list entry without a name" "name"
 wl_case '[{"name":"rig1","host":"10.0.0.5/path"}]' "workers.list host with URL structure" "workers.list[rig1].host"
 wl_case '[{"name":"rig1","host":"attacker:8080"}]' "workers.list host smuggling a port" "workers.list[rig1].host"
 wl_case '[{"name":"rig1","port":65536}]' "out-of-range workers.list port" "workers.list[rig1].port"
+wl_case '[{"name":"rig1","port":"8080"}]' "string workers.list port" "workers.list[rig1].port"
 wl_case '[{"name":"rig1","token":"has space"}]' "unsafe workers.list token" "workers.list[rig1].token"
 wl_case '[{"name":"rig1","watts":0}]' "non-positive workers.list watts (#260)" "workers.list[rig1].watts"
+wl_case '[{"name":"rig1","watts":"142"}]' "string workers.list watts (#260)" "workers.list[rig1].watts"
 
-# A valid workers.list[] applies cleanly, warns no deprecation, and — like the legacy shape — never
-# leaks a per-worker token into .env.
+# A valid workers.list[] applies cleanly, leaves the 1.x migration inert, and — like the 1.x shape
+# — never leaks a per-worker token into .env.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan"}, "workers":{"list":[{"name":"rig1","host":"worker-lan.local","token":"tok_xyz789"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "valid workers.list applies" "$?" "0"
-assert_not_contains "workers.list applying raises no deprecation warning" "$out" "deprecated"
+assert_not_contains "a canonical workers.list[] config triggers no 1.x migration" "$out" "Migrated the 1.x config keys"
 if grep -q 'tok_xyz789' "$V/.env"; then bad "workers.list token stays out of .env" "token landed in .env"; else ok "workers.list token stays out of .env"; fi
 
-# Setting BOTH workers.list[] and dashboard.workers[] is a hard error (#506) — a silent pick would
-# leave the other a stale, unnoticed copy of hosts/tokens. REVERT-PROOF: the exact case a partial
-# revert of the dual-read change would silently start allowing again.
+# Setting BOTH workers.list[] and the removed dashboard.workers[] to DIFFERENT values is a hard
+# error (#506/#1832) — migrating over the new key, or silently picking one, would leave the other a
+# stale unnoticed copy of hosts and tokens. Equal values are no conflict: the old name is dropped.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig"}]}, "workers":{"list":[{"name":"new-rig"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 rc=$?
 assert_rc "both workers.list and dashboard.workers set is rejected" "$rc" "1"
-assert_contains "both-set refusal names both keys" "$out" "sets both workers.list[] and dashboard.workers[]"
+assert_contains "both-set refusal names both keys" "$out" "different values (workers.list[] and dashboard.workers[])"
 
-# The refusal keys on CONTENT, not presence (#679): the dashboard config editor merges
-# config.reference.json (which ships BOTH keys as empty-array schema defaults) under the
-# operator's config before serving the form, and round-trips the merged doc on save — so an
-# empty array beside the populated key must neither refuse nor warn.
+# The refusal keys on CONTENT, not presence (#679): a part-edited 1.x config can carry an empty
+# dashboard.workers[] beside the populated new key, and an empty array is never an operator choice.
+# (config.reference.json no longer ships either 1.x name, so the editor's reference merge can not
+# produce this shape any more — a hand-edited file still can.) The migration drops the empty key.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[]}, "workers":{"list":[{"name":"new-rig","host":"worker-lan.local"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "workers.list beside an empty dashboard.workers applies (#679)" "$?" "0"
-assert_not_contains "empty legacy default does not trip the both-set refusal" "$out" "sets both workers.list[] and dashboard.workers[]"
-assert_not_contains "empty legacy default raises no deprecation warning" "$out" "deprecated"
+assert_not_contains "an empty 1.x key does not trip the both-set refusal" "$out" "different values (workers.list[] and dashboard.workers[])"
+assert_eq "the empty 1.x key is dropped, workers.list[] untouched" "$(jq -r '[(.dashboard|has("workers")),(.workers.list[0].name)]|map(tostring)|join(",")' "$V/config.json")" "false,new-rig"
 
-# Mirror: a populated legacy list beside an empty workers.list (the same reference-merge shape,
-# for an operator still on the deprecated key) selects — and still validates — the legacy entries.
+# Mirror: a populated 1.x list beside an empty workers.list[] is no conflict either — the migration
+# moves the entries in over the empty list, and they are then validated at their new path.
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"10.0.0.5"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "populated dashboard.workers beside an empty workers.list applies (#679)" "$?" "0"
-assert_contains "legacy shape beside the empty default still warns as deprecated" "$out" "dashboard.workers[] is deprecated"
+assert_contains "a populated 1.x list beside an empty workers.list[] is migrated" "$out" "Migrated the 1.x config keys"
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"attacker:8080"}]}, "workers":{"list":[]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "an empty workers.list must not shadow legacy entries from validation (#679)" "$?" "1"
-assert_contains "shadowed legacy entry is flagged under its own path label" "$out" "dashboard.workers[legacy-rig].host"
+assert_contains "the migrated entry is flagged under its new path label" "$out" "workers.list[legacy-rig].host"
 
 # The editor contract itself (#679): the shipped config.reference.json deep-merged UNDER a valid
 # operator config — exactly the document read_config serves and the editor POSTs back — must
@@ -370,40 +366,43 @@ jq -s '(.[0] | del(._docs)) * .[1]' "$V/reference.json" "$V/operator.json" >"$V/
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
 assert_rc "reference-merged editor round-trip survives the preview dry-run (#679)" "$?" "0"
 
-# Migration (#679): a validated legacy dashboard.workers[] is moved to workers.list[] in place on
-# apply — old key deleted, sibling workers.* keys and per-worker tokens preserved, pre-migration
-# copy kept beside the file (the .bak-control naming). Dry runs never write.
-rm -f "$V/config.json.bak-workers"
+# Migration (#679/#1832): a 1.x dashboard.workers[] is moved to workers.list[] in place on apply —
+# old key deleted, sibling workers.* keys and per-worker tokens preserved, pre-migration copy kept
+# beside the file as .bak-1x. Dry runs never write (#556).
+rm -f "$V/config.json.bak-1x"
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"worker-lan.local","token":"tok_mig456"}]}, "workers":{"api_port":9090} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply --dry-run --porcelain 2>&1)"
 assert_rc "dry run on a legacy config succeeds" "$?" "0"
-if [ -f "$V/config.json.bak-workers" ]; then bad "dry run never migrates (#556)" "backup appeared"; else ok "dry run never migrates (#556)"; fi
+if [ -f "$V/config.json.bak-1x" ]; then bad "dry run never migrates (#556)" "backup appeared"; else ok "dry run never migrates (#556)"; fi
 assert_eq "dry run leaves dashboard.workers in place" "$(jq -r '.dashboard | has("workers")' "$V/config.json")" "true"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "legacy config applies and migrates" "$?" "0"
-assert_contains "migration is announced with the backup path" "$out" "Migrated dashboard.workers[] to workers.list[]"
+assert_contains "migration is announced" "$out" "Migrated the 1.x config keys"
 assert_eq "entries moved to workers.list (token intact)" "$(jq -r '.workers.list[0].token' "$V/config.json")" "tok_mig456"
 assert_eq "sibling workers.* keys survive the move" "$(jq -r '.workers.api_port' "$V/config.json")" "9090"
 assert_eq "dashboard.workers is gone after migration" "$(jq -r '.dashboard | has("workers")' "$V/config.json")" "false"
-assert_eq "pre-migration copy still holds the legacy key" "$(jq -r '.dashboard.workers[0].name' "$V/config.json.bak-workers")" "legacy-rig"
+assert_eq "pre-migration copy still holds the legacy key" "$(jq -r '.dashboard.workers[0].name' "$V/config.json.bak-1x")" "legacy-rig"
 case "$(stat -c '%a' "$V/config.json" 2>/dev/null || stat -f '%Lp' "$V/config.json" 2>/dev/null)" in
 600) ok "migrated config.json stays owner-only" ;;
 *) bad "migrated config.json stays owner-only" "mode $(stat -c '%a' "$V/config.json" 2>/dev/null || stat -f '%Lp' "$V/config.json" 2>/dev/null)" ;;
 esac
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "second apply after migration succeeds" "$?" "0"
-assert_not_contains "migration runs once — nothing to move on the next apply" "$out" "Migrated dashboard.workers[]"
-assert_not_contains "no deprecation warning after migration" "$out" "deprecated"
+assert_not_contains "migration runs once — nothing to move on the next apply" "$out" "Migrated the 1.x config keys"
+assert_eq "the second apply preserves the migrated entries" "$(jq -r '.workers.list[0].token' "$V/config.json")" "tok_mig456"
 
-# An INVALID legacy list fails validation before the migration hook — config and backup untouched.
-rm -f "$V/config.json.bak-workers"
+# BEHAVIOUR CHANGE (#1832): an INVALID 1.x list is now migrated FIRST and refused after. The order
+# is required — a config whose only descriptors live under the old key would otherwise validate an
+# empty workers.list[] and pass. The rewrite is lossless, with .bak-1x holding the pre-migration copy.
+rm -f "$V/config.json.bak-1x"
 seed_env
 printf '{ "monero": {"mode":"local","wallet_address":"%s","node_username":"u","node_password":"p"}, "tari":{"wallet_address":"'"$VALID_TARI"'"}, "p2pool":{"pool":"main"}, "dashboard":{"secure":true,"host":"box.lan","workers":[{"name":"legacy-rig","host":"attacker:8080"}]} }\n' "$WALLET" >"$V/config.json"
 out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "invalid legacy config still fails apply" "$?" "1"
-assert_eq "failed validation leaves the legacy key untouched" "$(jq -r '.dashboard | has("workers")' "$V/config.json")" "true"
-if [ -f "$V/config.json.bak-workers" ]; then bad "no backup written for a refused config" "backup appeared"; else ok "no backup written for a refused config"; fi
+assert_eq "the refused config was migrated first — the 1.x key is gone" "$(jq -r '.dashboard | has("workers")' "$V/config.json")" "false"
+assert_eq "the refused config's entries survive at the new path" "$(jq -r '.workers.list[0].host' "$V/config.json")" "attacker:8080"
+if [ -f "$V/config.json.bak-1x" ]; then ok "a refused config keeps its pre-migration copy"; else bad "a refused config keeps its pre-migration copy" "no .bak-1x"; fi
 
 # dashboard.energy (#260): malformed price/currency fails apply loudly, like the worker descriptors.
 en_case() { # <energy-json> <label> <expected-msg-fragment>
