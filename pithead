@@ -4870,8 +4870,26 @@ check_stratum_exposure() {
     pub="$(host_public_ips)"
     pub="${pub//$'\n'/, }"
     if [ -n "$pub" ]; then
+        # setup's console warn NAMES the address, and keeps naming it: that is the operator's own
+        # terminal on their own host, and the address is what makes the finding actionable there.
+        # The DOCTOR verdict has a second audience since #1736 -- control_diag_doctor runs
+        # `doctor --json` and ships every recorded message to the dashboard over the network -- so
+        # the doctor arms carry the finding WITHOUT the value (#1772). The redactor on that path
+        # does not close it: bundle_redact_log (07-support-bundle.sh) keys on argv position, the
+        # onion shape and the Monero shape, and has no IP rule at all. tests/integration/lib.sh's
+        # redact() does have one (#1609), but that twin guards CI artifact uploads, not the browser.
         msg="This host appears to have a public IP ($pub). The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See $DOCS_URL/docs/workers.md#firewall."
-        if [ "$mode" = doctor ]; then dr_warn "$msg"; else warn "$msg"; fi
+        if [ "$mode" = doctor ]; then
+            # The appliance arm names only what an appliance operator can actually reach. Blocking
+            # the port at their own router is theirs. The two config remedies are not: neither
+            # STRATUM_BIND nor STRATUM_PASSWORD is in CONTROL_DASHBOARD_EDITABLE_KEYS or
+            # CONTROL_DASHBOARD_CONFIRM_KEYS (42-control-policy-and-host-checks.sh), where the
+            # stratum password is named as deliberately host-only. So it states the diagnosis,
+            # gives the one route that exists, and stops -- #1213's rule at #1772's site.
+            dr_warn_surface "This host appears to have a public IP. The stratum port $port is unauthenticated by default and cleartext — firewall it to your LAN, set p2pool.stratum_bind to a LAN IP / 127.0.0.1, and/or require a p2pool.stratum_password. See $DOCS_URL/docs/workers.md#firewall." "This machine appears to have a public IP, and the stratum port $port is unauthenticated and cleartext by default — anything on the internet can reach it. Block that port at your router, so that only your own network can. Narrowing the listen address or requiring a stratum password is not editable from the dashboard: changing either needs console access to this machine."
+        else
+            warn "$msg"
+        fi
     else
         [ "$mode" = doctor ] && dr_ok "No public IP on host interfaces — stratum :$port isn't directly internet-exposed."
     fi

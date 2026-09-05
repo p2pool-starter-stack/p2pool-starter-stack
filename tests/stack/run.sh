@@ -200,6 +200,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-control-telegram.sh" && domain_ran te
 # shellcheck source=tests/stack/test-control-backup.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-control-backup.sh" && domain_ran test-control-backup.sh "$_d0" "$?" || domain_ran test-control-backup.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-doctor-exposure.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-doctor-exposure.sh" && domain_ran test-doctor-exposure.sh "$_d0" "$?" || domain_ran test-doctor-exposure.sh "$_d0" "$?"
+
 # shellcheck source=tests/stack/test-control-diagnostics.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-control-diagnostics.sh" && domain_ran test-control-diagnostics.sh "$_d0" "$?" || domain_ran test-control-diagnostics.sh "$_d0" "$?"
 
@@ -412,14 +415,11 @@ fi
 #    AND IT IS LITERAL-ONLY, which is the blind spot extending the alternation does NOT close. The
 #    site pattern needs a quoted message on the same line, so a verdict whose text arrives in a
 #    VARIABLE can never be reached by any needle: 05-doctor-checks.sh:111 (dr_warn "$(head -n 1
-#    ...)", appliance-only by construction, text from the hugepages helper), 20-doctor-install-
-#    checks.sh:28 (dr_warn "$msg") and 21-doctor-stack-checks.sh:261 (dr_fail "${verdict#fail:}").
-#    Those three are unguarded here today and cannot be guarded here — read them by hand. One of
-#    them is not merely unguarded but LEAKING: 20-doctor-install-checks.sh:28 builds a message at
-#    :27 naming three remedies (firewall it to your LAN, set p2pool.stratum_bind, require a
-#    p2pool.stratum_password) and an appliance operator can reach none of them — neither key is in
-#    CONTROL_DASHBOARD_EDITABLE_KEYS or CONTROL_DASHBOARD_CONFIRM_KEYS. Pre-existing, not this
-#    change's doing, and narrow; recorded here so the hand-read starts with the one that is wrong.
+#    ...)", appliance-only by construction, text from the hugepages helper) and
+#    21-doctor-stack-checks.sh:261 (dr_fail "${verdict#fail:}"). Both are unguarded here and cannot
+#    be guarded here — read them by hand. A THIRD, 20-doctor-install-checks.sh:28, LEFT this list
+#    rather than being fixed here: #1772 made it dr_warn_surface, which the site pattern does not
+#    match, so its guard is behavioural now and lives in test-doctor-exposure.sh.
 dr_verb_leaks=$(grep -nE '(dr_fail|dr_warn|dr_info) "' "$STACK" |
     grep -E "\./pithead |docker compose |docker pull |docker-compose-v2|Start the Docker daemon|sudo |systemctl|git pull" |
     grep -v "appliance-unreachable" || true)
