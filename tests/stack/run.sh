@@ -288,8 +288,8 @@ echo "== unit: doctor's remedial strings are surface-aware (#1213) =="
 # Doctor's verdicts reach the dashboard verbatim now that the diagnostics verbs ship them
 # (control_diag_doctor runs `doctor --json`; doctor_json emits every message as {status, message}),
 # so a remedial string naming a CLI verb is a dead end on an appliance, which has no shell. Two
-# instruments, because either one alone passes for the wrong reason: the switch has to actually
-# FLIP, and no verdict may be left behind it.
+# instruments, because either alone passes for the wrong reason: the switch has to actually FLIP,
+# and no verdict may be left behind it.
 #
 # 1. The mechanism. Argument one is the DIY/host wording, argument two the appliance's; each side
 #    must print its own and NOT the other's -- asserting only that the right text appears would
@@ -309,23 +309,20 @@ for _s in fail warn info; do
     esac
 done
 
-# 2. The #1776 site, named because the sweep below could not see it. Its verdict prescribed two
-#    host-only remedies ("Move the data here" and the verb as the bare quoted word 'apply'), and
-#    the literal alternation carries `\./pithead ` but no token for that quoting -- so the sweep
-#    returned 0 matches over a site it fully covers, and #1213 closed with this string still plain.
-#    Read off the SHIPPED artifact, the same instrument the sweep uses, so a lib/ edit that never
-#    reaches `pithead` cannot pass this.
+# 2. The #1776 site, named because the sweep below could not see it: its verdict prescribed two
+#    host-only remedies ("Move the data here" and the verb as the bare quoted word 'apply'), which
+#    the sweep's alternation had no token for until #1777 widened it. Read off the SHIPPED
+#    artifact, the same instrument the sweep uses, so a lib/ edit that never reaches it cannot pass.
 #
-#    AND THIS BLOCK IS NOW THE SITE'S ONLY VERB GUARD. Converting it to dr_warn_surface takes it
+#    AND THIS BLOCK IS NOW THE SITE'S ONLY VERB GUARD. Converting it to dr_warn_surface took it
 #    OUT of block 3's sweep by construction -- that sweep's site pattern is `dr_warn "`, which a
-#    `dr_warn_surface "` call does not match, and the exclusion is deliberate because a host
-#    argument is SUPPOSED to keep its verb. So the single literal in _dd_pred_verb is all that
-#    stands behind the appliance side of this one verdict. Widen it here, not there.
+#    `dr_warn_surface "` call does not match, deliberately, because a host argument is SUPPOSED to
+#    keep its verb. The single literal in _dd_pred_verb is all that stands behind the appliance
+#    side of this verdict. Widen it here, not there.
 #
-#    THE CONTROL IS NOT OPTIONAL. Both assertions below are ABSENCE claims over a grep, and an
-#    absence claim goes green when the needle simply stops matching -- rename the message and this
-#    passes forever while proving nothing. So the same two predicates run against a synthetic
-#    PRE-FIX line first and must FAIL there.
+#    THE CONTROL IS NOT OPTIONAL. Both assertions below are ABSENCE claims over a grep, and one
+#    goes green when the needle merely stops matching -- rename the message and this passes forever
+#    proving nothing. So the same two predicates run against a synthetic PRE-FIX line and must fire.
 _dd_pred_plain() { case "$1" in *dr_warn_surface*) return 1 ;; *) return 0 ;; esac }
 _dd_pred_verb() { case "$1" in *"run 'apply'"*) return 0 ;; *) return 1 ;; esac }
 _dd_seed="            dr_warn \"Data dir from .env not found: X=Y — a relocated/copied install re-syncs from scratch. Move the data here, or set the data_dir in config.json and run 'apply'.\""
@@ -348,9 +345,9 @@ else
     # The host side KEEPS the verb by design (it is the DIY wording); only the appliance side must
     # not. Take the second quoted argument, the way the helper's own contract orders them.
     _dd_appl=$(printf '%s' "$_dd_line" | awk -F'"' '{print $4}')
-    # ...and prove the field EXISTS before reading an absence out of it. On the pre-fix shape --
-    # one quoted argument -- $4 is the empty string, _dd_pred_verb "" returns rc 1, and the row
-    # below would print ok having examined nothing. Only its sibling reds that case today.
+    # ...and prove the field EXISTS before reading an absence out of it: on the pre-fix shape (one
+    # quoted argument) $4 is empty, _dd_pred_verb "" returns rc 1, and the row below would print ok
+    # having examined nothing. Only its sibling reds that case today.
     if [ -z "$_dd_appl" ]; then
         bad "the data-dir verdict's appliance wording names no host verb (#1776)" "no second quoted argument on: $_dd_line"
     elif _dd_pred_verb "$_dd_appl"; then
@@ -360,10 +357,9 @@ else
     fi
 
     # The appliance wording NAMES which of these dirs the dashboard can repoint, so it is a claim
-    # about CONTROL_DASHBOARD_CONFIRM_KEYS -- and the first draft of it ("no dashboard control
-    # relocates a data directory") was false for four of the five keys the check fires on. Derive
-    # both sets from the shipped artifact rather than restating them, so an allowlist change reds
-    # HERE and names the string to rewrite, instead of leaving an operator a remedy they lack.
+    # about CONTROL_DASHBOARD_CONFIRM_KEYS -- and its first draft ("no dashboard control relocates a
+    # data directory") was false for four of the five keys the check fires on. Derive both sets from
+    # the shipped artifact, so an allowlist change reds HERE and names the string to rewrite.
     _dd_in_set() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac }
     _dd_repointable() {
         local _k _out=''
@@ -376,8 +372,8 @@ else
     # strictly REDUNDANT, its pass condition being exactly what the CANNOT row asserts, so it could
     # never red alone. This closes what those rows cannot see -- a second `for var in ..._DATA_DIR;
     # do` above missing_data_dirs would feed them, through head -1, a set the shipped code no longer
-    # uses, every row still green. The awk keeps a narrower gap: a trailing comment after its
-    # closing quote makes it over-read. Wrong input, no wrong output today, so NAMED not guarded.
+    # uses, every row green. The awk gap is narrower: a trailing comment after its closing quote
+    # makes it over-read. Wrong input, no wrong output today, so NAMED not guarded.
     assert_eq "the data-dir key list comes from exactly one site (#1776)" "$(printf '%s\n' "$_dd_sites" | grep -c .)" "1"
     _dd_conf=$(awk "/^CONTROL_DASHBOARD_CONFIRM_KEYS='/{f=1} f{print} f && /'[[:space:]]*\$/{exit}" "$STACK" |
         tr -d "\n'" | sed "s/^CONTROL_DASHBOARD_CONFIRM_KEYS=//;s/  */ /g;s/^ //")
@@ -400,29 +396,33 @@ else
 fi
 
 # 3. Totality over the SHIPPED artifact. The SITES are enumerated mechanically out of the built
-#    `pithead` rather than from a list kept by hand -- a hand list is blind to the site nobody
-#    remembered, and this sweep found nine of those. A PLAIN dr_fail/dr_warn/dr_info literal is one
-#    with no appliance side at all, so if it names a CLI verb an appliance operator is told to run
-#    it. `dr_*_surface` calls do not match the pattern: their host argument is supposed to keep the
-#    verb. The one exemption carries its reason in the source line itself.
+#    `pithead`, not a hand list -- a hand list is blind to the site nobody remembered, and this
+#    sweep found nine of those. A PLAIN dr_fail/dr_warn/dr_info literal has no appliance side, so
+#    naming a CLI verb there tells an appliance operator to run it; `dr_*_surface` calls do not
+#    match, their host argument keeping its verb by design. An exemption states its reason inline.
 #
-#    KNOW WHAT THIS DOES NOT COVER. The site enumeration is mechanical; the NEEDLE list below is
-#    not. It catches the verb forms doctor uses today, so a verdict phrased with a token nobody
-#    listed -- a `systemctl` this file never learned, a new console noun -- passes it clean. A green
-#    result here means "none of the KNOWN verb forms leaked", never "no verb leaked". Extend the
-#    alternation when doctor learns a new way to tell someone to do something.
+#    #1777 WIDENED THE ALTERNATION TO THE IMPERATIVE, not just the executable form: it carried
+#    `\./pithead ` but no token for a verb written as a bare or quoted word, so it returned 0 over
+#    #1776's site, which it fully covers. Over the artifact the widened branch adds exactly one
+#    site -- the "Run doctor there" info below -- and that one takes the marker, not a conversion.
 #
-#    AND IT IS LITERAL-ONLY, which is the blind spot extending the alternation does NOT close. The
-#    site pattern needs a quoted message on the same line, so a verdict whose text arrives in a
-#    VARIABLE can never be reached by any needle: 05-doctor-checks.sh:111 (dr_warn "$(head -n 1
-#    ...)", appliance-only by construction, text from the hugepages helper) and
-#    21-doctor-stack-checks.sh:261 (dr_fail "${verdict#fail:}"). Both are unguarded here and cannot
-#    be guarded here — read them by hand. A THIRD, 20-doctor-install-checks.sh:28, LEFT this list
-#    rather than being fixed here: #1772 made it dr_warn_surface, which the site pattern does not
-#    match, so its guard is behavioural now and lives in test-doctor-exposure.sh.
-dr_verb_leaks=$(grep -nE '(dr_fail|dr_warn|dr_info) "' "$STACK" |
-    grep -E "\./pithead |docker compose |docker pull |docker-compose-v2|Start the Docker daemon|sudo |systemctl|git pull" |
-    grep -v "appliance-unreachable" || true)
+#    WHICH LEAVES THE CONTROL AS THE ONLY THING VALIDATING THE WIDENING: with that marker in place
+#    the new branch has NO live target, so its 0 is what a needle matching nothing also prints. The
+#    seed is the pre-marker text, run through _dr_leaks -- the helper the sweep itself calls, never
+#    a second spelling of it, which would be mutated in lockstep with nothing.
+#
+#    STILL NOT COVERED: the needle list is hand-kept, so a verdict using a token nobody listed
+#    passes clean -- green means "none of the KNOWN forms leaked", never "no verb leaked". And it
+#    is LITERAL-ONLY: a message arriving in a VARIABLE is beyond any needle -- read
+#    05-doctor-checks.sh:111 and 21-doctor-stack-checks.sh:261 by hand. A THIRD site left this list
+#    when #1772 made the stratum-exposure warn a dr_warn_surface; it is test-doctor-exposure.sh's.
+_dr_leaks() { grep -nE '(dr_fail|dr_warn|dr_info) "' | grep -E "\./pithead |docker compose |docker pull |docker-compose-v2|Start the Docker daemon|sudo |systemctl|git pull|([Rr]e-?)?[Rr]un '?(\./pithead )?(apply|setup|up|down|restart|doctor|status|logs)'?" | grep -v "appliance-unreachable" || true; }
+if [ -z "$(printf '%s\n' '    dr_info "This is not the live install -- X/current points at Y. Run doctor there to check its control channel."' | _dr_leaks)" ]; then
+    bad "control: the sweep catches an imperative naming a bare pithead verb (#1777)" "the widened alternation cannot fire; the 0 below is not evidence"
+else
+    ok "control: the sweep catches an imperative naming a bare pithead verb (#1777)"
+fi
+dr_verb_leaks=$(_dr_leaks <"$STACK")
 assert_eq "no plain doctor verdict still names a CLI verb (#1213)" \
     "$(printf '%s' "$dr_verb_leaks" | grep -c . || true)" "0"
 [ -n "$dr_verb_leaks" ] && printf '    leaked: %s\n' "$dr_verb_leaks" | head -12 || true

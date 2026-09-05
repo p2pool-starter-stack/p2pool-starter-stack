@@ -4928,7 +4928,7 @@ check_control_units() {
     if [[ "$_name" =~ ^pithead-v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -L "$_parent/current" ]; then
         _live=$(cd "$_parent/current" 2>/dev/null && pwd -P)
         if [ -n "$_live" ] && [ "$_live" != "$here" ]; then
-            dr_info "This is not the live install — '$_parent/current' points at $_live. Run doctor there to check its control channel."
+            dr_info "This is not the live install — '$_parent/current' points at $_live. Run doctor there to check its control channel." # appliance-unreachable: the DIY versioned layout only -- the guard above needs basename pithead-vX.Y.Z AND a sibling `current` symlink, and the appliance's /opt/pithead install creates neither
             return 0
         fi
     fi
