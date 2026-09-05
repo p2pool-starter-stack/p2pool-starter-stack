@@ -168,6 +168,11 @@ Each disk is listed with its model, size and serial number. The USB stick you bo
 never offered. Nothing is preselected — you choose deliberately, because **installing erases
 the disk**.
 
+A rig has one more choice: **run from this USB stick**. Nothing is written to any disk, so none
+of the erase questions below apply — the machine mines from the stick and stops when you unplug
+it. The page says the rig's settings are saved and that it appears in your Pithead's Workers
+view once it connects. It never shows the install progress, because nothing is being installed.
+
 A disk that already holds a Pithead install is the exception, and the page asks what to do
 with what is on it:
 

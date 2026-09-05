@@ -147,9 +147,8 @@ def _data_wiped() -> dict:
 def wizard_stage() -> str:
     """Which step this machine is actually on, decided by the SPOOL — never by the client.
 
-    A page refresh must not walk backwards into an editable form after a config was accepted,
-    and the client cannot know the difference on its own: a bench session refreshed during
-    provisioning and was handed the setup form again, as if nothing had been submitted.
+    A page refresh must not walk back into an editable form after a config was accepted, and the
+    client cannot know that alone: a bench session refreshed mid-provision got the setup form back.
 
     handoff    credentials published, waiting for the operator to save them
     done       provisioning under way (or finished) — nothing left to edit
@@ -161,9 +160,9 @@ def wizard_stage() -> str:
     if _spool_read("installed") is not None or _spool_read("installing") is not None:
         return "installing"
     if _spool_read("applied") is not None or _spool_read("handoff-ack") is not None:
-        # Same ack, two meanings: on the installation medium it releases the INSTALL (the page
-        # then shows the switch-off steps), on an installed machine it releases provisioning.
-        return "installing" if installer_mode() else "done"
+        # Same ack, two meanings: on the medium it releases the INSTALL, on an installed
+        # machine provisioning. A stick run installs nothing, so it is "done" too (#1835).
+        return "installing" if installer_mode() and _spool_read("stick") is None else "done"
     if installer_mode():
         return "installer"
     return "setup"
@@ -370,12 +369,10 @@ def _gate_install_request(form: dict) -> str | None:
 
 
 def _submit_rig(form: dict) -> web.Response:
-    """The RigForge role's submission: no pithead config at all — a pool address, a worker
-    name, an optional stratum password, on their own spool channel. The coordinator flow stays
-    byte-for-byte untouched because nothing here goes near config.json; the HOST dials the
-    pool and owns everything after. On the installation medium the disk gates are the same as
-    every other role, with one extra first-class target: "usb" means run from this stick —
-    nothing is erased, so no gates apply to it."""
+    """The RigForge role's submission: no pithead config at all — a pool address, a worker name,
+    an optional stratum password, on their own spool channel. The coordinator flow stays
+    byte-for-byte untouched because nothing goes near config.json; the HOST dials the pool. On the
+    medium the disk gates match every other role, bar one target: "usb" runs from the stick."""
     pool = str(form.get("rig_pool", "")).strip()
     host, _, port = pool.rpartition(":")
     if not host or not port.isdigit():
@@ -383,7 +380,8 @@ def _submit_rig(form: dict) -> web.Response:
             {"error": "enter the pool address as host:port — a Pithead answers on port 3333"},
             status=400,
         )
-    if installer_mode() and str(form.get("disk", "")).strip() != "usb":
+    stick = installer_mode() and str(form.get("disk", "")).strip() == "usb"
+    if installer_mode() and not stick:
         err = _gate_install_request(form)
         if err:
             return web.json_response({"error": err}, status=400)
@@ -395,7 +393,9 @@ def _submit_rig(form: dict) -> web.Response:
     if password:
         rig["stratum_password"] = password
     _spool_clear_error()
-    # The role rides beside the request so /status can narrate honestly after it is consumed.
+    # Role AND medium ride beside it: a stick run copies nothing, so nothing may narrate that.
+    if stick:
+        _spool_write_text("stick", "1")
     _spool_write_text("role", "rig")
     _spool_write_text("rig-request.json", json.dumps(rig))
     return web.json_response({"status": "accepted"})
@@ -523,7 +523,7 @@ async def handoff_ack(request: web.Request) -> web.Response:
 
 
 async def status(request: web.Request) -> web.Response:
-    if installer_mode():
+    if installer_mode() and _spool_read("stick") is None:
         if _spool_read("installed") is not None:
             return web.Response(
                 text="Installed — the machine is switching itself off. "
