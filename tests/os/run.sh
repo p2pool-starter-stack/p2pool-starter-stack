@@ -1103,7 +1103,7 @@ phase_update_dashboard() { # <good-bundle-path> <serial-byte-offset-before-this-
         bad "leg 4: install did not complete (got: $(printf '%s' "$out" | cut -c1-200))"
         # The runner deletes .install.log on a failed install and the result carries only a whitelisted last line
         # (#1651: one gate red said "[ERROR] rauc install failed", guest gone) — keep the guest's own account.
-        _ssh "{ journalctl -b -o short-iso --no-pager | grep -aiE 'rauc|os.install|os-update' | tail -300; echo '== rauc status'; rauc status; echo '== df'; df -h /data /tmp; echo '== free'; free -m; echo '== oom'; dmesg | grep -aiE 'oom|killed process'; } 2>&1" >"$SERIAL.leg4-install" || true
+        SSH_TIMEOUT=120 _ssh "{ echo '== pithead-control.service (the root runner)'; journalctl -b -u pithead-control.service -o short-iso --no-pager -n 200; echo '== journal rauc/os-install lines'; journalctl -b -o short-iso --no-pager | grep -aiE 'rauc|os.install|os-update' | tail -300; echo '== rauc status'; rauc status; echo '== df'; df -h /data /tmp; echo '== free'; free -m; echo '== oom'; dmesg | grep -aiE 'oom|killed process'; } 2>&1" >"$SERIAL.leg4-install" || true
         info "install diagnostics kept at $SERIAL.leg4-install"
         _leg4_srv_stop
         return
