@@ -158,7 +158,7 @@ control off, since RigForge refuses a writable path it cannot pin to one source.
 Where the machine cannot fill a line in, the card leaves that line out rather than
 showing a blank beside its label: with no IPv4 address yet it tells you to read the
 address off the console once the machine is up, and on the rare failure to mint a token
-it says the rig cannot be adopted and that its console gives the reason.
+it says the rig cannot be adopted until it has one, and to set the machine up again.
 
 **Pithead + RigForge** asks every coordinator question below, unchanged, and adds the built-in
 miner on top. The two mining workloads on that one box do not compete for HugePages: the
