@@ -1,20 +1,19 @@
 #!/bin/sh
-# Give the persistent journal (Storage=persistent, os/rootfs/Dockerfile) somewhere real to land
-# (#1030). journald.conf.d already asks for persistent storage, but /var/log/journal sits on
-# the same read-only root as /etc — the same root pithead-machine-id's own comment describes
-# PID 1 bind-mounting a transient machine-id over, because a direct write there fails EROFS.
-# journald hits the same wall silently: it falls back to /run/log/journal (volatile, gone on
-# any hard reset) for the WHOLE boot, and nothing ever promotes it, because the promotion unit
-# (systemd-journal-flush.service) runs before /data is even mounted. So a box that reset
-# mid-first-boot — the #1029/#1030 incident: an interrupted container-image load — left NO
-# journal at all to diagnose it from, even though Storage=persistent was set the entire time.
+# Give the persistent journal (Storage=persistent, os/rootfs/Dockerfile) ONE home on /data
+# (#1030, #1791). The #1029/#1030 incident — a box reset mid-first-boot during an interrupted
+# container-image load — left NO journal to diagnose it from, even though Storage=persistent was
+# set the entire time; that loss's own root cause was never pinned down. What this bind
+# guarantees is a target for journald's promotion path (systemd-journal-flush, delayed past
+# data.mount by the .service ordering) that is on /data whether or not the /var overlay
+# (upperdir on /data, the fstab line in os/rauc/populate-slot.sh) came up — and, since #1791,
+# the SAME target every boot: before the .service ordered this unit After=var.mount, the overlay
+# and this bind raced for /var/log/journal, each boot's journal landed in whichever won, and
+# `journalctl --list-boots` omitted the boots that went the other way.
 #
-# The fix mirrors pithead-ssh-host-keys and pithead-machine-id: put the real directory on /data
-# (survives everything short of a factory reset) and bind-mount it onto the mountpoint the image
-# already bakes at /var/log/journal, so journald's own promotion path (systemd-journal-flush,
-# delayed past data.mount by this unit's ordering — see the .service file) finds a genuinely
-# writable, persistent target instead of the read-only root. A bind mount only needs its target
-# to EXIST as a directory, not be writable, so the baked empty /var/log/journal is enough.
+# The mechanics mirror pithead-ssh-host-keys and pithead-machine-id: the real directory lives on
+# /data (survives everything short of a factory reset) and is bind-mounted onto the mountpoint
+# the image already bakes at /var/log/journal. A bind mount only needs its target to EXIST as a
+# directory, not be writable, so the baked empty /var/log/journal is enough on a read-only root.
 set -eu
 
 DATA_DIR="${PITHEAD_JOURNAL_DATA_DIR:-/data/pithead/journal}"
