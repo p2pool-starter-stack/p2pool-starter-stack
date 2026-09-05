@@ -146,8 +146,9 @@ addresses, runs no node, and serves nothing to log into. If a Pithead already an
 network at `pithead.local:3333`, its address is filled in for you; otherwise enter it by hand
 from that machine's own "Point miners at" line. Confirming shows a summary card with the worker
 name, where it mines, this machine's address and a **control token** — **not a login**, because
-a rig has none. The token is shown once and never again: a rig serves no page after this, so copy
-it now. It is what lets that Pithead adopt the rig: in its dashboard, under Workers, the adopt
+a rig has none. The token is shown once — a rig serves no page after this — so copy it now. If you lose
+it, the boot menu's **Set up again** with the same worker name shows the same token again
+(see [The boot menu](#the-boot-menu)). It is what lets that Pithead adopt the rig: in its dashboard, under Workers, the adopt
 form takes this rig's address, control port `8082` and the token. Until you do that, the rig
 still mines and still appears under Workers once it connects, but its row reads as an API error,
 because the token guards every API on the rig — the miner's own included, so nothing else on the
@@ -374,6 +375,57 @@ install-then-fall-back protection as any other update. The practical consequence
 **taking updates when they are offered is the security maintenance.** A machine left on
 an old image keeps running fine, but it keeps the old image's known holes too. The base
 system is Debian 13, which receives security support upstream into 2030.
+
+## The boot menu
+
+Every start shows a short menu for five seconds, then boots by itself. You never need to
+touch it: the machine keeps two copies of the system and boots the last one that worked,
+so an update that fails to come up is undone on the next start without you.
+
+- **Pithead OS - slot A** and **slot B** are those two copies. The one selected when the
+  menu appears is the one the machine chose; the other holds the previous version after an
+  update. Pick it only if support asks you to.
+- **Pithead OS - slot A (fallback)** is what boots when neither copy is marked good: the
+  same system as slot A, offered so a machine with nobody at it boots something rather
+  than waiting at a prompt.
+- **Set up again** opens the setup page, keeping everything the machine already has. Use it
+  when a machine's answers need changing and there is no other way in. A RigForge rig has no
+  dashboard and no login, so this entry is its only way back to the setup page from the
+  machine itself.
+
+### Set up again
+
+Choose it with a keyboard on the machine during the countdown. The machine starts the
+setup page instead of its normal work, prints the address and one-time token on the
+console as it did on the first boot, and the page opens by naming what the machine is: a
+rig mining at a pool as a worker, or a Pithead coordinator. Two choices:
+
+- **Keep it** closes the page and starts the machine exactly as it was. Nothing changes,
+  and the same holds for a page you never touch or a machine switched off part way: the
+  saved settings are replaced only when you accept new ones.
+- **Set up again** opens the form filled in with the saved answers and the secrets left
+  out: a stratum password, and for a coordinator the dashboard login and node credentials,
+  are typed again. Accept the form and the machine provisions itself with the new answers.
+
+A rig kept as a rig with the same worker name keeps its control token: the Pithead that
+adopted it goes on reaching it, and the card shows that same token again, so this is also
+the way to see a token you did not copy the first time. A different worker name, or a
+change of role, makes a new one. A rig that becomes a coordinator, or the other way round,
+is provisioned as the new role; whatever the old role kept on the data partition stays
+there until a [factory reset](#starting-over-the-two-resets).
+
+### Getting a rig back to setup from another computer
+
+A run-from-USB rig with no monitor or keyboard cannot reach the menu. Plug the stick into
+another computer instead:
+
+- Delete `pithead/machine-role` and `pithead/rig.json` from the stick's partition labelled
+  `data`. It is ext4, so a Linux machine can open it; macOS and Windows cannot without extra
+  software. The setup page runs on the next boot and the installed systems are kept.
+- Or create an empty file named `pithead-reset` at the top of the stick's first partition,
+  the small FAT one that any computer can open. The next boot erases the data area and
+  starts from a blank setup page: a factory reset.
+- Or write the image to the stick again ([step 1](#1-write-the-image-to-a-usb-stick)).
 
 ## Backing up your data
 

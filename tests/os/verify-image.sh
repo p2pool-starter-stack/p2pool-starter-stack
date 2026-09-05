@@ -110,14 +110,14 @@ chk "grub.cfg in the prefix dir" '[ -s "$ESP/grub/grub.cfg" ]'
 chk "grubenv in the prefix dir, not the ESP root" '[ -s "$ESP/grub/grubenv" ] && [ ! -e "$ESP/grubenv" ]'
 chk "grubenv seeds slot A good" 'grub-editenv "$ESP/grub/grubenv" list | grep -q "A_OK=1"'
 chk "kernel root by probed PARTUUID, never label" 'grep -q "probe --set=PU --part-uuid" "$ESP/grub/grub.cfg"'
-# The console carries the token and the generated password; kernel chatter that scrolls them
-# away is a defect. Journald keeps everything regardless.
+# The console carries the token and the password; chatter that scrolls them away is a defect.
 chk "console is quieted so the token stays readable" 'grep -q "loglevel=4" "$ESP/grub/grub.cfg"'
 chk "display hotplug polling off (repeated EDID spam)" 'grep -q "drm_kms_helper.poll=0" "$ESP/grub/grub.cfg"'
+# shellcheck source=tests/os/verify-image-boot-menu.sh
+. "$SCRIPT_DIR/verify-image-boot-menu.sh"
 # mDNS advertises IPv4 only — AAAA records stalled clients that cannot route to the box's v6.
 chk "avahi is IPv4-only (no unreachable-AAAA stall)" 'grep -q "^use-ipv6=no" "$ROOT/etc/avahi/avahi-daemon.conf"'
-# Boot recovery is compose-owned (#792): pithead-boot renders + ups + health-gates the slot
-# commit. podman-restart started the stack into its own cgroup and SIGKILLed it on unit stop.
+# Boot recovery is compose-owned (#792): pithead-boot renders + ups + health-gates the slot commit.
 chk "pithead-boot unit enabled" 'test -L "$ROOT/etc/systemd/system/multi-user.target.wants/pithead-boot.service"'
 chk "pithead-boot script present and executable" 'test -x "$ROOT/usr/local/sbin/pithead-boot"'
 # Physical-presence config channel (#786 sub-issue D): pithead-boot's one stage before render,

@@ -105,12 +105,39 @@ carried to the target by `pithead-install` beside the config and token pre-seeds
 installed machine's first boot lands them as the two files above, scrubbing the ESP copy the
 way the config pre-seed is scrubbed. The stick keeps neither copy after a disk install: a
 stick whose own `/data` carries the rig marker IS a rig (run-from-USB), and that marker
-outranks installer mode on every later boot.
+outranks installer mode on every later boot — except one chosen from the boot menu's **Set up
+again** entry, which opens the wizard beside the role (below).
 
-**Getting a machine back out of the rig role** is the installer, not a setting: a rig serves no
-dashboard and answers on no port, so there is nothing to log into and change. Boot the stick
-beside it and install with the wipe, and it is a blank machine that can pick any role again. A
-*keep* reinstall deliberately leaves it a rig — keep means keep whatever the role says.
+**Getting a machine back out of the rig role** is the boot menu's **Set up again** entry
+(#1318) or the installer, never a setting: a rig serves no dashboard and answers on no port, so
+there is nothing to log into and change. Boot the stick beside it and install with the wipe, and
+it is a blank machine that can pick any role again. A *keep* reinstall deliberately leaves it a
+rig — keep means keep whatever the role says.
+
+### Set up again: the wizard beside a saved role
+
+`os/rauc/grub.cfg`'s fourth entry boots the slot the default would have booted and appends
+`pithead.setup=1` to that one boot's kernel cmdline. `pithead-setup-again.service`, the flag's
+only reader, runs `pithead firstboot-wizard` on a provisioned machine with `PITHEAD_SETUP_AGAIN=1`
+and `Before=pithead-boot.service`, so the role's normal boot waits behind the page. Under the
+switch (`lib/pithead/12a-setup-again.sh`) three things change and nothing else: the "already a
+rig" and "config.json present" short-circuits are skipped; `stage_wizard_spool` publishes
+`saved-role.json` and points the pre-fill at the saved answers (`rig-defaults.json` gets the saved
+pool + worker; `last-attempt.json` gets `config.json` through `strip_config_secrets`, unless a
+failed retry's context is already there); and the inner loop honours `keep-role`. The page shows
+its Keep it / Set up again screen exactly when `saved-role.json` exists (`saved_role` in
+`/api/state`, `null` otherwise; a malformed file falls through to the normal form).
+
+| Spool file | Written by | Meaning |
+|---|---|---|
+| `saved-role.json` | host | present only on a set-up-again boot: `{role, pool, worker}` for a rig, `{role}` for a coordinator, never a secret |
+| `keep-role` | page | Keep it: the host ends the session with nothing on `/data` touched, the unit exits, pithead-boot runs the normal boot |
+
+Set up again is the ordinary submit. A rig accepted with the same worker name keeps its
+`access_token` (`firstboot_consume_rig` carries it over); any other change mints a new one on the
+next render. `record_machine_role` removes `rig.json` when the accepted role is not `rig`, so a
+role's data goes with the role. A coordinator's `config.json` is NOT removed by a change to `rig`:
+it is operator data, and the factory reset is the erase.
 
 ## Restore-at-setup
 

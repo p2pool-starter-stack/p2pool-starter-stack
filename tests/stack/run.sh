@@ -35,13 +35,10 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-dashboard.sh" && domain_ran test-dash
 # shellcheck source=tests/stack/test-dashboard-onion.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-dashboard-onion.sh" && domain_ran test-dashboard-onion.sh "$_d0" "$?" || domain_ran test-dashboard-onion.sh "$_d0" "$?"
 
-# Regression (#1330): test-dashboard-onion.sh must not depend on running after test-dashboard.sh.
-# A `( ... )` subshell is a fork of THIS process and inherits its whole variable table, exported
-# or not — including $auth_hb64/$caddy_https, already left behind here by test-dashboard.sh's
-# earlier `source` a few lines up, so a subshell guard would stay green even if this file went
-# back to reading those as globals. Only a genuinely separate `bash` process is isolated: it
-# inherits the environment (exported vars), never a parent shell's plain variables. $HERE isn't
-# exported either, so it's passed as an argument rather than read from the environment.
+# Regression (#1330): test-dashboard-onion.sh must not depend on running after test-dashboard.sh. A
+# `( ... )` subshell forks THIS process and inherits its whole variable table, exported or not — including
+# $auth_hb64/$caddy_https left behind by test-dashboard.sh's `source` above — so a subshell guard would
+# stay green. Only a separate `bash` process is isolated (environment only); $HERE is passed as an argument.
 # shellcheck disable=SC1090,SC2015  # STACK/HERE paths are dynamic by design
 bash -c '
     set -uo pipefail
@@ -223,6 +220,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-install.sh" && domain_ran t
 
 # shellcheck source=tests/stack/test-appliance-rig-miner.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-rig-miner.sh" && domain_ran test-appliance-rig-miner.sh "$_d0" "$?" || domain_ran test-appliance-rig-miner.sh "$_d0" "$?"
+
+# shellcheck source=tests/stack/test-appliance-setup-again.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-appliance-setup-again.sh" && domain_ran test-appliance-setup-again.sh "$_d0" "$?" || domain_ran test-appliance-setup-again.sh "$_d0" "$?"
 
 # shellcheck source=tests/stack/test-appliance-boot.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-appliance-boot.sh" && domain_ran test-appliance-boot.sh "$_d0" "$?" || domain_ran test-appliance-boot.sh "$_d0" "$?"

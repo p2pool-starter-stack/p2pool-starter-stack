@@ -57,6 +57,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/data-floor-fallback-leg.sh"
 # shellcheck source=tests/os/aged-version.sh
 . "$SCRIPT_DIR/aged-version.sh"
+# shellcheck source=tests/os/setup-again-leg.sh
+. "$SCRIPT_DIR/setup-again-leg.sh"
 
 IMAGE=""
 KEEP=0
@@ -2865,15 +2867,13 @@ phase_rig() {
     else
         bad "a rig started containers: '$names'"
     fi
-    # Prebuilt-first, proven by identity: a native recompile produces a DIFFERENT binary, and a
-    # clone could not have happened at all (this guest has no path to github).
+    # Prebuilt-first, proven by identity: a recompile gives a DIFFERENT binary; a clone has no path to github.
     if _ssh "cmp -s /data/rigforge/data/worker/xmrig/build/xmrig /opt/rigforge/prebuilt/xmrig/build/xmrig"; then
         ok "the rig mines the BAKED binary byte for byte — no compile, no clone, no clearnet"
     else
         bad "the running miner is not the baked prebuilt — something compiled or fetched on first boot"
     fi
-    # Removable-root tolerance: the journal is in memory, so a stick root takes no rotating
-    # writes. (This guest's root is virtual, but the setting is the role's, not the medium's.)
+    # Removable-root tolerance: an in-memory journal, so a stick root takes no rotating writes (the role's setting, not the medium's).
     [ "$(_ssh 'systemd-analyze cat-config systemd/journald.conf 2>/dev/null | grep -c "^Storage=volatile"')" != "0" ] &&
         ok "journald is volatile on a rig (a rig's root may be the stick it mines from)" ||
         bad "journald is still persistent on a rig — a USB root would take rotating writes"
@@ -2887,8 +2887,7 @@ phase_rig() {
     _rig_mining_up 24 &&
         ok "the rig returned mining with no hands on it (its unit lives in /run and died with the reboot)" ||
         bad "the rig did not return after the reboot — its runtime unit was never re-rendered"
-    # WHICH unit owns the boot is the whole R4 fork: the wizard's window is closed by rig.json,
-    # and pithead-boot — skipped on a rig before this phase existed — is what runs.
+    # WHICH unit owns the boot is the whole R4 fork: the wizard's window is closed, pithead-boot runs.
     [ "$(_ssh 'systemctl is-active pithead-boot' | tr -d '\r\n')" = "active" ] &&
         ok "pithead-boot owns a provisioned rig's boot" ||
         bad "pithead-boot did not run on the rig (its condition still excludes a machine with no config.json)"
@@ -2900,8 +2899,7 @@ phase_rig() {
         awk '$1 !~ /^[0-9a-f]{64}-[0-9a-f]+\.service$/' | tr -s ' ' | tr '\n' ';')
     [ -z "${failed_units//[; ]/}" ] && ok "no failed systemd units on the rig after the reboot" ||
         bad "failed units on the rig after the reboot: $failed_units"
-    # The commit gate, rig-shaped: a rig that could not commit would roll back every A/B update
-    # it ever received. Note the pool here answers nothing — the commit must not depend on it.
+    # The commit gate, rig-shaped: a rig that cannot commit rolls back every update; the pool answers nothing, and must not matter.
     local genv tries3=0
     while [ "$tries3" -lt 18 ]; do
         genv=$(_ssh "grub-editenv /boot/efi/grub/grubenv list" 2>/dev/null | tr '\n' ' ')
@@ -2915,6 +2913,7 @@ phase_rig() {
         ;;
     *) bad "the rig never self-committed — grubenv: ${genv:-unreadable}" ;;
     esac
+    rig_setup_again_legs "$card_tok" "$token" # #1318: Keep it, then Set up again as the same rig (tests/os/setup-again-leg.sh)
 
     # ---- A/B update: identical pipeline, identical outcome --------------------------------
     info "update leg — a rig takes a bundle exactly like a coordinator"
@@ -2975,6 +2974,7 @@ phase_rig() {
     marker=$(_ssh cat /etc/pithead-test-marker | tr -d '\r\n')
     [ "$marker" = "v2" ] && ok "COMMIT: the update persists on the rig across reboot" ||
         bad "expected v2 on the rig after commit, got '$marker'"
+    rig_setup_again_coordinator_leg "$token" # #1318: Set up again as a coordinator, from the updated slot
 }
 
 phase_fault() {
