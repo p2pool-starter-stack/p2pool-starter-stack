@@ -6,7 +6,7 @@
 # scalar secrets, so each shape needs its own proof that the property still holds — the masked
 # prefill copy must sentinel every set token rather than the first one, and the staging swap must
 # restore each sentinel from the live token rather than committing the sentinel itself. The legacy
-# dashboard.workers[] shape (#172/#679) and the workers.list[] shape (#506) are tested separately
+# removed 1.x dashboard.workers[] shape (#172/#679) and the workers.list[] shape (#506) separately
 # because they are read by different code paths, not because the property differs.
 # Sourced by tests/stack/run.sh.
 #
@@ -39,9 +39,12 @@ echo "== black-box: per-worker token mask + host-side restore, legacy dashboard.
 # refuses any dashboard.workers change, asserted above) — so this restore is exactly what lets an
 # operator's OTHER edits round-trip: the workers come back as sentinels and must resolve to the
 # live values unchanged, or every dashboard commit on a stack with configured workers would fail.
-# Since #679 `apply` MIGRATES the legacy shape, so a live config carries dashboard.workers only
-# between a hand-edit and the next apply — exactly the state the preview leg (a dry run, never
-# migrates) still serves. Hand-edit to legacy and render the masked copy directly, no apply.
+# 2.0.0 REMOVED the alias (#1832), which does not retire this block — it sharpens it. A live
+# config carries dashboard.workers[] between a hand-edit (or a restored 1.x backup) and the next
+# host apply, and 49-control-request-loop.sh:81 re-renders the prefill before draining precisely to
+# pick up such edits, so this state reaches the masker. The mask therefore STAYS, and the restore
+# must stay with it: they are one mechanism, and a mask whose restore cannot resolve blanks every
+# per-rig token instead of leaking one. Hand-edit to legacy and render the masked copy, no apply.
 jq '.dashboard.workers=[
     {name:"rig1",host:"10.0.0.5",token:"tok_rig1secret"},
     {name:"rig2"},
@@ -70,16 +73,20 @@ case "$(cat "$RESULTS/$UUID6.json")$(cat "$AUDIT")" in
 *tok_rig1secret* | *tok_rig3secret*) bad "results/audit stay free of the restored per-worker token" "a per-worker token leaked" ;;
 *) ok "results/audit stay free of the restored per-worker token" ;;
 esac
-# 3) commit: workers restored to live == live, so the gate passes on the pool-only change; the
-#    commit's `apply -y` then MIGRATES (#679) — the committed config keeps the live per-worker
-#    tokens under workers.list[], the legacy key is gone, and the pre-migration copy sits beside.
+# 3) commit: the sentinels resolve to the live values, so the gate sees only the pool change —
+#    but the staged doc still carries dashboard.workers[], which 2.0.0 dropped from the schema, so
+#    the closed-schema check refuses it as an unknown key like any other typo (#1832). The control
+#    channel never migrates; `pithead apply` on the host is the one path that moves the entries, so
+#    a refused commit must leave the operator's hand-edited config EXACTLY as it was.
 printf '{"id":"%s","action":"commit","actor":"admin"}\n' "$UUID6" >"$REQS/$UUID6.json"
 run_pending >/dev/null
-assert_eq "worker-sentinel commit applies" "$(jq -r '.status' "$RESULTS/$UUID6.json" 2>/dev/null)" "applied"
-assert_eq "committed config keeps the live per-worker token (migrated to workers.list, #679)" "$(jq -r '.workers.list[0].token' "$C/config.json")" "tok_rig1secret"
-assert_eq "commit migrated the legacy key away (#679)" "$(jq -r '.dashboard | has("workers")' "$C/config.json")" "false"
-assert_eq "pre-migration copy kept through the control commit (#679)" "$(jq -r '.dashboard.workers[0].token' "$C/config.json.bak-workers" 2>/dev/null)" "tok_rig1secret"
-assert_eq "committed config carries no sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
+WCERR="$(jq -r '.error // ""' "$RESULTS/$UUID6.json" 2>/dev/null)"
+assert_eq "worker-sentinel commit on a 1.x config is refused (#1832)" "$(jq -r '.status' "$RESULTS/$UUID6.json" 2>/dev/null)" "rejected"
+assert_contains "refused as an unknown schema key, not silently dropped" "$WCERR" "adds config keys not in the schema"
+assert_contains "the refusal names the removed key itself" "$WCERR" "dashboard.workers"
+assert_eq "a refused commit leaves the live per-worker token untouched" "$(jq -r '.dashboard.workers[0].token' "$C/config.json")" "tok_rig1secret"
+assert_eq "the control channel never migrates — only a host apply does" "$(jq -r '.workers.list == null' "$C/config.json")" "true"
+assert_eq "config carries no sentinel dict" "$(jq -r '[.. | objects | select(.__secret__?)] | length' "$C/config.json")" "0"
 # 4) duplicate names resolve first-declared-wins (staging only — a duplicate can't round-trip a
 #    commit, since the second entry's token would flip and trip the gate). Same hand-edited
 #    legacy state as above: masked copy rendered directly, no apply, so no migration yet.
