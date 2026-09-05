@@ -5,11 +5,11 @@
 // The view only ever ASKS — every request rides the X-Pithead-Control header (CSRF guard) and
 // the host decides. When the channel is off the routes 404 and this view explains how to enable.
 //
-// ONE editing surface, the wizard's pattern (#785): the form sections on top and the WHOLE
-// candidate config beneath as a collapsed JSON pane — both live, both views of a single
-// `candidate` object. Editing a field rewrites the candidate (typed by the field, via the shared
-// configsync.coerceForType) and the pane re-renders; editing the pane replaces the candidate and
-// the fields refill. What gets previewed and committed is exactly the candidate the pane shows.
+// ONE editing surface, the wizard's pattern (#785): the form sections on top and the candidate
+// config beneath as a collapsed JSON pane — both live, both views of a single `candidate`
+// object. Editing a field rewrites the candidate (typed by the field, via configsync's shared
+// coerceForType) and the pane re-renders; editing the pane replaces it and the fields refill.
+// Hidden paths (#1850) sit outside the candidate: neither surface shows or alters them.
 //
 // The form pins a `core` group — the wizard's own shortlist, `_core_keys` on the fetched config,
 // sourced from config.core-keys.json so the two never drift apart — above LOGICAL sections
@@ -22,6 +22,7 @@
 // sentinel — "blank means keep" survives the model change.
 
 import { applyFailure } from "./applyfailure.mjs";
+import { editableCandidate, restoreHidden } from "./confighidden.mjs";
 import {
   buildSections,
   isSecretSentinel,
@@ -206,10 +207,7 @@ export class ConfigView extends Component {
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const cfg = await res.json();
-      // The candidate is the config MINUS the underscore metadata (_core_keys and friends are
-      // display directives, not configuration) — what the pane shows is what preview receives.
-      const candidate = {};
-      for (const [k, v] of Object.entries(cfg)) if (!k.startsWith("_")) candidate[k] = v;
+      const candidate = editableCandidate(cfg);
       const text = JSON.stringify(candidate, null, 2);
       this.setState({
         phase: "form",
@@ -276,12 +274,13 @@ export class ConfigView extends Component {
     return pollResult(id, skip);
   }
 
-  // The candidate IS the proposed config — the pane shows exactly what preview receives, which
-  // is the point of the pattern (#785). A pane mid-typo blocks Save via jsonError instead.
+  // The candidate plus the hidden subtrees the fetched config carried (#1850) IS the proposed
+  // config — the pane shows every key preview receives that this page may change, which is the
+  // point of the pattern (#785). A pane mid-typo blocks Save via jsonError instead.
   buildProposed() {
-    const { candidate, jsonError } = this.state;
+    const { candidate, cfg, jsonError } = this.state;
     if (jsonError) return { error: jsonError };
-    return { config: candidate };
+    return { config: restoreHidden(candidate, cfg) };
   }
 
   async save() {
@@ -387,13 +386,14 @@ export class ConfigView extends Component {
 
   // The JSON pane (#785, the wizard's pattern): the whole candidate beneath the form, collapsed
   // by default, two-way live — never a separate mode. Load-from-file fills it (FileReader, no
-  // upload), and what it shows is byte-for-byte what Save previews.
+  // upload); it shows byte-for-byte what Save previews, minus the hidden paths (#1850).
   renderJson(editText, jsonError, busy) {
     return html`<details class="card config-section">
-        <summary><strong>Advanced</strong> — the exact configuration this will apply</summary>
+        <summary><strong>Advanced</strong> — the configuration this page can change</summary>
         <p class="text-muted text-xs">Editing a field above updates it; editing here directly
         wins. Set secrets appear as <code>__secret__</code> markers and stay unchanged unless
-        you replace them. The host's gate remains the authority on what commits.</p>
+        you replace them. Developer-only settings are not listed and are left exactly as they
+        are. The host's gate remains the authority on what commits.</p>
         <textarea class="worker-edit" spellcheck="false" rows="20" disabled=${busy}
                   value=${editText} onInput=${(e) => this.onJsonInput(e.target.value)}></textarea>
         ${jsonError ? html`<p class="status-bad text-xs">${jsonError}</p>` : null}

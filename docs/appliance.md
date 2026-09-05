@@ -241,8 +241,9 @@ The dashboard login is also the machine's **console login**: sit at the machine,
 `root` with the dashboard password. It is set fresh at every boot and never stored on disk.
 Two more switches live only in the **Advanced** view, deliberately out of the quick form:
 `ssh.enabled` with `ssh.authorized_key` turns on key-only SSH (never passwords) for remote
-debugging. Neither can be changed from the dashboard later — anyone who could flip them from a
-browser session would own the machine, wallets and all.
+debugging. Neither can be changed from the dashboard later, and its Configuration view does not
+list them at all — anyone who could flip them from a browser session would own the machine,
+wallets and all.
 
 **Already know exactly what you want?** Open **Advanced** at the bottom. It shows the complete
 configuration — every key, with its default filled in — and it *is* what the machine will run:
@@ -518,7 +519,8 @@ try the IP the console prints as well as <https://pithead.local>; some networks 
 
 **You need a shell on the machine.** Log in at its console as `root` with the dashboard
 password. For SSH, set `ssh.enabled` and `ssh.authorized_key` in the Advanced view at setup —
-key-only, and only if you need it.
+key-only, and only if you need it. The dashboard does not offer them after that; a configuration
+stick is the way in later.
 
 **"Wrong token."** The token changes each time the setup service restarts — read the
 current one from the console. After five wrong attempts it mints a new one on purpose.
