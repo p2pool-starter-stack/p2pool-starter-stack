@@ -18,6 +18,20 @@ set -eu
 
 DATA_DIR="${PITHEAD_JOURNAL_DATA_DIR:-/data/pithead/journal}"
 TARGET="${PITHEAD_JOURNAL_TARGET:-/var/log/journal}"
+ROLE_FILE="${PITHEAD_MACHINE_ROLE_FILE:-/data/pithead/machine-role}"
+
+# A rig has nothing to persist (#1817): its journal is volatile BY DESIGN — the root may be
+# the stick it mines from — and `pithead local-miner` reclaims /var/log/journal on every boot
+# on its way to flipping journald volatile. With the persistent home bound onto that path the
+# reclaim met a mountpoint, `rm -rf` failed on it, and pithead's errexit turned the failure into
+# a boot verb that exited non-zero: the rig booted mining and never committed its slot. Same
+# marker as pithead-boot's role fork, read the same way; RequiresMountsFor=/data means it is
+# readable by now. A machine with no marker yet (first boot) still binds — the wizard's rig leg
+# takes that bind off itself before reclaiming (rig_minimize_writes).
+if [ -f "$ROLE_FILE" ] && [ "$(tr -d '[:space:]' <"$ROLE_FILE")" = "rig" ]; then
+    echo "pithead-journal-persist: this machine is a rig — its journal is volatile, nothing to bind"
+    exit 0
+fi
 
 mkdir -p "$DATA_DIR"
 # Same owner+mode systemd-tmpfiles gives /var/log/journal itself (root:systemd-journal, setgid

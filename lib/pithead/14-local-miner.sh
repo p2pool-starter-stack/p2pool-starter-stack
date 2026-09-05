@@ -326,8 +326,28 @@ rig_minimize_writes() {
     # overrides a drop-in.
     printf '[Journal]\nStorage=volatile\nRuntimeMaxUse=32M\n' >"$dropin/zz-rig-volatile.conf" 2>/dev/null || return 0
     [ -d "$journal" ] || return 0
-    rm -rf "${journal:?}"
+    # Restart FIRST: journald holds the persistent files under $journal open, and a bind there
+    # cannot come off while it does (umount: target is busy). Volatile, it writes under /run and
+    # holds nothing here. (Before #1817 the restart came after the reclaim, which worked only
+    # because unlinking an open file is allowed — taking a mount off is not.)
     systemctl restart systemd-journald >/dev/null 2>&1 || true
+    # #1817: a first boot binds the persistent journal home onto this path before the role is
+    # known (pithead-journal-persist), so the reclaim meets a MOUNTPOINT. `rm -rf` on one empties
+    # it — through the bind, onto /data — and then fails on the mountpoint itself. Take the bind
+    # off first, so what is reclaimed is the overlay's own directory and nothing on /data is
+    # touched. Every step is best-effort: this is a stick-wear optimisation, nothing downstream
+    # reads its result, and the one caller that matters runs under errexit (pithead-boot's
+    # `local-miner`) — a cleanup that cannot complete must never leave a slot uncommitted.
+    if mountpoint -q "$journal" 2>/dev/null; then
+        umount "$journal" 2>/dev/null || true
+        # A bind that did not come off is left alone: `rm -rf` through it would empty the
+        # persistent home on /data, the one thing this block promises not to do.
+        if mountpoint -q "$journal" 2>/dev/null; then
+            warn "The journal bind is still up, so nothing is reclaimed; journald is volatile for this boot anyway."
+            return 0
+        fi
+    fi
+    rm -rf "${journal:?}" || warn "The journal directory could not be reclaimed; journald is volatile for this boot anyway."
     log "Rig write minimization: the journal is in memory for this boot — the root may be the stick the miner runs from."
 }
 
@@ -336,7 +356,11 @@ provision_rig_miner() {
         warn "This machine is marked as a rig, but its settings are missing — install it again from the stick to choose a role."
         return 1
     fi
-    rig_minimize_writes
+    # `|| true` on purpose (#1817): the minimization is best-effort by construction, and this
+    # function is called BARE from the boot path (pithead-boot -> `pithead local-miner`, errexit
+    # armed) but under `|| true` from the wizard — a failure inside it passed first boot and
+    # killed every boot after, which is the one signature a full gate is needed to see.
+    rig_minimize_writes || true
     render_rig_miner_config || return 1
     if rigforge_setup_run; then
         log "The rig is mining: $(jq -r '.worker // "this machine"' "$PWD/rig.json" 2>/dev/null) -> $(jq -r '.pool // "no pool recorded"' "$PWD/rig.json" 2>/dev/null)."

@@ -75,6 +75,35 @@ out=$(PATH="$JP/bin:$PATH" PITHEAD_JOURNAL_DATA_DIR="$DATA_DIR" PITHEAD_JOURNAL_
 assert_eq "already mounted -> mount is not called again" "$(cat "$MOUNT_LOG")" ""
 assert_contains "the script says it is already bound" "$out" "already the persistent mount"
 
+# A rig stands down (#1817): its journal is volatile by design, and `pithead local-miner`
+# reclaims /var/log/journal on every boot — a bind there turned the reclaim into an rm on a
+# mountpoint, and under errexit the rig's boot verb died on it. The marker is the same file
+# pithead-boot forks on, read the same way (whitespace-tolerant, the exact word).
+echo "== unit: pithead-journal-persist stands down on a rig — the marker, not the bind (#1817) =="
+ROLE_FILE="$JP/machine-role"
+: >"$MOUNT_LOG"
+rm -f "$JP/already-mounted"
+printf 'rig\n' >"$ROLE_FILE"
+out=$(PATH="$JP/bin:$PATH" PITHEAD_JOURNAL_DATA_DIR="$DATA_DIR" PITHEAD_JOURNAL_TARGET="$TARGET" \
+    PITHEAD_MACHINE_ROLE_FILE="$ROLE_FILE" sh "$SCRIPT" 2>&1)
+assert_rc "rig marker -> rc 0 (the unit must not fail the early boot transaction)" "$?" "0"
+assert_eq "rig marker -> mount is never called" "$(cat "$MOUNT_LOG")" ""
+assert_contains "the script says why it stood down" "$out" "is a rig"
+# Sibling controls: a coordinator marker and a near-miss both still bind — the fork is on the
+# exact word, as in pithead-boot, and an absent marker (first boot) binds too.
+for role in pithead rigs; do
+    : >"$MOUNT_LOG"
+    printf '%s\n' "$role" >"$ROLE_FILE"
+    PATH="$JP/bin:$PATH" PITHEAD_JOURNAL_DATA_DIR="$DATA_DIR" PITHEAD_JOURNAL_TARGET="$TARGET" \
+        PITHEAD_MACHINE_ROLE_FILE="$ROLE_FILE" sh "$SCRIPT" >/dev/null 2>&1
+    assert_contains "marker '$role' still binds" "$(cat "$MOUNT_LOG")" "--bind $DATA_DIR $TARGET"
+done
+: >"$MOUNT_LOG"
+rm -f "$ROLE_FILE"
+PATH="$JP/bin:$PATH" PITHEAD_JOURNAL_DATA_DIR="$DATA_DIR" PITHEAD_JOURNAL_TARGET="$TARGET" \
+    PITHEAD_MACHINE_ROLE_FILE="$ROLE_FILE" sh "$SCRIPT" >/dev/null 2>&1
+assert_contains "no marker yet (first boot) still binds" "$(cat "$MOUNT_LOG")" "--bind $DATA_DIR $TARGET"
+
 echo "== unit: load_baked_images narrates a FINISH, not just a start, per archive (#1030) =="
 # Without this, a journal that survives a reset (the fix above) still shows only "Loading..."
 # for an archive that was interrupted mid-write and a truncated load is indistinguishable from

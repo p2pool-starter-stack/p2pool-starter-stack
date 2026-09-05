@@ -172,6 +172,67 @@ assert_rc "re-run (the leg fires every boot) -> rc 0" "$?" "0"
 assert_eq "the config is re-derived, not repaired" "$(jq -r '.pools[0].url' "$RIGL/rigforge/config.json")" "pithead.local:3333"
 assert_eq "the stratum password lands as the pool pass" "$(jq -r '.pools[0].pass' "$RIGL/rigforge/config.json")" "s3cret"
 assert_not_contains "already volatile -> journald is not restarted again" "$(cat "$RF_LOG")" "restart systemd-journald"
+# #1817: a first boot binds the persistent journal home onto this path before the role is
+# known (pithead-journal-persist), so the reclaim meets a MOUNTPOINT. The bind comes off
+# first — after journald has let go of the files under it, which is why the restart moves
+# ahead of the umount — and only then is the directory reclaimed.
+printf '#!/usr/bin/env bash\n[ -f "%s/bound" ] && exit 0\nexit 1\n' "$RIGL" >"$RIGL/bin/mountpoint"
+printf '#!/usr/bin/env bash\necho "umount:$*" >>"${RF_LOG:?}"\nrm -f "%s/bound"\n' "$RIGL" >"$RIGL/bin/umount"
+chmod +x "$RIGL/bin/mountpoint" "$RIGL/bin/umount"
+mkdir -p "$RIGL/journal/abc"
+touch "$RIGL/bound"
+: >"$RF_LOG"
+rigl_out=$(run_rig provision_local_miner 2>&1)
+assert_rc "a bound journal path -> rc 0" "$?" "0"
+assert_eq "journald lets go first, then the bind comes off, then the miner is set up" \
+    "$(grep -o 'systemctl:restart systemd-journald\|umount:[^ ]*\|rigforge:setup' "$RF_LOG" | tr '\n' ' ')" \
+    "systemctl:restart systemd-journald umount:$RIGL/journal rigforge:setup "
+[ -d "$RIGL/journal" ] && bad "the directory under the bind is reclaimed" "still there" ||
+    ok "the directory under the bind is reclaimed"
+# A reclaim that cannot complete must not take the boot verb down: pithead-boot calls
+# `pithead local-miner` BARE under the CLI's errexit, while the wizard calls the same leg under
+# `|| true` — a failure inside the minimization passed first boot and killed every boot after
+# (the #1651 gate, BUILD_COMMIT 4fb4943a: the rig booted mining and never committed its slot).
+# Driven under errexit for real. The armed-runner control is an ABSENCE row, paired with the
+# positive rows after it (rc 0 + console text); rm is stubbed to refuse the path as a mountpoint does.
+run_rig_errexit() { (
+    cd "$RIGL" || exit 99
+    export PITHEAD_APPLIANCE=1 PATH="$RIGL/bin:$PATH"
+    # shellcheck disable=SC1090
+    source "$STACK"
+    "$@"
+); }
+_errexit_probe() {
+    false
+    echo survived
+}
+assert_not_contains "control: the errexit runner is armed" "$(run_rig_errexit _errexit_probe 2>/dev/null)" "survived"
+cat >"$RIGL/bin/rm" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+    [ "\$a" = "$RIGL/journal" ] && { echo "rm: cannot remove '\$a': Device or resource busy" >&2; exit 1; }
+done
+exec /bin/rm "\$@"
+EOF
+chmod +x "$RIGL/bin/rm"
+mkdir -p "$RIGL/journal/abc"
+touch "$RIGL/bound"
+: >"$RF_LOG"
+rigl_out=$(run_rig_errexit provision_local_miner 2>&1)
+assert_rc "a reclaim that cannot complete does not take the boot verb down (errexit armed)" "$?" "0"
+assert_contains "the miner is still set up behind it" "$(cat "$RF_LOG")" "rigforge:setup appliance=1"
+assert_contains "the console says the journal was not reclaimed" "$rigl_out" "could not be reclaimed"
+# Review (#1817): a bind that will not come off is LEFT ALONE — `rm -rf` through it would empty the
+# persistent home on /data. Real rm here, so a reclaim that reached it would empty the directory.
+printf '#!/usr/bin/env bash\necho "umount:$*" >>"${RF_LOG:?}"\nexit 32\n' >"$RIGL/bin/umount"
+rm -f "$RIGL/bin/rm" && mkdir -p "$RIGL/journal/abc" && touch "$RIGL/bound" && : >"$RF_LOG"
+rigl_out=$(run_rig_errexit provision_local_miner 2>&1)
+assert_rc "umount fails (busy) -> the verb still completes" "$?" "0"
+[ -d "$RIGL/journal/abc" ] && ok "a bind still up is not reclaimed through" || bad "a bind still up is not reclaimed through" "emptied"
+assert_contains "the console says the bind is still up" "$rigl_out" "bind is still up"
+rm -f "$RIGL/bin/rm" "$RIGL/bin/mountpoint" "$RIGL/bin/umount" "$RIGL/bound"
+rm -rf "$RIGL/journal"
+unset -f run_rig_errexit _errexit_probe
 # No prebuilt (a wiped workspace): the operator gets told why the console is silent for minutes.
 rm -rf "$RIGL/rigforge/data/worker/xmrig"
 rigl_out=$(run_rig provision_local_miner 2>&1)
