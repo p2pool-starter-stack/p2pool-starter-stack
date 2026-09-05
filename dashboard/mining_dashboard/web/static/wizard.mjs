@@ -752,8 +752,8 @@ export class WizardApp extends Component {
             change later.<//>
             <${Field} label="Mine on this machine too?">
                 <select value=${String(v("localMiner") ?? false)} onChange=${on("localMiner")}>
-                    <option value="false">No — this box only coordinates the miners (default)</option>
-                    <option value="true">Yes — this machine also mines with its own CPU (built-in RigForge)</option>
+                    <option value="false">No — this box only coordinates the miners</option>
+                    <option value="true">Yes — this machine also mines with its own CPU (built-in RigForge, default)</option>
                 </select>
             <//>
             ${
