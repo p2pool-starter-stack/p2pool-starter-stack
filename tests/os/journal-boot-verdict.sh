@@ -52,7 +52,13 @@ JOURNAL_HOME_PROBE='stat -c "%m %i" /var/log/journal 2>/dev/null || echo "missin
 # $1 = the probe's output. Prints the verdict line on stdout; exit 0 = pass, 1 = fail.
 journal_home_verdict() {
     local mnt tino hino fstype subdir boots v
-    { read -r mnt tino; read -r hino; read -r fstype; read -r subdir; read -r boots; } <<<"$1"
+    {
+        read -r mnt tino
+        read -r hino
+        read -r fstype
+        read -r subdir
+        read -r boots
+    } <<<"$1"
     for v in "$tino" "$hino" "$boots"; do
         case "$v" in '' | *[!0-9]*)
             echo "journal home unreadable after the reboot (mount: ${mnt:-?}, inodes: ${tino:-?}/${hino:-?}, boots: ${boots:-?})"
