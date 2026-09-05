@@ -124,21 +124,16 @@ render_masked_config() { # <control-dir>
     local mdir="$1/masked" tmp
     mkdir -p "$mdir" 2>/dev/null || true
     tmp="$mdir/.config.json.tmp"
-    # Per-worker tokens (#172) live in the variable-length descriptor array, out of reach of the
-    # fixed-path walk above — mask each SET .token entry by entry. workers.list[] is current
-    # (#506); dashboard.workers[] is the deprecated fallback — mask BOTH shapes unconditionally
-    # (validate_worker_endpoints refuses a config that populates both, but empty schema defaults
-    # may sit alongside the populated one, #679, and masking an empty array is a no-op).
+    # Per-worker tokens (#172) live in the variable-length descriptor array at workers.list[]
+    # (#506), out of reach of the fixed-path walk above — mask each SET .token entry by entry.
+    # Masking an empty array is a no-op. The deprecated dashboard.workers[] shape was masked here
+    # too until 2.0.0 removed it (#1832); a pre-2.0 config is migrated before this ever runs.
     if jq --argjson paths "$CONTROL_SECRET_PATHS" '
         reduce $paths[] as $p (.;
             if ((try getpath($p) catch null) // "") == "" then .
             else setpath($p; {"__secret__": true}) end)
         | if (.workers | type) == "object" and (.workers.list | type) == "array"
           then .workers.list |= map(
-              if (.token // "") == "" then . else .token = {"__secret__": true} end)
-          else . end
-        | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
-          then .dashboard.workers |= map(
               if (.token // "") == "" then . else .token = {"__secret__": true} end)
           else . end
         # notifications.webhooks[] (#848): the whole URL is the bearer secret (query strings carry

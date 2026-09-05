@@ -182,7 +182,7 @@ publish_disk_inventory() { # <spool-dir>
 strip_config_secrets() { # <config-file> -> stripped JSON on stdout
     jq -e --argjson paths "$CONTROL_SECRET_PATHS" '
         delpaths($paths)
-        | del(.dashboard.auth, .dashboard.workers, .workers, .telegram,
+        | del(.dashboard.auth, .workers, .telegram,
               .healthchecks, .notifications, .ssh, .tari.spend_public_key)' "$1" 2>/dev/null
 }
 

@@ -13,11 +13,11 @@ control_approval_gate() { # <staged-file> [confirm-token]
     # is ALLOWED (#504). Every OTHER config path renders to .env and is gated by the allowlist, so a
     # change there is caught below — a NEW config.json-only block, though, MUST add its own line.
     #
-    # The per-worker descriptors — workers.list[] (#506) or its deprecated fallback
-    # dashboard.workers[] (#172) — carry per-rig hosts and API tokens (exactly the "free-form string
-    # that reaches a URL or credential" class the allowlist exists to keep host-CLI-only). The
-    # legacy dashboard.workers[] shape stays refused outright, whatever it changes to: any commit
-    # touching it goes back to a host edit.
+    # The per-worker descriptors — workers.list[] (#506) — carry per-rig hosts and API tokens
+    # (exactly the "free-form string that reaches a URL or credential" class the allowlist exists to
+    # keep host-CLI-only). The deprecated dashboard.workers[] alias (#172) used to be refused here
+    # outright; 2.0.0 removed it (#1832), so a staged config carrying it is now refused one step
+    # later by the closed-schema check below, as an unknown key like any other typo.
     #
     # workers.list[] gets ONE narrow ADD-ONLY exception (the click-to-adopt flow): a commit may
     # APPEND a brand-new descriptor to the end of the array, but every entry already live must
@@ -30,11 +30,10 @@ control_approval_gate() { # <staged-file> [confirm-token]
     # live.workers.list exactly. An empty live list makes every staged entry "new" by definition
     # (first adoption); a shorter/reordered/edited staged list can never match and is refused.
     if ! jq -e --slurpfile live "$CONFIG_FILE" '
-        (.dashboard.workers // []) == ($live[0].dashboard.workers // [])
-        and ((($live[0].workers.list // []) | length) as $n
+        ((($live[0].workers.list // []) | length) as $n
              | (.workers.list // [])[0:$n] == ($live[0].workers.list // []))
         ' "$staged" >/dev/null 2>&1; then
-        printf 'this change alters an existing per-worker descriptor (workers.list[] / dashboard.workers[], a per-rig host/token) rather than only adding a new one, which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+        printf 'this change alters an existing per-worker descriptor (workers.list[], a per-rig host/token) rather than only adding a new one, which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
         return 1
     fi
     # SSRF floor on what an add-only append may point at (see _control_host_is_internal): every
@@ -61,10 +60,10 @@ control_approval_gate() { # <staged-file> [confirm-token]
     # guarded above. Fail closed — an unreadable reference or a jq error refuses the commit.
     # INVARIANT: config.reference.json MUST stay a complete superset of every config path this script
     # reads (grep the config_bool/`jq ... "$CONFIG_FILE"` sites), or a legit config carrying a
-    # read-but-unlisted path is false-rejected on every commit. That includes backward-compat aliases
-    # like xmrig_proxy.* (read at the XvB block) and dashboard.workers[] (read at
-    # validate_worker_endpoints, #506). Guarded two ways in tests/stack/run.sh: the
-    # legacy-xmrig_proxy round-trip case above, and (#561) an automated drift guard that walks this
+    # read-but-unlisted path is false-rejected on every commit. 2.0.0 removed the two backward-compat
+    # aliases that used to need listing for this reason (#1832), so the superset is now smaller rather
+    # than larger. Guarded two ways in tests/stack/run.sh: the case asserting a staged 1.x alias is
+    # REFUSED here rather than round-tripped, and (#561) an automated drift guard that walks this
     # script's own config_bool/`jq ... "$CONFIG_FILE"` read sites with a conservative fixed-shape
     # extractor and fails loud ("extend the extractor") on a shape it doesn't recognize, rather than
     # risking the false-alarms a naive grep-based path diff would hit on jq-internal and filename
@@ -72,7 +71,7 @@ control_approval_gate() { # <staged-file> [confirm-token]
     local unknown
     if ! unknown=$(jq -rn --slurpfile ref "$REFERENCE_CONFIG" --slurpfile cfg "$staged" '
         def norm: [.[] | strings] | join(".");
-        ([$cfg[0] | paths | select(.[0:2] != ["dashboard", "workers"] and .[0:2] != ["workers", "list"]) | norm]
+        ([$cfg[0] | paths | select(.[0:2] != ["workers", "list"]) | norm]
          - [$ref[0] | paths | norm])
         | unique | join(", ")' 2>/dev/null); then
         printf 'could not validate the staged config against the schema (%s) — refusing to commit' "$REFERENCE_CONFIG"
@@ -231,11 +230,10 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
     # under umask 077 so it is never even briefly world-readable (create-then-chmod race); the
     # chmod stays as belt-and-suspenders.
     # Per-worker token sentinels (#172) get the same swap, but out of the fixed-path walk: they
-    # live in the variable-length descriptor array — workers.list[] (#506) or its deprecated
-    # fallback dashboard.workers[] — so restore each from the LIVE token matched by worker name
-    # (first-declared wins on duplicate names, matching the container's probe; whichever shape the
-    # live config actually uses). A sentinel for a rig with no live token collapses to "" too, and
-    # the sentinel is restored into whichever shape the submitted doc carries.
+    # live in the variable-length descriptor array at workers.list[] (#506) — so restore each from
+    # the LIVE token matched by worker name (first-declared wins on duplicate names, matching the
+    # container's probe). A sentinel for a rig with no live token collapses to "" too. The
+    # deprecated dashboard.workers[] shape was restored here as well until 2.0.0 removed it (#1832).
     (umask 077 && jq --argjson paths "$CONTROL_SECRET_PATHS" --slurpfile live "$CONFIG_FILE" "$WORKER_LIST_JQ"'
         (reduce (($live[0] | worker_list) | reverse | .[]) as $w ({};
             if ($w | type) == "object" and ($w.name | type) == "string"
@@ -251,12 +249,7 @@ control_preview() { # <request-file> <id> <actor> <control-dir>
               then .token = (if (.name | type) == "string" then ($livetok[.name] // "") else "" end)
               else . end)
           else . end
-        | if (.dashboard | type) == "object" and (.dashboard.workers | type) == "array"
-          then .dashboard.workers |= map(
-              if (.token | type) == "object" and .token.__secret__ == true
-              then .token = (if (.name | type) == "string" then ($livetok[.name] // "") else "" end)
-              else . end)
-          else . end' "$file" >"$staged")
+        ' "$file" >"$staged")
     chmod 600 "$staged" 2>/dev/null || true
     if out=$(PITHEAD_CONFIG_FILE="$staged" "$0" apply --dry-run --porcelain 2>"$errf"); then
         result=$(printf '%s\n' "$out" | jq -R -s '
@@ -304,7 +297,9 @@ control_reown_operator_files() {
     # GNU stat first, BSD fallback (see the provision_onion_client_auth note). No owner → skip.
     owner=$(stat -c '%u:%g' "$CONFIG_FILE" 2>/dev/null || stat -f '%u:%g' "$CONFIG_FILE" 2>/dev/null) || owner=""
     [ -n "$owner" ] || return 0
-    for f in "$ENV_FILE" "Caddyfile" "${CONFIG_FILE}.bak-control" "${CONFIG_FILE}.bak-workers"; do
+    # .bak-workers is the pre-2.0 name of the migration backup .bak-1x now writes (#1832) — both are
+    # listed so a machine that migrated under 1.x still has its old copy reowned rather than stranded.
+    for f in "$ENV_FILE" "Caddyfile" "${CONFIG_FILE}.bak-control" "${CONFIG_FILE}.bak-1x" "${CONFIG_FILE}.bak-workers"; do
         [ -e "$f" ] || continue
         # Fail safe: a chown that can't complete leaves the pre-existing bug, never corrupts state.
         chown "$owner" "$f" 2>/dev/null ||

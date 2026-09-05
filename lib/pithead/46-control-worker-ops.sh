@@ -25,7 +25,7 @@ resolve_worker_target() { # <worker-name> <verb-for-the-host-missing-message, e.
     cport=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .control_port // 8082' "$CONFIG_FILE" 2>/dev/null | head -1)
     token=$(jq -r --arg n "$worker" "$WORKER_LIST_JQ"'worker_list[] | select(.name == $n) | .token // ""' "$CONFIG_FILE" 2>/dev/null | head -1)
     if [ -z "$host" ]; then
-        RESOLVE_WORKER_ERR="worker '$worker' has no configured host in workers.list[] (or the deprecated dashboard.workers[]) — set host + control_port + token to $verb it."
+        RESOLVE_WORKER_ERR="worker '$worker' has no configured host in workers.list[] — set host + control_port + token to $verb it."
         return 1
     fi
     # host charset guard (#122): no port/path/userinfo can be smuggled into the URL below.
@@ -38,7 +38,7 @@ resolve_worker_target() { # <worker-name> <verb-for-the-host-missing-message, e.
         return 1
     fi
     if [ -z "$token" ]; then
-        RESOLVE_WORKER_ERR="worker '$worker' has no token in workers.list[] (or the deprecated dashboard.workers[]) — the rig's control API is bearer-mandatory."
+        RESOLVE_WORKER_ERR="worker '$worker' has no token in workers.list[] — the rig's control API is bearer-mandatory."
         return 1
     fi
     RESOLVED_HOST="$host" RESOLVED_CPORT="$cport" RESOLVED_TOKEN="$token"
@@ -48,7 +48,7 @@ resolve_worker_target() { # <worker-name> <verb-for-the-host-missing-message, e.
 # Worker config apply (#185): POST an operator's writable-key change to a RigForge rig's control API
 # and record the outcome for the dashboard's config history. The intent carries ONLY the worker NAME
 # and the CHANGES — never a host, port, or token: the runner resolves the rig's real address + bearer
-# from the HOST's own config.json (workers.list[] / the deprecated dashboard.workers[], #506), so a
+# from the HOST's own config.json (workers.list[], #506), so a
 # tampered intent can at most target another ALREADY-configured rig, never an arbitrary host (#122
 # SSRF), and the rig's access token —
 # masked out of the container (#440) — never leaves the host. Changes are re-validated against the

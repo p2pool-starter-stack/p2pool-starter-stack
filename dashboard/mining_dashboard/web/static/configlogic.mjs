@@ -46,9 +46,10 @@ function isPlainObject(v) {
 
 function walk(node, path, out) {
   for (const [key, value] of Object.entries(node)) {
-    // Underscore-prefixed keys are metadata/docs, not config, at ANY depth — config.reference.json
-    // carries a couple nested ones (xmrig_proxy._docs, dashboard._workers_docs) alongside the
-    // top-level _docs buildSections already skipped; without this they'd render as stray text
+    // Underscore-prefixed keys are metadata/docs, not config, at ANY depth. The two nested ones
+    // this guarded (xmrig_proxy._docs, dashboard._workers_docs) went with the deprecated aliases in
+    // 2.0.0 (#1832); the rule stays because the top-level _docs and any future nested one need it,
+    // and without it they'd render as stray text
     // fields and, worse, fall into the catch-all "Other" logical group (#611) since no group
     // claims a docs blob.
     if (key.startsWith("_")) continue;
@@ -58,7 +59,7 @@ function walk(node, path, out) {
       walk(value, p, out);
       continue;
     }
-    // Array values (dashboard.workers, #172) have no form rendering: skip them so they can't be
+    // Array values (workers.list, #506) have no form rendering: skip them so they can't be
     // mangled into a string by a text field. applyEdits clones the whole config and only folds
     // TOUCHED fields back, so a skipped array survives the round trip verbatim.
     if (Array.isArray(value)) continue;
@@ -171,7 +172,6 @@ export const LOGICAL_GROUPS = [
       "dashboard.check_for_updates",
       "network",
       "ssh",
-      "xmrig_proxy",
     ],
   },
 ];

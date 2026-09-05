@@ -132,15 +132,15 @@ render_env() {
     p2pool_socks=$(p2pool_outbound_flags "$(jq -r '.p2pool.clearnet // false' "$CONFIG_FILE")" "$NETWORK_PREFIX")
     [ -n "$p2pool_socks" ] && p2pool_flags="${p2pool_flags:+$p2pool_flags }$p2pool_socks"
 
-    # XvB config (accepts legacy xmrig_proxy.* keys)
+    # XvB config. The xmrig_proxy.* alias is gone (#1832) — migrated to xvb.* before any read.
     local xvb_enabled xvb_url xvb_donor xvb_donation_level xvb_tor
-    xvb_enabled=$(jq -r 'if .xvb.enabled != null then .xvb.enabled elif .xmrig_proxy.enabled != null then .xmrig_proxy.enabled else "true" end' "$CONFIG_FILE")
+    xvb_enabled=$(jq -r 'if .xvb.enabled != null then .xvb.enabled else "true" end' "$CONFIG_FILE")
     # Route XvB donation mining through Tor by default (#166); xvb.tor:false opts out for max yield.
     # config_bool so xvb.tor=false (route XvB over clearnet) is honoured rather than coerced to Tor (#294).
     xvb_tor=$(normalize_bool "$(config_bool '.xvb.tor' true)")
-    xvb_url=$(jq -r '.xvb.url // .xmrig_proxy.url // empty' "$CONFIG_FILE")
+    xvb_url=$(jq -r '.xvb.url // empty' "$CONFIG_FILE")
     [ -z "$xvb_url" ] && xvb_url="na.xmrvsbeast.com:4247"
-    xvb_donor=$(jq -r '.xvb.donor_id // .xmrig_proxy.donor_id // empty' "$CONFIG_FILE")
+    xvb_donor=$(jq -r '.xvb.donor_id // empty' "$CONFIG_FILE")
     case "$xvb_donor" in
     "" | auto | DYNAMIC_ID) xvb_donor="${MONERO_WALLET:0:8}" ;;
     esac

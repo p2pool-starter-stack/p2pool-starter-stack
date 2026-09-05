@@ -20,10 +20,10 @@ logger = logging.getLogger("Config")
 # to the miner-IP fallback path (#122). pithead validates the same shape loudly at apply; this
 # parse only has to stay safe if the mount is stale or hand-edited.
 #
-# workers.list[] is the current sub-key (#506); dashboard.workers[] (#172) is read as a deprecated
-# fallback when workers.list is unset or empty, logged once, and removed in v1.9 — pithead's
-# apply-time validation refuses a config that populates both, so this loader only needs to pick
-# whichever is populated (an empty array is a schema default, never an operator choice, #679).
+# The descriptors live at workers.list[] (#506) and nowhere else. Until 2.0.0 an unset or empty
+# workers.list fell back to the deprecated dashboard.workers[] (#172); that alias was removed in
+# #1832 and pithead migrates a pre-2.0 config to workers.list[] before the dashboard ever reads
+# the mount, so this loader needs no fallback and an alias left in a stale mount reads as absent.
 #   name  — 1-128 printable non-space ASCII chars (matched against the stratum name, '+' stripped)
 #   host  — hostname or IPv4 literal: letters/digits/dot/dash/underscore only, so a config value
 #           can never smuggle a port, path, or userinfo into the probe URL (no ':/@?#'; IPv6
@@ -45,10 +45,9 @@ def _valid_watts(v):
 def load_worker_endpoints(path) -> list[dict]:
     """The validated workers.list[] entries (#506); invalid entries dropped, first name wins.
 
-    dashboard.workers[] (#172) is read as a deprecated fallback when workers.list is unset or an
-    empty array (removed in v1.9 — pithead's apply-time validation refuses a config that
-    populates both, but an empty workers.list may legitimately sit alongside a populated legacy
-    key, #679: empty arrays are schema defaults, not operator choices).
+    The deprecated dashboard.workers[] fallback (#172) was removed in 2.0.0 (#1832): pithead
+    migrates a pre-2.0 config in place before this mount is written, so the alias never reaches
+    here. A stale mount still carrying it reads as no descriptors at all, which is fail-closed.
     """
     try:
         with open(path) as f:
@@ -57,14 +56,6 @@ def load_worker_endpoints(path) -> list[dict]:
         return []
     workers_block = doc.get("workers") if isinstance(doc, dict) else None
     raw = workers_block.get("list") if isinstance(workers_block, dict) else None
-    if raw is None or raw == []:
-        dashboard_block = doc.get("dashboard") if isinstance(doc, dict) else None
-        if isinstance(dashboard_block, dict) and "workers" in dashboard_block:
-            raw = dashboard_block["workers"]
-            logger.info(
-                "dashboard.workers[] is deprecated — move these entries to workers.list[] "
-                "(removed in v1.9)."
-            )
     if not isinstance(raw, list):
         return []
     out, seen = [], set()

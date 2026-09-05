@@ -237,8 +237,8 @@ parse_and_validate_config() {
         error "p2pool.stratum_port must be an integer between 1 and 65535 (got \"$STRATUM_PORT\")."
     fi
 
-    validate_worker_endpoints
     migrate_legacy_workers
+    validate_worker_endpoints
     validate_energy_config
 
     # Optional miner authentication on the stratum port (#152). xmrig-proxy's --access-password

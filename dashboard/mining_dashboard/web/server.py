@@ -328,7 +328,7 @@ async def handle_worker_apply(request):
     """Push a writable-key config change to a worker's rig via the HOST-side control runner (#185).
 
     This container never holds the rig's token: it spools ``{worker, changes}`` and the host resolves
-    the rig's address + bearer from config.json (dashboard.workers[]), POSTs, and polls the rig's
+    the rig's address + bearer from config.json (workers.list[]), POSTs, and polls the rig's
     ``/status``. Fail-closed — the route only exists when the control channel is on, which itself
     requires a dashboard password. The change surface is the writable allowlist only. Records the
     terminal outcome in the per-worker config history."""

@@ -61,12 +61,6 @@
       "source": ""
     }
   },
-  "xmrig_proxy": {
-    "_docs": "DEPRECATED backward-compat alias for xvb.* (the block was renamed). Kept in the schema so a config.json that predates the rename still validates through the dashboard control channel; xvb.* wins when both are present. Use xvb.* in new configs.",
-    "enabled": true,
-    "url": "na.xmrvsbeast.com:4247",
-    "donor_id": "auto"
-  },
   "tor": {
     "data_dir": "auto",
     "auto_heal": false
@@ -100,9 +94,7 @@
       "price_feed": false,
       "tari_price": 0,
       "xmr_price": 0
-    },
-    "_workers_docs": "DEPRECATED alias for the top-level workers.list[] (the block was relocated, #506). Kept in the schema so a config.json that predates the move still validates through the dashboard control channel; setting both workers.list[] and dashboard.workers[] is a hard error at apply. Use workers.list[] in new configs. Removed in v1.9.",
-    "workers": []
+    }
   },
   "workers": {
     "api_port": 8080,

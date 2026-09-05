@@ -193,7 +193,7 @@ def build_worker_detail(name, data, state_mgr, range_arg="all", window=None):
     measured hashrate (worker_history) aggregated over its active window, so an operator can compare config
     versions empirically. ``hashrate_history`` (#1013) is the same rig's hashrate as a chartable time series,
     honoring the same ``range_arg``/``window`` ``/api/state`` already uses.
-    ``editable`` is whether the worker has an operator-set ``host`` in ``dashboard.workers[]`` — the
+    ``editable`` is whether the worker has an operator-set ``host`` in ``workers.list[]`` — the
     precondition for the host-side write path. The rig's token is masked out of this container (#440),
     so the container cannot verify it; the host runner re-checks it and fails closed if it is missing.
     """
