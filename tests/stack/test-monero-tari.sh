@@ -92,6 +92,23 @@ assert_eq "launch line masks all four secrets, keeps every flag name and --socks
 assert_contains "p2pool is still exec'd with the RAW bare tari address" "$ml_out" "ARG=[12TariPayout]"
 assert_eq "--flag=VALUE masked, and --merge-mine= still masks the address AFTER it" "$(PATH="$PE:$PATH" bash "$ROOT/build/p2pool/entrypoint.sh" --wallet=4MoneroPayout --merge-mine=tari://172.28.0.27:18142 12TariPayout 2>&1 | sed -n 's/^\[p2pool-entrypoint\] launching: //p')" "p2pool --wallet=[redacted] --merge-mine=tari://172.28.0.27:18142 [redacted]"
 
+echo "== p2pool entrypoint drops the merge-mine triple when tari.mode is off (#1855) =="
+# tari.mode: off is opt-in Tari for 2.0 — no Tari surface at all, so p2pool must launch with no
+# --merge-mine, no Tari gRPC URL and no Tari wallet argument. Compose still appends the fixed
+# triple unconditionally (it can't drop a command item conditionally); the entrypoint strips it.
+off_out=$(PATH="$PE:$PATH" TARI_MODE=off bash "$ROOT/build/p2pool/entrypoint.sh" --host 172.28.0.26 --merge-mine tari://172.28.0.27:18142 12TariPayout --stratum 0.0.0.0:3333 2>&1)
+assert_not_contains "TARI_MODE=off → no --merge-mine flag" "$off_out" "ARG=[--merge-mine]"
+assert_not_contains "TARI_MODE=off → no Tari gRPC URL" "$off_out" "ARG=[tari://172.28.0.27:18142]"
+assert_not_contains "TARI_MODE=off → no Tari wallet arg" "$off_out" "ARG=[12TariPayout]"
+assert_contains "TARI_MODE=off → the surrounding monero args survive" "$off_out" "ARG=[--host]"
+assert_contains "TARI_MODE=off → --stratum survives" "$off_out" "ARG=[0.0.0.0:3333]"
+# Control: TARI_MODE unset (today's default — nothing renders it yet) leaves the triple untouched,
+# so the assertions above can't pass by the stub simply never seeing --merge-mine at all.
+on_out=$(PATH="$PE:$PATH" bash "$ROOT/build/p2pool/entrypoint.sh" --host 172.28.0.26 --merge-mine tari://172.28.0.27:18142 12TariPayout --stratum 0.0.0.0:3333 2>&1)
+assert_contains "TARI_MODE unset → --merge-mine survives" "$on_out" "ARG=[--merge-mine]"
+assert_contains "TARI_MODE unset → Tari gRPC URL survives" "$on_out" "ARG=[tari://172.28.0.27:18142]"
+assert_contains "TARI_MODE unset → Tari wallet arg survives" "$on_out" "ARG=[12TariPayout]"
+
 echo "== unit: monero_prune_flag maps prune bool -> 1/0, honouring explicit false (#294) =="
 # render_env + preflight both size disk off this flag; an explicit prune:false must yield 0, not the
 # pruned default of 1. Missing config falls back to pruned (1).

@@ -20,6 +20,28 @@ set -euo pipefail
 # node RPC/ZMQ then stay DIRECT (socat is a plain TCP forward, not p2pool's proxy) while the
 # sidechain P2P still rides --socks5 over Tor. The socat hops (loopback -> node) are intra-stack,
 # allowed by the #270 firewall (subnet -> 172.16/12).
+# tari.mode: off (#1855) — Tari merge-mining is opt-in for 2.0, and Compose can't drop a command
+# item conditionally, so the fixed `--merge-mine tari://... WALLET` triple docker-compose.yml
+# always appends gets stripped HERE, before anything below ever sees $@. Bare-flag form only,
+# matching what compose actually emits; the everything-untouched case (TARI_MODE unset or any
+# other value) is the default so a pre-#1855 compose file lands on this entrypoint unchanged.
+if [ "${TARI_MODE:-}" = "off" ]; then
+    _args=()
+    _skip=0
+    for _a in "$@"; do
+        if [ "$_skip" -gt 0 ]; then
+            _skip=$((_skip - 1))
+            continue
+        fi
+        if [ "$_a" = "--merge-mine" ]; then
+            _skip=2
+            continue
+        fi
+        _args+=("$_a")
+    done
+    set -- "${_args[@]}"
+fi
+
 if printf '%s' "${P2POOL_FLAGS:-}" | grep -q -- '--socks5'; then
     _node="" _rpc="18081" _zmq="18083" _prev=""
     for _a in "$@"; do
