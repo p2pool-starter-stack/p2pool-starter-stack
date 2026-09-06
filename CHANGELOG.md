@@ -58,9 +58,9 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
   ([#1558](https://github.com/p2pool-starter-stack/pithead/issues/1558)). Worker Inspect is prefilled from the rig's own configuration ([#1235](https://github.com/p2pool-starter-stack/pithead/issues/1235)), and each
   node card says whether that node runs locally or remotely ([#1040](https://github.com/p2pool-starter-stack/pithead/issues/1040)). The XvB decision table is
   rebuilt as per-tier blocks ([#1316](https://github.com/p2pool-starter-stack/pithead/issues/1316)).
-- **The boot menu names what the machine already is, and offers "Set up again" ([#1318](https://github.com/p2pool-starter-stack/pithead/issues/1318), [#1838](https://github.com/p2pool-starter-stack/pithead/issues/1838)).**
-  A set-up-again boot opens the wizard beside the saved role, with the machine's rig data kept and
-  offered back.
+- **The boot menu says what each entry boots, and offers "Set up again" ([#1318](https://github.com/p2pool-starter-stack/pithead/issues/1318), [#1838](https://github.com/p2pool-starter-stack/pithead/issues/1838)).**
+  A set-up-again boot opens the setup page beside the saved role; the page opens by naming what the
+  machine already is, with its rig data kept and offered back.
 - **An appliance rig mints its own control token and shows it once ([#1836](https://github.com/p2pool-starter-stack/pithead/issues/1836)),** beside the
   address to adopt it at; it serves the sister feed and pins control to its coordinator.
 - **`pithead doctor --json` and `pithead support-bundle`:** a machine-readable doctor report, and a
@@ -88,7 +88,8 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
 
 - **The two 1.x configuration aliases ([#1832](https://github.com/p2pool-starter-stack/pithead/issues/1832)).** `dashboard.workers[]` is `workers.list[]`, and
   `xmrig_proxy.{enabled,url,donor_id}` is `xvb.*`. A 1.x configuration is migrated in place once, the
-  first time 2.0.0 reads it; after that the old names are unknown to the product.
+  first time 2.0.0 reads it; after that the old names are unknown to the product. A configuration that
+  sets an old name and its replacement to different values is refused.
 
 ### Fixed
 
