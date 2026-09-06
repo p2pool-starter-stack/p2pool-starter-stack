@@ -929,7 +929,7 @@ button sits next to the Simple/Advanced toggle whether or not the channel is on;
 view explains how to turn it on and nothing else.
 
 One editing surface: the form on top and, beneath it, a collapsed **Advanced** pane holding
-the configuration this page can change — both live views of a single candidate. Editing
+the configuration this page sends — both live views of a single candidate. Editing
 a field rewrites the pane; editing the pane refills the fields; what the pane shows is
 byte-for-byte what Save previews, apart from the developer-only keys named below, which the
 machine keeps and this page never touches. (This is the setup wizard's pattern — the first page and

@@ -389,7 +389,7 @@ export class ConfigView extends Component {
   // upload); it shows byte-for-byte what Save previews, minus the hidden paths (#1850).
   renderJson(editText, jsonError, busy) {
     return html`<details class="card config-section">
-        <summary><strong>Advanced</strong> — the configuration this page can change</summary>
+        <summary><strong>Advanced</strong> — the configuration this page sends</summary>
         <p class="text-muted text-xs">Editing a field above updates it; editing here directly
         wins. Set secrets appear as <code>__secret__</code> markers and stay unchanged unless
         you replace them. Developer-only settings are not listed and are left exactly as they
