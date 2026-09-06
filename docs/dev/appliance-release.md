@@ -311,7 +311,8 @@ holds a Pithead `data` partition. Expected: listed as "reinstall, keeps existing
 and `/data` survives with its contents. *This is the one that costs a user days of
 re-syncing if it is wrong.*
 
-**M6 — configure by paste.** Complete the wizard using copy/paste for both addresses.
+**M6 — configure by paste.** Answer **yes** to merge-mining so the Tari address is asked at
+all, then complete the wizard using copy/paste for both addresses.
 Confirm a pasted **subaddress** (`8…`) is rejected with an explanation before submitting.
 Expected: the stack provisions and the dashboard comes up.
 

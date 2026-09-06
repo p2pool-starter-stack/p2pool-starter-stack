@@ -19,6 +19,7 @@ import {
 import { Component, html, render } from "./preact.mjs";
 import { rigCardFields, rigCardNote } from "./rigcardlogic.mjs";
 import { savedRoleOrSetup } from "./savedrole.mjs";
+import { TariSection, tariAnswer, XvbField } from "./wizardmining.mjs";
 import { Err, Field, Note } from "./wizardparts.mjs";
 
 // The simple questions, each bound to its config path. Conditional blocks name the field that
@@ -39,6 +40,7 @@ const FIELDS = {
   tariRemoteGrpc: { path: "tari.remote.grpc_port" },
   pool: { path: "p2pool.pool" },
   localMiner: { path: "local_miner.enabled" },
+  xvb: { path: "xvb.enabled" },
   clearnetSync: { path: "monero.clearnet_initial_sync" },
   healthchecks: { path: "healthchecks.ping_url" },
   telegramToken: { path: "telegram.bot_token" },
@@ -589,7 +591,7 @@ export class WizardApp extends Component {
     const addr = classifyMoneroAddress(v("moneroWallet"));
     const tg = telegramPairReady(v("telegramToken"), v("telegramChat"));
     const remoteMonero = v("moneroMode") === "remote";
-    const remoteTari = v("tariMode") === "remote";
+    const tariMode = tariAnswer(v("tariMode"));
     const { installer, disks, chosen, confirm, wipe, dataWiped } = this.state;
     // The select is stored for a rig and read out of the config for the two coordinators.
     const role = this.state.role || (v("localMiner") ? "both" : "pithead");
@@ -660,8 +662,8 @@ export class WizardApp extends Component {
               diskPicked &&
               !keepEverything &&
               !rig &&
-              html`<h3>Payout addresses</h3>
-            <${Note}>Paste these — they are far too long to type, and a typo pays a stranger.<//>
+              html`<h3>Payout address</h3>
+            <${Note}>Paste it — it is far too long to type, and a typo pays a stranger.<//>
             <${Field} label="Monero payout address">
                 <input class="wizard-mono" value=${v("moneroWallet") || ""} onInput=${on("moneroWallet")}
                     autocomplete="off" autocapitalize="off" spellcheck=${false}
@@ -670,12 +672,6 @@ export class WizardApp extends Component {
             <p class=${addr.kind === "ok" || addr.kind === "empty" || addr.kind === "partial" ? "text-muted" : "c-bad"}>
                 ${addr.message}
             </p>
-            <${Field} label="Tari payout address">
-                <input class="wizard-mono" value=${v("tariWallet") || ""} onInput=${on("tariWallet")}
-                    autocomplete="off" autocapitalize="off" spellcheck=${false} required />
-            <//>
-            <${Note}>Merge-mining earns Tari from the same work that mines Monero — this stack
-            always does both, so it needs both addresses.<//>
 
             <h3>Monero node</h3>
             <${Field} label="Where does Monero data come from?">
@@ -710,28 +706,7 @@ export class WizardApp extends Component {
                 : null
             }
 
-            <h3>Tari node</h3>
-            <${Field} label="Where does Tari data come from?">
-                <select value=${remoteTari ? "remote" : "local"} onChange=${on("tariMode")}>
-                    <option value="local">Run the bundled node on this machine (default)</option>
-                    <option value="remote">Use a Tari node I already run</option>
-                </select>
-            <//>
-            ${
-              remoteTari &&
-              html`<div class="wizard-when">
-                <${Field} label="Node host">
-                    <input value=${v("tariRemoteHost") || ""} onInput=${on("tariRemoteHost")}
-                        placeholder="192.168.1.10 or my-node.local" autocomplete="off" spellcheck=${false} />
-                <//>
-                <${Field} label="gRPC port">
-                    <input value=${v("tariRemoteGrpc") ?? 18142} onInput=${on("tariRemoteGrpc")}
-                        inputmode="numeric" pattern="[0-9]+" />
-                <//>
-                <${Note}>An IP or a hostname both work. Only over a network you trust — this
-                connection is not encrypted.<//>
-            </div>`
-            }
+            <${TariSection} answer=${tariMode} v=${v} on=${on} />
 
             
             <h3>Mining</h3>
@@ -759,6 +734,7 @@ export class WizardApp extends Component {
                 CPU governor, memory reservations — which is exactly what a dedicated
                 appliance is for.<//>`
             }
+            <${XvbField} v=${v} on=${on} />
 
             <h3>First sync</h3>
             <${Field} label="Downloading the chain the first time">
@@ -816,9 +792,12 @@ export class WizardApp extends Component {
                         <option value="false">Full — about 320 GB (only if you need the whole chain)</option>
                     </select>
                 <//>
-                <${Note}>A local Tari node adds about 170 GB on top. Under roughly 350 GB of
-                disk, pruned Monero plus a ${" "}<em>remote</em>${" "}Tari node is the
-                combination that fits.<//>`
+                ${
+                  tariMode !== "off" &&
+                  html`<${Note}>A local Tari node adds about 170 GB on top. Under roughly 350 GB
+                    of disk, pruned Monero plus a ${" "}<em>remote</em>${" "}Tari node is the
+                    combination that fits.<//>`
+                }`
                 }
                 <${Field} label="Healthchecks.io ping URL">
                     <input value=${v("healthchecks") || ""} onInput=${on("healthchecks")}
