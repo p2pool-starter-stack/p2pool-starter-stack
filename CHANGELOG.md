@@ -9,7 +9,7 @@ Pithead ships as **one product, one version** — the version lives in the top-l
 [`VERSION`](VERSION) file and every released image is tagged with it. Releases are cut
 per the process in [`docs/dev/releasing.md`](docs/dev/releasing.md).
 
-## [2.0.0] - 2026-09-04
+## [2.0.0] - 2026-09-06
 
 Pithead 2.0.0 is the first release of **Pithead OS**, the appliance: a bootable image that
 installs itself on a machine you dedicate to it, is set up from a browser, and updates as one
@@ -49,7 +49,7 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
   can grow past ([#1103](https://github.com/p2pool-starter-stack/pithead/issues/1103), [#1724](https://github.com/p2pool-starter-stack/pithead/issues/1724)); the CPU governor is set to performance; a hardware watchdog resets a
   box whose kernel or init has hung, with nobody present. The Tor-only egress firewall is enforced under the
   appliance's own container engine, and IPv6 fails closed. The mining-rig role ships RigForge
-  v1.16.0.
+  v1.17.0 ([#1826](https://github.com/p2pool-starter-stack/pithead/issues/1826)).
 - **Service Diagnostics in the dashboard ([#913](https://github.com/p2pool-starter-stack/pithead/issues/913), [#943](https://github.com/p2pool-starter-stack/pithead/issues/943)):** the host doctor's detail and a
   bounded, redacted tail of each service's log, without a shell.
 - **The dashboard says where a rig's running configuration came from ([#1345](https://github.com/p2pool-starter-stack/pithead/issues/1345)),** persists the
@@ -58,6 +58,11 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
   ([#1558](https://github.com/p2pool-starter-stack/pithead/issues/1558)). Worker Inspect is prefilled from the rig's own configuration ([#1235](https://github.com/p2pool-starter-stack/pithead/issues/1235)), and each
   node card says whether that node runs locally or remotely ([#1040](https://github.com/p2pool-starter-stack/pithead/issues/1040)). The XvB decision table is
   rebuilt as per-tier blocks ([#1316](https://github.com/p2pool-starter-stack/pithead/issues/1316)).
+- **The boot menu names what the machine already is, and offers "Set up again" ([#1318](https://github.com/p2pool-starter-stack/pithead/issues/1318), [#1838](https://github.com/p2pool-starter-stack/pithead/issues/1838)).**
+  A set-up-again boot opens the wizard beside the saved role, with the machine's rig data kept and
+  offered back.
+- **An appliance rig mints its own control token and shows it once ([#1836](https://github.com/p2pool-starter-stack/pithead/issues/1836)),** beside the
+  address to adopt it at; it serves the sister feed and pins control to its coordinator.
 - **`pithead doctor --json` and `pithead support-bundle`:** a machine-readable doctor report, and a
   redacted bundle for a support request that masks wallet and onion addresses as well as
   credentials ([#1585](https://github.com/p2pool-starter-stack/pithead/issues/1585)).
@@ -75,6 +80,15 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
 - **A failed setup keeps the machine's existing configuration ([#1059](https://github.com/p2pool-starter-stack/pithead/issues/1059))** rather than discarding
   it, and the CLI degrades instead of aborting when the optional dashboard auth key is absent
   ([#1246](https://github.com/p2pool-starter-stack/pithead/issues/1246)).
+- **The setup wizard opens on Pithead + RigForge, and the miner select is the switch ([#1830](https://github.com/p2pool-starter-stack/pithead/issues/1830)).**
+- **The dashboard's Configuration view never shows `ssh.*` and never changes it ([#1850](https://github.com/p2pool-starter-stack/pithead/issues/1850)),** and
+  its Advanced pane says what it does with a key.
+
+### Removed
+
+- **The two 1.x configuration aliases ([#1832](https://github.com/p2pool-starter-stack/pithead/issues/1832)).** `dashboard.workers[]` is `workers.list[]`, and
+  `xmrig_proxy.{enabled,url,donor_id}` is `xvb.*`. A 1.x configuration is migrated in place once, the
+  first time 2.0.0 reads it; after that the old names are unknown to the product.
 
 ### Fixed
 
@@ -107,6 +121,8 @@ otherwise. The appliance guide is [`docs/appliance.md`](docs/appliance.md).
   failed poll ([#1637](https://github.com/p2pool-starter-stack/pithead/issues/1637)); Monero clients validate the shape of a response body ([#1592](https://github.com/p2pool-starter-stack/pithead/issues/1592)); a
   full history window no longer fails to settle who changed a configuration ([#1369](https://github.com/p2pool-starter-stack/pithead/issues/1369)), and a
   failed history read is no longer shown as another dashboard's change ([#1409](https://github.com/p2pool-starter-stack/pithead/issues/1409)).
+- **A reinstall's pre-fill drops the login but keeps the switches that need it ([#1846](https://github.com/p2pool-starter-stack/pithead/issues/1846)),** and a
+  rig running from the USB stick is no longer told the disk is being copied ([#1835](https://github.com/p2pool-starter-stack/pithead/issues/1835)).
 - **The confirm countdown for settings applied from the stick stays bounded when a login prompt
   contends for the console ([#1823](https://github.com/p2pool-starter-stack/pithead/issues/1823));** the console read that could park forever now runs under a
   timeout, at the cost of a countdown up to twice its length on a contended console.
