@@ -1015,6 +1015,9 @@ function DashboardView({
 }) {
   const advanced = ui.view === "advanced";
   const configView = ui.view === "config";
+  // Backup is its own view, not a card below the config editor (#1854): an operator handed a
+  // working machine has to be able to find "take a backup" without reading the editor first.
+  const backupView = ui.view === "backup";
   // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
   // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
   // context as reference at the bottom — "mine" first, "the world" last.
@@ -1030,22 +1033,29 @@ function DashboardView({
     <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
             <div class="toggle-group" role="group" aria-label="Dashboard view">
-                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} aria-pressed=${!advanced && !configView}
+                <button class=${"btn-toggle" + (!advanced && !configView && !backupView ? " active" : "")} aria-pressed=${!advanced && !configView && !backupView}
                     title="Chart, workers and the headline numbers" onClick=${() => onView("simple")}>Simple</button>
                 <button class=${"btn-toggle" + (advanced ? " active" : "")} aria-pressed=${advanced}
                     title="Every stats card, calculators and diagnostics" onClick=${() => onView("advanced")}>Advanced</button>
                 <button class=${"btn-toggle" + (configView ? " active" : "")} aria-pressed=${configView}
                     title="View or edit the stack configuration" onClick=${() => onView("config")}>Configuration</button>
+                <button class=${"btn-toggle" + (backupView ? " active" : "")} aria-pressed=${backupView}
+                    title="Export an encrypted copy of this machine's configuration and secrets" onClick=${() => onView("backup")}>Backup</button>
             </div>
         </div>
         <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />
         ${
           configView
-            ? html`<div class="card-stack"><${ConfigView} appliance=${!!state.os_update} /><${BackupPanel} enabled=${state.control_enabled} /><${DiagnosticsPanel} enabled=${state.control_enabled} /><${SecurityPanel} /></div>`
+            ? html`<div class="card-stack"><${ConfigView} appliance=${!!state.os_update} /><${DiagnosticsPanel} enabled=${state.control_enabled} /><${SecurityPanel} /></div>`
             : null
         }
         ${
-          configView
+          backupView
+            ? html`<div class="card-stack"><${BackupPanel} enabled=${state.control_enabled} appliance=${!!state.os_update} /></div>`
+            : null
+        }
+        ${
+          configView || backupView
             ? null
             : html`
         <div class="grid">

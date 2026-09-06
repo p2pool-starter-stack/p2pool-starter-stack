@@ -1211,6 +1211,24 @@ daemon, use the support bundle or the console.
 If you pick a service the host will not read logs for, the host refuses and the panel shows its
 reason as-is rather than guessing at one.
 
+## Backup view
+
+**Backup** is its own entry in the toggle above the chart, beside Simple, Advanced and
+Configuration ([#1854](https://github.com/p2pool-starter-stack/pithead/issues/1854)). It used to
+sit below the config editor, where an operator handed a working machine had to scroll past a form
+they had no reason to open before finding it. The card itself is unchanged — one button, one
+archive, one passphrase shown once — and
+[Backing up your data](appliance.md#backing-up-your-data) covers what it produces.
+
+The card names both halves a restore needs: the encrypted archive, and the kit that carries the
+passphrase opening it. Neither half is any use without the other, and setting a machine up later
+asks for that same pair.
+
+On the appliance the card drops the host-side remedy the other builds print. Turning the control
+channel back on means editing `config.json` and running `./pithead apply`, and an appliance
+operator has no shell for either, so there the card says backup returns with the control channel
+rather than naming a file they cannot open.
+
 ## Upgrading from the dashboard
 
 With `dashboard.control.enabled: true` (the same flag as the Configuration view) and a newer

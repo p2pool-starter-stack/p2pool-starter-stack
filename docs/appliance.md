@@ -431,7 +431,7 @@ another computer instead:
 
 The machine holds state a resync cannot rebuild: your wallet settings, the Tor onion
 keys that give it its address, and the dashboard's history. There is no filesystem to
-copy from a shell-less box, so the dashboard's **Configuration → Backup** card exports it
+copy from a shell-less box, so the dashboard's **Backup** view exports it
 for you as one encrypted file.
 
 Click **Back up now** and the machine stops the stack, archives `config.json`, `.env`,
@@ -492,7 +492,7 @@ factory reset you asked for never shows this notice.
 Fresh flash, restore, done — if the machine is gone (dead disk, stolen, dropped), a backup
 taken beforehand provisions a replacement in one page, with nothing retyped.
 
-**Take a backup before you need it.** The dashboard's **Configuration → Backup** card is
+**Take a backup before you need it.** The dashboard's **Backup** view is
 the machine's own way to do that ([Backing up your data](#backing-up-your-data) above): the
 archive it downloads and the passphrase from its kit are exactly what restore asks for. The
 console works too — log in as `root` with the dashboard password and run:

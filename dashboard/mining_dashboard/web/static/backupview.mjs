@@ -128,6 +128,16 @@ export class BackupPanel extends Component {
 
   render() {
     if (!this.props.enabled) {
+      // The appliance has no shell and keeps the control channel on, so the host-CLI remedy below
+      // is advice its operator cannot act on (#1854). There, a quiet channel is a fault to wait
+      // out, not a setting to change — say that instead of naming a file they cannot open.
+      if (this.props.appliance) {
+        return html`<div class="card">
+            <h3>Backup</h3>
+            <p>Backup is unavailable while the control channel is not answering. It returns with
+            the channel; nothing on this machine has to be changed by hand.</p>
+        </div>`;
+      }
       return html`<div class="card">
           <h3>Backup</h3>
           <p>Backup export is off with the rest of the control channel. To enable it, set
@@ -146,6 +156,9 @@ export class BackupPanel extends Component {
         <p>Export an encrypted archive of config.json, .env, the Tor onion-service keys, and the
         dashboard database — the state a dead box takes with it. Blockchains are excluded; they
         re-sync.</p>
+        <p class="text-muted text-xs">Keep both halves: the archive, and the kit that carries the
+        passphrase opening it. Neither is any use without the other, and setting a machine up
+        later asks for this same pair.</p>
         <button class="btn-toggle active" disabled=${phase !== "idle"}
                 onClick=${() => this.setState({ phase: "confirm" })}>Back up now</button>
     </div>${modal}`;
