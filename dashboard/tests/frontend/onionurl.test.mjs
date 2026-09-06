@@ -54,10 +54,12 @@ test('client authorisation is explained beside the URL when it is on (#1853)', (
     // The WORDS, not the markup. htm strips a whitespace run containing a newline from each end of
     // a static text chunk, so a line break before the <span> renders "to,pithead onion-client-key"
     // — a defect both assertions above stay green on, because each matches one side of the join.
-    assert.match(
-        on.replace(/<[^>]*>/g, ''),
-        /On a machine you can log in to, pithead onion-client-key prints it\./,
-    );
+    // This drops the tags and puts NOTHING in their place, which is the load-bearing half: the
+    // sibling in xvbview.test.mjs substitutes a space, and a space would re-join "to,<span>pithead"
+    // into readable text and pass over the very defect this asserts against. Not a sanitiser — the
+    // result is read by assert.match and never reaches a DOM.
+    const words = on.split(/<[^>]*>/).join('');
+    assert.match(words, /On a machine you can log in to, pithead onion-client-key prints it\./);
     // And is absent when it is off — the same render path, one boolean apart.
     assert.doesNotMatch(withOnion({ url: URL, client_auth: false }), /Client authorisation/);
 });
