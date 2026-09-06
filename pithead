@@ -8197,13 +8197,13 @@ render_env() {
     [ -z "$xvb_donation_level" ] && xvb_donation_level="auto"
 
     # How much Tari blocks the stack (#31/#35/#51/#897). monerod is required and not
-    # configurable (a monerod outage always rejects workers; the miner always waits for
-    # monerod's sync). A Tari outage never rejects workers, regardless of this flag — p2pool
-    # keeps mining Monero through it. tari_required (default true) still decides the rest:
-    # the miner waits for Tari's sync too, and a Tari-only sync drives full Sync Mode. false =
-    # non-blocking Tari for those two.
+    # configurable. A Tari outage never rejects workers regardless of this flag — p2pool keeps
+    # mining Monero through it — but tari_required (default true) makes the miner wait for Tari's
+    # sync, and the dashboard's sync gate STOPS p2pool and xmrig-proxy while it waits. TARI_MODE
+    # off therefore decides this outright (#1855): there is no Tari node to wait for, and a
+    # machine that declined merge-mining must still mine Monero. local/remote keep the override.
     local tari_required
-    tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
+    tari_required=$(jq -r --arg m "$TARI_MODE" 'if $m == "off" then "false" elif .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
     # Opt-in fail-closed miner hold on an unrecoverable dashboard health failure (#490), default
     # false. The dashboard is an observability layer, not the mining datapath, so the default is
@@ -8419,7 +8419,7 @@ PAYOUT_CONFIRM_ENABLED=$PAYOUT_CONFIRM_ENABLED
 WALLET_RPC_USERNAME=wallet
 WALLET_RPC_PASSWORD=$WALLET_RPC_PASSWORD
 MONERO_WALLET_RPC_URL=http://127.0.0.1:18082/json_rpc
-TARI_WALLET_ADDRESS=$TARI_WALLET
+TARI_WALLET_ADDRESS=${TARI_WALLET:-your_tari_wallet_address}
 TARI_VIEW_KEY=$TARI_VIEW_KEY
 TARI_SPEND_PUBLIC_KEY=$TARI_SPEND_PUBLIC_KEY
 TARI_WALLET_PASSWORD=$TARI_WALLET_PASSWORD
@@ -9551,7 +9551,7 @@ preflight_resources() {
     # goes remote. check_disk_grouped skips empty dirs.
     local pre_mono_dir="${MONERO_DIR:-}" pre_tari_dir="${TARI_DIR:-}"
     [ "$MONERO_MODE" == "remote" ] && pre_mono_dir=""
-    [ "$TARI_MODE" == "remote" ] && pre_tari_dir=""
+    [ "$TARI_MODE" != "local" ] && pre_tari_dir=""
     check_disk_grouped preflight "$prune" \
         "$pre_mono_dir" "$pre_tari_dir" "${P2POOL_DIR:-}" "${DASHBOARD_DIR:-}" "${TOR_DATA_DIR:-}"
 

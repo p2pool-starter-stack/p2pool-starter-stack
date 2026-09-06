@@ -27,6 +27,7 @@ out="$(cd "$V" && PATH="$V/bin:$PATH" ./pithead apply -y 2>&1)"
 assert_rc "a config with no tari.mode applies cleanly" "$?" "0"
 assert_eq "missing tari.mode still means local" "$(run_sourced "$V" env_get_file "$V/.env" TARI_MODE)" "local"
 assert_contains "missing tari.mode still starts the bundled node" "$(run_sourced "$V" env_get_file "$V/.env" COMPOSE_PROFILES)" "local_tari"
+assert_eq "missing tari.mode leaves Tari BLOCKING, exactly as 1.x did" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "true"
 
 # (1b) The SIBLING that makes (1) narrow: "off" is the ONLY value that excuses a missing Tari payout
 # address. The gate reads $TARI_MODE, so a default that ever drifted to "off" would let a config
@@ -53,16 +54,32 @@ esac
 # omits tari.wallet_address entirely and applied cleanly, which is the assertion; this names it.
 ok "tari.mode off does not require a tari.wallet_address (config in (2) has none)"
 
-# (4) The two values compose must still be able to interpolate. Nothing consumes them when off —
-# the tari service is profile-gated away and p2pool's entrypoint drops the merge-mine triple from
-# argv — but compose resolves EVERY interpolation in the file at parse time, profiled-off services
-# included, so an empty value here fails `compose up` outright rather than at startup.
+# (4) The three values that must never render EMPTY when off. The tari service is profile-gated
+# away, but compose resolves EVERY interpolation in the file at parse time, profiled-off services
+# included, so an empty value fails `compose up` outright rather than at startup.
+# TARI_WALLET_ADDRESS fails worse and more quietly. p2pool's `--merge-mine tari://<addr> <wallet>`
+# triple is one unquoted line in the appliance's Quadlet unit (36-quadlet-units.sh:233), and
+# systemd Exec= splits on whitespace and emits no empty word — so an empty wallet does not pass an
+# empty argument, it VANISHES, and p2pool reads the NEXT flag as its payout address. That is an
+# argv shift, not a bad value. #1903 will drop the triple when off and retire this; it is not
+# landed, so a non-empty placeholder is the guard until it is.
 [ -n "$(run_sourced "$V" env_get_file "$V/.env" TARI_GRPC_ADDRESS)" ] &&
     ok "tari.mode off still renders a TARI_GRPC_ADDRESS placeholder" ||
     bad "tari.mode off still renders a TARI_GRPC_ADDRESS placeholder" "empty"
 [ -n "$(run_sourced "$V" env_get_file "$V/.env" TARI_MEM_LIMIT)" ] &&
     ok "tari.mode off still renders a TARI_MEM_LIMIT placeholder" ||
     bad "tari.mode off still renders a TARI_MEM_LIMIT placeholder" "empty"
+[ -n "$(run_sourced "$V" env_get_file "$V/.env" TARI_WALLET_ADDRESS)" ] &&
+    ok "tari.mode off still renders a TARI_WALLET_ADDRESS placeholder" ||
+    bad "tari.mode off still renders a TARI_WALLET_ADDRESS placeholder" "empty — p2pool's merge-mine argv shifts"
+
+# (4b) A machine that declined merge-mining must still MINE. TARI_REQUIRED drives the dashboard's
+# sync gate, which stops p2pool and xmrig-proxy until it is satisfied; with no Tari node running,
+# the Tari leg never reports synced, so a default-true flag holds an off machine at zero hashrate
+# forever — the exact inverse of what its operator asked for. The config in (2) sets no
+# dashboard.tari_required, so this reads the DERIVED value and not an echo of an explicit one.
+# (1) above is the control: the same assertion reads "true" on a machine that did not decline.
+assert_eq "tari.mode off makes Tari non-blocking, so the stack still mines Monero" "$(run_sourced "$V" env_get_file "$V/.env" TARI_REQUIRED)" "false"
 
 # (5) A view key with tari.mode off is refused, and the message names the mode that IS set. Payout
 # confirmation scans the LOCAL Tari node; with no node at all there is nothing to scan, and the old
