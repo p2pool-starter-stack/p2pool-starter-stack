@@ -1,6 +1,6 @@
 // The host's remote-node probe report, rendered (#1889). ONE module, because the same report
 // reaches an operator on two surfaces — the wizard's setup screen, and the Configuration view's
-// preview once the control channel carries a probe of its own — and seven failure reasons worded
+// preview once the control channel carries a probe of its own — and six failure reasons worded
 // two ways is exactly how two surfaces come to disagree about what a failure means.
 //
 // IT GATES NOTHING. `preflight_remote_nodes` refuses to provision and hands the form back
@@ -96,10 +96,17 @@ function summariseRow(p) {
 export const NodeProbeReport = ({ report, children }) => {
   const s = probeSummary(report);
   if (!s) return null;
+  // The headline has to agree with the skipped paragraph below it. `ok` alone would put a green
+  // "every check passed" over a red "2 of the 3 produced no result" — unreachable from the shipped
+  // producer, whose `ok` already implies `probed == configured`, but this is precisely the
+  // malformed report `skipped` exists to survive, and an endpoint that produced no row was not
+  // verified. The CONSEQUENCE below deliberately stays on `s.ok`: a host that published `ok: true`
+  // DID proceed, so telling the operator setup had stopped would be the opposite lie.
+  const passed = s.ok && s.skipped === 0;
   return html`<div class="card">
-    <h3 class=${s.ok ? "c-ok" : "c-bad"}>
+    <h3 class=${passed ? "c-ok" : "c-bad"}>
       ${
-        s.ok
+        passed
           ? "Every node check this configuration asks for passed."
           : "A node this machine was told to use could not be verified."
       }

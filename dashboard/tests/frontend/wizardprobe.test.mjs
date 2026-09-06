@@ -205,6 +205,22 @@ test("skipped: the gap is named on screen, and stays silent when there is none",
   assert.doesNotMatch(card(report([RPC, ZMQ])), /checks this configuration asks for/);
 });
 
+test("skipped: a gap contradicts the headline, whatever the verdict says", () => {
+  // `ok: true` beside a gap is unreachable from the shipped producer — its `ok` already implies
+  // `probed == configured` — but it is exactly the malformed report `skipped` exists to survive,
+  // and the two lines are computed independently. A green "every check passed" above a red "2 of
+  // the 3 produced no result" is one card telling the operator both things at once.
+  const out = card(report([RPC], { ok: true, configured: 3 }));
+  assert.doesNotMatch(out, /Every node check this configuration asks for passed/);
+  assert.match(out, /2 of the 3 checks/);
+  // The consequence still keys on the verdict, not on the gap: this host published `ok: true` and
+  // DID proceed, so claiming setup had stopped would be the opposite lie.
+  assert.doesNotMatch(card(report([RPC], { ok: true, configured: 3 }), "Setup does not continue."), /Setup does not continue/);
+  // The two controls that keep this narrow: a clean pass still says so, and the gap is what moved
+  // the headline — not the mere presence of the paragraph.
+  assert.match(card(report([RPC, ZMQ])), /Every node check this configuration asks for passed/);
+});
+
 // --- rendered -----------------------------------------------------------------------------------
 
 test("rendered: a failure names the endpoint, the address, the reason and the host's detail", () => {
