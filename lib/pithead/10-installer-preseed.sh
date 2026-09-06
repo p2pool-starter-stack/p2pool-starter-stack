@@ -273,27 +273,32 @@ zmq_greeting_ok() { # <hex>; rc 0 only for a well-formed ZMTP >=3 greeting
     [ "${#g}" -ge 24 ] && [ "${g:0:2}" = "ff" ] && [ "${g:18:2}" = "7f" ] && [ "$((16#${g:20:2}))" -ge 3 ]
 }
 
-zmq_endpoint_greets() { # <host> <port>; rc 0 only for a ZMTP >=3 peer
-    local g
+zmq_endpoint_greets() { # <host> <port>; rc 0 only for a ZMTP >=3 peer; sets NODE_PROBE_REASON
+    local g rc=0
     g=$(timeout 5 bash -c '
         exec 3<>/dev/tcp/"$0"/"$1" 2>/dev/null || exit 1
         { printf "\xff\x00\x00\x00\x00\x00\x00\x00\x00\x7f\x03\x01NULL"; head -c 48 /dev/zero; } >&3
-        head -c 64 <&3 | od -An -v -tx1 | tr -d " \n"' "$1" "$2" 2>/dev/null) || g=""
-    zmq_greeting_ok "$g"
+        head -c 64 <&3 | od -An -v -tx1 | tr -d " \n"' "$1" "$2" 2>/dev/null) || rc=$?
+    case "$rc" in
+    0) NODE_PROBE_REASON="protocol" ;;
+    124) NODE_PROBE_REASON="timeout" ;;
+    *) NODE_PROBE_REASON="refused" ;;
+    esac
+    [ "$rc" -eq 0 ] || return 1
+    zmq_greeting_ok "$g" || return 1
+    NODE_PROBE_REASON="ok"
 }
 
 # --- #1889: probe what the endpoint IS, not only that it answered ----------------------------
-# The dial proves a port ANSWERED and nothing more. On the ZMQ port that gap was already closed
-# (zmq_endpoint_greets speaks ZMTP at the peer); on the RPC port it was not, so a wrong service
-# on 18081 passed the whole preflight. get_info is monerod's own status method and
-# `.status == "OK"` is the well-formedness test the rest of the stack already uses
-# (21-doctor-stack-checks.sh:328), so this adds no new notion of "a real node".
-# A REAL LIMITATION, NAMED RATHER THAN HIDDEN: `monero.remote` carries no auth keys in
-# config.reference.json — only host, rpc_port, zmq_port — so this goes out UNAUTHENTICATED. A
-# remote node with RPC auth enabled answers 401, reported as `auth` and REFUSED, never passed: a
-# node we cannot authenticate to is a node we cannot verify.
-# Bounded twice on purpose: curl's own --max-time, and an outer `timeout` so the probe is capped
-# even if curl is missing or wedges before it arms its own timer.
+# The dial proves a port ANSWERED and nothing more. On the ZMQ port the gap was half closed:
+# zmq_endpoint_greets spoke ZMTP but reported a refused port and a wrong protocol alike, so it
+# now sets NODE_PROBE_REASON (declared below) to say which. On the RPC port nothing was checked
+# at all, so a wrong service on 18081 passed the whole preflight. get_info is monerod's own
+# status method and `.status == "OK"` the well-formedness test the rest of the stack already
+# uses (21-doctor-stack-checks.sh:328), so this adds no new notion of "a real node".
+# NAMED RATHER THAN HIDDEN: `monero.remote` has no auth keys, so this goes out UNAUTHENTICATED —
+# a node with RPC auth answers 401, reported as `auth` and REFUSED, never passed. Bounded twice:
+# curl's --max-time and an outer `timeout`, so a missing curl (127) or a wedge is still capped.
 NODE_PROBE_REASON=""
 monero_rpc_speaks() { # <host> <port>; rc 0 only for a monerod that answers get_info
     local body rc=0
@@ -303,6 +308,7 @@ monero_rpc_speaks() { # <host> <port>; rc 0 only for a monerod that answers get_
         7) NODE_PROBE_REASON="refused" ;;
         22) NODE_PROBE_REASON="auth" ;;
         28 | 124) NODE_PROBE_REASON="timeout" ;;
+        127) NODE_PROBE_REASON="missing-tool" ;;
         *) NODE_PROBE_REASON="unknown" ;;
         esac
         return 1
@@ -327,12 +333,7 @@ node_probe_one() { # <target> <host> <port> <checked> <detail-on-failure>; print
     t0=$(date +%s%N 2>/dev/null) || t0=0
     case "$checked" in
     rpc) monero_rpc_speaks "$host" "$port" || rc=1 ;;
-    zmq)
-        zmq_endpoint_greets "$host" "$port" || {
-            rc=1
-            NODE_PROBE_REASON="protocol"
-        }
-        ;;
+    zmq) zmq_endpoint_greets "$host" "$port" || rc=1 ;;
     *)
         timeout 5 bash -c "</dev/tcp/$host/$port" 2>/dev/null || {
             rc=1
@@ -346,21 +347,20 @@ node_probe_one() { # <target> <host> <port> <checked> <detail-on-failure>; print
     if [ "$rc" -ne 0 ]; then
         ok=false
         detail="$fail_detail"
-        # The reach failures keep the caller's message, which names the LAN-access switch. The
-        # two the RPC check can tell apart do NOT: saying "cannot reach" about a port that
-        # answered promptly sends the operator to check a network path that is fine, and it is
-        # the same class of dishonesty this issue exists to fix. Only `rpc` overrides, so the
-        # ZMQ leg keeps its own published-but-dead wording.
-        if [ "$checked" = "rpc" ]; then
-            case "$NODE_PROBE_REASON" in
-            protocol)
-                detail="$host:$port answered, but what is listening there does not speak monerod's RPC — the port is open and the service behind it is the wrong one. Check that this is the right host and RPC port for a Monero node."
-                ;;
-            auth)
-                detail="the node at $host:$port requires RPC authentication, and Pithead has nowhere to store remote-node credentials (monero.remote has no auth keys). It cannot verify this node, so it will not accept it — point it at a node that answers get_info unauthenticated on the LAN."
-                ;;
-            esac
-        fi
+        # The REACH failures keep the caller's message, which names the LAN-access switch. A
+        # failure the probe can name more precisely overrides it, on EITHER leg: "cannot reach"
+        # about a port that answered, and "it answered" about one that refused, are one defect.
+        case "$checked:$NODE_PROBE_REASON" in
+        rpc:protocol)
+            detail="$host:$port answered, but what is listening there does not speak monerod's RPC — the port is open and the service behind it is the wrong one. Check that this is the right host and RPC port for a Monero node."
+            ;;
+        rpc:auth)
+            detail="the node at $host:$port requires RPC authentication, and Pithead has nowhere to store remote-node credentials (monero.remote has no auth keys). It cannot verify this node, so it will not accept it — point it at a node that answers get_info unauthenticated on the LAN."
+            ;;
+        zmq:protocol)
+            detail="the remote Monero node at $host answers on ZMQ port $port but nothing there speaks ZMQ — a published container port with no publisher behind it answers a reachability check exactly like a live node does. Check that monerod is running with ZMQ enabled, and that zmq_lan_access is on if it is a Pithead host."
+            ;;
+        esac
     elif [ "$checked" = "connect" ]; then
         detail="$host:$port accepted a TCP connection; the protocol behind it was NOT checked"
     else
@@ -390,7 +390,7 @@ node_probe_report() { # <config-file>; prints {ok, configured, probed, probes:[.
         zmq=$(jq -r '.monero.remote.zmq_port // 18083' "$cfg")
         want=$((want + 2))
         rows="$rows$(node_probe_one monero "$host" "$port" rpc "cannot reach the remote Monero node at $host:$port — check the host, the port, and that the node allows LAN access (monero.rpc_lan_access / zmq_lan_access on a Pithead host)")"$'\n'
-        rows="$rows$(node_probe_one monero "$host" "$zmq" zmq "the remote Monero node at $host answers on ZMQ port $zmq but nothing there speaks ZMQ — a published container port with no publisher behind it answers a reachability check exactly like a live node does. Check that monerod is running with ZMQ enabled, and that zmq_lan_access is on if it is a Pithead host")"$'\n'
+        rows="$rows$(node_probe_one monero "$host" "$zmq" zmq "cannot reach the remote Monero node's ZMQ port at $host:$zmq — check the host, the port, and that the node allows LAN access (monero.zmq_lan_access on a Pithead host)")"$'\n'
     fi
     if [ "$(jq -r '.tari.mode // "local"' "$cfg")" = "remote" ]; then
         host=$(jq -r '.tari.remote.host // ""' "$cfg")
@@ -406,9 +406,9 @@ node_probe_report() { # <config-file>; prints {ok, configured, probed, probes:[.
 # sentence are derived from that one report — there is no second code path that could disagree
 # with what the page is shown. The prose contract is unchanged (rc 1 plus one line naming the
 # endpoint), so the wizard's call site and its existing assertions still hold.
-# The optional <spool-dir> is how the page gets the machine-readable half, and it is written on
-# the PASS path too: Tari's "answered, protocol not checked" IS a pass, and the page has to be
-# able to say that rather than showing an unqualified tick.
+# The optional <spool-dir> is where the machine-readable half lands, AHEAD OF ITS CONSUMER —
+# nothing reads node-probe.json at this head; the page that will is #1888. It is written on the
+# PASS path too: Tari's "answered, protocol not checked" IS a pass the page must be able to show.
 preflight_remote_nodes() { # <config-file> [spool-dir]
     local cfg="$1" spool="${2:-}" report
     report=$(node_probe_report "$cfg")
