@@ -2,7 +2,7 @@
 #
 # The browser-shaped wizard submit for phase_provision (#1846). Sourced by tests/os/run.sh.
 # What a person's browser sends is not the no-JS field form: wizard.mjs takes the page's own
-# served config (/api/state .config — the reference merged with the last attempt), sets the
+# served config (/api/wizard-state .config — the reference merged with the last attempt), sets the
 # operator's answers on the same paths the page uses, and POSTs it whole as `config=<JSON>`
 # beside `auth_mode=auto` (the recommended "generate a strong password for me"). The old leg
 # posted `monero_wallet=…&pool=…`, which build_config() turns into a config server-side, so the
@@ -21,7 +21,7 @@ provision_browser_submit() { # <ip> <jar> [field=value]...
     # head of the body — so the log discriminates a refusal from a timeout from a non-JSON page (#1932).
     local raw="" http="" crc=0 tries=0
     while [ "$tries" -lt 6 ]; do
-        raw=$(curl -sSk -b "$jar" -m 5 -w '\n%{http_code}' "https://$ip/api/state" 2>/dev/null)
+        raw=$(curl -sSk -b "$jar" -m 5 -w '\n%{http_code}' "https://$ip/api/wizard-state" 2>/dev/null)
         crc=$?
         http=${raw##*$'\n'}
         raw=${raw%$'\n'*}
@@ -49,5 +49,5 @@ provision_browser_submit() { # <ip> <jar> [field=value]...
 # The page's own error line, for a red that names the refusal instead of a timeout. Empty when
 # the page shows none (or cannot be reached).
 provision_page_error() { # <ip> <jar>
-    curl -sSk -b "$2" -m 5 "https://$1/api/state" 2>/dev/null | jq -r '.error // ""' 2>/dev/null
+    curl -sSk -b "$2" -m 5 "https://$1/api/wizard-state" 2>/dev/null | jq -r '.error // ""' 2>/dev/null
 }
