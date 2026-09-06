@@ -79,7 +79,10 @@ if [ -n "${PITHEAD_TEST_SSH_PUBKEY:-}" ] && [ -n "${PITHEAD_REGISTRY:-}" ] &&
     [ "$PITHEAD_REGISTRY" != "ghcr.io/p2pool-starter-stack" ]; then
     TEST_REGISTRY="$PITHEAD_REGISTRY"
     if [ -n "${PITHEAD_REGISTRY_CA:-}" ]; then
-        [ -s "$PITHEAD_REGISTRY_CA" ] || { echo "PITHEAD_REGISTRY_CA: $PITHEAD_REGISTRY_CA is not a readable file" >&2; exit 1; }
+        [ -s "$PITHEAD_REGISTRY_CA" ] || {
+            echo "PITHEAD_REGISTRY_CA: $PITHEAD_REGISTRY_CA is not a readable file" >&2
+            exit 1
+        }
         echo "==> debug build: the image will provision from $TEST_REGISTRY (TLS, CA $PITHEAD_REGISTRY_CA)"
     else
         echo "==> debug build: the image will provision from $TEST_REGISTRY (insecure for podman)"
