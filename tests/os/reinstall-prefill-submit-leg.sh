@@ -19,7 +19,7 @@
 # $1 = a disk holding a provisioned install (the reinstall leg's target); $DISK still holds the
 # installer image the restore leg booted from; ip/SERIAL/VM/HARNESS_WALLET from run.sh.
 phase_install_prefill_submit_leg() { # <target-disk>
-    local target_disk="$1" token="" tries=0 jar served scode handoff="" page_err=""
+    local target_disk="$1" token="" tries=0 jar scode handoff="" page_err=""
     info "pre-fill submit leg (#1846) — the previous machine's answers, submitted as a browser does"
     _ssh "systemctl poweroff" 2>/dev/null || true
     sleep 8
@@ -59,12 +59,14 @@ phase_install_prefill_submit_leg() { # <target-disk>
         return
     }
     # Fixture-works control: the page must be OFFERING the previous install's answers, or the
-    # candidate below is a blank form and the row cannot reach the #1846 path.
-    served=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/wizard-state" 2>/dev/null | jq -r '.config.monero.wallet_address // ""' 2>/dev/null)
-    case "$served" in
+    # candidate below is a blank form and the row cannot reach the #1846 path. The pre-fill is
+    # read off the disk before the page is served, so the first read carrying a wallet is the
+    # verdict; a red names the wallet it saw, or what the reads saw when none carried one (#1936).
+    wizard_state_poll "$ip" "$jar" '.config.monero.wallet_address // empty' || true
+    case "$WIZ_STATE" in
     "${HARNESS_WALLET:0:8}"*) ok "pre-fill submit leg: the page offers the previous install's answers (pre-fill armed)" ;;
     *)
-        bad "pre-fill submit leg: pre-fill NOT armed, the leg cannot reach the #1846 path (served wallet: ${served:-none})"
+        bad "pre-fill submit leg: pre-fill NOT armed, the leg cannot reach the #1846 path (served wallet: ${WIZ_STATE:-none; $WIZ_STATE_WHY})"
         rm -f "$jar"
         return
         ;;
