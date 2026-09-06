@@ -42,6 +42,7 @@ test('the appliance flag reaches the card, so it never prints a host-CLI remedy 
     const state = clone();
     state.os_update = { status: 'idle' }; // what makes App call this machine an appliance
     const out = renderApp({ state, ui: { ...UI, view: 'backup' } });
-    assert.match(out, /Backup is unavailable while the control channel is not answering/);
+    assert.match(out, /set up without a dashboard login/);
+    assert.doesNotMatch(out, /not answering|returns with the channel/);
     assert.doesNotMatch(out, /pithead apply/);
 });

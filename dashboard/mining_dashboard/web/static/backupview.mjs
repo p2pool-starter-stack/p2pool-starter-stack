@@ -128,14 +128,18 @@ export class BackupPanel extends Component {
 
   render() {
     if (!this.props.enabled) {
-      // The appliance has no shell and keeps the control channel on, so the host-CLI remedy below
-      // is advice its operator cannot act on (#1854). There, a quiet channel is a fault to wait
-      // out, not a setting to change — say that instead of naming a file they cannot open.
+      // The appliance has no shell, so the host-CLI remedy below is advice its operator cannot
+      // act on (#1854) — but "wait for the channel" was the WRONG replacement. `enabled` is
+      // DASHBOARD_CONTROL_ENABLED, a config constant with no liveness in it, and an appliance
+      // reaches this branch only in the "No login" case: apply_appliance_defaults turns the
+      // channel on when the key is null AND the dashboard password is non-empty, so an empty
+      // password leaves it off DELIBERATELY and permanently. Nothing returns. Name the login.
       if (this.props.appliance) {
         return html`<div class="card">
             <h3>Backup</h3>
-            <p>Backup is unavailable while the control channel is not answering. It returns with
-            the channel; nothing on this machine has to be changed by hand.</p>
+            <p>Backup is off because this machine was set up without a dashboard login. The
+            control channel it exports through sits behind that login, so it stays off until
+            this machine has one — set a password under Set up again in the boot menu.</p>
         </div>`;
       }
       return html`<div class="card">

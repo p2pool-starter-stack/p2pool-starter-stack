@@ -141,10 +141,14 @@ test("BackupPanel failed phase surfaces the host's error", () => {
 });
 
 // #1854: the appliance has no shell, so the host-CLI remedy in the explainer above is advice its
-// operator cannot act on. The card has to say something true for a box you cannot log into.
-test("BackupPanel on the appliance drops the remedy it has no shell to run (#1854)", () => {
+// operator cannot act on. The card has to say something true for a box you cannot log into —
+// and "wait for the channel" was not true. `enabled` carries no liveness, and the only way an
+// appliance reaches this branch is the "No login" setup, where the off state is permanent.
+test("BackupPanel on the appliance names the login, not a channel that is coming back (#1854)", () => {
   const out = renderToString(inst({ enabled: false, appliance: true }).render());
-  assert.match(out, /Backup is unavailable while the control channel is not answering/);
+  assert.match(out, /set up without a dashboard login/);
+  // The defect this replaced: telling an operator to wait for something that never arrives.
+  assert.doesNotMatch(out, /not answering|returns with the channel/);
   assert.doesNotMatch(out, /pithead apply/);
   assert.doesNotMatch(out, /config\.json/);
 });
