@@ -16,9 +16,23 @@ provision_browser_submit() { # <ip> <jar> [field=value]...
     local ip="$1" jar="$2" served cfg extra=()
     shift 2
     for f in "$@"; do extra+=(--data-urlencode "$f"); done
-    served=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/state" 2>/dev/null | jq -c '.config // empty' 2>/dev/null)
+    # A few reads, the way a person waits for the page: one cold read at -m 5 is not a verdict.
+    # When none serves a config, the reason prints what the helper saw — status, curl's rc, the
+    # head of the body — so the log discriminates a refusal from a timeout from a non-JSON page (#1932).
+    local raw="" http="" crc=0 tries=0
+    while [ "$tries" -lt 6 ]; do
+        raw=$(curl -sSk -b "$jar" -m 5 -w '\n%{http_code}' "https://$ip/api/state" 2>/dev/null)
+        crc=$?
+        http=${raw##*$'\n'}
+        raw=${raw%$'\n'*}
+        served=$(printf '%s' "$raw" | jq -c '.config // empty' 2>/dev/null)
+        [ -n "$served" ] && break
+        tries=$((tries + 1))
+        sleep 5
+    done
     [ -n "$served" ] || {
-        printf 'no-served-config'
+        printf 'no-served-config(http=%s curl=%s after %sx5s body=%s)' "${http:-none}" "$crc" "$tries" \
+            "$(printf '%s' "$raw" | head -c 60 | tr -c '[:print:]' '?')"
         return 1
     }
     # The four answers the Both role gives on the page, on the page's own paths (wizard.mjs
