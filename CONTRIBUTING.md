@@ -126,10 +126,10 @@ retired, so a reference to it anywhere in this tree is stale and should be fixed
 fires a workflow's `schedule:` trigger from the default branch only, and Dependabot reads
 `.github/dependabot.yml` from the default branch only. A scheduled workflow or a Dependabot entry
 that lives anywhere else never runs — and a job that never runs looks exactly like a job that ran
-and found nothing, which is why this went unnoticed three times while the twin existed (#1146,
-#1162, #1163). #1048 is its sibling and worth knowing next to it: there the schedule did fire, and
-the job skipped itself behind an unset repository variable, so `main` showed green for a gate that
-had never run. Nothing in the tree needs an explicit checkout `ref:` or a Dependabot
+and found nothing, which is why this went unnoticed three times while the twin existed
+(#1146, #1162, #1163). Its sibling is #1048, worth knowing next to it: there the schedule did fire,
+and the job skipped itself behind an unset repository variable, so `main` showed green for a gate
+that had never run. Nothing in the tree needs an explicit checkout `ref:` or a Dependabot
 `target-branch:` any more; if you find one, it is left over from the twin.
 
 Check this from run history, never from the file — the file always looks fine:
