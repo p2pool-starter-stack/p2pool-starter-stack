@@ -361,11 +361,19 @@ if [ "$MODE" = "--test" ]; then
     chk "test SSH key present (harness build)" '[ -s "$ROOT/root/.ssh/authorized_keys" ]'
     chk "variant stamp says debug" '[ "$(cat "$ROOT/etc/pithead-variant")" = "debug" ]'
     # #1892: built against a non-default registry, the boot units must carry it AND podman must trust it — one without the other is a first boot that cannot find its wizard image, or a provision that refuses the pull.
-    [ -z "${PITHEAD_REGISTRY:-}" ] || [ "$PITHEAD_REGISTRY" = ghcr.io/p2pool-starter-stack ] || chk "boot units pinned to the test registry, podman told to trust it" 'grep -qxF "Environment=PITHEAD_REGISTRY=$PITHEAD_REGISTRY" "$ROOT/etc/systemd/system/pithead-boot.service.d/pithead-test-registry.conf" && grep -qxF "Environment=PITHEAD_REGISTRY=$PITHEAD_REGISTRY" "$ROOT/etc/systemd/system/pithead-firstboot.service.d/pithead-test-registry.conf" && grep -qF "location = \"${PITHEAD_REGISTRY%%/*}\"" "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf"'
+    if [ -n "${PITHEAD_REGISTRY:-}" ] && [ "$PITHEAD_REGISTRY" != ghcr.io/p2pool-starter-stack ]; then
+        chk "boot units pinned to the test registry" 'grep -qxF "Environment=PITHEAD_REGISTRY=$PITHEAD_REGISTRY" "$ROOT/etc/systemd/system/pithead-boot.service.d/pithead-test-registry.conf" && grep -qxF "Environment=PITHEAD_REGISTRY=$PITHEAD_REGISTRY" "$ROOT/etc/systemd/system/pithead-firstboot.service.d/pithead-test-registry.conf"'
+        # The trust half is whichever the builder chose: the CA it was handed, byte for byte, or the insecure entry.
+        if [ -n "${PITHEAD_REGISTRY_CA:-}" ]; then
+            chk "podman trusts the test registry's CA, and no insecure entry" 'cmp -s "$PITHEAD_REGISTRY_CA" "$ROOT/etc/containers/certs.d/${PITHEAD_REGISTRY%%/*}/ca.crt" && [ ! -e "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf" ]'
+        else
+            chk "podman told the test registry is insecure, and no CA" 'grep -qF "location = \"${PITHEAD_REGISTRY%%/*}\"" "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf" && [ ! -e "$ROOT/etc/containers/certs.d" ]'
+        fi
+    fi
 else
     # The reason this script exists in versioned form: a leaked test key on a release image is a
     # backdoor, and ad-hoc eyeballing is how one ships.
-    chk "NO test marker, NO test registry pin (#1892)" '[ ! -e "$ROOT/etc/pithead-test-marker" ] && [ ! -e "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf" ] && [ ! -e "$ROOT/etc/systemd/system/pithead-boot.service.d/pithead-test-registry.conf" ]'
+    chk "NO test marker, NO test registry pin or trust (#1892)" '[ ! -e "$ROOT/etc/pithead-test-marker" ] && [ ! -e "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf" ] && [ ! -e "$ROOT/etc/containers/certs.d" ] && [ ! -e "$ROOT/etc/systemd/system/pithead-boot.service.d/pithead-test-registry.conf" ]'
     chk "NO SSH authorized_keys" '[ ! -s "$ROOT/root/.ssh/authorized_keys" ]'
     chk "ssh service disabled" '! ls "$ROOT"/etc/systemd/system/multi-user.target.wants/ssh.service'
     chk "variant stamp says release" '[ "$(cat "$ROOT/etc/pithead-variant")" = "release" ]'
