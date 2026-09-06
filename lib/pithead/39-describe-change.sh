@@ -150,7 +150,7 @@ describe_change() {
         msg="P2Pool sidechain changing ($key: '$old' → '$new') — p2pool re-syncs the new sidechain and your PPLNS window resets."
         ;;
     MONERO_NODE_HOST | MONERO_RPC_PORT | MONERO_ZMQ_PORT | TARI_GRPC_ADDRESS)
-        flag=CONFIRM msg="${key%%_*} node endpoint ($key): ${old:-unset} → $new — the stack points its RPC client THERE and trusts the chain data, block templates and share heights that address returns. #1888: confirm-gated, not free-commit, because it moves TRUST rather than disk; the host probes the new endpoint before accepting it, and putting the old address back reverses it."
+        flag=CONFIRM msg="${key%%_*} node endpoint ($key): ${old:-unset} → $new — the stack points its RPC client THERE and trusts the chain data, block templates and share heights that address returns. Confirm-gated, not free-commit, because it moves TRUST rather than disk; the host probes the new endpoint before accepting it, and putting the old address back reverses it."
         ;;
     MONERO_NODE_USERNAME | MONERO_NODE_PASSWORD)
         msg="Monero node RPC credential updated ($key)."
