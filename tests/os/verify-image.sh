@@ -300,13 +300,11 @@ echo "==> host identity never ships baked (#894/#895)"
 # host identity underneath it must be exactly as per-machine as a release image's.
 chk "no SSH host keys baked (extractable + shared across every machine otherwise)" \
     '! ls "$ROOT"/etc/ssh/ssh_host_* >/dev/null 2>&1'
-chk "machine-id ships empty (systemd's own read-only-root first-boot semantics)" \
-    '[ ! -s "$ROOT/etc/machine-id" ]'
+chk "machine-id ships empty (systemd's own read-only-root first-boot semantics)" '[ ! -s "$ROOT/etc/machine-id" ]'
 # systemd's first-boot logic PREFERS /var/lib/dbus/machine-id when it exists — dbus's postinst
 # bakes one at build, and a baked copy gives every machine flashed from this release the SAME
 # identity. The symlink makes dbus follow the per-machine /etc/machine-id instead.
-chk "dbus machine-id is a symlink (no per-release baked identity)" \
-    '[ -L "$ROOT/var/lib/dbus/machine-id" ]'
+chk "dbus machine-id is a symlink (no per-release baked identity)" '[ -L "$ROOT/var/lib/dbus/machine-id" ]'
 chk "SSH host-key generator baked and executable" '[ -x "$ROOT/usr/local/sbin/pithead-ssh-host-keys" ]'
 chk "ssh.service host-key drop-in orders after /data" \
     'grep -q "RequiresMountsFor=/data" "$ROOT/etc/systemd/system/ssh.service.d/pithead-host-keys.conf"'
@@ -356,28 +354,14 @@ chk "blanket disable preset baked (first-boot preset-all must be a no-op)" \
 chk "systemd-firstboot masked (every boot is a first boot with an empty machine-id)" \
     '[ "$(readlink "$ROOT/etc/systemd/system/systemd-firstboot.service")" = "/dev/null" ]'
 
-echo "==> test material"
-# The variant stamp must MATCH the material, not just exist: a debug image stamped "release"
-# defeats the os-update guard that keeps a debug box from silently dropping its own SSH.
-if [ "$MODE" = "--test" ]; then
-    chk "test SSH key present (harness build)" '[ -s "$ROOT/root/.ssh/authorized_keys" ]'
-    chk "variant stamp says debug" '[ "$(cat "$ROOT/etc/pithead-variant")" = "debug" ]'
-else
-    # The reason this script exists in versioned form: a leaked test key on a release image is a
-    # backdoor, and ad-hoc eyeballing is how one ships.
-    chk "NO test marker" '[ ! -e "$ROOT/etc/pithead-test-marker" ]'
-    chk "NO SSH authorized_keys" '[ ! -s "$ROOT/root/.ssh/authorized_keys" ]'
-    chk "ssh service disabled" '! ls "$ROOT"/etc/systemd/system/multi-user.target.wants/ssh.service'
-    chk "variant stamp says release" '[ "$(cat "$ROOT/etc/pithead-variant")" = "release" ]'
-    # The keyring is the fleet's update trust root. A dev build auto-generates a CN=pithead-dev
-    # cert; if that baked as the release keyring, every device would trust a throwaway,
-    # unencrypted key with no offline backup — a backdoor of the same class as a leaked SSH key,
-    # so it is a hard fail here (the build guard should stop it upstream, this catches a slip at
-    # the artifact). A legitimately self-signed release root is fine — only the known dev CN is
-    # refused, so this never false-positives on a real single-cert keyring.
-    chk "keyring is NOT the dev signing cert (CN=pithead-dev)" \
-        '! openssl x509 -in "$ROOT/etc/rauc/keyring.pem" -noout -subject 2>/dev/null | grep -q "pithead-dev"'
-fi
+# The sibling carries the refusals that stop a debug image shipping as a release; this script runs
+# without -e, so a missing sibling must refuse here rather than source nothing and report clean.
+[ -r "$SCRIPT_DIR/verify-image-variant.sh" ] || {
+    echo "verify-image: $SCRIPT_DIR/verify-image-variant.sh is missing — refusing to report" >&2
+    exit 2
+}
+# shellcheck source=tests/os/verify-image-variant.sh
+. "$SCRIPT_DIR/verify-image-variant.sh"
 
 echo ""
 printf 'verify-image: \033[1;32m%d passed\033[0m, ' "$PASS"
