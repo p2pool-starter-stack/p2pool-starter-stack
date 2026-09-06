@@ -967,8 +967,8 @@ the config tab now behave identically.) The pieces:
   read-only, with a tooltip ("Host-only — edit `config.json` and run `./pithead apply`") instead of
   letting you edit it and finding out only at Save. A smaller set of operationally-disruptive
   fields — the four service data directories, the stratum port, the clearnet initial-sync toggles,
-  enabling Monero pruning, and the Monero outbound-peer count — render **editable but
-  confirm-gated**
+  enabling Monero pruning, the Monero outbound-peer count, and the remote Monero and Tari node
+  endpoints — render **editable but confirm-gated**
   ([#719](https://github.com/p2pool-starter-stack/pithead/issues/719)): editable, tooltipped
   "you'll type `APPLY` to confirm at Save". Both sets are derived from the same allowlists the gate
   enforces (see below) and surfaced on `GET /api/config` as `_editable_keys` and `_confirm_keys`,
@@ -1019,9 +1019,10 @@ direction, to anything else. A second, confirm-gated allowlist
 ([#719](https://github.com/p2pool-starter-stack/pithead/issues/719)) adds the
 operationally-disruptive-but-recoverable settings — a data-directory move (re-sync), a stratum-port
 change (rigs repoint), a clearnet initial-sync enable (host IP exposed during IBD, auto-reverts),
-enabling Monero pruning, and the Monero outbound-peer count (bounded, but the biggest
-steady-state knob on the shared Tor daemon's load) — which commit only behind the typed
-`APPLY`. Type-to-confirm here is
+enabling Monero pruning, the Monero outbound-peer count (bounded, but the biggest
+steady-state knob on the shared Tor daemon's load), and the remote Monero and Tari **node
+endpoints** ([#1888](https://github.com/p2pool-starter-stack/pithead/issues/1888)) — which commit
+only behind the typed `APPLY`. Type-to-confirm here is
 friction, not a security control: a compromised dashboard that can set a field can also fill the
 confirm box, so the boundary stays where a breach would happen. Form mode's grey-out and
 confirm-gating (above) are those SAME allowlists surfaced to the browser up front, not a separate
@@ -1030,9 +1031,25 @@ allowlists gate BOTH edit modes identically regardless — JSON mode is a differ
 the candidate config, not a different validation path, so it can't smuggle a change the form
 couldn't make. The **security perimeter stays host-only** in every direction: wallets and view
 keys, the dashboard login and onion settings, the control channel itself, the Tor egress firewall,
-the stratum password, node endpoints and credentials, and the per-rig hosts and tokens. The gate
+the stratum password, the node RPC credentials, and the per-rig hosts and tokens. The gate
 also refuses the heavier direction of a confirm-gated key (disabling pruning forces a full re-sync,
 so it stays host-only). Apply those from the host with `./pithead apply`.
+
+A node-endpoint change is the one confirm-gated setting with a second gate behind the typed
+`APPLY`: before the commit is accepted, the host dials the endpoint you staged and refuses one it
+cannot reach, reporting which check failed
+([#1889](https://github.com/p2pool-starter-stack/pithead/issues/1889)) — a TCP connect on each
+port, and for Monero's ZMQ port a protocol greeting, because a published container port with no
+publisher behind it answers a reachability check exactly like a live node does. The probe runs on
+the staged config, host-side, and only when an endpoint key actually changed, so an unrelated
+commit is never held up by a node that happens to be down. It is what makes the endpoints
+committable at all: the typed token is friction, but the probe means a dashboard cannot park a
+chain on a node that is not there. The remote node's RPC username and password did not move with
+the endpoints — those are secrets, and they stay host-only.
+
+On an appliance a refusal never tells you to open a shell you do not have: where a DIY host is
+told to edit `config.json` and run `./pithead apply`, the appliance is told the setting is fixed at
+setup and pointed at **Set up again**.
 
 A dashboard-confirmed data-directory move
 ([#728](https://github.com/p2pool-starter-stack/pithead/issues/728)) is held to a tighter rule than

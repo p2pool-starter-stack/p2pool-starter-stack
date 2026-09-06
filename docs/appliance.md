@@ -268,6 +268,12 @@ when everything passes does it show you, on this page, the things you must save:
 - the **dashboard address** (`https://pithead.local`)
 - where to **point your miners** (`stratum+tcp://pithead.local:3333`)
 
+A remote node's address is not a one-time answer. If the node you point at goes away, moves, or
+you want to try another one, the dashboard's Configuration view changes it on a running machine:
+type `APPLY` to confirm, and the machine dials the new endpoint and refuses it if nothing answers
+there ([#1888](https://github.com/p2pool-starter-stack/pithead/issues/1888)). The node's RPC
+username and password are the exception and stay fixed at setup.
+
 **Copy the login somewhere safe, then press "I saved these — erase the disk and install."**
 Nothing touches the disk until that press. The install takes a few minutes, and when it
 finishes **the machine switches itself off.** That is the end of the install, not a crash.
