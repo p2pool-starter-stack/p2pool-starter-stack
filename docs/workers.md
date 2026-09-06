@@ -224,12 +224,19 @@ To point it at a differently-configured fleet, set
 
 Only the worker's validated IP is ever contacted; a miner-controlled worker name is never used as a
 request host (the SSRF guard). If a probe fails, the worker isn't dropped: it keeps its
-proxy-reported hashrate and is flagged `api ⚠` on the dashboard, with a single log line naming the
-URL, status, and likely fix, so a misconfigured API reads differently from an offline miner.
+proxy-reported hashrate and is badged on the dashboard, with a single log line naming the URL,
+status, and likely fix, so a misconfigured API reads differently from an offline miner. Which badge
+depends on whether the rig is *adopted* — whether its [`workers.list`](#per-worker-overrides) entry
+carries a control token:
+
+| Rig | Badge | Meaning |
+|---|---|---|
+| adopted | `api ⚠` | the configured probe failed — check `workers.api_auth` / `api_port`, or the miner's xmrig `http` settings |
+| not adopted | `not adopted` | nothing is misconfigured: the dashboard reads no stats for a rig it holds no control token for. Adopt it from [Worker Inspect](dashboard.md#worker-inspect) |
 
 > Upgrading? Earlier builds provisioned each miner with `access-token = <worker name>`. If your
 > miners still carry a token, set `workers.api_auth: name`, otherwise the new no-auth default probe
-> gets `401` and every worker shows `api ⚠`. (Reprovisioning the miners to drop the token is the
+> gets `401` and every adopted worker shows `api ⚠`. (Reprovisioning the miners to drop the token is the
 > other option; new RigForge workers ship open by default.)
 
 #### Per-worker overrides

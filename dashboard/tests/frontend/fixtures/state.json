@@ -668,6 +668,7 @@
     {
       "accepted": 1200,
       "accepted_str": "1,200",
+      "adopted": null,
       "api_ok": null,
       "h15": 0,
       "h15_str": "0.00 H/s",
@@ -708,6 +709,7 @@
     {
       "accepted": 800,
       "accepted_str": "800",
+      "adopted": null,
       "api_ok": null,
       "h15": 0,
       "h15_str": "0.00 H/s",

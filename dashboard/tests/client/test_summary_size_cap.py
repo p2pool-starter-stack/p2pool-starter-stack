@@ -91,7 +91,7 @@ async def test_a_body_up_to_the_ceiling_is_accepted(size):
 async def test_a_body_past_the_ceiling_is_refused_without_raising():
     # Refused, not crashed: one oversized rig must not take the poll down for every other worker.
     result = await _stats(body_of(xc._MAX_SUMMARY_BYTES + 1))
-    assert result == {"api_ok": False}
+    assert result == {"api_ok": False, "adopted": False}
 
 
 async def test_the_ceiling_does_not_trust_the_rig_s_content_length():
@@ -99,14 +99,14 @@ async def test_the_ceiling_does_not_trust_the_rig_s_content_length():
     # would lie WITH — it is also absent under chunked encoding. The client must bound the read
     # itself rather than believe the header.
     result = await _stats(body_of(xc._MAX_SUMMARY_BYTES + 1), content_length=10)
-    assert result == {"api_ok": False}
+    assert result == {"api_ok": False, "adopted": False}
 
 
 async def test_an_oversized_body_is_never_parsed():
     # The refusal has to happen on the BYTES. Handing json.loads a body we already know is over the
     # ceiling would do the expensive thing first and check afterwards.
     huge = b'{"a":"' + b"x" * (xc._MAX_SUMMARY_BYTES * 2) + b'"}'
-    assert (await _stats(huge)) == {"api_ok": False}
+    assert (await _stats(huge)) == {"api_ok": False, "adopted": False}
 
 
 async def test_a_body_split_across_many_reads_is_still_read_whole():
@@ -121,4 +121,5 @@ async def test_a_body_split_across_many_reads_is_still_read_whole():
 
 async def test_an_oversized_body_delivered_in_pieces_is_still_refused():
     # The other half: trickling an oversized body must not slip past the ceiling either.
-    assert (await _stats(body_of(xc._MAX_SUMMARY_BYTES + 1), chunk=97)) == {"api_ok": False}
+    result = await _stats(body_of(xc._MAX_SUMMARY_BYTES + 1), chunk=97)
+    assert result == {"api_ok": False, "adopted": False}

@@ -378,9 +378,10 @@ class XMRigWorkerClient:
 
         The auth method is chosen by ``XMRIG_API_AUTH`` (``none`` default / ``name`` / ``token``);
         the port by ``XMRIG_API_PORT``. There is no auto-detection fallback: if the configured probe
-        fails, we return ``{"api_ok": False}`` and log a single (rate-limited) WARNING with a fix
-        hint, rather than silently trying alternatives or swallowing the error. On success the parsed
-        summary is returned with ``api_ok`` set to ``True``.
+        fails, we return ``{"api_ok": False, "adopted": bool}`` and log a single (rate-limited)
+        WARNING with a fix hint, rather than silently trying alternatives or swallowing the error.
+        ``adopted`` — does the descriptor we resolved carry a control token — lets the row read
+        "not adopted" rather than blame config (#1857); it rides the success payload too.
 
         Per-worker overrides (#506, ``workers.list[]``) merge on top: per-worker field >
         fleet default > inherit. An operator-set ``host`` replaces the connecting IP as the probe
@@ -393,8 +394,12 @@ class XMRigWorkerClient:
         """
         name_token = name.split("+")[0].strip()[:_MAX_NAME_TOKEN] if name else ""
         safe_ip = _safe_probe_host(ip)
-        override = _worker_override(name_token, safe_ip)
-        if override and "host" in override:
+        override = _worker_override(name_token, safe_ip) or {}
+        # Adoption (#1836/#1857): decided HERE so it reuses the probe's own name-then-host
+        # descriptor match — a name-only lookup downstream would miss a `+suffix` stratum name.
+        # It rides BOTH verdicts, so the field cannot contradict itself between two polls.
+        adopted = bool(override.get("token"))
+        if "host" in override:
             # Operator-set in config.json — never miner-advertised (#122). Pinning the host also
             # means an imposter claiming this rig's name can't pull the rig's token to its own
             # address; docs recommend host+token together for exactly that reason.
@@ -409,23 +414,18 @@ class XMRigWorkerClient:
             # to prevent (#122).
             return {}
 
-        port = override.get("port", XMRIG_API_PORT) if override else XMRIG_API_PORT
+        port = override.get("port", XMRIG_API_PORT)
         url = f"http://{host}:{port}/1/summary"
-        headers = self._auth_header(name_token, override.get("token", "") if override else "")
+        headers = self._auth_header(name_token, override.get("token", ""))
 
         try:
             async with self.session.get(url, headers=headers, timeout=API_TIMEOUT) as response:
                 if response.status == 200:
-                    # This loop is where the bounded async read was worked out (#1347); #1360
-                    # lifted it into ``bounded_read`` and this is the call site coming back to it.
-                    # Keeping a second copy meant two implementations of one contract, and they had
-                    # already diverged: the helper's accumulator was fixed to a ``bytearray``
-                    # because immutable ``bytes +=`` is O(n^2) in the NUMBER of reads, and the read
-                    # is SHORT, so the far end picks that number. This is the least trustworthy
-                    # endpoint we read — a rig's own API — so it is the last place to keep the
-                    # slow copy. Overflow is a refusal for THIS rig only, never an exception that
-                    # takes the poll down for every other worker, so it is caught here rather than
-                    # left to the blanket handler below, which would log it differently.
+                    # The bounded async read was worked out here (#1347) and lifted into
+                    # ``bounded_read`` by #1360 — one contract, one implementation; the
+                    # ``bytearray``/short-read rationale lives in ``helper/http.py``. Overflow is a
+                    # refusal for THIS rig only, never an exception that takes the poll down for
+                    # every other worker, so it is caught here, not by the blanket handler below.
                     try:
                         body = await bounded_read(
                             response.content,
@@ -434,16 +434,16 @@ class XMRigWorkerClient:
                         )
                     except ResponseTooLarge:
                         self._warn(host, name, url, f"body over {_MAX_SUMMARY_BYTES} bytes")
-                        return {"api_ok": False}
+                        return {"api_ok": False, "adopted": adopted}
                     payload = json.loads(body)
                     if isinstance(payload, dict):
                         self._warned.pop(host, None)  # recovered — allow the next failure to log
-                        payload["api_ok"] = True
+                        payload["api_ok"], payload["adopted"] = True, adopted
                         return payload
                     self._warn(host, name, url, f"HTTP 200 but body was {type(payload).__name__}")
-                    return {"api_ok": False}
+                    return {"api_ok": False, "adopted": adopted}
                 self._warn(host, name, url, f"HTTP {response.status}")
-                return {"api_ok": False}
+                return {"api_ok": False, "adopted": adopted}
         except Exception as e:
             self._warn(host, name, url, f"{type(e).__name__}: {e}")
-            return {"api_ok": False}
+            return {"api_ok": False, "adopted": adopted}
