@@ -121,6 +121,17 @@ file, so `node_probe` is `null` there and on any host older than the report; the
 verdict only when `ok` arrives as a real boolean, and a malformed file falls through to `null` the
 way every other spool reader fails open.
 
+`nodeprobe.mjs` renders it, and owns the operator's words for all seven reasons in one place: the
+setup screen shows the report today, and the Configuration view's preview will show the same one
+once the control channel carries a probe of its own, so a reason worded twice cannot come to mean
+two things. Three rules in it are load-bearing rather than stylistic. A reason the module does not
+recognise reads as "the check did not complete" and never as "not reached", because the probe's
+vocabulary is expected to grow and an invented reachability claim is the defect that growth would
+otherwise reintroduce. A `missing-tool` row drops the host's own `detail`, which is the generic
+reach sentence naming the operator's host, port and LAN switch — none of them at fault when the
+check could not run at all. And the module renders no control: the gate is the host's, so a failed
+probe leaves the form editable and the submit button live, which is the only way out of it.
+
 ### The machine-role contract
 
 What the boot path reads, written by the host at the moment a role is accepted:
