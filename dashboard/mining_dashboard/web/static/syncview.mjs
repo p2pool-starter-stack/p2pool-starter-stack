@@ -23,10 +23,31 @@ export function Gauge({ percent, state }) {
     </div>`;
 }
 
+// What the screen says while it holds (#1886 gap 3). The headline alone named neither mechanism
+// behind the wait, so an operator who changed a setting and saw nothing happen could not tell a
+// working machine from a stuck one. Both added sentences are about a clock this page does not
+// control: workers are readmitted on NodeHealthMonitor.healthy (reachable continuously for
+// NODE_RECOVERY_AFTER_SEC, deliberately distinct from "not down"), and TARI_REQUIRED is read at
+// import, so a change reaches the dashboard only when apply recreates the container. No durations
+// are printed — both windows are env-tunable and a number here would read as a promise.
+//
+// The readmission sentence is scoped to a node that went away and came back, because
+// _apply_worker_rejection has exactly one call site and it is guarded by `if self.miner_released:`
+// — a one-way latch that is False until the sync gate first releases. On a first sync there are no
+// rejected workers to readmit, so an unscoped sentence promised a wait that cannot occur on this
+// screen's own primary path (found reviewing PR #1926; no test caught it).
 export function SyncView({ sync }) {
   return html`
     <div id="sync-view">
-        <div class="header-placeholder"><p>System is currently synchronizing with the network.</p></div>
+        <div class="header-placeholder">
+            <p>System is currently synchronizing with the network.</p>
+            <p class="text-muted">This screen clears itself once the required chains are ready —
+            nothing here needs a click. If the node went unreachable and is catching up again,
+            workers are readmitted once the node has stayed reachable for a recovery window,
+            rather than on the first check that succeeds. Whether Tari is required is read when
+            the dashboard starts, so changing it takes effect once you apply the change, not
+            while this screen is up.</p>
+        </div>
         <div class="grid">
             <div class="card">
                 <h2 class="text-accent text-center">Monero Sync</h2>

@@ -15,6 +15,14 @@ The dashboard shows Sync Mode the first time you start the stack, or any time th
 node is still catching up. A `Syncing...` badge appears next to the hostname, the headline reads
 *"System is currently synchronizing with the network,"* and no hashrate is routed yet.
 
+The screen also says what it is waiting on, because two of the clocks involved are not the progress
+bars and an operator watching only those reads a working machine as a stuck one. If the node went
+unreachable and is catching up again, workers are readmitted once the node has stayed reachable for
+a recovery window rather than on the first check that succeeds — a machine starting for the first
+time has no rejected workers, so that wait belongs to a node that dropped out, not to a first run.
+And `dashboard.tari_required` is read when the dashboard starts, so changing it takes effect once
+you apply the change, not while the screen is up.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./images/launch/sync.png">
   <img alt="Sync Mode" src="./images/launch/sync-light.png">
