@@ -354,6 +354,12 @@ chk "blanket disable preset baked (first-boot preset-all must be a no-op)" \
 chk "systemd-firstboot masked (every boot is a first boot with an empty machine-id)" \
     '[ "$(readlink "$ROOT/etc/systemd/system/systemd-firstboot.service")" = "/dev/null" ]'
 
+# The sibling carries the refusals that stop a debug image shipping as a release; this script runs
+# without -e, so a missing sibling must refuse here rather than source nothing and report clean.
+[ -r "$SCRIPT_DIR/verify-image-variant.sh" ] || {
+    echo "verify-image: $SCRIPT_DIR/verify-image-variant.sh is missing — refusing to report" >&2
+    exit 2
+}
 # shellcheck source=tests/os/verify-image-variant.sh
 . "$SCRIPT_DIR/verify-image-variant.sh"
 

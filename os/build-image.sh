@@ -140,7 +140,6 @@ trap 'rm -f "$build_log"' EXIT
 if ! docker build -f os/rootfs/Dockerfile -t "$ROOTFS_TAG" \
     --build-arg PITHEAD_TEST_SSH_PUBKEY="${PITHEAD_TEST_SSH_PUBKEY:-}" \
     --build-arg PITHEAD_TEST_MARKER="${PITHEAD_TEST_MARKER:-}" \
-    --build-arg PITHEAD_TEST_REGISTRY="$TEST_REGISTRY" \
     --build-arg PITHEAD_UPDATER="${PITHEAD_UPDATER:-rauc}" \
     --build-arg APT_INDEX_STAMP="$apt_index_stamp" . 2>&1 | tee "$build_log"; then
     apt_fetch_failure_hint "$(cat "$build_log")"
