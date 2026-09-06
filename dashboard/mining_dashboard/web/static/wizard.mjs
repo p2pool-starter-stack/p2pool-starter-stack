@@ -80,7 +80,7 @@ export const Gate = ({ error, onSubmit }) => html`<div class="card">
                 spellcheck=${false} placeholder="pit-XXXXXX" />
         <//>
         <${Note}>Case doesn't matter, and the ${" "}<code>pit-</code>${" "}prefix is optional.<//>
-        <button type="submit">Continue</button>
+        <button type="submit" class="btn-toggle active">Continue</button>
     </form>
 </div>`;
 
@@ -206,7 +206,7 @@ export const Done = ({ status, handoff, installer, stick, rig, onAck }) => html`
             <p>This is what the machine will be.</p>
             ${rigCardFields(handoff).map((f) => html`<${Field} label=${f.label}><code class="wizard-mono">${f.value}</code><//>`)}
             <${Note}>${rigCardNote(handoff)}<//>
-            <button type="button" onClick=${onAck}>
+            <button type="button" class="btn-toggle active" onClick=${onAck}>
                 ${installer && !stick ? "Looks right — erase the disk and install" : "Looks right — save it"}</button>`
         : handoff
           ? html`<h3>Save this before anything else</h3>
@@ -215,7 +215,7 @@ export const Done = ({ status, handoff, installer, stick, rig, onAck }) => html`
             <${Field} label="Dashboard password"><code class="wizard-mono">${handoff.password}</code><//>
             <${Field} label="Dashboard address"><code class="wizard-mono">${handoff.dashboard}</code><//>
             <${Field} label="Point miners at"><code class="wizard-mono">${handoff.stratum}</code><//>
-            <button type="button" onClick=${onAck}>
+            <button type="button" class="btn-toggle active" onClick=${onAck}>
                 ${installer ? "I saved these — erase the disk and install" : "I saved these — start provisioning"}</button>
             <${Note}>${
               installer
@@ -571,7 +571,7 @@ export class WizardApp extends Component {
               html`<${RestoreSection} file=${this.state.restoreFile} passphrase=${restorePassphrase}
                 onFile=${(e) => this.setState({ restoreFile: e.target.files[0] || null })}
                 onPassphrase=${(e) => this.setState({ restorePassphrase: e.target.value })} />
-            <button type="submit" disabled=${submitting}>
+            <button type="submit" class="btn-toggle active" disabled=${submitting}>
                 ${submitting ? "Validating…" : "Restore and provision"}</button>`
             }
         </form>
@@ -846,7 +846,7 @@ export class WizardApp extends Component {
 
             ${
               diskPicked &&
-              html`<button type="submit" disabled=${(!rig && !!jsonError) || this.state.submitting}>
+              html`<button type="submit" class="btn-toggle active" disabled=${(!rig && !!jsonError) || this.state.submitting}>
                 ${
                   this.state.submitting
                     ? "Validating…"
@@ -877,8 +877,9 @@ export class WizardApp extends Component {
   }
 }
 
-// Mount only in a browser: node --test imports this module to render-probe the views, and a
-// bare `document` reference at import time would make the whole file untestable.
+// Mount only in a browser (node --test imports this module; a bare `document` would break that).
+// Clear #app: the shell ships the heading and "Loading…" inside it, and preact APPENDS (#1868).
 if (typeof document !== "undefined") {
+  document.getElementById("app").replaceChildren();
   render(html`<${WizardApp} />`, document.getElementById("app"));
 }
