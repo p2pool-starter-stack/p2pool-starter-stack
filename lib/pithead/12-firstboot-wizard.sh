@@ -369,7 +369,7 @@ firstboot_wizard() {
                 # Reachability before commitment: a remote node that cannot be dialed fails HERE,
                 # on the page, with the attempt kept for editing — not minutes into provisioning.
                 local pf_err
-                if ! pf_err=$(preflight_remote_nodes "$PWD/config.json"); then
+                if ! pf_err=$(preflight_remote_nodes "$PWD/config.json" "$spool"); then
                     printf '%s' "$pf_err" | tail -c 300 >"$spool/error.txt"
                     jq -c . "$PWD/config.json" >"$spool/last-attempt.json" 2>/dev/null
                     chown 1000:1000 "$spool/error.txt" "$spool/last-attempt.json" 2>/dev/null || true

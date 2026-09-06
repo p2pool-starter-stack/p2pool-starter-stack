@@ -74,6 +74,10 @@ out=$(
     source "$STACK"
     set +e
     timeout() { return 0; }
+    # #1889 added an RPC protocol leg to the same config. Stub it PASSING so this case still
+    # measures the ZMTP greeting alone — otherwise it would go green off the new leg's failure
+    # and stop testing the thing it names.
+    monero_rpc_speaks() { return 0; }
     preflight_remote_nodes "$PFSB/zmq.json" 2>/dev/null
 )
 assert_rc "reachable but no ZMTP greeting -> rc 1" "$?" "1"
@@ -90,11 +94,86 @@ out=$(
         case "$*" in *"od -An"*) printf '%s' "$PFZ_LIVE" ;; esac
         return 0
     }
+    monero_rpc_speaks() { return 0; }
     preflight_remote_nodes "$PFSB/zmq.json" 2>/dev/null
 )
 assert_rc "reachable AND greeting -> rc 0" "$?" "0"
 rm -rf "$PFSB"
 unset PFSB out PFZ_LIVE PFZ_HTTP PFZ_ZMTP2
+
+echo "== unit: the node probe reports WHAT it checked, not only that a port answered =="
+# #1889. The dial proves a port ANSWERED. Until now the Monero RPC port got nothing further, so a
+# wrong service on 18081 passed the whole preflight while the ZMQ port beside it was genuinely
+# protocol-checked. These cases pin the reason mapping and the report contract.
+mk_tmpdir NPB
+# monero_rpc_speaks' verdict is reached through `timeout`, so every failure class is a stub here
+# rather than a socket — the same technique the ZMQ cases above use, and for the same reason.
+np_reason() { # <stub-rc> [body]; prints the reason the RPC leg lands on
+    (
+        cd "$NPB" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        eval "timeout() { ${2:+printf '%s' '$2'; }return $1; }"
+        monero_rpc_speaks 10.0.0.1 18081
+        printf '%s' "$NODE_PROBE_REASON"
+    )
+}
+assert_eq "a well-formed get_info is the only pass" "$(np_reason 0 '{"status":"OK"}')" "ok"
+assert_eq "a listener that answers but is not monerod reads as protocol, not unreachable" \
+    "$(np_reason 0 '<html>nope</html>')" "protocol"
+# Valid JSON that is not an OK status. This is the case `.status == "OK"` exists for, and it is
+# the one a wrong-service fixture CANNOT reach: non-JSON fails jq's parse whatever the filter
+# says, so a mutation replacing the status test with `true` survived a suite that only ever fed
+# it HTML. A real monerod answers exactly this shape while it is busy or erroring.
+assert_eq "JSON that is not an OK status is refused, not accepted as well-formed" \
+    "$(np_reason 0 '{"status":"BUSY"}')" "protocol"
+assert_eq "a refused connection reads as refused" "$(np_reason 7)" "refused"
+assert_eq "an RPC that demands credentials reads as auth, never as success" "$(np_reason 22)" "auth"
+assert_eq "a node that never answers reads as timeout" "$(np_reason 28)" "timeout"
+# A reason the mapping does not know must still be NAMED. The dashboard switches on this enum and
+# its default arm has to be unreachable, so an unmapped code becomes `unknown` rather than a
+# silently-wrong neighbour.
+assert_eq "an unmapped failure is named unknown, not guessed" "$(np_reason 99)" "unknown"
+
+np_report() { # <config-json>; prints the report with both network legs stubbed PASSING
+    printf '%s' "$1" >"$NPB/c.json"
+    (
+        cd "$NPB" || exit
+        # shellcheck disable=SC1090
+        source "$STACK"
+        set +e
+        monero_rpc_speaks() { return 0; }
+        zmq_endpoint_greets() { return 0; }
+        timeout() { return 0; }
+        node_probe_report "$NPB/c.json"
+    )
+}
+out=$(np_report '{"monero":{"mode":"local"},"tari":{"mode":"remote","remote":{"host":"10.0.0.1","grpc_port":18142}}}')
+assert_eq "a Tari pass says the protocol was NOT checked" \
+    "$(printf '%s' "$out" | jq -r '.probes[0].checked')" "connect"
+assert_contains "and says so in words, not only in a field" "$out" "NOT checked"
+# THE ROLL-UP, both directions. `all()` over an empty array is TRUE, so a consumer deriving the
+# gate from the probe list alone reads a run that probed NOTHING as a pass. But "nothing probed"
+# is also the correct state of an all-local machine. Only `configured` separates them.
+out=$(np_report '{"monero":{"mode":"local"},"tari":{"mode":"local"}}')
+assert_eq "0 probed of 0 configured is a PASS — an all-local machine has nothing to reach" \
+    "$(printf '%s' "$out" | jq -c '[.ok,.configured,.probed]')" "[true,0,0]"
+# Fault injection: the config asks for three endpoints and the probe emits no rows. This is the
+# shape the empty-array roll-up would have called a pass.
+out=$(
+    printf '{"monero":{"mode":"remote","remote":{"host":"10.0.0.1"}},"tari":{"mode":"remote","remote":{"host":"10.0.0.1"}}}' >"$NPB/c.json"
+    cd "$NPB" || exit
+    # shellcheck disable=SC1090
+    source "$STACK"
+    set +e
+    node_probe_one() { return 0; }
+    node_probe_report "$NPB/c.json"
+)
+assert_eq "0 probed of 3 configured is a FAILURE, not a vacuous pass" \
+    "$(printf '%s' "$out" | jq -c '[.ok,.configured,.probed]')" "[false,3,0]"
+rm -rf "$NPB"
+unset NPB out
 
 echo "== unit: appliance defaults (tor.auto_heal) =="
 # Applied only where ABSENT: an operator who wrote false meant it.
