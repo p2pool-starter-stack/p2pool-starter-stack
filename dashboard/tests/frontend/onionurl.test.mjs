@@ -51,6 +51,13 @@ test('client authorisation is explained beside the URL when it is on (#1853)', (
     const on = withOnion({ url: URL, client_auth: true });
     assert.match(on, /Client authorisation is on/);
     assert.match(on, /onion-client-key/);
+    // The WORDS, not the markup. htm strips a whitespace run containing a newline from each end of
+    // a static text chunk, so a line break before the <span> renders "to,pithead onion-client-key"
+    // — a defect both assertions above stay green on, because each matches one side of the join.
+    assert.match(
+        on.replace(/<[^>]*>/g, ''),
+        /On a machine you can log in to, pithead onion-client-key prints it\./,
+    );
     // And is absent when it is off — the same render path, one boolean apart.
     assert.doesNotMatch(withOnion({ url: URL, client_auth: false }), /Client authorisation/);
 });
@@ -69,7 +76,12 @@ test('the block never carries client-auth key material (#1853)', () => {
 
 test('the URL comes with a copy control (#1853)', () => {
     const html = withOnion({ url: URL, client_auth: false });
-    assert.match(html, /<button type="button" class="btn-range btn-reset">\s*Copy\s*<\/button>/);
+    // aria-live is on the button on purpose (#1853 design pass): the label itself changes to
+    // "Copied", so the control IS the status message and a screen reader hears nothing without it.
+    assert.match(
+        html,
+        /<button type="button" class="btn-range btn-reset" aria-live="polite">\s*Copy\s*<\/button>/,
+    );
 });
 
 test('copyText answers whether the clipboard actually took the text (#1853)', async () => {

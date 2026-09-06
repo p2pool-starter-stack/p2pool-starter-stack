@@ -45,18 +45,28 @@ export class OnionUrl extends Component {
     return html`
       <div class="brand-host text-muted">
         <span class="font-mono">${onion.url}</span>
-        <button type="button" class="btn-range btn-reset" onClick=${() => this.copy()}>
+        <button
+          type="button"
+          class="btn-range btn-reset"
+          aria-live="polite"
+          onClick=${() => this.copy()}
+        >
           ${copied ? "Copied" : "Copy"}
         </button>
         ${
           // Client authorisation on means the URL alone does not open — Tor Browser answers with
           // a generic failure that reads as "the onion is down". Saying so here is the whole
           // point; the key itself is host-side and never reaches this container.
+          //
+          // The ${" "} before the <span> is load-bearing and the repo has 13 other sites of it:
+          // htm strips a whitespace run CONTAINING A NEWLINE from both ends of every static text
+          // chunk, so a line break before a tag deletes the space and the words run together. A
+          // field is pushed as its own child and never goes through that regex.
           onion.client_auth
             ? html`<div>
                 Client authorisation is on — this address only opens for a browser holding your
-                client key. Get the key with
-                <span class="font-mono">pithead onion-client-key</span> on the machine.
+                client key. On a machine you can log in to,${" "}
+                <span class="font-mono">pithead onion-client-key</span> prints it.
               </div>`
             : null
         }
