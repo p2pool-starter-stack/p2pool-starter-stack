@@ -105,9 +105,7 @@ async def test_a_passing_report_is_served_verbatim(client, spool):
     assert (await _state(client))["node_probe"] == _report()
 
 
-async def test_a_failing_report_keeps_every_row_so_the_page_can_say_which_leg_failed(
-    client, spool
-):
+async def test_a_failing_report_keeps_every_row_so_the_page_can_say_which_leg_failed(client, spool):
     """Monero contributes two rows to Tari's one, and the operator needs the one that failed
     named — a report reduced to its top-level verdict cannot say which."""
     rows = [
