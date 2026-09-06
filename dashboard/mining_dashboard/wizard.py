@@ -146,6 +146,16 @@ def _data_wiped() -> dict:
     return _spool_json("data-wiped.json")
 
 
+def _saved_role() -> dict | None:
+    """The role this machine is already set up as, published by the HOST only on a set-up-again
+    boot (#1318): {"role": "rig", "pool", "worker"} for a rig, {"role": "pithead"} or
+    {"role": "both"} for a coordinator. Its PRESENCE is the signal to offer "Keep it", so a file
+    that names no role reads as ABSENT rather than as an error — the one thing this screen must
+    never do is offer to keep a role it cannot name. None means "run the normal wizard"."""
+    saved = _spool_json("saved-role.json")
+    return saved if isinstance(saved.get("role"), str) and saved["role"] else None
+
+
 def wizard_stage() -> str:
     """Which step this machine is actually on, decided by the SPOOL — never by the client.
 
@@ -251,6 +261,8 @@ async def wizard_state(request: web.Request) -> web.Response:
             "rig_defaults": _rig_defaults(),
             "data_wiped": _data_wiped(),
             "handoff": json.loads(raw_handoff) if raw_handoff else None,
+            # Always present, null when this is not a set-up-again boot (#1318).
+            "saved_role": _saved_role(),
         }
     )
 
@@ -456,6 +468,18 @@ async def handoff_ack(request: web.Request) -> web.Response:
     return web.json_response({"status": "provisioning"})
 
 
+async def keep_role(request: web.Request) -> web.Response:
+    """The "Keep it" half of the set-up-again screen: the operator wants the machine left as it
+    is, so there is nothing to configure and nothing to submit. The host is waiting on this file
+    to carry on booting with the configuration it already has."""
+    if not _authed(request):
+        raise web.HTTPFound("/")
+    if _saved_role() is None:
+        return web.json_response({"error": "nothing to keep"}, status=400)
+    _spool_write_text("keep-role", "1")
+    return web.json_response({"status": "kept"})
+
+
 async def status(request: web.Request) -> web.Response:
     if installer_mode() and _spool_read("stick") != "1":
         if _spool_read("installed") is not None:
@@ -504,6 +528,7 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.post("/submit-restore", submit_restore),
             web.get("/api/handoff", handoff),
             web.post("/handoff-ack", handoff_ack),
+            web.post("/keep-role", keep_role),
             web.get("/status", status),
         ]
     )
