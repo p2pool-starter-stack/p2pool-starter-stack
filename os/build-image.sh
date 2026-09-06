@@ -159,6 +159,14 @@ if [ -n "$TEST_REGISTRY" ]; then
         printf '[Service]\nEnvironment=PITHEAD_REGISTRY=%s\n' "$TEST_REGISTRY" \
             >"$stage/etc/systemd/system/$u.service.d/pithead-test-registry.conf"
     done
+    # An SSH shell running ./pithead by hand reads /etc/environment through PAM, never a unit's
+    # drop-in (#1931): the pin goes there too, appended to the file the rootfs already carries
+    # (PITHEAD_ENGINE, Dockerfile) so the later tar entry replaces it whole and loses nothing.
+    tar -xOf os/build/pithead-root.tar etc/environment >"$stage/etc/environment" || {
+        echo "build-image: the exported rootfs has no etc/environment to pin the registry into" >&2
+        exit 1
+    }
+    printf 'PITHEAD_REGISTRY=%s\n' "$TEST_REGISTRY" >>"$stage/etc/environment"
     # containers/image reads /etc/containers/certs.d/<host:port>/ca.crt for a TLS registry; the
     # insecure entry is the HTTP fallback. One or the other, never both.
     if [ -n "${PITHEAD_REGISTRY_CA:-}" ]; then
