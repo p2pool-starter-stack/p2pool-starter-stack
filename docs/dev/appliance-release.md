@@ -173,7 +173,10 @@ Two build variants, chosen by one flag:
   own `~/.ssh/id_ed25519.pub`) as root's authorized key and enables sshd, for benches driven
   over SSH. Verify with `tests/os/verify-image.sh IMAGE --test`. A bench that takes an A/B
   update to a *release* bundle loses SSH — deliberate, and worth remembering before pressing
-  install.
+  install. Built with `PITHEAD_REGISTRY` set to a non-default namespace, a debug image also
+  pins that registry into its boot units and marks it insecure for podman, so a bench box can
+  provision from a registry on the LAN (#1892); the release variant never carries either file,
+  and `verify-image.sh` checks both ways.
 
 The updater defaults to RAUC; an image built without it cannot take another update, and the
 only way to get one now is to set `PITHEAD_UPDATER` to something else on purpose.

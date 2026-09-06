@@ -300,13 +300,11 @@ echo "==> host identity never ships baked (#894/#895)"
 # host identity underneath it must be exactly as per-machine as a release image's.
 chk "no SSH host keys baked (extractable + shared across every machine otherwise)" \
     '! ls "$ROOT"/etc/ssh/ssh_host_* >/dev/null 2>&1'
-chk "machine-id ships empty (systemd's own read-only-root first-boot semantics)" \
-    '[ ! -s "$ROOT/etc/machine-id" ]'
+chk "machine-id ships empty (systemd's own read-only-root first-boot semantics)" '[ ! -s "$ROOT/etc/machine-id" ]'
 # systemd's first-boot logic PREFERS /var/lib/dbus/machine-id when it exists — dbus's postinst
 # bakes one at build, and a baked copy gives every machine flashed from this release the SAME
 # identity. The symlink makes dbus follow the per-machine /etc/machine-id instead.
-chk "dbus machine-id is a symlink (no per-release baked identity)" \
-    '[ -L "$ROOT/var/lib/dbus/machine-id" ]'
+chk "dbus machine-id is a symlink (no per-release baked identity)" '[ -L "$ROOT/var/lib/dbus/machine-id" ]'
 chk "SSH host-key generator baked and executable" '[ -x "$ROOT/usr/local/sbin/pithead-ssh-host-keys" ]'
 chk "ssh.service host-key drop-in orders after /data" \
     'grep -q "RequiresMountsFor=/data" "$ROOT/etc/systemd/system/ssh.service.d/pithead-host-keys.conf"'
@@ -362,10 +360,12 @@ echo "==> test material"
 if [ "$MODE" = "--test" ]; then
     chk "test SSH key present (harness build)" '[ -s "$ROOT/root/.ssh/authorized_keys" ]'
     chk "variant stamp says debug" '[ "$(cat "$ROOT/etc/pithead-variant")" = "debug" ]'
+    # #1892: built against a non-default registry, the boot units must carry it AND podman must trust it — one without the other is a first boot that cannot find its wizard image, or a provision that refuses the pull.
+    [ -z "${PITHEAD_REGISTRY:-}" ] || [ "$PITHEAD_REGISTRY" = ghcr.io/p2pool-starter-stack ] || chk "boot units pinned to the test registry, podman told to trust it" 'grep -qxF "Environment=PITHEAD_REGISTRY=$PITHEAD_REGISTRY" "$ROOT/etc/systemd/system/pithead-boot.service.d/pithead-test-registry.conf" && grep -qxF "Environment=PITHEAD_REGISTRY=$PITHEAD_REGISTRY" "$ROOT/etc/systemd/system/pithead-firstboot.service.d/pithead-test-registry.conf" && grep -qF "location = \"${PITHEAD_REGISTRY%%/*}\"" "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf"'
 else
     # The reason this script exists in versioned form: a leaked test key on a release image is a
     # backdoor, and ad-hoc eyeballing is how one ships.
-    chk "NO test marker" '[ ! -e "$ROOT/etc/pithead-test-marker" ]'
+    chk "NO test marker, NO test registry pin (#1892)" '[ ! -e "$ROOT/etc/pithead-test-marker" ] && [ ! -e "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf" ] && [ ! -e "$ROOT/etc/systemd/system/pithead-boot.service.d/pithead-test-registry.conf" ]'
     chk "NO SSH authorized_keys" '[ ! -s "$ROOT/root/.ssh/authorized_keys" ]'
     chk "ssh service disabled" '! ls "$ROOT"/etc/systemd/system/multi-user.target.wants/ssh.service'
     chk "variant stamp says release" '[ "$(cat "$ROOT/etc/pithead-variant")" = "release" ]'
