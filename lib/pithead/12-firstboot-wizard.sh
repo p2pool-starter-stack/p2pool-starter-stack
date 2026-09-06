@@ -19,9 +19,10 @@ stage_wizard_spool() { # <spool-dir> -> fingerprint on stdout
     cp /opt/pithead/config.reference.json "$spool/config.reference.json" 2>/dev/null ||
         cp "$PWD/config.reference.json" "$spool/config.reference.json" 2>/dev/null || true
     chown 1000:1000 "$spool/config.reference.json" 2>/dev/null || true
-    # The rig role's pre-fill rides beside the reference — derived fresh each boot, like the
-    # disk inventory, so machine 2 on a fleet stick never opens on machine 1's discovery.
+    # The rig pre-fill and (#1318) the saved role ride beside the reference — derived fresh each
+    # boot, like the disk inventory, so machine 2 on a fleet stick never opens on machine 1's.
     publish_rig_defaults "$spool"
+    publish_saved_role "$spool"
     # The data-wipe note (#1121): same "derived fresh every boot" rule, for the same fleet-stick
     # reason — see publish_data_wipe_note.
     publish_data_wipe_note "$spool"
@@ -94,12 +95,11 @@ firstboot_wizard() {
         fi
     fi
     # A machine already carrying the rig role mines, and asks nothing — not even on a stick that
-    # could offer the installer, because a run-from-USB rig's stick IS that rig's system, not a
-    # fleet tool. Reached only on the boot that ACCEPTS the role (a disk install's first boot,
-    # just above): once the marker exists, pithead-boot owns every later boot and this unit's
-    # own condition skips it. The miner is best-effort here for the same reason it is in pithead-boot
-    # — a rig whose pool moved must still come up and keep retrying, not brick its own boot.
-    if [ "$(machine_role)" = "rig" ]; then
+    # could offer the installer: a run-from-USB rig's stick IS that rig's system, not a fleet tool.
+    # Reached only on the boot that ACCEPTS the role (a disk install's first boot, just above); a
+    # boot from the menu's "Set up again" entry (#1318) skips this and opens the page beside the role.
+    # The miner is best-effort, as in pithead-boot: a pool that moved must not brick the boot.
+    if [ "$(machine_role)" = "rig" ] && ! setup_again_mode; then
         _console "This machine is a RigForge rig ($(jq -r '.worker // "unnamed"' "$PWD/rig.json" 2>/dev/null) -> $(jq -r '.pool // "no pool recorded"' "$PWD/rig.json" 2>/dev/null))."
         provision_rig_miner || true
         return 0
@@ -126,7 +126,7 @@ firstboot_wizard() {
                     warn "Could not remove the consumed pre-seed from $PRESEED_DIR — it holds credentials; delete it."
             fi
         fi
-        if [ -f "$PWD/config.json" ]; then
+        if [ -f "$PWD/config.json" ] && ! setup_again_mode; then
             log "config.json already present (pre-seeded) — skipping the wizard and running setup."
             # A pre-seeded config that names no password gets one too: skipping the wizard must
             # not mean skipping the login.
@@ -198,7 +198,7 @@ firstboot_wizard() {
         rm -f "$spool/handoff.json" "$spool/handoff-ack" "$spool/installing" \
             "$spool/installed" "$spool/applied" "$spool/install-request" \
             "$spool/rig-request.json" "$spool/role" \
-            "$spool/restore-archive" "$spool/restore-passphrase"
+            "$spool/restore-archive" "$spool/restore-passphrase" "$spool/keep-role" "$spool/stick"
         # A pre-seeded token is the operator's own choice and stays fixed across restarts of
         # this loop; without one, mint a fresh secret every round.
         token=$(preseed_token) || token=$(wizard_mint_token)
@@ -209,12 +209,10 @@ firstboot_wizard() {
             -e WIZARD_TLS_KEY="${cert_fp:+/wizard-spool/wizard.key}" \
             -v "$spool":/wizard-spool \
             "$image" -m mining_dashboard.wizard >/dev/null || {
-            # `error` writes to stderr, which systemd routes to /dev/console — ONE device,
-            # whichever the kernel cmdline named LAST. On a box whose monitor is not that device
-            # the failure is invisible, so the newest thing on screen stays "preparing the setup
-            # page" and a STOPPED box reads as a slow one for as long as the operator is willing
-            # to wait. That is how a three-minute failure was mistaken for an hour of progress.
-            # _console reaches every physical console, which is the whole point here.
+            # `error` writes to stderr = /dev/console, ONE device (whichever the cmdline named
+            # LAST); on a box whose monitor is the other one the failure is invisible and a STOPPED
+            # box reads as a slow one — a three-minute failure was once taken for an hour of
+            # progress. _console reaches every physical console, which is the whole point here.
             _console "" "Setup has STOPPED — this box is no longer preparing a page." \
                 "The container engine could not start the setup page." \
                 "Diagnose with: journalctl -u pithead-firstboot -b"
@@ -254,6 +252,8 @@ firstboot_wizard() {
             } >"$dev" 2>/dev/null || true
         done
         while :; do
+            # #1318 "Keep it": the page wrote keep-role — nothing on /data was touched; return.
+            wizard_keep_requested "$spool" && return 0
             # A keep-everything reinstall arrives as a bare install-request with no config
             # candidate: the preserved /data keeps config, login and chains, so there is
             # nothing to validate and no credentials to hand off — install and switch off.

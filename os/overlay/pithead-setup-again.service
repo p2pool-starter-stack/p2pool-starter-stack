@@ -1,0 +1,49 @@
+[Unit]
+Description=Pithead setup wizard beside the saved role (the boot menu's "Set up again" entry, #1318)
+# This unit runs on exactly one kind of boot: one chosen from the "Set up again" entry in
+# os/rauc/grub.cfg, which appends pithead.setup=1 to that boot's kernel cmdline and to no other —
+# the next boot takes the default entry and this condition is false again. And only on a
+# PROVISIONED machine, the same two triggering shapes pithead-boot.service keys on: before a role
+# exists pithead-firstboot owns the boot whatever the cmdline says, so the two units are
+# mutually exclusive by construction rather than by ordering.
+#
+# Before pithead-boot: the role's normal boot — the stack, or a rig's miner — waits behind the
+# page. "Keep it" ends this unit with nothing on /data touched, and pithead-boot then runs the
+# boot the machine would have taken from the default entry. A new role accepted on the page is
+# provisioned by the wizard exactly as on a first boot; pithead-boot's pass after it is the same
+# idempotent every-boot pass it always is. The booted slot is not committed while the page is
+# open, so a freshly updated slot that is never confirmed here falls back exactly as one that
+# never served would — that is the A/B promise, not a gap.
+ConditionKernelCommandLine=pithead.setup=1
+ConditionPathExists=|/data/pithead/config.json
+ConditionPathExists=|/data/pithead/machine-role
+# Same guard as both boot owners: container storage lives on /data.
+ConditionPathIsMountPoint=/data
+Wants=network-online.target systemd-timesyncd.service podman.socket pithead-sync.service
+After=network-online.target systemd-timesyncd.service podman.socket pithead-sync.service
+Before=pithead-boot.service
+
+[Service]
+Type=oneshot
+# Stays 'active' after success so the boot that follows can be attributed to this entry
+# (the harness asserts it; `systemctl is-active pithead-setup-again` on the machine says so).
+RemainAfterExit=yes
+WorkingDirectory=/data/pithead
+Environment=PITHEAD_ENGINE=podman
+# Same pair as pithead-firstboot: systemd sets neither, and pithead assumes both.
+Environment=HOME=/root
+Environment=USER=root
+# The one switch the wizard reads to become a wizard BESIDE a role instead of a first boot:
+# it skips the "this machine already has a role" short-circuits, tells the page what the machine
+# is (spool: saved-role.json), and honours the page's "Keep it" (spool: keep-role).
+Environment=PITHEAD_SETUP_AGAIN=1
+# The URL + one-time token must reach the person standing at the machine — the whole reason
+# this entry exists is that they have a console and nothing else.
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStartPre=/bin/sh -c 'timedatectl show -p NTPSynchronized --value | grep -qx yes || htpdate -s www.debian.org || true'
+ExecStart=/data/pithead/pithead firstboot-wizard
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

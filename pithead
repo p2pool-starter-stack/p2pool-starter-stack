@@ -1866,6 +1866,9 @@ firstboot_consume_spool() { # <spool-dir>
 
 record_machine_role() { # <pithead|both|rig>
     printf '%s\n' "$1" >"$PWD/machine-role" 2>/dev/null || true
+    # A role change replaces the role's data with it (#1318): rig.json — and the control token in
+    # it — belongs to the rig role only, so a machine accepted as a coordinator leaves none behind.
+    [ "$1" = rig ] || rm -f "$PWD/rig.json"
 }
 
 # The wizard's response to a failed (setup), as one step so it can be driven directly (#1059).
@@ -1987,8 +1990,14 @@ firstboot_consume_rig() { # <spool-dir>
         rm -f "$req"
         return 1
     fi
-    if ! jq --arg w "${worker:-$(hostname)}" '{pool: .pool, worker: $w}
-        + (if (.stratum_password // "") == "" then {} else {stratum_password: .stratum_password} end)' \
+    # The control token (#1836) survives a "Set up again" that keeps the role AND the worker name
+    # (#1318): the coordinator adopted THIS worker with THIS token. Any other change mints a new one.
+    local keep_tok=""
+    [ "$(jq -r '.worker // ""' "$PWD/rig.json" 2>/dev/null)" = "${worker:-$(hostname)}" ] &&
+        keep_tok=$(jq -r '.access_token // ""' "$PWD/rig.json" 2>/dev/null)
+    if ! jq --arg w "${worker:-$(hostname)}" --arg t "$keep_tok" '{pool: .pool, worker: $w}
+        + (if (.stratum_password // "") == "" then {} else {stratum_password: .stratum_password} end)
+        + (if $t == "" then {} else {access_token: $t} end)' \
         "$req" >"$PWD/rig.json" 2>/dev/null; then
         rm -f "$req" "$PWD/rig.json"
         printf 'could not record the rig settings — submit again' >"$spool/error.txt"
@@ -2655,9 +2664,10 @@ stage_wizard_spool() { # <spool-dir> -> fingerprint on stdout
     cp /opt/pithead/config.reference.json "$spool/config.reference.json" 2>/dev/null ||
         cp "$PWD/config.reference.json" "$spool/config.reference.json" 2>/dev/null || true
     chown 1000:1000 "$spool/config.reference.json" 2>/dev/null || true
-    # The rig role's pre-fill rides beside the reference — derived fresh each boot, like the
-    # disk inventory, so machine 2 on a fleet stick never opens on machine 1's discovery.
+    # The rig pre-fill and (#1318) the saved role ride beside the reference — derived fresh each
+    # boot, like the disk inventory, so machine 2 on a fleet stick never opens on machine 1's.
     publish_rig_defaults "$spool"
+    publish_saved_role "$spool"
     # The data-wipe note (#1121): same "derived fresh every boot" rule, for the same fleet-stick
     # reason — see publish_data_wipe_note.
     publish_data_wipe_note "$spool"
@@ -2730,12 +2740,11 @@ firstboot_wizard() {
         fi
     fi
     # A machine already carrying the rig role mines, and asks nothing — not even on a stick that
-    # could offer the installer, because a run-from-USB rig's stick IS that rig's system, not a
-    # fleet tool. Reached only on the boot that ACCEPTS the role (a disk install's first boot,
-    # just above): once the marker exists, pithead-boot owns every later boot and this unit's
-    # own condition skips it. The miner is best-effort here for the same reason it is in pithead-boot
-    # — a rig whose pool moved must still come up and keep retrying, not brick its own boot.
-    if [ "$(machine_role)" = "rig" ]; then
+    # could offer the installer: a run-from-USB rig's stick IS that rig's system, not a fleet tool.
+    # Reached only on the boot that ACCEPTS the role (a disk install's first boot, just above); a
+    # boot from the menu's "Set up again" entry (#1318) skips this and opens the page beside the role.
+    # The miner is best-effort, as in pithead-boot: a pool that moved must not brick the boot.
+    if [ "$(machine_role)" = "rig" ] && ! setup_again_mode; then
         _console "This machine is a RigForge rig ($(jq -r '.worker // "unnamed"' "$PWD/rig.json" 2>/dev/null) -> $(jq -r '.pool // "no pool recorded"' "$PWD/rig.json" 2>/dev/null))."
         provision_rig_miner || true
         return 0
@@ -2762,7 +2771,7 @@ firstboot_wizard() {
                     warn "Could not remove the consumed pre-seed from $PRESEED_DIR — it holds credentials; delete it."
             fi
         fi
-        if [ -f "$PWD/config.json" ]; then
+        if [ -f "$PWD/config.json" ] && ! setup_again_mode; then
             log "config.json already present (pre-seeded) — skipping the wizard and running setup."
             # A pre-seeded config that names no password gets one too: skipping the wizard must
             # not mean skipping the login.
@@ -2834,7 +2843,7 @@ firstboot_wizard() {
         rm -f "$spool/handoff.json" "$spool/handoff-ack" "$spool/installing" \
             "$spool/installed" "$spool/applied" "$spool/install-request" \
             "$spool/rig-request.json" "$spool/role" \
-            "$spool/restore-archive" "$spool/restore-passphrase"
+            "$spool/restore-archive" "$spool/restore-passphrase" "$spool/keep-role" "$spool/stick"
         # A pre-seeded token is the operator's own choice and stays fixed across restarts of
         # this loop; without one, mint a fresh secret every round.
         token=$(preseed_token) || token=$(wizard_mint_token)
@@ -2845,12 +2854,10 @@ firstboot_wizard() {
             -e WIZARD_TLS_KEY="${cert_fp:+/wizard-spool/wizard.key}" \
             -v "$spool":/wizard-spool \
             "$image" -m mining_dashboard.wizard >/dev/null || {
-            # `error` writes to stderr, which systemd routes to /dev/console — ONE device,
-            # whichever the kernel cmdline named LAST. On a box whose monitor is not that device
-            # the failure is invisible, so the newest thing on screen stays "preparing the setup
-            # page" and a STOPPED box reads as a slow one for as long as the operator is willing
-            # to wait. That is how a three-minute failure was mistaken for an hour of progress.
-            # _console reaches every physical console, which is the whole point here.
+            # `error` writes to stderr = /dev/console, ONE device (whichever the cmdline named
+            # LAST); on a box whose monitor is the other one the failure is invisible and a STOPPED
+            # box reads as a slow one — a three-minute failure was once taken for an hour of
+            # progress. _console reaches every physical console, which is the whole point here.
             _console "" "Setup has STOPPED — this box is no longer preparing a page." \
                 "The container engine could not start the setup page." \
                 "Diagnose with: journalctl -u pithead-firstboot -b"
@@ -2890,6 +2897,8 @@ firstboot_wizard() {
             } >"$dev" 2>/dev/null || true
         done
         while :; do
+            # #1318 "Keep it": the page wrote keep-role — nothing on /data was touched; return.
+            wizard_keep_requested "$spool" && return 0
             # A keep-everything reinstall arrives as a bare install-request with no config
             # candidate: the preserved /data keeps config, login and chains, so there is
             # nothing to validate and no credentials to hand off — install and switch off.
@@ -3189,6 +3198,49 @@ firstboot_wizard() {
             sleep 2
         done
     done
+}
+
+# The boot menu's "Set up again" entry (#1318). os/rauc/grub.cfg appends pithead.setup=1 to that
+# one boot; pithead-setup-again.service runs `pithead firstboot-wizard` with PITHEAD_SETUP_AGAIN
+# set, ahead of pithead-boot. What that switch changes is small, and all of it is here or one line
+# each in firstboot_wizard: the "this machine already has a role" short-circuits are skipped, the
+# page is told what the machine is, and "Keep it" ends the session with nothing on /data touched.
+# The role marker, rig.json and config.json are replaced only where a NEW role is accepted — the
+# same accept paths a first boot takes, unchanged.
+setup_again_mode() { [ -n "${PITHEAD_SETUP_AGAIN:-}" ]; }
+
+# What the page is told the machine already is, secrets left out: the role, and for a rig the pool
+# and worker it mines as (no stratum password, no control token). The rig form's pre-fill is
+# pointed at the SAME answers, so "Set up again" opens on them rather than on a fresh LAN probe; a
+# coordinator's form pre-fills from config.json through the reinstall rule (strip_config_secrets),
+# once per session so a failed re-provision's own retry context is never overwritten. Nothing is
+# published outside a set-up-again boot: the file's presence IS the page's signal.
+publish_saved_role() { # <spool-dir>
+    setup_again_mode || return 0
+    local spool="$1" role tmp="$1/.saved-role.json.$$" rtmp="$1/.rig-defaults.json.$$"
+    role=$(machine_role)
+    if [ "$role" = rig ] && [ -f "$PWD/rig.json" ]; then
+        jq '{role: "rig", pool: (.pool // ""), worker: (.worker // "")}' "$PWD/rig.json" >"$tmp" 2>/dev/null ||
+            jq -n '{role: "rig"}' >"$tmp"
+        jq '{pool, worker}' "$tmp" >"$rtmp" 2>/dev/null && mv -f "$rtmp" "$spool/rig-defaults.json" || rm -f "$rtmp"
+    else
+        jq -n --arg r "$role" '{role: $r}' >"$tmp"
+        if [ ! -f "$spool/last-attempt.json" ] && [ -f "$PWD/config.json" ]; then
+            strip_config_secrets "$PWD/config.json" >"$spool/last-attempt.json" 2>/dev/null ||
+                rm -f "$spool/last-attempt.json"
+        fi
+    fi
+    chown 1000:1000 "$tmp" "$spool/rig-defaults.json" "$spool/last-attempt.json" 2>/dev/null || true
+    mv -f "$tmp" "$spool/saved-role.json"
+}
+
+# "Keep it": the page wrote keep-role. Nothing on /data was touched — the marker, rig.json and
+# config.json are exactly as this boot found them — so firstboot_wizard returns, the unit ends,
+# and pithead-boot runs the boot the machine would have taken from the default entry.
+wizard_keep_requested() { # <spool-dir>
+    setup_again_mode && [ -f "$1/keep-role" ] || return 1
+    rm -f "$1/keep-role"
+    _console "Setup closed: the saved settings are kept. The machine is starting as it was."
 }
 
 announce_dashboard_url() {

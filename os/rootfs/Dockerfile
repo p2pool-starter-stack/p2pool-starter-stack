@@ -289,10 +289,10 @@ RUN printf '[Match]\nName=en*\nName=eth*\n\n[Network]\nDHCP=yes\nMulticastDNS=ye
 COPY os/overlay/pithead-firstboot.service /etc/systemd/system/pithead-firstboot.service
 COPY os/overlay/pithead-sync.service /etc/systemd/system/pithead-sync.service
 COPY os/overlay/pithead-sync /usr/local/sbin/pithead-sync
-# State mounts are derived from the boot disk at every boot, never from labels — every pithead
-# disk carries the same labels, and two present at once made LABEL= mount the wrong /data.
+# State mounts derive from the boot disk every boot, never labels: every pithead disk carries the same labels, and two at once made LABEL= mount the wrong /data.
 COPY os/overlay/pithead-mount-generator /usr/lib/systemd/system-generators/pithead-mount-generator
 COPY os/overlay/pithead-boot.service /etc/systemd/system/pithead-boot.service
+COPY os/overlay/pithead-setup-again.service /etc/systemd/system/pithead-setup-again.service
 COPY os/overlay/pithead-boot /usr/local/sbin/pithead-boot
 # Physical-presence configuration channel (#786 sub-issue D): pithead-boot's one stage before render; no unit of its own.
 COPY os/overlay/pithead-media-config /usr/local/sbin/pithead-media-config
@@ -375,7 +375,7 @@ RUN systemctl enable podman.socket pithead-boot.service pithead-cpu-governor.ser
         systemd-timesyncd systemd-resolved \
         systemd-networkd systemd-networkd-wait-online pithead-sync.service pithead-firstboot.service \
         pithead-data-reset.service pithead-machine-id.service pithead-hugepages.service \
-        pithead-journal-persist.service \
+        pithead-journal-persist.service pithead-setup-again.service \
     && systemctl disable ssh
 # systemd-repart.service is static — it is pulled in by sysinit.target, and `systemctl enable` on a
 # static unit is an error that would fail the build. Assert it is present instead.

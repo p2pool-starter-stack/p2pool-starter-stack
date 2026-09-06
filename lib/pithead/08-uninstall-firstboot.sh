@@ -85,6 +85,9 @@ firstboot_consume_spool() { # <spool-dir>
 
 record_machine_role() { # <pithead|both|rig>
     printf '%s\n' "$1" >"$PWD/machine-role" 2>/dev/null || true
+    # A role change replaces the role's data with it (#1318): rig.json — and the control token in
+    # it — belongs to the rig role only, so a machine accepted as a coordinator leaves none behind.
+    [ "$1" = rig ] || rm -f "$PWD/rig.json"
 }
 
 # The wizard's response to a failed (setup), as one step so it can be driven directly (#1059).
@@ -206,8 +209,14 @@ firstboot_consume_rig() { # <spool-dir>
         rm -f "$req"
         return 1
     fi
-    if ! jq --arg w "${worker:-$(hostname)}" '{pool: .pool, worker: $w}
-        + (if (.stratum_password // "") == "" then {} else {stratum_password: .stratum_password} end)' \
+    # The control token (#1836) survives a "Set up again" that keeps the role AND the worker name
+    # (#1318): the coordinator adopted THIS worker with THIS token. Any other change mints a new one.
+    local keep_tok=""
+    [ "$(jq -r '.worker // ""' "$PWD/rig.json" 2>/dev/null)" = "${worker:-$(hostname)}" ] &&
+        keep_tok=$(jq -r '.access_token // ""' "$PWD/rig.json" 2>/dev/null)
+    if ! jq --arg w "${worker:-$(hostname)}" --arg t "$keep_tok" '{pool: .pool, worker: $w}
+        + (if (.stratum_password // "") == "" then {} else {stratum_password: .stratum_password} end)
+        + (if $t == "" then {} else {access_token: $t} end)' \
         "$req" >"$PWD/rig.json" 2>/dev/null; then
         rm -f "$req" "$PWD/rig.json"
         printf 'could not record the rig settings — submit again' >"$spool/error.txt"
