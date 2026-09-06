@@ -364,9 +364,12 @@ Because a published `.onion` puts a control panel at a stable address, pithead *
   without a manual CA process, and Tor already encrypts the transport, so the browser shows a one-time
   "accept the risk" prompt — the same click you make for the LAN dashboard.
 
-After `apply`, read the address from `./pithead status` or `./pithead doctor` (printed only to that local
-output). Treat the `.onion` as a secret: anyone who has it can _attempt_ the login (and, without
-client-auth, reach it).
+After `apply`, the address is on the dashboard itself: it sits under the machine name in the header,
+in full, with a **Copy** button, whenever the onion is on. That is the surface to use on an
+appliance, where there is no shell to run a command in. `./pithead status` and `./pithead doctor`
+print it too on a machine you can log in to. Treat the `.onion` as a secret: anyone who has it can
+_attempt_ the login (and, without client-auth, reach it), so the header shows it only to a browser
+that is already through the dashboard's own login.
 
 **Connecting with client authorization.** With `client_auth: true` the onion won't answer at all
 until your Tor client presents the private key. Run `./pithead onion-client-key` on the host — it

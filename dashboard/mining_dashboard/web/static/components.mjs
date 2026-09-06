@@ -34,6 +34,7 @@ import {
   WORKER_COLUMNS,
 } from "./logic.mjs";
 import { MineCartTrain } from "./minecart.mjs";
+import { OnionUrl } from "./onionurl.mjs";
 import { OsUpdateControl, OsVerdictBanner } from "./osupdate.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 import { SecurityPanel } from "./securityview.mjs";
@@ -154,6 +155,7 @@ function Header({ state }) {
                         }
                     </div>
                     <div class="brand-host font-mono text-muted">${state.host_ip}${state.host_addr ? html`<span class="brand-host-at">@</span>${state.host_addr}` : null}</div>
+                    <${OnionUrl} onion=${state.dashboard_onion} />
                 </div>
             </div>
             <div class="text-small mt-2">
