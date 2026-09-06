@@ -293,10 +293,10 @@ if [ -f ./pithead ] && [ -f dashboard/mining_dashboard/wizard.py ]; then
                     WIZ_SHIPPED="$WIZ_TMP/shipped-wizard.py"
                     break
                 fi
-                WIZ_WHY="tar -xOf $member from $(basename "$layer" | cut -c1-12) failed: $(head -c 120 "$WIZ_TMP/extract.err")"
+                WIZ_WHY="tar -xOf $member from $(basename "$layer" | cut -c1-12) failed: $(head -c 120 "$WIZ_TMP/extract.err" | tr -c '[:print:]' '?')"
             done
         else
-            WIZ_WHY="tar -xzf $(basename "$WIZ_ARCHIVE") failed: $(head -c 120 "$WIZ_TMP/untar.err")"
+            WIZ_WHY="tar -xzf $(basename "$WIZ_ARCHIVE") failed: $(head -c 120 "$WIZ_TMP/untar.err" | tr -c '[:print:]' '?')"
         fi
     fi
     chk "the baked wizard image contains the tree's wizard.py" \
