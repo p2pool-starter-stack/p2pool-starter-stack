@@ -62,7 +62,7 @@ jobs:
       - name: "Patch-coverage gate — changed lines >=90% (diff-cover vs the PR's own base, #286)"
         # GITHUB_BASE_REF is set on pull_request runs; push runs fall back to develop. Grading a PR
         # against develop instead of its base branch charges it the base branch's whole coverage
-        # debt (a bash-only PR into the appliance branch failed on wizard.py lines it never touched).
+        # debt (a bash-only appliance PR once failed on wizard.py lines it never touched).
         run: |
           git fetch --no-tags origin develop "${GITHUB_BASE_REF:-develop}"
           make test-patch-coverage

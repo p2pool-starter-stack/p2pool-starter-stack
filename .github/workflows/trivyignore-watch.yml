@@ -13,8 +13,8 @@ name: Trivyignore mute watch
 # This file lives on the DEFAULT branch on purpose: a `schedule:` is read from the default branch
 # only — pin-watch.yml's header carries the history of learning that the hard way (#1048, #1064,
 # #1146). The job runs on `develop`, which carries the script and every image the shared
-# `.trivyignore` covers — the appliance rootfs included, since develop-v2 was fast-forwarded into
-# develop and retired on 2026-09-06 — so the union check is built from the whole covered set.
+# `.trivyignore` covers, the appliance rootfs included (its twin branch was retired into develop on
+# 2026-09-06), so the union check is built from the whole covered set.
 on:
   schedule:
     # Mondays 07:00 UTC, after the 05:00/06:00/06:30 sweeps. The registration was PROVEN before
