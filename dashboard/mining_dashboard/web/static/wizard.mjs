@@ -18,6 +18,8 @@ import {
 } from "./configsync.mjs";
 import { Component, html, render } from "./preact.mjs";
 import { rigCardFields, rigCardNote } from "./rigcardlogic.mjs";
+import { savedRoleOrSetup } from "./savedrole.mjs";
+import { Err, Field, Note } from "./wizardparts.mjs";
 
 // The simple questions, each bound to its config path. Conditional blocks name the field that
 // gates them; option lists carry the same guidance the docs give. This is deliberately a
@@ -68,13 +70,6 @@ const TIMEZONES = [
   "Asia/Tokyo",
   "Australia/Sydney",
 ];
-
-const Note = ({ children }) => html`<p class="text-muted wizard-note">${children}</p>`;
-const Err = ({ children }) => (children ? html`<p class="c-bad">${children}</p>` : null);
-
-const Field = ({ label, children }) => html`<label class="config-field">
-    <span class="config-field-name">${label}</span>${children}
-</label>`;
 
 export const Gate = ({ error, onSubmit }) => html`<div class="card">
     <p>Enter the one-time token shown on this machine's console or terminal.</p>
@@ -300,6 +295,7 @@ export class WizardApp extends Component {
       rigDefaults: s.rig_defaults || {},
       dataWiped: s.data_wiped || {},
       handoff: s.handoff || null,
+      savedRole: s.saved_role || null,
     };
     // The host's discovery pre-fills the rig fields, but only while they are untouched — the
     // form polls, and a half-typed pool address must survive it (same rule as cfg below).
@@ -876,7 +872,7 @@ export class WizardApp extends Component {
       view = html`<${Done} status=${status} handoff=${this.state.handoff}
         installer=${this.state.installer} stick=${this.state.chosen === "usb"}
         rig=${this.state.role === "rig"} onAck=${this.ack} />`;
-    else view = this.renderSetup();
+    else view = savedRoleOrSetup(this);
     return html`<h1>Pithead setup</h1>${view}`;
   }
 }

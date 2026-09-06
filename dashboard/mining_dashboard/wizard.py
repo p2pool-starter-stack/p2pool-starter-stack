@@ -32,6 +32,8 @@ import tempfile
 
 from aiohttp import web
 
+from mining_dashboard.wizard_form import build_config
+
 MAX_FAILURES = 5
 EXIT_TOKEN_LOCKOUT = 3
 # Restore-at-setup upload cap (#909): a Pithead backup holds only config, keys and the
@@ -144,6 +146,16 @@ def _data_wiped() -> dict:
     return _spool_json("data-wiped.json")
 
 
+def _saved_role() -> dict | None:
+    """The role this machine is already set up as, published by the HOST only on a set-up-again
+    boot (#1318): {"role": "rig", "pool", "worker"} for a rig, {"role": "pithead"} or
+    {"role": "both"} for a coordinator. Its PRESENCE is the signal to offer "Keep it", so a file
+    that names no role reads as ABSENT rather than as an error — the one thing this screen must
+    never do is offer to keep a role it cannot name. None means "run the normal wizard"."""
+    saved = _spool_json("saved-role.json")
+    return saved if isinstance(saved.get("role"), str) and saved["role"] else None
+
+
 def wizard_stage() -> str:
     """Which step this machine is actually on, decided by the SPOOL — never by the client.
 
@@ -249,76 +261,10 @@ async def wizard_state(request: web.Request) -> web.Response:
             "rig_defaults": _rig_defaults(),
             "data_wiped": _data_wiped(),
             "handoff": json.loads(raw_handoff) if raw_handoff else None,
+            # Always present, null when this is not a set-up-again boot (#1318).
+            "saved_role": _saved_role(),
         }
     )
-
-
-def build_config(form: dict) -> dict:
-    """Form fields as a pithead config — the fallback for a client that never populated the
-    JSON pane (no JavaScript: the harness's curl, a text browser). Mirrors the CLI wizard's
-    question set; the host's parse_and_validate_config is the validator.
-
-    Keys are omitted rather than written empty: an absent key inherits the documented default,
-    while an empty string is a value and would override it."""
-
-    def s_(name: str) -> str:
-        return str(form.get(name, "")).strip()
-
-    def port(name: str, fallback: int) -> int:
-        raw = s_(name)
-        return int(raw) if raw.isdigit() else fallback
-
-    cfg: dict = {
-        "monero": {"wallet_address": s_("monero_wallet")},
-        "tari": {"wallet_address": s_("tari_wallet")},
-        "p2pool": {"pool": s_("pool") or "mini", "stratum_password": "auto"},
-    }
-
-    if form.get("monero_mode") == "remote":
-        cfg["monero"]["mode"] = "remote"
-        cfg["monero"]["remote"] = {
-            "host": s_("monero_remote_host"),
-            "rpc_port": port("monero_remote_rpc", 18081),
-            "zmq_port": port("monero_remote_zmq", 18083),
-        }
-        if form.get("monero_remote_auth"):
-            cfg["monero"]["node_username"] = s_("monero_remote_user")
-            cfg["monero"]["node_password"] = s_("monero_remote_pass")
-
-    if form.get("tari_mode") == "remote":
-        cfg["tari"]["mode"] = "remote"
-        cfg["tari"]["remote"] = {
-            "host": s_("tari_remote_host"),
-            "grpc_port": port("tari_remote_grpc", 18142),
-        }
-
-    # prune only means anything for a node we run. On remote, the key is noise at best and a
-    # lie at worst — the chain lives on someone else's machine and its shape is not ours.
-    if form.get("monero_mode") != "remote" and form.get("prune") == "false":
-        cfg["monero"]["prune"] = False
-
-    # Optional services: written ONLY when actually filled in. An empty ping_url silently
-    # disables the dead-man's switch the operator thinks they have; a half-configured
-    # Telegram fails validation on a blank they never meant to set.
-    hc = s_("healthchecks_url")
-    if hc:
-        cfg["healthchecks"] = {"ping_url": hc}
-    tg_token, tg_chat = s_("telegram_token"), s_("telegram_chat")
-    if tg_token and tg_chat:
-        cfg["telegram"] = {"enabled": True, "bot_token": tg_token, "chat_id": tg_chat}
-
-    if form.get("local_miner"):
-        cfg["local_miner"] = {"enabled": True}
-
-    if form.get("clearnet_sync") == "true":
-        cfg["monero"]["clearnet_initial_sync"] = True
-        cfg["tari"]["clearnet_initial_sync"] = True
-
-    tz = s_("timezone")
-    if tz and tz != "auto":  # auto IS the documented default — writing it would only pin it
-        cfg.setdefault("dashboard", {})["timezone"] = tz
-
-    return cfg
 
 
 def _spool_write_text(name: str, text: str) -> None:
@@ -522,6 +468,18 @@ async def handoff_ack(request: web.Request) -> web.Response:
     return web.json_response({"status": "provisioning"})
 
 
+async def keep_role(request: web.Request) -> web.Response:
+    """The "Keep it" half of the set-up-again screen: the operator wants the machine left as it
+    is, so there is nothing to configure and nothing to submit. The host is waiting on this file
+    to carry on booting with the configuration it already has."""
+    if not _authed(request):
+        raise web.HTTPFound("/")
+    if _saved_role() is None:
+        return web.json_response({"error": "nothing to keep"}, status=400)
+    _spool_write_text("keep-role", "1")
+    return web.json_response({"status": "kept"})
+
+
 async def status(request: web.Request) -> web.Response:
     if installer_mode() and _spool_read("stick") != "1":
         if _spool_read("installed") is not None:
@@ -570,6 +528,7 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.post("/submit-restore", submit_restore),
             web.get("/api/handoff", handoff),
             web.post("/handoff-ack", handoff_ack),
+            web.post("/keep-role", keep_role),
             web.get("/status", status),
         ]
     )
