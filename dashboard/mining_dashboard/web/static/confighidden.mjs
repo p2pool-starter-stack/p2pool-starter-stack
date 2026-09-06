@@ -33,11 +33,11 @@ function isPlainObject(v) {
 // dropped (`_core_keys` and friends are display directives, not configuration) and every hidden
 // path dropped with it.
 //
-// The projection is a deep copy, not the aliased slice the view used to build inline. The form
-// edits the candidate in place, so sharing objects with the fetched config let a field edit
-// rewrite `cfg` too — and `cfg` is what the "a blanked secret returns to the sentinel the server
-// sent" recovery reads back out of. A masked secret is copied as the plain object it is; the
-// sentinel is a shape, not an identity, so it survives the copy.
+// The projection copies every plain object on the way down, not the aliased slice the view used
+// to build inline. The form edits the candidate in place, so sharing objects with the fetched
+// config let a field edit rewrite `cfg` too — and `cfg` is what the "a blanked secret returns to
+// the sentinel the server sent" recovery reads back out of. ARRAYS ride by reference, not copied
+// (`isPlainObject` excludes them) — safe only while nothing edits an array member in place.
 export function editableCandidate(cfg) {
   const out = withoutHidden(cfg || {}, []);
   for (const k of Object.keys(out)) if (k.startsWith("_")) delete out[k];
