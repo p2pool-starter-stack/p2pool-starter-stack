@@ -528,7 +528,7 @@ test("an empty pool address is stopped client-side with a named reason", async (
   restore();
 });
 
-test("the rig card shows the worker and where it points — no credentials, no login", () => {
+test("the rig card with no token and no address is worker and pool only — no login", () => {
   const handoff = { role: "rig", worker: "shed-3", stratum: "stratum+tcp://pithead.local:3333" };
   const card = renderToString(
     html`<${Done} status="" handoff=${handoff} installer=${true} stick=${false} onAck=${() => {}} />`,

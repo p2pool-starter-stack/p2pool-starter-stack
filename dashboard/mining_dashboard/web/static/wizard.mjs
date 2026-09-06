@@ -17,6 +17,7 @@ import {
   telegramPairReady,
 } from "./configsync.mjs";
 import { Component, html, render } from "./preact.mjs";
+import { rigCardFields, rigCardNote } from "./rigcardlogic.mjs";
 
 // The simple questions, each bound to its config path. Conditional blocks name the field that
 // gates them; option lists carry the same guidance the docs give. This is deliberately a
@@ -208,10 +209,8 @@ export const Done = ({ status, handoff, installer, stick, rig, onAck }) => html`
       handoff && handoff.role === "rig"
         ? html`<h3>Check this rig</h3>
             <p>This is what the machine will be.</p>
-            <${Field} label="Worker name"><code class="wizard-mono">${handoff.worker}</code><//>
-            <${Field} label="Mines toward"><code class="wizard-mono">${handoff.stratum}</code><//>
-            <${Note}>A rig has no dashboard and no login — nothing to save. It appears by this
-            name in the Pithead's Workers view.<//>
+            ${rigCardFields(handoff).map((f) => html`<${Field} label=${f.label}><code class="wizard-mono">${f.value}</code><//>`)}
+            <${Note}>${rigCardNote(handoff)}<//>
             <button type="button" onClick=${onAck}>
                 ${installer && !stick ? "Looks right — erase the disk and install" : "Looks right — save it"}</button>`
         : handoff
