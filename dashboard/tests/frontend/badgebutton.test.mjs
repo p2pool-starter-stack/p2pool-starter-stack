@@ -49,6 +49,8 @@ test("dashboard.css: the reset sits above the variants, so their fills and borde
 test("dashboard.css: a transparent badge button's muted text clears AA on the page background (#1858)", () => {
   // With the UA fill gone, an outline badge sits on the header, which sets no background of its own
   // — so the backdrop is --bg. Pre-fix this pair was --text-muted on #efefef: 2.67:1 in dark.
+  // Not read here: the prefers-color-scheme auto block (dashboard.css:68-86), whose tokens are
+  // byte-identical to the light block's today. A divergence there would pass this test unnoticed.
   for (const [theme, block] of [["dark", DARK_BLOCK], ["light", LIGHT_BLOCK]]) {
     const muted = themeToken(DASHBOARD_CSS, block, "--text-muted");
     const bg = themeToken(DASHBOARD_CSS, block, "--bg");

@@ -7,7 +7,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { StatsTable, WorkerInspect } from "../../mining_dashboard/web/static/workerview.mjs";
-import { contrastRatio, DASHBOARD_CSS, themeToken } from "./helpers/contrast.mjs";
+import {
+  contrastRatio,
+  DARK_BLOCK,
+  DASHBOARD_CSS,
+  LIGHT_BLOCK,
+  themeToken,
+} from "./helpers/contrast.mjs";
 import { renderToString } from "./helpers/render.mjs";
 
 const SENTINEL = { __secret__: true };
@@ -458,10 +464,10 @@ test("dashboard.css: .stat-value declares an explicit --text colour, not an empt
 
 test("dashboard.css: .stat-value's --text on --card meets WCAG AA (>= 4.5:1) in dark AND light (#1232)", () => {
   // Dark is the base palette; light is the explicit override block — pull each theme's pair independently.
-  const darkText = themeToken(DASHBOARD_CSS, /:root,\s*:root\[data-theme="dark"\]\s*\{[^}]*\}/, "--text");
-  const darkCard = themeToken(DASHBOARD_CSS, /:root,\s*:root\[data-theme="dark"\]\s*\{[^}]*\}/, "--card");
-  const lightText = themeToken(DASHBOARD_CSS, /:root\[data-theme="light"\]\s*\{[^}]*\}/, "--text");
-  const lightCard = themeToken(DASHBOARD_CSS, /:root\[data-theme="light"\]\s*\{[^}]*\}/, "--card");
+  const darkText = themeToken(DASHBOARD_CSS, DARK_BLOCK, "--text");
+  const darkCard = themeToken(DASHBOARD_CSS, DARK_BLOCK, "--card");
+  const lightText = themeToken(DASHBOARD_CSS, LIGHT_BLOCK, "--text");
+  const lightCard = themeToken(DASHBOARD_CSS, LIGHT_BLOCK, "--card");
 
   const darkRatio = contrastRatio(darkText, darkCard);
   const lightRatio = contrastRatio(lightText, lightCard);
