@@ -850,9 +850,10 @@ const RigUpdateBadge = ({ up, name, onInspect }) => {
 
 // The worker's xmrig-API badge (#1857). One probe verdict answers two different questions and the
 // row has to tell them apart: an ADOPTED rig whose configured feed then failed is a real fault, and
-// the red badge's config advice is right for it; a rig the dashboard holds no control token for is
-// not broken at all — it is simply not adopted yet (#1836), so it gets the neutral `badge-outline`
-// the version badge uses and is pointed at the Adopt form instead of at workers.api_auth.
+// the red badge's config advice is right for it; a rig the dashboard holds no control token for
+// gets the neutral `badge-outline` the version badge uses (#1836). That is NOT a claim it is
+// healthy: `workers.list` defaults to [], so a hand-configured miner with a real API fault lands
+// here too, and the tooltip names BOTH remedies rather than promising adoption fixes it.
 // The tooltip branches on `onInspect` for the same reason the name button does: with dashboard
 // control off there is no way into the rig from this table and no Adopt form (workerview.mjs), so
 // "open it and adopt" would be an impossible instruction. When control IS on it renders as a
@@ -862,10 +863,11 @@ const ApiBadge = ({ w, onInspect }) => {
   if (w.adopted)
     return html` <span class="badge badge-bad" title="The dashboard couldn't read this worker's xmrig API, so uptime and per-miner hashrate are unavailable (it still mines — figures come from the proxy). Check workers.api_auth / api_port, or the miner's xmrig http settings.">api ⚠</span>`;
   const title =
-    "This rig mines through the proxy, but the dashboard cannot read its stats until you adopt it. " +
+    "This rig mines through the proxy, but the dashboard could not read its stats, and it holds no control token for it. " +
     (onInspect
-      ? "Open it from its name in this table and choose Adopt this rig."
-      : "Adopting needs dashboard.control on, which needs a dashboard password.");
+      ? "A rig set up by the setup wizard needs adopting: open it from its name in this table and choose Adopt this rig. "
+      : "A rig set up by the setup wizard needs adopting, which needs dashboard.control on and a dashboard password. ") +
+    "A miner you configured yourself needs its xmrig API checked: workers.api_auth / api_port, or the miner's xmrig http settings.";
   return onInspect
     ? html` <button type="button" class="badge badge-outline" onClick=${() => onInspect(w.name)} title=${title}>not adopted</button>`
     : html` <span class="badge badge-outline" title=${title}>not adopted</span>`;

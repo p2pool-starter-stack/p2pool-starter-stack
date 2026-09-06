@@ -17,7 +17,10 @@ const RED_BADGE = /class="badge badge-bad" title="The dashboard couldn't read th
 const NEUTRAL_SPAN = /<span class="badge badge-outline" title="([^"]*)">not adopted<\/span>/;
 const NEUTRAL_BUTTON =
   /<button type="button" class="badge badge-outline" title="([^"]*)">not adopted<\/button>/;
-const CANNOT_READ = "This rig mines through the proxy, but the dashboard cannot read its stats";
+const CANNOT_READ = "This rig mines through the proxy, but the dashboard could not read its stats";
+// The second remedy is the whole point of design ruling 2: a rig with no `workers.list` entry may
+// have a REAL api fault (the list defaults to []), so adoption must never be offered as the only fix.
+const HAND_CONFIGURED = /A miner you configured yourself needs its xmrig API checked/;
 
 // The fixture pins both workers to api_ok=null, so nothing here renders until a test asks for it.
 function withWorker({ api_ok, adopted, control = false }) {
@@ -53,7 +56,8 @@ test("with dashboard control ON the badge is a button pointing at the Adopt form
   const m = html.match(NEUTRAL_BUTTON);
   assert.ok(m, "expected a keyboard-reachable button badge when control is on");
   assert.match(m[1], new RegExp(CANNOT_READ));
-  assert.match(m[1], /Open it from its name in this table and choose Adopt this rig\./);
+  assert.match(m[1], /needs adopting: open it from its name in this table and choose Adopt this rig\./);
+  assert.match(m[1], HAND_CONFIGURED);
 });
 
 test("with dashboard control OFF the tooltip names the switch, not an impossible instruction", () => {
@@ -64,7 +68,8 @@ test("with dashboard control OFF the tooltip names the switch, not an impossible
   assert.ok(m, "expected a plain span badge when control is off");
   assert.doesNotMatch(html, NEUTRAL_BUTTON);
   assert.match(m[1], new RegExp(CANNOT_READ));
-  assert.match(m[1], /Adopting needs dashboard\.control on, which needs a dashboard password\./);
+  assert.match(m[1], /needs adopting, which needs dashboard\.control on and a dashboard password\./);
+  assert.match(m[1], HAND_CONFIGURED);
   assert.doesNotMatch(m[1], /choose Adopt this rig/);
 });
 

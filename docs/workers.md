@@ -232,11 +232,12 @@ carries a control token:
 | Rig | Badge | Meaning |
 |---|---|---|
 | adopted | `api ⚠` | the configured probe failed — check `workers.api_auth` / `api_port`, or the miner's xmrig `http` settings |
-| not adopted | `not adopted` | nothing is misconfigured: the dashboard reads no stats for a rig it holds no control token for. Adopt it from [Worker Inspect](dashboard.md#worker-inspect) |
+| not adopted | `not adopted` | the probe failed and the dashboard holds no control token for the rig. A rig the setup wizard set up needs adopting from [Worker Inspect](dashboard.md#worker-inspect); a miner you configured yourself needs the same check as the row above |
 
 > Upgrading? Earlier builds provisioned each miner with `access-token = <worker name>`. If your
 > miners still carry a token, set `workers.api_auth: name`, otherwise the new no-auth default probe
-> gets `401` and every adopted worker shows `api ⚠`. (Reprovisioning the miners to drop the token is the
+> gets `401` and every worker is badged — `api ⚠` if adopted, `not adopted` if not; both tooltips
+> name this key. (Reprovisioning the miners to drop the token is the
 > other option; new RigForge workers ship open by default.)
 
 #### Per-worker overrides
@@ -297,7 +298,7 @@ enabled` and `control: enabled` with `api_allow_from` set to that Pithead's IPv4
 RigForge's upgrade path. The token is shown once, on the setup page's rig card, beside the rig's
 address. Until you adopt the rig — paste both into Worker Inspect's adopt form, or add its
 `host` + `token` entry to `workers.list[]` by hand — the dashboard's probe is refused (the feed
-wants the token) and the rig's row reads as an API error, though it mines all the while. A rig
+wants the token) and the rig's row is badged `not adopted`, though it mines all the while. A rig
 pointed at a pool with no IPv4 address (an onion address) renders with control off and the feed
 on. The appliance's built-in miner (the **Pithead + RigForge** choice) still ships without
 control: it sits on the same machine as the dashboard.
