@@ -472,6 +472,10 @@ To connect to an external Monero node instead of running one locally, set `moner
   `get_info`, and requires a well-formed reply. Opening the port is not enough: a different
   service listening on `18081` answers a connection exactly as a node does. The ZMQ port is
   checked the same way, by exchanging a ZMQ greeting.
+- A failure says which failure it was. A port that refused the connection is reported as out of
+  reach, and points you at the host, the port and the LAN-access switches; a port that answered
+  without speaking the expected protocol is reported as the wrong service behind an open port.
+  Merging the two would send you to check a network path that is fine.
 - The check is unauthenticated. A node that requires RPC credentials answers it with an
   authentication failure and is refused rather than accepted unchecked, because `monero.remote`
   has nowhere to put those credentials. Point the stack at a node that answers `get_info` from
