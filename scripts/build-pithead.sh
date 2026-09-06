@@ -6,8 +6,8 @@
 # and an operator runs `./pithead` straight out of a checkout. So the split into sources cannot
 # introduce a runtime `source` — the file has to keep working as one self-contained script. It is
 # therefore built by CONCATENATION: lib/pithead/*.sh in LC_ALL=C name order, byte for byte, into
-# the committed `pithead`. Both the sources and the artifact are committed, and the artifact is
-# the thing that ships.
+# the committed `pithead`, under a banner naming this script as the generator. Both the sources
+# and the artifact are committed, and the artifact is the thing that ships.
 #
 # That design is only honest if the two cannot drift, which is what `--check` is for: it rebuilds
 # into a temporary file and refuses on any difference. `make lint` runs it, so a slice edited
@@ -117,12 +117,13 @@ build() {
         return 1
     fi
 
+    # Line 2 of the artifact names its generator (deterministic — no date or host — so `--check` stays a byte comparison).
     local i=0
     while IFS= read -r f; do
         [ "$i" -eq 0 ] || printf '\n'
         cat "$f"
         i=$((i + 1))
-    done <<<"$slices"
+    done <<<"$slices" | awk -v n="$(printf '%s\n' "$slices" | wc -l | tr -d ' ')" 'NR == 1 { print; printf "# GENERATED FILE — do not edit. Built from lib/pithead/*.sh (%s slices, LC_ALL=C name order) by:\n#   scripts/build-pithead.sh\n# A drifted copy fails `scripts/build-pithead.sh --check` (make lint-pithead-parity).\n", n; next } 1'
 }
 
 write_artifact() {
@@ -216,7 +217,7 @@ self_test() {
     #    Compared with `cmp` on real files, NOT via `$(...)`: command substitution strips trailing
     #    newlines from both operands, which would make this case blind to any defect at the
     #    artifact's tail — a stray or missing final newline is exactly a join defect.
-    printf '#!/usr/bin/env bash\nset -Eeuo pipefail\n\nmiddle() { :; }\n\nmain "$@"\n' >"$tmp/expected"
+    printf '#!/usr/bin/env bash\n# GENERATED FILE — do not edit. Built from lib/pithead/*.sh (3 slices, LC_ALL=C name order) by:\n#   scripts/build-pithead.sh\n# A drifted copy fails `scripts/build-pithead.sh --check` (make lint-pithead-parity).\nset -Eeuo pipefail\n\nmiddle() { :; }\n\nmain "$@"\n' >"$tmp/expected"
     PITHEAD_BUILD_ROOT="$tmp" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1 || true
     if cmp -s "$tmp/pithead" "$tmp/expected"; then
         echo "  ok   — build joins the slices in sort order, one blank line between each pair"
@@ -325,7 +326,7 @@ self_test() {
     printf '#!/usr/bin/env bash\nfirst\n' >"$order/lib/pithead/00-prelude.sh"
     printf 'ten\n' >"$order/lib/pithead/10-ten.sh"
     printf 'two\n' >"$order/lib/pithead/2-two.sh"
-    printf '#!/usr/bin/env bash\nfirst\n\nten\n\ntwo\n' >"$order/expected"
+    printf '#!/usr/bin/env bash\n# GENERATED FILE — do not edit. Built from lib/pithead/*.sh (3 slices, LC_ALL=C name order) by:\n#   scripts/build-pithead.sh\n# A drifted copy fails `scripts/build-pithead.sh --check` (make lint-pithead-parity).\nfirst\n\nten\n\ntwo\n' >"$order/expected"
     PITHEAD_BUILD_ROOT="$order" bash "${BASH_SOURCE[0]}" >/dev/null 2>&1 || true
     if cmp -s "$order/pithead" "$order/expected"; then
         echo "  ok   — slices are ordered by LC_ALL=C lexical sort, not a numeric or version sort"
