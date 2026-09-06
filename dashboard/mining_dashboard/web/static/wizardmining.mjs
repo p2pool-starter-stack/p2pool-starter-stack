@@ -40,8 +40,8 @@ export const TariSection = ({ answer, v, on }) => html`<h3>Tari merge-mining</h3
     <//>
     <${Note}>Merge-mining earns Tari from the same work that mines Monero, so it costs no
     hashrate — but it needs its own payout address and a node of its own, and the bundled node
-    wants about 170 GB of disk on top of Monero's. You can turn it on later from the dashboard's
-    Configuration view.<//>
+    wants about 170 GB of disk on top of Monero's. Turning it on later means setting this machine
+    up again from the boot menu — the Configuration view does not carry this switch.<//>
     ${
       answer !== "off" &&
       html`<div class="wizard-when">

@@ -255,6 +255,32 @@ test("leaving the raffle writes a BOOLEAN false to xvb.enabled (#1848)", () => {
 
 // --- the components on their own ---------------------------------------------------------------
 
+test("the Tari note does not send the operator to a view that cannot change tari.mode", () => {
+  // The defect this guards: the note promised "turn it on later from the dashboard's
+  // Configuration view", and tari.mode is NOT editable there. control_service.py's
+  // EDITABLE_ENV_KEY_PATHS carries only dashboard.tari_required, tari.mem_limit, tari.data_dir
+  // and tari.clearnet_initial_sync, and the host's own allowlist has no TARI_MODE either — so
+  // the field renders greyed and the operator is hunting for a control that is not there.
+  //
+  // Scoped to TariSection ON PURPOSE. The XvbField sibling says "Changeable later" and that is
+  // TRUE (XVB_ENABLED -> xvb.enabled), so a needle swept over the whole form would match the
+  // honest row and this guard would be pinning the wrong subject.
+  const v = (name) => ({ tariWallet: "", tariRemoteHost: "", xvb: true })[name];
+  const on = () => () => {};
+  // Source wrapping puts newlines inside the sentences, so match on collapsed whitespace.
+  const out = renderToString(html`<${TariSection} answer="off" v=${v} on=${on} />`).replace(
+    /\s+/g,
+    " ",
+  );
+  // The needle forbids the PROMISE, not the phrase: the honest copy names the Configuration
+  // view too, to say it does NOT carry this switch. A bare /Configuration view/ needle reddens
+  // on the fix as readily as on the defect.
+  assert.doesNotMatch(out, /(turn|change) it on later from the dashboard/i);
+  assert.doesNotMatch(out, /later from the dashboard's Configuration view/i);
+  assert.match(out, /Configuration view does not carry this switch/);
+  assert.match(out, /setting this machine up again from the boot menu/);
+});
+
 test("TariSection and XvbField render from props alone, with no app around them", () => {
   // The form tests above are the ones that matter; this is the narrow guard that neither export
   // reaches back into WizardApp, so a second view can render either one from props alone.

@@ -230,7 +230,7 @@ Then a handful of choices, all with sensible defaults:
 
 | Question | Default | When to change it |
 |---|---|---|
-| Merge-mine Tari? | no | Off on a new machine. Say yes and the same work earns on both chains, at no cost in hashrate; it then asks for a Tari payout address — paste that one too — and where the Tari node runs. Turn it on later from the dashboard's Configuration view. |
+| Merge-mine Tari? | no | Off on a new machine. Say yes and the same work earns on both chains, at no cost in hashrate; it then asks for a Tari payout address — paste that one too — and where the Tari node runs. It cannot be turned on from the dashboard afterwards — the Configuration view does not carry this switch; set the machine up again from the boot menu to change it. |
 | P2Pool sidechain | mini | `nano` for a single low-power rig, `main` only for very large hashrate. Changeable later. |
 | Telegram bot | — | Optional. Alerts and status commands; needs both the token and the chat id. |
 | Monero node | run it here | Point at a node you already run. It has to be on your own network — a private address (10.x, 172.16–31.x, 192.168.x) or one reached over a VPN — because the machine only lets the mining containers dial private ranges; everything else goes through Tor. |
