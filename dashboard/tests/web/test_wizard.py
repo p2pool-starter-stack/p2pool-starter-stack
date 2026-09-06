@@ -294,11 +294,11 @@ async def test_form_fields_still_work_without_the_pane(client, seeded):
     assert cfg["monero"]["wallet_address"].startswith("4")
 
 
-def test_both_wallets_always_flow_to_the_host_validator():
-    # tari.mode is local|remote only — there is no Monero-only mode, and the wizard must not
-    # invent one. An empty value still passes through so the HOST produces the rejection.
+def test_a_machine_that_never_answered_the_tari_question_declines_it():
+    # This read "tari.mode is local|remote only" until #1855 made that false: off is what a new
+    # machine gets, written EXPLICITLY because an omitted key still parses as local.
     cfg = wizard.build_config({"monero_wallet": "4" + "A" * 94, "tari_wallet": ""})
-    assert cfg["tari"]["wallet_address"] == ""
+    assert cfg["tari"] == {"mode": "off"}
 
 
 def test_remote_monero_carries_ports_and_defaults_them():
