@@ -203,8 +203,8 @@ source "$ROOT/scripts/release.sh"
 
 # The appliance rootfs builds three more things from an `ARG` — two binaries compiled from source
 # and the RigForge tree fetched as a source tarball — and dependabot has no ecosystem for an ARG
-# consumed by a download, so nothing else can see any of them. They exist on the appliance lane
-# only, hence the guard: on `develop` this loop is simply shorter, not wrong.
+# consumed by a download, so nothing else can see any of them. They live under `os/`, hence the
+# guard: a checkout without the appliance tree runs the shorter loop, not a wrong one.
 #
 # BOUNDARY, stated because a silent one is what this whole issue is about: GitHub runs `schedule:`
 # from the DEFAULT branch, so a single-job workflow only ever reads `develop` and these two rows
@@ -214,7 +214,7 @@ source "$ROOT/scripts/release.sh"
 components="monero p2pool xmrig-proxy tari caddy socket-proxy"
 lane="the product stack"
 # A real `if`, for the same reason the publish step in pin-watch.yml uses one: `[ -f X ] && var=…`
-# evaluates to 1 on the develop lane, which is only safe while nothing depends on the exit status.
+# evaluates to 1 on a checkout without `os/`, which is only safe while nothing depends on the exit status.
 if [ -f "$ROOT/os/rootfs/Dockerfile" ]; then
     components="$components compose cosign rigforge"
     lane="the product stack and the appliance rootfs"

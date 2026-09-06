@@ -29,7 +29,8 @@ name: Scheduled-run watch
 # cannot be widened without orphaning the issue and filing a duplicate. Filing a `build-images` red
 # under it would put a REBUILD finding inside the one report whose premise is that it scanned the
 # bytes users pulled, and would make its "Last fully successful sweep" stamp span two questions.
-# Separately, ci.yml sits one line under its file-budget ceiling, so a job there had no room.
+# Separately, ci.yml sits AT its file-budget ceiling (513 lines of 513, zero headroom), so a job there
+# had no room.
 #
 # This file lives on the DEFAULT branch on purpose: a `schedule:` is read from the default branch
 # only — pin-watch.yml's header carries the history of learning that the hard way (#1048, #1064,

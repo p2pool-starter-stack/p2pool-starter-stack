@@ -8,9 +8,8 @@ name: Upstream pin watch
 #
 # ONE tracking issue per lane, edited in place. An issue persists, is assignable and milestonable,
 # and lets a human write "held until the bench is free, here's why" in a comment — which a report
-# artifact nobody opens cannot do, and which is the failure mode #1128 was filed about. Two lanes
-# rather than one table because the two trees have different pins and different owners; merging
-# them would mean one lane's rows silently vanishing whenever the other lane could not be read.
+# artifact nobody opens cannot do, and which is the failure mode #1128 was filed about. One issue,
+# one table: since the appliance tree joined `develop`, a single run reads every pin.
 #
 # This file lives on the DEFAULT branch on purpose: a `schedule:` fires from the default branch only,
 # and a watcher that lives elsewhere runs exactly zero times while looking fine (#1048, #1064, #1146).
@@ -32,9 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
-      # fail-fast: false so a lane that cannot report does not cancel the lane that can — a missing
-      # report is the thing this watcher exists to make loud, not a reason to lose the other one.
-      fail-fast: false
       matrix:
         include:
           # `ref: ""` is checkout's own default: the ref that triggered the run. On the weekly

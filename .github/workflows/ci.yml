@@ -17,10 +17,10 @@ on:
   #                 tracking issue rather than reddening, because "a shipped image has a fixable
   #                 CVE" asks for a patch release, which is a decision a person makes.
   #
-  # NEITHER FIRES FROM THIS FILE — `schedule:` is read from the DEFAULT branch only, so both run
-  # from `develop`'s copy and this cron block is inert. It is here so the twins stay level, and so
-  # `make lint-trivy-parity` (this lane only) covers sweep-shipped's trivy step at all. Change the
-  # cadence on `develop`, and prove it fired with `gh run list --json event`.
+  # THIS cron block is the one that fires: `schedule:` is read from the DEFAULT branch only, and
+  # `develop` is it. `make lint-trivy-parity` covers sweep-shipped's trivy step. Change the cadence
+  # here, and prove it fired with `gh run list --json event` — a schedule that never runs looks
+  # exactly like one that ran and found nothing (#1162).
   schedule:
     - cron: "0 5 * * 1" # Mondays 05:00 UTC
 
