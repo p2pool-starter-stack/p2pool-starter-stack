@@ -1,0 +1,4 @@
+# The shipped CLI is BUILT from lib/pithead/*.sh by scripts/build-pithead.sh (concatenation, byte for
+# byte); `make lint-pithead-parity` refuses any drift. Mark it generated so a PR that edits a slice
+# does not also show the 700 KB artifact diff — the slices are what gets reviewed.
+pithead linguist-generated=true
