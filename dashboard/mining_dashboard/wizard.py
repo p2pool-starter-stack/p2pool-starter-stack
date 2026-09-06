@@ -130,6 +130,18 @@ def _last_attempt() -> dict:
     return _spool_json("last-attempt.json")
 
 
+# What a machine that has NEVER been configured is served, for the answers where the PAGE's
+# default and the REFERENCE's differ. `local_miner.enabled` was always one. `tari.mode` joins it
+# for #1855: merge-mining is opt-in on a new machine, while config.reference.json keeps
+# `tari.mode: "local"` and must keep it — the reference is the default for a config that ALREADY
+# EXISTS, so flipping it there would stop merge-mining on every upgraded install.
+#
+# It reaches the page only through the `or` below, so it is exactly the never-configured case. A
+# pre-seed, a reinstall pre-fill or a rejected submission is a machine that HAS answers; each of
+# those wins whole and is never handed this.
+_NEW_MACHINE_ANSWERS = {"local_miner": {"enabled": True}, "tari": {"mode": "off"}}
+
+
 def _rig_defaults() -> dict:
     """The rig role's pre-fill, published by the HOST like the disk inventory: a Pithead pool
     discovered on the LAN (when one answered) and this machine's own name for the worker
@@ -254,7 +266,7 @@ async def wizard_state(request: web.Request) -> web.Response:
             "stage": stage,
             # Kept for the field's original meaning; `stage` is what the client renders from.
             "mode": "installer" if installer_mode() else "setup",
-            "config": _deep_merge(ref, _last_attempt() or {"local_miner": {"enabled": True}}),
+            "config": _deep_merge(ref, _last_attempt() or _NEW_MACHINE_ANSWERS),
             "reference": ref,
             "error": _spool_read("error.txt"),
             "disks": _disks(),

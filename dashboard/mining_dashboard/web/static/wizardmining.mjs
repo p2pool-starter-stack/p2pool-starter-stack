@@ -7,33 +7,29 @@
 import { html } from "./preact.mjs";
 import { Field, Note } from "./wizardparts.mjs";
 
-/**
- * Which of the three answers a stored `tari.mode` is, for the select to show.
- *
- * Only the literal "off" reads as declined. Everything else — a missing key included — is a yes,
- * because that is what the host does with a config written before the question existed
- * (`lib/pithead/28-parse-and-validate-config.sh`: no key means `local`). Reading an absent key as
- * "off" would show an upgraded 1.x install as having declined merge-mining, and submitting that
- * screen would then write the decline back.
- *
- * The opposite coercion is what this replaces: the select used to be `remoteTari ? "remote" :
- * "local"`, which had no way to say "off" at all — a machine that had declined rendered as
- * "local" and submit wrote `local` back, silently re-enabling the merge-mining its operator
- * turned down.
- */
+// Which of the three answers a stored `tari.mode` is, for the select to show.
+//
+// Only the literal "off" reads as declined. Everything else — a missing key included — is a yes,
+// because that is what the host does with a config written before the question existed
+// (`lib/pithead/28-parse-and-validate-config.sh`: no key means `local`). Reading an absent key as
+// "off" would show an upgraded 1.x install as having declined merge-mining, and submitting that
+// screen would then write the decline back.
+//
+// The opposite coercion is what this replaces: the select used to be `remoteTari ? "remote" :
+// "local"`, which had no way to say "off" at all — a machine that had declined rendered as
+// "local" and submit wrote `local` back, silently re-enabling the merge-mining its operator
+// turned down.
 export function tariAnswer(mode) {
   if (mode === "off") return "off";
   return mode === "remote" ? "remote" : "local";
 }
 
-/**
- * The Tari merge-mining question and everything that hangs off a yes.
- *
- * The payout address moved in here from the Payout addresses section: a machine that does not
- * merge-mine has nowhere to be paid in Tari, and the field carried `required`, so leaving it up
- * there would have blocked submit on a form that never asks the question. `required` stays on it
- * for a yes — that is the same bar the Monero address holds.
- */
+// The Tari merge-mining question and everything that hangs off a yes.
+//
+// The payout address moved in here from the Payout addresses section: a machine that does not
+// merge-mine has nowhere to be paid in Tari, and the field carried `required`, so leaving it up
+// there would have blocked submit on a form that never asks the question. `required` stays on it
+// for a yes — that is the same bar the Monero address holds.
 export const TariSection = ({ answer, v, on }) => html`<h3>Tari merge-mining</h3>
     <${Field} label="Merge-mine Tari?">
         <select value=${answer} onChange=${on("tariMode")}>
@@ -71,12 +67,10 @@ export const TariSection = ({ answer, v, on }) => html`<h3>Tari merge-mining</h3
       </div>`
     }`;
 
-/**
- * The raffle switch (#1848). Opt-OUT, unlike Tari: `xvb.enabled` is true in the reference, so the
- * default answer here is the one a machine already had, and only a No changes anything. There is
- * no follow-up question by design — the donor id and tier keep their defaults and stay editable
- * from the dashboard, which is where the raffle's own decision table lives.
- */
+// The raffle switch (#1848). Opt-OUT, unlike Tari: `xvb.enabled` is true in the reference, so the
+// default answer here is the one a machine already had, and only a No changes anything. There is
+// no follow-up question by design — the donor id and tier keep their defaults and stay editable
+// from the dashboard, which is where the raffle's own decision table lives.
 export const XvbField = ({ v, on }) => html`<${Field} label="Join the XMRvsBeast raffle?">
         <select value=${String(v("xvb") ?? true)} onChange=${on("xvb")}>
             <option value="true">Yes — donate a slice of hashrate to the raffle (default)</option>

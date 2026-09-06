@@ -114,10 +114,9 @@ const inputFor = controlFor("input");
 const TARI_Q = "Merge-mine Tari?";
 const XVB_Q = "Join the XMRvsBeast raffle?";
 
-const setupOn = (tariMode, extra = {}) => {
+const setupOn = (tariMode) => {
   const cfg = clone(REF);
   cfg.tari.mode = tariMode;
-  Object.assign(cfg, extra);
   const inst = form(cfg);
   return { inst, tree: inst.renderSetup() };
 };
