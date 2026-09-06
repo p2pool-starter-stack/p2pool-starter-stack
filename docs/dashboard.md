@@ -1190,11 +1190,11 @@ other three hidden services — the Monero node's, the Tari node's and P2Pool's 
 than by address, so there is nothing of theirs on this page to hide.
 
 The two surfaces disagree about your dashboard's **own** onion on purpose: the header shows it in
-full, with a **Copy** button, because on an appliance there is no shell to read it in and a machine
-you cannot reach is a machine you cannot fix. This panel still redacts it. So a `[redacted].onion`
-here is not a promise that the address is absent from the browser — scroll up and it is in the
-header. When you need one of the node onions, they are in the stack's `.env`, which the encrypted
-backup archive carries.
+full, with a **Copy** button, because a machine you cannot reach is a machine you cannot fix. This
+panel still redacts it. So on the Compose stack a `[redacted].onion` here is not a promise that the
+address is absent from the browser — scroll up and it is in the header. On the appliance the header
+block does not render yet (#1896), so there the redaction is the whole story. When you need one of
+the node onions, they are in the stack's `.env`, which the encrypted backup archive carries.
 
 **Show recent log** returns the last 200 lines from one service, redacted on the host by the same
 redactor the [support bundle](operations.md) uses — so a credential a service echoed on its
