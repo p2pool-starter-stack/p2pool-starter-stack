@@ -1184,16 +1184,17 @@ those verdicts ask you to save a change rather than to find a console. P2Pool's 
 apply refuses to finish while that one is missing, so no dashboard surface can regenerate it.
 
 One thing reads differently here than at a terminal: the report is redacted on its way to the
-browser, so where `pithead doctor` prints an onion address in full, this panel shows it as
-`[redacted].onion`. The redactor recognises onions by shape, so it covers every one the report
-names — the Monero, Tari and P2Pool hidden services, which reach the browser nowhere else.
+browser, so where `pithead doctor` prints your dashboard's onion address in full, this panel shows
+it as `[redacted].onion`. That is the only address the redaction changes here. The report names the
+other three hidden services — the Monero node's, the Tari node's and P2Pool's — by setting rather
+than by address, so there is nothing of theirs on this page to hide.
 
-Your dashboard's **own** onion is the exception, and the two surfaces disagree about it on purpose:
-the header shows that one in full, with a **Copy** button, because on an appliance there is no shell
-to read it in and a machine you cannot reach is a machine you cannot fix. This panel still redacts
-it. So a `[redacted].onion` here is not a promise that the address is absent from the browser —
-scroll up and it is in the header. Run `pithead doctor` on the host, or check the emergency kit,
-when you need one of the other three.
+The two surfaces disagree about your dashboard's **own** onion on purpose: the header shows it in
+full, with a **Copy** button, because on an appliance there is no shell to read it in and a machine
+you cannot reach is a machine you cannot fix. This panel still redacts it. So a `[redacted].onion`
+here is not a promise that the address is absent from the browser — scroll up and it is in the
+header. When you need one of the node onions, they are in the stack's `.env`, which the encrypted
+backup archive carries.
 
 **Show recent log** returns the last 200 lines from one service, redacted on the host by the same
 redactor the [support bundle](operations.md) uses — so a credential a service echoed on its
