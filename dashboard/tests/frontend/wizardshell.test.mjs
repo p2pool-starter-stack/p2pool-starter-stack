@@ -7,7 +7,7 @@
 // A new file rather than wizard.test.mjs, which is at 765 against a 765 ceiling.
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
@@ -20,14 +20,36 @@ function ruleFor(css, selectorRe) {
   return m ? { selector: m[2].trim(), body: m[3] } : null;
 }
 
-test("wizard.mjs: every button declares a class, so none falls through to the browser default", () => {
-  // Each opening tag, taken as the text after `<button` up to a comfortable bound: the tag itself
-  // can hold arrow functions, so scanning for the closing `>` would stop at the first `=>`.
-  const tags = WIZARD_MJS.split("<button").slice(1).map((s) => s.slice(0, 200));
-  assert.ok(tags.length >= 7, `expected the wizard's buttons, found ${tags.length}`);
-  const bare = tags.filter((t) => !/class="(btn-toggle[^"]*|wizard-link)"/.test(t));
+// The wizard's view modules, found by the import they share rather than by a hand-kept list — a new
+// view that renders a button is then covered the day it is written. The first sweep here read only
+// wizard.mjs and was blind to savedrole.mjs's "Keep it", which is exactly this defect in a file the
+// needle never looked at.
+const STATIC = new URL("../../mining_dashboard/web/static/", import.meta.url);
+const VIEWS = readdirSync(STATIC)
+  .filter((f) => f.endsWith(".mjs"))
+  .map((f) => [f, readFileSync(new URL(f, STATIC), "utf8")])
+  .filter(([f, src]) => f === "wizard.mjs" || src.includes("./wizardparts.mjs"));
+
+test("every wizard view: a button declares a class, so none falls through to the browser default", () => {
+  // An enumeration that quietly found nothing would pass this test while proving nothing, so the
+  // root is asserted before the property is.
+  assert.ok(VIEWS.length >= 2, `expected the wizard's view modules, found ${VIEWS.length}`);
+  assert.ok(
+    VIEWS.some(([f]) => f === "savedrole.mjs"),
+    "savedrole.mjs no longer matches the wizard-view marker — widen the root, do not narrow the claim",
+  );
+  const bare = [];
+  for (const [file, src] of VIEWS) {
+    // Each opening tag, taken as the text after `<button` up to a comfortable bound: the tag can
+    // hold arrow functions, so scanning for the closing `>` would stop at the first `=>`.
+    for (const tag of src.split("<button").slice(1).map((s) => s.slice(0, 200))) {
+      if (!/class="(btn-toggle[^"]*|wizard-link)"/.test(tag)) {
+        bare.push(`${file}: <button${tag.split("\n")[0].trim()}`);
+      }
+    }
+  }
   assert.deepEqual(
-    bare.map((t) => t.split("\n")[0].trim()),
+    bare,
     [],
     "a button with no class renders as the user-agent control (#1868): give it the dashboard's " +
       "btn-toggle skin, or wizard-link if it is deliberately a text link",
