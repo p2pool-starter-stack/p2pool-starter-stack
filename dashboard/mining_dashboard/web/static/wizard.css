@@ -14,6 +14,20 @@
   font-size: 0.82rem;
 }
 
+/* A stratum URL and the rig's 32-character control token carry no break opportunity of their own,
+ * and .config-field's value column takes its minimum width from the string, so on a phone the row
+ * pushed the card past the viewport and the token's last characters sat outside the border with no
+ * cue that there was more (#1879). The label column already breaks this way — .config-field-name in
+ * dashboard.css — so this is the same rule for the value beside it.
+ *
+ * Scoped to <code>, not to .wizard-mono: that class is also on three inputs and on the JSON
+ * textarea, where breaking mid-token would change a surface nobody reported. Descending from
+ * .wizard-shell covers every value the wizard renders, including the discovered pool address that
+ * appears in prose rather than in a card row. */
+.wizard-shell code {
+  overflow-wrap: anywhere;
+}
+
 .wizard-json {
   width: 100%;
   min-height: 22rem;
