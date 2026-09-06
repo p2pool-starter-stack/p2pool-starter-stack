@@ -8,10 +8,10 @@
 // they exercise the true server contract; copyText is a pure function and is tested directly,
 // because the render probe deliberately never invokes handlers.
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 
 import { clone, renderApp } from './harness.mjs';
-import { copyText } from '../../mining_dashboard/web/static/onionurl.mjs';
+import { CLEAR_MS, OnionUrl, copyText } from '../../mining_dashboard/web/static/onionurl.mjs';
 
 // A run of one letter, not a realistic v3 address: nothing here depends on the characters, and a
 // high-entropy literal is what puts a secret scanner on a test file that holds no secret.
@@ -37,7 +37,7 @@ test('the onion URL renders under the host line, whole (#1853)', () => {
 });
 
 test('no onion means no block at all — not an empty row (#1853)', () => {
-    // On the appliance an empty row reads as "Tor is broken" rather than "Tor is off".
+    // An empty row reads as "Tor is broken" rather than "Tor is off".
     assert.doesNotMatch(withOnion(null), /\.onion/);
     assert.doesNotMatch(withOnion(undefined), /\.onion/);
     // The control: the same fixture, one field filled, does render it — so the assertions above
@@ -74,14 +74,75 @@ test('the block never carries client-auth key material (#1853)', () => {
     assert.doesNotMatch(html, /SENTINEL/);
 });
 
-test('the URL comes with a copy control (#1853)', () => {
+test('the copy control keeps its name, and the confirmation has its own region (#1853)', () => {
     const html = withOnion({ url: URL, client_auth: false });
-    // aria-live is on the button on purpose (#1853 design pass): the label itself changes to
-    // "Copied", so the control IS the status message and a screen reader hears nothing without it.
+    // The button's accessible name IS its text, so the confirmation cannot live in the label: one
+    // copy would leave the control named "Copied", a state rather than the action it performs.
     assert.match(
         html,
-        /<button type="button" class="btn-range btn-reset" aria-live="polite">\s*Copy\s*<\/button>/,
+        /<button type="button" class="btn-range btn-reset">\s*Copy address\s*<\/button>/,
     );
+    // The region is rendered EMPTY rather than conditionally: a live region inserted with its
+    // message already inside it presents no content change, and announces nothing.
+    assert.match(html, /<span role="status"><\/span>/);
+});
+
+// The render probe never invokes handlers, so the copy state machine is driven directly. setState
+// is replaced rather than stubbed away, so each call's payload is observable in order.
+const driveCopy = (clipboard) => {
+    const component = new OnionUrl({ onion: { url: URL, client_auth: false } });
+    const seen = [];
+    component.setState = (patch) => {
+        Object.assign(component.state, patch);
+        seen.push(patch.copied);
+    };
+    const priorNavigator = globalThis.navigator;
+    Object.defineProperty(globalThis, 'navigator', { value: { clipboard }, configurable: true });
+    const restore = () =>
+        Object.defineProperty(globalThis, 'navigator', {
+            value: priorNavigator,
+            configurable: true,
+        });
+    return { component, seen, restore };
+};
+
+test('the confirmation clears itself, so a second copy announces too (#1853)', async (t) => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    const { component, seen, restore } = driveCopy({ writeText: async () => {} });
+    t.after(() => {
+        mock.timers.reset();
+        restore();
+    });
+
+    await component.copy();
+    assert.deepEqual(seen, [true], 'a successful copy raises the confirmation');
+    // Left standing, the region's content never changes again and every copy after the first is
+    // silent to a screen reader. Coming down is what makes the next one an announcement.
+    mock.timers.tick(CLEAR_MS);
+    assert.deepEqual(seen, [true, false], 'the confirmation is still up after CLEAR_MS elapsed');
+    assert.equal(component.state.copied, false);
+});
+
+test('a failed copy takes a standing confirmation down with it (#1853)', async (t) => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    const clipboard = { writeText: async () => {} };
+    const { component, seen, restore } = driveCopy(clipboard);
+    t.after(() => {
+        mock.timers.reset();
+        restore();
+    });
+
+    await component.copy();
+    // The clipboard goes away under the operator — a page that lost its secure context, a denied
+    // permission. The previous "Copied" must not read as this attempt's answer.
+    clipboard.writeText = async () => {
+        throw new Error('denied');
+    };
+    await component.copy();
+    assert.deepEqual(seen, [true, false]);
+    // And no timer from the failed attempt is left to fire.
+    mock.timers.tick(CLEAR_MS);
+    assert.deepEqual(seen, [true, false]);
 });
 
 test('copyText answers whether the clipboard actually took the text (#1853)', async () => {
