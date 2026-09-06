@@ -128,7 +128,7 @@ def test_sinks_all_private_requires_ip_literal_proof():
     assert _sinks_all_private(["http://192.168.1.5/hook"]) is True
     assert _sinks_all_private(["http://127.0.0.1:8080/hook", "http://[::1]/ntfy/alerts"]) is True
     assert _sinks_all_private(["http://[fc00::1]/hook"]) is True  # IPv6 ULA — the v6 LAN case
-    # The real _notify_knobs shape: webhook configured, NTFY_URL unset ("" must not veto).
+    # The real _shared_knobs shape: webhook configured, NTFY_URL unset ("" must not veto).
     assert _sinks_all_private(["http://192.168.1.5/hook", ""]) is True
     assert _sinks_all_private(["http://192.168.1.5/hook", "https://ntfy.sh/mytopic"]) is False
     assert _sinks_all_private(["http://nas.local/hook"]) is False  # hostname — unknowable
