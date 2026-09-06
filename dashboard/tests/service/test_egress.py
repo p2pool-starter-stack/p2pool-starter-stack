@@ -218,10 +218,10 @@ def test_topology_safe_has_no_leaks_and_hub_nodes(_topo):
 
 
 def test_topology_lan_ingress_edges(_edge, _topo):
+    # Both hops LEAVE this box, so the legend's own split makes them LAN, never Local (#1856).
     topo = _topo()
-    rigs = _edge(topo, "rigs", "xmrig-proxy")
-    assert rigs["kind"] == "ingress" and rigs["route"] == "local"
-    assert _edge(topo, "browser", "caddy")["kind"] == "ingress"
+    for e in (_edge(topo, "rigs", "xmrig-proxy"), _edge(topo, "browser", "caddy")):
+        assert e["kind"] == "ingress" and e["route"] == "lan", e
 
 
 def test_topology_daemon_p2p_is_bidirectional_over_tor(_edge, _topo):
