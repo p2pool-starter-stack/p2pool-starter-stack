@@ -79,7 +79,7 @@ _wsp_self_test() {
     calls=$(mktemp)
     sleep() { :; }
     curl() { # the body, a newline, the status — what -w '\n%{http_code}' prints; rc per shape
-        echo x >>"$calls"
+        echo "${!#}" >>"$calls" # the URL — the last argument — so a case can assert the route
         case "$shape" in
         timeout) printf '\n000' && return 28 ;;
         noconfig) printf '{"error":"x"}\n200' ;;
@@ -113,6 +113,9 @@ _wsp_self_test() {
     : >"$calls"
     wizard_state_poll h j '.error' || f=$((f + 1))
     _wsp_case control "$WIZ_STATE" x || f=$((f + 1))
+    # The route: the wizard registers /api/wizard-state and no /api/state (#1932); a shim that
+    # never reads its arguments would pass with either, so the URL the poll asked is asserted once.
+    _wsp_case route "$(tail -n 1 "$calls")" 'https://h/api/wizard-state' || f=$((f + 1))
     rm -f "$calls"
     if [ "$f" -gt 0 ]; then
         printf '#1936 wizard-state-poll self-test FAILED: %s checks\n' "$f"
