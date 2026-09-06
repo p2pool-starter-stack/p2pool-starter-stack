@@ -71,6 +71,14 @@ wins and no config crosses.
 Never a client flag. `/api/wizard-state` carries the handoff payload inline for the same
 reason — a separate fetch is a separate race.
 
+**And a spool file that judges a submission is cleared where submissions ARRIVE.** `error.txt`
+and `node-probe.json` (#1889) each describe one config, not the machine, and the host only ever
+writes them — every arm that hands the form back before `preflight_remote_nodes` runs would
+otherwise leave the previous verdict standing. So the wizard voids both at each of its four
+spool-writing entry points (`_spool_clear_host_verdict`) rather than removing them arm by arm,
+which the next arm added would silently defeat. The probe report is the half that bites: it is
+written on the PASS path too, so the survivor is the one that reads as "the nodes were reached".
+
 ## The role select — one stick, three machines
 
 The page's FIRST disclosure, above the disk, is what the machine IS. One select, reading
