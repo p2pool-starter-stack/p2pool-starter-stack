@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Dashboard domain (#1105 Phase 1, develop-v2 lane): the dashboard's own login (Caddy basic_auth
+# Dashboard domain (#1105 Phase 1, appliance lane): the dashboard's own login (Caddy basic_auth
 # enable/disable/change previews plus the actual basic_auth block in the rendered Caddyfile, #8),
 # generate_caddyfile's scheme/port/Host-header render (secure vs. plain HTTP; a custom HOST_PORT
 # moving the vhost off 80/443; the :80 redirect's and :443's own catch-alls so an unmatched Host

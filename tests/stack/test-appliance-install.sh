@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Appliance install domain (#1105 Phase 1, develop-v2 lane): getting Pithead onto a machine, and
+# Appliance install domain (#1105 Phase 1, appliance lane): getting Pithead onto a machine, and
 # what the next install reads back off the one before it. The installer gate retries a device
 # probe that has not settled yet, so a reinstall boot does not fall through into setup mode; the
 # installation medium's pre-seeded config and the ESP's wipe note are read as input rather than

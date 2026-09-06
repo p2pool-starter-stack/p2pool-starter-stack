@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Rig/worker domain (#1105 Phase 1, develop-v2 lane): the merge-mining rig's stratum-facing
+# Rig/worker domain (#1105 Phase 1, appliance lane): the merge-mining rig's stratum-facing
 # surface and the control channel's per-rig worker-config/worker-upgrade verbs — xmrig-proxy's
 # stratum auth + donate-level knobs (#152/#173), the co-located built-in miner's opt-in announce
 # of the pool URL + stratum secret to a RigForge install (#593), stratum-over-TLS render and the

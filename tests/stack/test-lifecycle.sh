@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Lifecycle & data domain (#1105 Phase 1, develop-v2 lane): the stack's recovery paths, scoped
+# Lifecycle & data domain (#1105 Phase 1, appliance lane): the stack's recovery paths, scoped
 # restarts, and filesystem ownership discipline — `restart`'s whole-stack vs. tor-only vs.
 # monerod-only scoping (#424/#972), the mkdir-before-chown ordering that keeps
 # prepare_directories/reset_dashboard from EACCES-ing a non-default operator uid (#550),

@@ -12,10 +12,9 @@ name: Trivyignore mute watch
 #
 # This file lives on the DEFAULT branch on purpose: a `schedule:` is read from the default branch
 # only — pin-watch.yml's header carries the history of learning that the hard way (#1048, #1064,
-# #1146). The JOB checks out `develop-v2` explicitly: the script and two of its covered images
-# (the appliance rootfs, and the `.trivyignore` block that documents it) exist only on that lane,
-# while every dashboard/monero/p2pool/xmrig-proxy/tor mute is shared — so the appliance lane's
-# tree is the one place the whole covered set can be built and the union check is honest.
+# #1146). The job runs on `develop`, which carries the script and every image the shared
+# `.trivyignore` covers, the appliance rootfs included (its twin branch was retired into develop on
+# 2026-09-06), so the union check is built from the whole covered set.
 on:
   schedule:
     # Mondays 07:00 UTC, after the 05:00/06:00/06:30 sweeps. The registration was PROVEN before
@@ -38,9 +37,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The appliance lane: the one tree holding the script AND every image the shared
-          # `.trivyignore` covers (see the header). NOT the ref that triggered the run.
-          ref: develop-v2
+          # The triggering ref: on the schedule that is `develop`, the one tree holding the script
+          # AND every image the shared `.trivyignore` covers (see the header).
           persist-credentials: false
       - name: Build and scan the covered images, no ignore file applied
         id: report

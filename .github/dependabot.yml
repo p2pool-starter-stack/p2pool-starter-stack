@@ -1,5 +1,8 @@
 # Dependabot (Wave 7 tooling, #282): automated dependency + CVE update PRs across every
 # supply-chain surface. Grouped + weekly to keep PR volume sane.
+#
+# Dependabot reads this file from the DEFAULT branch (`develop`) only and resolves every `directory:`
+# there; one entry per surface covers everything (CONTRIBUTING.md § One integration branch, #1163, #1425).
 version: 2
 updates:
   # GitHub Actions — keep the SHA-pinned actions (#282) fresh. Dependabot rewrites the SHA and the
@@ -29,12 +32,9 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # Base-image digests across every build/* Dockerfile (incl. the uv build image) plus
-  # dashboard/Dockerfile (moved out of build/, #1106) (#833). This is the mechanism that clears
-  # base-distro CVEs — e.g. the openssl point-release accepted in .trivyignore. The appliance
-  # rootfs is NOT in this list: it
-  # lives on this branch only, which Dependabot never reads, so the entry here did nothing for as
-  # long as it existed (#1163). It is covered by the `target-branch` entry further down, which is
-  # on `develop` where Dependabot will actually see it.
+  # dashboard/Dockerfile (#1106, #833). This is the mechanism that clears base-distro CVEs — e.g.
+  # the openssl point-release accepted in .trivyignore. The appliance rootfs has its own entry
+  # below: a different base, a different policy note, and stakes worth their own group.
   - package-ecosystem: "docker"
     directories:
       - "/dashboard"
@@ -53,19 +53,12 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
-  # The appliance rootfs base images (#833, #1163). Deliberately asymmetric, and it has to be:
-  # Dependabot reads this file from the DEFAULT branch only, so the entry lives here on `develop`,
-  # while the path it names exists only on `develop-v2`. `target-branch` is the mechanism for
-  # exactly that — Dependabot resolves `directory` against it and opens the PR there. Anyone
-  # applying "the twins are level" mechanically will read this as wrong; moving it to develop-v2
-  # is what makes it stop running, which is how it went unnoticed (CONTRIBUTING.md § The two lanes).
-  #
-  # The stakes here are higher than for build/* above: the appliance's Debian userland has no apt
-  # at runtime, so a base digest bump plus a rebake IS its patch channel. There is no other way for
-  # a fixed openssl or kernel package to reach a flashed box between releases.
+  # The appliance rootfs base images (#833, #1163). The stakes here are higher than for build/*
+  # above: the appliance's Debian userland has no apt at runtime, so a base digest bump plus a
+  # rebake IS its patch channel. There is no other way for a fixed openssl or kernel package to
+  # reach a flashed box between releases.
   - package-ecosystem: "docker"
     directory: "/os/rootfs"
-    target-branch: "develop-v2"
     schedule:
       interval: "weekly"
     groups:
@@ -98,116 +91,7 @@ updates:
       - dependency-name: "*"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
-  # ── INERT ON THIS BRANCH ─────────────────────────────────────────────────────────────────────
-  # Everything below is a verbatim copy of what `develop` carries, kept so the twins stay level
-  # (#1685 F1). Dependabot reads this file from the DEFAULT branch only, which is `develop`, so
-  # nothing in this file — above the line or below it — does anything while `develop-v2` is not
-  # the default branch. The copy exists so the retirement (#1169) inherits a config that already
-  # works, and so a hand-made change to one twin shows up as missing from the other. The prose
-  # below describes the config as Dependabot resolves it FROM `develop`, so its `/build/dashboard`
-  # references are about that branch's tree, not this one's.
-
-  # ── develop-v2 coverage (#1425, #1650) ──────────────────────────────────────────────────────
-  # Everything above this line resolves against the DEFAULT branch, `develop`. That is not a
-  # style choice: Dependabot reads this file from the default branch only, and with no
-  # `target-branch:` it also resolves each `directory:` there and opens the PR there. So every
-  # entry above watches the FROZEN twin, and `develop-v2` — the branch all work actually lands
-  # on — was covered by the `/os/rootfs` entry and nothing else.
-  #
-  # Two distinct faults produced that, and they need different repairs (#1425):
-  #   * a WRONG DIRECTORY — `uv` and the docker group name `/build/dashboard`, which is 404 on
-  #     develop-v2 (the dashboard moved to `dashboard/` at #1106). Repair: name the real path.
-  #   * a MISSING TARGET — `github-actions` and `docker-compose` name `/`, which exists on both
-  #     twins. Nothing is mispointed; the entries simply never target develop-v2. Repair: a
-  #     second entry carrying `target-branch:`.
-  # A fix that treats these as one edit repairs the first and silently leaves the second.
-  #
-  # DO NOT "level the twins" by deleting these. `develop` is frozen but still takes critical
-  # patches under lane policy exception (a), so its entries stay; and moving an entry to
-  # develop-v2 is what makes it stop running, which is how the gap went unnoticed for so long
-  # (CONTRIBUTING.md § The two lanes; the /os/rootfs comment above states the same mechanism).
-  # The duplication ends when develop-side watching is retired — that is #1169, and it is
-  # blocked while develop still ships patches. Until then, two entries per surface is the cost.
-  #
-  # WHY EVERY SURFACE IS LISTED HERE AND NOT JUST THE DASHBOARD. The twins are held level by
-  # TWIN PRs, not by sync merges: every hand-made change on develop has a develop-v2 partner
-  # (#1438 -> #1440, #1313 -> #1356, #1290 -> #1344), so a merge-base or ahead/behind count
-  # cannot see the mechanism and says nothing about whether the twins have drifted.
-  # What has no twin mechanism is a DEPENDABOT RAISE: it is opened against the default branch,
-  # and nobody hand-writes the partner. Measured 2026-09-03, those are the only two develop-only
-  # changes with no develop-v2 equivalent — ruff (#1423), 0.16.4 on develop against 0.16.3 here,
-  # and actions/download-artifact (#1424), v8.0.1 against v7.0.0 here. The github-actions row is
-  # the sharpest case: it was level until #1424 merged, and went stale and silent in the same
-  # instant, because the open PR was the only signal that a newer version existed. So build/* and
-  # docker-compose are carried by twin PRs for hand-made changes, and by Dependabot on develop-v2
-  # for raises once these entries land.
-  #
-  # `tests/integration/tor-client/Dockerfile` is covered by NO entry on either twin, and that is
-  # DELIBERATE, recorded here so it is an omission on purpose rather than by accident: it is test
-  # scaffolding that is never shipped or flashed, so a stale base there costs a rebuild, not a
-  # CVE in a user's hands.
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    target-branch: "develop-v2"
-    schedule:
-      interval: "weekly"
-    groups:
-      actions-v2:
-        patterns: ["*"]
-
-  # develop-v2's dashboard Python deps. Same subject as the `uv` entry above, different path:
-  # `dashboard/`, not `build/dashboard/` (#1106).
-  - package-ecosystem: "uv"
-    directory: "/dashboard"
-    target-branch: "develop-v2"
-    schedule:
-      interval: "weekly"
-    groups:
-      python-v2:
-        patterns: ["*"]
-    ignore:
-      # Same reason as the develop-side entry: protobuf/grpcio are pinned to what the vendored
-      # Tari gRPC stubs assert at import time (see dashboard/pyproject.toml on develop-v2); a
-      # major bump needs the stubs regenerated first.
-      - dependency-name: "protobuf"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "grpcio"
-        update-types: ["version-update:semver-major"]
-
-  # develop-v2's base-image digests. `/dashboard` is the moved path; the four `build/*` entries
-  # exist on both twins and are repeated here because nothing carries a develop-side bump across
-  # (see the measurement above). `/os/rootfs` is NOT repeated — it already has its own
-  # develop-v2 entry, and a second one naming the same directory would be a duplicate.
-  - package-ecosystem: "docker"
-    directories:
-      - "/dashboard"
-      - "/build/monero"
-      - "/build/p2pool"
-      - "/build/tor"
-      - "/build/xmrig-proxy"
-    target-branch: "develop-v2"
-    schedule:
-      interval: "weekly"
-    groups:
-      docker-v2:
-        patterns: ["*"]
-    ignore:
-      # Same policy as the develop-side docker entry: digest + patch within the pinned tag.
-      # Major/minor base bumps are deliberate migrations, not security updates.
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-
-  # develop-v2's third-party image digests pinned directly in docker-compose.yml. The file exists
-  # on both twins, so this is the missing-target case, not the wrong-directory one.
-  - package-ecosystem: "docker-compose"
-    directory: "/"
-    target-branch: "develop-v2"
-    schedule:
-      interval: "weekly"
-    groups:
-      compose-v2:
-        patterns: ["*"]
-    ignore:
-      # Same policy as the develop-side entry: digest + patch within the pinned tag.
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+  # `tests/integration/tor-client/Dockerfile` is covered by NO entry, and that is DELIBERATE,
+  # recorded here so it is an omission on purpose rather than by accident: it is test scaffolding
+  # that is never shipped or flashed, so a stale base there costs a rebuild, not a CVE in a user's
+  # hands.

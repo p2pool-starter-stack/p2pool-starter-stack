@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Dashboard-onion domain (#1105 Phase 1, develop-v2 lane): the dashboard-onion cluster stacked on
+# Dashboard-onion domain (#1105 Phase 1, appliance lane): the dashboard-onion cluster stacked on
 # test-dashboard.sh — generate_caddyfile's onion vhost render (the bridge-gateway HTTP site plus,
 # once the .onion address is provisioned, its own self-signed HTTPS vhost, #343), the shared
 # access-log render across ALL vhosts (LAN + onion HTTP + onion HTTPS, #349), the onion client-auth

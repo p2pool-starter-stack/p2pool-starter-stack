@@ -8,31 +8,19 @@
 # loudly and says so. Run `--self-test` to check the overlap logic against fixtures.
 set -euo pipefail
 
-# The base the gate grades against, and #1557: this was a bare `COMPARE=origin/develop` with no
-# override. `develop` is FROZEN and all work lands on `develop-v2`, so every lane branch was graded
-# over the whole twin divergence instead of its own patch — on one branch, 572 files instead of 2
-# and 87 measured dashboard files instead of 0. Green over the wrong set is the same word as green
-# over the right one, and there is no rc, no warning and no empty output to notice it.
-#
-# On a pull_request run GITHUB_BASE_REF is the PR's own base and ci.yml already fetches it; reading
-# it here is the whole of #1557's other half, so that shared file needs no change. Off a PR it is
-# unset (a local run, or a push build — `push:` only fires on main/develop): prefer develop-v2,
-# where work lands, and fall back to develop when develop-v2 was never fetched, which is the push
-# case. `COMPARE` in the environment still wins, so a caller can grade against anything.
-pick_compare() { # <github-base-ref> <preferred-exists: yes|no> <preferred> <fallback> -> the ref
+# The base the gate grades against (#1557): on a pull_request run GITHUB_BASE_REF is the PR's own
+# base and ci.yml already fetches it — grading against anything else measures the wrong set, and
+# green over the wrong set is the same word as green over the right one (once: 572 files instead
+# of 2). Off a PR (a local run, or a push build) the base is `develop`, the one integration branch.
+# `COMPARE` in the environment still wins, so a caller can grade against anything.
+pick_compare() { # <github-base-ref> <fallback> -> the ref
     [ -n "$1" ] && {
         echo "origin/$1"
         return 0
     }
-    [ "$2" = yes ] && {
-        echo "origin/$3"
-        return 0
-    }
-    echo "origin/$4"
+    echo "origin/$2"
 }
-_pref=develop-v2
-if git rev-parse --verify --quiet "origin/$_pref" >/dev/null; then _has=yes; else _has=no; fi
-COMPARE="${COMPARE:-$(pick_compare "${GITHUB_BASE_REF:-}" "$_has" "$_pref" develop)}"
+COMPARE="${COMPARE:-$(pick_compare "${GITHUB_BASE_REF:-}" develop)}"
 # The tree the dashboard coverage run measures (pytest --cov=mining_dashboard). Python outside
 # it (tests, integration fakes) is never in coverage.xml, so it can't make the gate applicable.
 MEASURED='dashboard/mining_dashboard/*.py'
@@ -124,10 +112,8 @@ if [ "${1:-}" = "--self-test" ]; then
             st_fail=1
         fi
     }
-    expect_eq "on a PR, GITHUB_BASE_REF is the base" origin/develop-v2 "$(pick_compare develop-v2 no develop-v2 develop)"
-    expect_eq "GITHUB_BASE_REF outranks the preference, even naming the frozen branch" origin/develop "$(pick_compare develop yes develop-v2 develop)"
-    expect_eq "off a PR, develop-v2 when it is fetched" origin/develop-v2 "$(pick_compare "" yes develop-v2 develop)"
-    expect_eq "off a PR, fall back to develop when develop-v2 is absent" origin/develop "$(pick_compare "" no develop-v2 develop)"
+    expect_eq "on a PR, GITHUB_BASE_REF is the base" origin/release-x "$(pick_compare release-x develop)"
+    expect_eq "off a PR, the base is develop" origin/develop "$(pick_compare "" develop)"
 
     [ "$st_fail" -eq 0 ] && {
         echo "patch-coverage self-test OK"

@@ -27,35 +27,11 @@ TARGET_LINES=400
 HARD_CEILING=800
 BUDGET_FILE="docs/dev/file-budget.tsv"
 
-# The branch this PR ratchets against — the twin lane it will merge into, NOT a fixed branch.
-# develop-v2 carries develop's whole history plus the appliance code, so the same files are
-# legitimately LARGER there; ratcheting a develop-v2 PR against origin/develop would reject
-# every one of those larger ceilings as an illegal "raise". The lane is a property of the
-# branch's HISTORY, never of being level with the lane tip: a develop-v2 branch carries
-# v2-only commits in its merge-base with develop-v2, and develop's own history never does.
-# The previous rule (is the lane TIP an ancestor of HEAD) false-REDded every in-flight
-# develop-v2 branch the moment any other merge moved the lane. Each candidate
-# falls back to its bare local name; if nothing resolves the monotonic check is skipped
-# with a loud note.
+# The branch this PR ratchets against: `develop`, the one integration branch (the appliance twin
+# it once had to detect was retired into it on 2026-09-06). The remote ref first, then the bare
+# local name; if neither resolves the monotonic check is skipped with a loud note.
 resolve_base_ref() {
-    local v2 dev mb
-    for v2 in origin/develop-v2 develop-v2; do
-        git rev-parse -q --verify "$v2" >/dev/null 2>&1 || continue
-        mb=$(git merge-base HEAD "$v2" 2>/dev/null) || mb=""
-        [ -n "$mb" ] || break
-        for dev in origin/develop develop; do
-            git rev-parse -q --verify "$dev" >/dev/null 2>&1 || continue
-            if git merge-base --is-ancestor "$mb" "$dev" 2>/dev/null; then
-                echo "$dev"
-            else
-                echo "$v2"
-            fi
-            return 0
-        done
-        # develop-v2 exists but no develop ref at all: v2-lane by elimination.
-        echo "$v2"
-        return 0
-    done
+    local dev
     for dev in origin/develop develop; do
         if git rev-parse -q --verify "$dev" >/dev/null 2>&1; then
             echo "$dev"
@@ -256,14 +232,14 @@ check_monotonic() {
         # run that skipped is indistinguishable from a run that checked. Outside CI the NOTE
         # stays: a local checkout legitimately may not carry the base branch refs.
         if [ "${GITHUB_ACTIONS:-}" = true ]; then
-            echo "file-budget: FAIL — no base ref (origin/develop-v2, develop-v2, origin/develop" \
-                "or develop) resolvable under GITHUB_ACTIONS. The monotonic-ceiling check cannot" \
+            echo "file-budget: FAIL — no base ref (origin/develop or develop) resolvable under" \
+                "GITHUB_ACTIONS. The monotonic-ceiling check cannot" \
                 "run, and a job that resolves no base ref at all is misconfigured rather than" \
                 "clean: restore fetch-depth: 0 on this job (#1452, #1739)."
             return 1
         fi
-        echo "file-budget: NOTE — no base ref (origin/develop-v2, develop-v2, origin/develop or" \
-            "develop) resolvable; skipping the monotonic-ceiling check. A checkout without the base" \
+        echo "file-budget: NOTE — no base ref (origin/develop or develop) resolvable; skipping" \
+            "the monotonic-ceiling check. A checkout without the base" \
             "branch refs does this; in CI it means the job has lost its fetch-depth: 0 (#1452)." >&2
         return 0
     fi

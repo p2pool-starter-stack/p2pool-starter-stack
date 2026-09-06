@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Control-channel spool + audit hardening domain (#1105 Phase 1, develop-v2 lane): the sections
+# Control-channel spool + audit hardening domain (#1105 Phase 1, appliance lane): the sections
 # that prove the control channel's own storage cannot be grown without bound by a caller. The
 # audit log is trimmed to its newest entries BEFORE an append once it passes the size cap, so the
 # file shrinks instead of growing forever and the fresh entry is always last (#349); and the

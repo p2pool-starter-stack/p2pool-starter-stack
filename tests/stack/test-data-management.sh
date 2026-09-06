@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Control-channel data-management domain (#1105 Phase 1, develop-v2 lane): the sections that prove
+# Control-channel data-management domain (#1105 Phase 1, appliance lane): the sections that prove
 # where a dashboard-confirmed data-dir move may point, and that the confirm gate does not tax the
 # ordinary case. #719 made the *_DATA_DIR moves confirm-gated, but assert_safe_dir is a BLOCKLIST,
 # so a confirmed move could still target any non-blocklisted absolute path; control_approval_gate

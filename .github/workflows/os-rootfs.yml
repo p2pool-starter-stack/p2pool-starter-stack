@@ -8,25 +8,18 @@ name: OS rootfs scan
 # because the xmrig prebuild makes this the slowest image in the repo — the paths filter keeps
 # it off stack-only PRs.
 #
-# THIS FILE LIVES ON THE DEFAULT BRANCH (`develop`) AND MUST STAY THERE, even though everything it
-# scans is on `develop-v2` (#1162). GitHub fires `schedule:` from the default branch only, so while
-# this file was develop-v2-only its weekly sweep never ran once — 96 runs over 18 days, every one a
-# `pull_request`. Living on `develop` is only half of it: a job on `develop` still checks out
-# `develop`, which has no os/, so the checkout below names the appliance branch explicitly for every
-# trigger that is not a PR. Do not "fix" the asymmetry by moving the file back — the rule and the
-# one-command check for it are in CONTRIBUTING.md § The two lanes.
+# THIS FILE LIVES ON THE DEFAULT BRANCH (`develop`), which also carries the appliance tree it
+# scans (the appliance's twin branch was retired into develop on 2026-09-06). GitHub fires
+# `schedule:` from the default branch only (#1162): while this file lived on a non-default branch
+# its weekly sweep never ran once — 96 runs over 18 days, every one a `pull_request`. Prove a
+# scheduled job fires from run history, never from this file; the one-command check is in
+# CONTRIBUTING.md § One integration branch.
 on:
   pull_request:
-    # A PR whose BASE has no os/ cannot be scanned, and a green check named "Build + scan the
-    # appliance rootfs" that scanned nothing is the same lie in a smaller font. `.trivyignore` is in
-    # the paths filter below and lives on both lanes, so without this a PR editing it on `develop` —
-    # #1156 added four mutes that way — would report the appliance clean under a mute it never
-    # applied. Excluding the two os/-less long-lived branches keeps the filter honest while leaving
-    # stacked appliance branches covered. The appliance-side sync PR is what scans a `.trivyignore`
-    # change for real.
-    branches-ignore:
-      - "develop"
-      - "main"
+    # Every PR targets `develop`, which carries os/, so the paths filter alone decides which PRs
+    # build and scan: a change under os/ or to `.trivyignore` (a new mute must be scanned for real —
+    # #1156 added four that were never applied to the appliance). Until 2026-09-06 PRs into the
+    # os/-less default branch were excluded here; that exclusion would now skip every PR.
     paths:
       - "os/**"
       - ".github/workflows/os-rootfs.yml"
@@ -51,23 +44,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # A PR run scans the PR (the empty string is checkout's default: the triggering ref).
-          # Everything else — the weekly sweep and any manual dispatch — is asking about the
-          # appliance, which lives on develop-v2 whichever branch the trigger fired from. Naming it
-          # here is what makes the sweep real rather than a green skip (#1162). It also means a
-          # dispatch is a true rehearsal of the schedule instead of a different code path.
-          # Written negated on purpose: in an Actions expression `A && B || C` is not a
-          # ternary, it is real boolean logic, and '' is FALSY. `event == 'pull_request' && ''`
-          # would collapse to '' and fall through to 'develop-v2', so every PR would scan
-          # develop-v2 instead of the PR. The truthy value has to be the develop-v2 arm.
-          ref: ${{ github.event_name != 'pull_request' && 'develop-v2' || '' }}
+          # The triggering ref, checkout's default: a PR run scans the PR; the weekly sweep and a
+          # manual dispatch run on `develop`, which carries `os/` (#1162).
           persist-credentials: false
       - name: Check the appliance tree exists
-        # Only a PR may legitimately miss the tree: a PR into `develop` can reach this workflow
-        # through the .trivyignore path filter, and `develop` has no os/. Every other trigger has
-        # just checked out develop-v2 by name, so a miss there means the checkout did not do what
-        # it was asked — and a quiet skip would report a green weekly sweep of nothing, which is
-        # the exact failure #1162 was filed for. Fail instead.
+        # Only a PR may legitimately miss the tree: a branch cut before the appliance tree existed
+        # can reach this workflow through the .trivyignore path filter. Every other trigger runs on
+        # `develop`, which carries os/, so a miss there means the checkout did not do what it was
+        # asked — and a quiet skip would report a green weekly sweep of nothing, which is the exact
+        # failure #1162 was filed for. Fail instead.
         id: tree
         env:
           EVENT: ${{ github.event_name }}
@@ -80,7 +65,7 @@ jobs:
             echo "The appliance rootfs was NOT scanned: os/rootfs/Dockerfile is not on this PR's branch." \
               >>"$GITHUB_STEP_SUMMARY"
           else
-            echo "::error::checked out develop-v2 but os/rootfs/Dockerfile is missing — the appliance checkout did not do what it was asked, so this run cannot report a scan it did not do"
+            echo "::error::checked out the triggering ref but os/rootfs/Dockerfile is missing — the checkout did not do what it was asked, so this run cannot report a scan it did not do"
             exit 1
           fi
       - name: docker build os/rootfs

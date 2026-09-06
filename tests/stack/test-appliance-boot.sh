@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Appliance boot domain (#1105 Phase 1, develop-v2 lane): what an appliance does between power-on
+# Appliance boot domain (#1105 Phase 1, appliance lane): what an appliance does between power-on
 # and a slot it is willing to keep. The baked image store is loaded by archive digest rather than
 # by tag, rebuilds itself when an interrupted write leaves it damaged, and narrates a slow load
 # without narrating a fast one (#798). pithead-boot then wires the miner leg AFTER the slot commit,

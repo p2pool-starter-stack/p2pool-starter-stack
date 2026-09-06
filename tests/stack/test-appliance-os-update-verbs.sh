@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Appliance os-update verbs domain (#1105 Phase 1, develop-v2 lane): the dashboard-driven A/B
+# Appliance os-update verbs domain (#1105 Phase 1, appliance lane): the dashboard-driven A/B
 # update path, exercised through the control channel the way an operator reaches it. Two black-box
 # sections drive a release-shaped appliance sandbox — control channel on, PITHEAD_APPLIANCE forced,
 # and the toolchain stubbed (rauc, curl, systemctl, df) — so the whole

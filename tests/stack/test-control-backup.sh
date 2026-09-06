@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Control-channel backup-verb domain (#1105 Phase 1, develop-v2 lane): the backup verb sections
+# Control-channel backup-verb domain (#1105 Phase 1, appliance lane): the backup verb sections
 # (#908). control_backup generates its OWN passphrase rather than accepting one from the container
 # and runs the real backup as a child "$self backup -y", so stack_backup's own error() exit cannot
 # take the drain loop's other pending requests with it; the one-time kit it hands back is visible

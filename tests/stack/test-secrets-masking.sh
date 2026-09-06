@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Control-channel secrets-masking domain (#1105 Phase 1, develop-v2 lane): the four sections that
+# Control-channel secrets-masking domain (#1105 Phase 1, appliance lane): the four sections that
 # prove a secret never leaves the host in the clear. The pre-masked prefill copy and the host-side
 # secret merge the dashboard container reads instead of the raw config.json (#440), the per-field
 # .env line-injection guard (#33 hardening), the client-auth requirement on a published onion

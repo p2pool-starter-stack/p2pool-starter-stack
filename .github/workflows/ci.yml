@@ -17,10 +17,10 @@ on:
   #                 tracking issue rather than reddening, because "a shipped image has a fixable
   #                 CVE" asks for a patch release, which is a decision a person makes.
   #
-  # NEITHER FIRES FROM THIS FILE — `schedule:` is read from the DEFAULT branch only, so both run
-  # from `develop`'s copy and this cron block is inert. It is here so the twins stay level, and so
-  # `make lint-trivy-parity` (this lane only) covers sweep-shipped's trivy step at all. Change the
-  # cadence on `develop`, and prove it fired with `gh run list --json event`.
+  # THIS cron block is the one that fires: `schedule:` is read from the DEFAULT branch only, and
+  # `develop` is it. `make lint-trivy-parity` covers sweep-shipped's trivy step. Change the cadence
+  # here, and prove it fired with `gh run list --json event` — a schedule that never runs looks
+  # exactly like one that ran and found nothing (#1162).
   schedule:
     - cron: "0 5 * * 1" # Mondays 05:00 UTC
 
@@ -62,7 +62,7 @@ jobs:
       - name: "Patch-coverage gate — changed lines >=90% (diff-cover vs the PR's own base, #286)"
         # GITHUB_BASE_REF is set on pull_request runs; push runs fall back to develop. Grading a PR
         # against develop instead of its base branch charges it the base branch's whole coverage
-        # debt (a bash-only PR into the appliance branch failed on wizard.py lines it never touched).
+        # debt (a bash-only appliance PR once failed on wizard.py lines it never touched).
         run: |
           git fetch --no-tags origin develop "${GITHUB_BASE_REF:-develop}"
           make test-patch-coverage
@@ -223,7 +223,7 @@ jobs:
         # against the rebuild's is the whole reason both exist, and two trivy releases apart is
         # enough to make them disagree for reasons that have nothing to do with the images. If the
         # step above ever loses its `version:`, this comparison stops meaning anything, and on
-        # develop no lint will say so (`make lint-trivy-parity` is develop-v2's).
+        # nothing but `make lint-trivy-parity` will say so.
         #
         # trivy pulls the digest from the registry itself — nothing is built here.
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -415,7 +415,7 @@ jobs:
     name: Shell tests (shellcheck + pithead suite)
     if: github.event_name != 'schedule' # scheduled runs are the CVE sweep — build-images only (#833)
     runs-on: ubuntu-latest
-    timeout-minutes: 25 # 11-15 min is this job's honest range on develop-v2 (73 runs: 633-902 s, 21 within 60 s of the old 900 s cap) and two runs were cancelled AT it (#1789)
+    timeout-minutes: 25 # 11-15 min is this job's honest range on the appliance lane (73 runs: 633-902 s, 21 within 60 s of the old 900 s cap) and two runs were cancelled AT it (#1789)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -496,7 +496,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0  # lint-file-budget's ratchet needs origin/develop-v2 to exist, or it skips (#1452, #1608)
+          fetch-depth: 0  # lint-file-budget's ratchet needs origin/develop to exist, or it skips (#1452, #1608)
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
