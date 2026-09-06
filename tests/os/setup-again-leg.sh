@@ -22,6 +22,11 @@ _setup_again_boot() {
         bad "could not write next_entry into the ESP's grubenv"
         return 1
     }
+    # Where the console log ends NOW: the session below reads only what this boot prints after
+    # it. The log is continuous across in-guest reboots, so "the last token on the console" is
+    # the previous session's until the new one appears — leg 3 once posted leg 2's token off
+    # exactly that and the gate refused it.
+    SA_SERIAL_OFFSET=$(stat -c %s "$SERIAL" 2>/dev/null || echo 0)
     _reboot_wait reboot "$1" || {
         bad "the guest never returned from the reboot into the setup entry"
         return 1
@@ -38,20 +43,22 @@ _setup_again_boot() {
         bad "pithead-setup-again is '${st:-unreadable}' 120 s into the boot — the flag was not honoured"
 }
 
-# The wizard session on a set-up-again boot: a token this boot minted (not $1, the last session's),
-# the page served, a session cookie in $jar. Sets token and jar in the caller; rc 1 = reported.
-_setup_again_session() { # $1 = the previous session's token
-    local tries=0
+# The wizard session on a set-up-again boot: the token THIS boot minted (read past the offset
+# _setup_again_boot took before the reboot, never the last session's), the page served, a session
+# cookie in $jar. Sets token and jar in the caller; rc 1 = reported.
+_setup_again_session() {
+    local tries=0 from="${SA_SERIAL_OFFSET:-0}"
+    # A harness-driven guest boot truncates the console log; then everything in it is this boot's.
+    [ "$(stat -c %s "$SERIAL" 2>/dev/null || echo 0)" -ge "$from" ] || from=0
     token=""
     while [ "$tries" -lt 40 ]; do
-        token=$(tr -d '\r' <"$SERIAL" | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
-        [ -n "$token" ] && [ "$token" != "$1" ] && break
-        token=""
+        token=$(tail -c +"$((from + 1))" "$SERIAL" | tr -d '\r' | grep -oE 'pit-[A-Z0-9]{6}' | tail -1)
+        [ -n "$token" ] && break
         sleep 3
         tries=$((tries + 1))
     done
     [ -n "$token" ] || {
-        bad "no NEW one-time token appeared on the console (the last session's was $1)"
+        bad "no one-time token appeared on the console after the reboot into the setup entry"
         return 1
     }
     _wait_setup_page 120 || {
@@ -85,8 +92,9 @@ _setup_again_rig_submit() {
         bad "no rig card appeared after Set up again"
         return 1
     }
-    sa_card_address=$(printf '%s' "$card" | jq -r '.address // ""' 2>/dev/null)
-    printf '%s' "$card" | jq -r '.token // ""' 2>/dev/null
+    # Both fields on ONE line: this runs under $(...), so a variable set here dies with the
+    # subshell — the first battery read an empty address off exactly that (#1318 rig-leg red).
+    printf '%s' "$card" | jq -r '"\(.token // "") \(.address // "")"' 2>/dev/null
     curl -sSk -b "$jar" -X POST "https://$ip/handoff-ack" -o /dev/null 2>/dev/null || true
 }
 
@@ -114,7 +122,7 @@ rig_setup_again_legs() {
     _ssh "systemctl is-active --quiet xmrig" 2>/dev/null &&
         bad "the miner is running beside the open page — the normal boot was taken" ||
         ok "the miner is not started beside the page"
-    _setup_again_session "$token" || return
+    _setup_again_session || return
     saved=$(_ssh "cat $SA_SPOOL/saved-role.json" 2>/dev/null | tr -d '\r')
     printf '%s' "$saved" | jq -e '.role == "rig" and .worker == "kvm-rig" and .pool == "127.0.0.1:22"' >/dev/null 2>&1 &&
         ok "the page is told the saved role: rig, kvm-rig -> 127.0.0.1:22" ||
@@ -137,8 +145,15 @@ rig_setup_again_legs() {
     done
     [ "$st" = active ] && ok "Keep it: the page closed and the unit ended clean (active, exited)" ||
         bad "the setup-again unit is '${st:-unreadable}' 120 s after keep-role was written"
-    _ssh "journalctl -b -u pithead-setup-again -o cat --no-pager 2>/dev/null | grep -q 'saved settings are kept'" 2>/dev/null &&
-        ok "the host logged the keep, by name" || bad "no 'saved settings are kept' line in the setup-again journal"
+    # The keep line is a JOURNAL line (journal+console on the unit), but this is a rig: minutes
+    # into every boot pithead-boot flips journald volatile and reclaims the persistent journal
+    # (#1817, 14-local-miner.sh), taking this boot's earlier entries with it — by the time the
+    # miner is up, `journalctl -b -u pithead-setup-again` is empty. journald's own console
+    # forward of the entry (`pithead[<pid>]: [pithead] ...`, distinct from _console's bare tty
+    # write) is the durable witness that the line reached the journal.
+    tr -d '\r' <"$SERIAL" | grep -qE 'pithead\[[0-9]+\]: \[pithead\] Setup closed: the saved settings are kept' &&
+        ok "the host logged the keep, by name (the journal entry, via its console forward)" ||
+        bad "no 'saved settings are kept' journal entry reached the console"
     _ssh "test ! -e $SA_SPOOL/keep-role" 2>/dev/null && ok "keep-role was consumed" ||
         bad "keep-role is still in the spool — a later session would close at once"
     _rig_mining_up 24 && ok "the rig mines again after Keep — pithead-boot ran the boot it would have" ||
@@ -150,12 +165,14 @@ rig_setup_again_legs() {
 
     info "set-up-again leg 2 — Set up again as the same rig keeps the token"
     _setup_again_boot 300 || return
-    _setup_again_session "$token" || return
+    _setup_again_session || return
     card_tok=$(_setup_again_rig_submit kvm-rig) || {
         rm -f "$jar"
         return
     }
     rm -f "$jar"
+    sa_card_address=${card_tok#* }
+    card_tok=${card_tok%% *}
     [ -n "$card_tok" ] && [ "$card_tok" = "$tok0" ] &&
         ok "same role + worker: the card shows the SAME token — the coordinator's adoption survives" ||
         bad "the card's token changed on an unchanged rig ('${card_tok:0:8}' vs '${tok0:0:8}')"
@@ -170,18 +187,33 @@ rig_setup_again_legs() {
         ok "still no coordinator config on the rig" || bad "a config.json appeared on the rig after Set up again"
 }
 
-# Leg 3, at the end of the phase: the rig runs the updated slot B, committed. $1 = the last
-# session's one-time token. Set up again as a coordinator replaces the role and its data.
+# Leg 3, at the end of the phase: the rig runs the updated slot B, committed. Set up again as a
+# coordinator replaces the role and its data. ($1, the last session's token, is no longer what
+# the session keys on — see _setup_again_boot — but run.sh still hands it over.)
 rig_setup_again_coordinator_leg() {
     local token="$1" jar="" cmd scode tries=0 n=0 role
     info "set-up-again leg 3 — Set up again as a coordinator replaces the role (from slot B)"
+    # The COMMIT leg's reboot left GRUB's try-count on B raised (B_TRY=1) until pithead-boot
+    # re-commits it on the miner running. The setup entry follows what the DEFAULT would boot,
+    # and an uncommitted B is not it — the first battery rebooted inside that window and the
+    # entry correctly took A. Wait for the rig's own re-commit; that it happens is the property.
+    while [ "$n" -lt 24 ]; do
+        case "$(_ssh 'grub-editenv /boot/efi/grub/grubenv list' 2>/dev/null | tr -d '\r' | tr '\n' ' ')" in
+        *"B_OK=1 "*"B_TRY=0"* | *"B_TRY=0"*"B_OK=1"*) break ;;
+        esac
+        sleep 5
+        n=$((n + 1))
+    done
+    [ "$n" -lt 24 ] && ok "the updated slot re-committed itself on the next boot (B_OK=1 B_TRY=0), no hands" ||
+        bad "slot B did not re-commit within 120 s of the COMMIT reboot — the setup entry would follow the fallback"
+    n=0
     _setup_again_boot 300 || return
     cmd=$(_ssh cat /proc/cmdline 2>/dev/null | tr -d '\r')
     case "$cmd" in
     *pithead.setup=1*rauc.slot=B* | *rauc.slot=B*pithead.setup=1*) ok "after the update the setup entry followed the default to slot B" ;;
     *) bad "the setup entry did not follow the default to slot B — cmdline: $(printf '%s' "$cmd" | cut -c1-160)" ;;
     esac
-    _setup_again_session "$token" || return
+    _setup_again_session || return
     scode=$(curl -sSk -b "$jar" --data "monero_wallet=$HARNESS_WALLET&tari_wallet=$HARNESS_TARI&pool=mini" "https://$ip/submit" -o /dev/null -w '%{http_code}' 2>/dev/null)
     [ "$scode" = "200" ] || {
         bad "coordinator submit on the set-up-again page returned ${scode:-none}, want 200"
