@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# GENERATED FILE — do not edit. Built from lib/pithead/*.sh (53 slices, LC_ALL=C name order) by:
+#   scripts/build-pithead.sh
+# A drifted copy fails `scripts/build-pithead.sh --check` (make lint-pithead-parity).
 #
 # Management script for the Monero + Tari merge-mining stack.
 #
