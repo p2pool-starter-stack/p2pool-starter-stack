@@ -64,8 +64,9 @@ provision_page_error() { # <ip> <jar>
 # --- self-test (#1936) -----------------------------------------------------------------------
 #
 # Driven by `tests/os/provision-browser-submit.sh --self-test`, tier 1, no guest: curl is a shim
-# answering four shapes — a timeout, a 200 without .config, an HTML error page, a config that
-# arrives on the third read with a blank line before the status — and sleep is a no-op. Each
+# answering four shapes — a timeout, a 200 without .config, an HTML error page longer than the
+# 60-byte bound, a config that arrives on the third read with a blank line before the status —
+# and sleep is a no-op. Each
 # reason is asserted on the exact string the battery log will carry. The last case is the control
 # that the shim answered, not the real curl: no real read serves `.error` = x.
 _wsp_case() { # <name> <got> <want>
@@ -82,7 +83,7 @@ _wsp_self_test() {
         case "$shape" in
         timeout) printf '\n000' && return 28 ;;
         noconfig) printf '{"error":"x"}\n200' ;;
-        html) printf '<html>502 Bad Gateway\001</html>\n502' ;;
+        html) printf '<html><body>502 Bad Gateway\001 from an upstream that never answered in time</body></html>\n502' ;;
         late)
             [ "$(wc -l <"$calls")" -ge 3 ] || { printf '\n000' && return 28; }
             printf '{"config":{"monero":{"wallet_address":"4ABCDEFGHIJ"}}}\n\n200'
@@ -99,7 +100,7 @@ _wsp_self_test() {
     _wsp_case noconfig "$WIZ_STATE_WHY" 'http=200 curl=0 after 6x5s body={"error":"x"}' || f=$((f + 1))
     shape=html
     : >"$calls"
-    _wsp_case html "$(provision_browser_submit h j)" 'no-served-config(http=502 curl=0 after 6x5s body=<html>502 Bad Gateway?</html>)' || f=$((f + 1))
+    _wsp_case html "$(provision_browser_submit h j)" 'no-served-config(http=502 curl=0 after 6x5s body=<html><body>502 Bad Gateway? from an upstream that never ans)' || f=$((f + 1))
     shape=late
     : >"$calls"
     wizard_state_poll h j '.config // empty' || f=$((f + 1))
@@ -121,7 +122,7 @@ _wsp_self_test() {
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ] && [ "${1:-}" = "--self-test" ]; then
-    set -u # what tests/os/run.sh runs the helpers under
+    set -uo pipefail # what tests/os/run.sh runs the helpers under
     _wsp_self_test
     exit $?
 fi
