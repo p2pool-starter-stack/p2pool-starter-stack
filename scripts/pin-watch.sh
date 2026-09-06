@@ -208,9 +208,9 @@ source "$ROOT/scripts/release.sh"
 #
 # BOUNDARY, stated because a silent one is what this whole issue is about: GitHub runs `schedule:`
 # from the DEFAULT branch, so a single-job workflow only ever reads `develop` and these two rows
-# are simply absent from a run that looks complete (#1146). pin-watch.yml therefore runs this
-# script TWICE — once on the triggering ref, once against an explicit `develop-v2` checkout — and
-# publishes the two reports to two separate tracking issues. The report below says which it is.
+# were simply absent from a run that looks complete while the default branch had no `os/`
+# (#1146). Since 2026-09-06 `develop` carries the appliance tree, so one run reads every pin and
+# the report below carries the appliance block whenever the tree has `os/rootfs/Dockerfile`.
 components="monero p2pool xmrig-proxy tari caddy socket-proxy"
 lane="the product stack"
 # A real `if`, for the same reason the publish step in pin-watch.yml uses one: `[ -f X ] && var=…`
@@ -270,10 +270,8 @@ done
 printf '%s\n\n' "Upstream currency for $lane, checked weekly by \`scripts/pin-watch.sh\`. This never bumps anything."
 printf '| component | pinned | upstream latest | |\n|---|---|---|---|\n%s\n' "$rows"
 printf '%s\n' "Not watched here, because they publish no GitHub release feed: the alpine base image, \`ubuntu:24.04\`, \`python:3.11-slim\`. Dependabot's docker ecosystem reads those \`FROM\` lines and does cover them."
-# Both arms, so this file stops being a twin-sync conflict: `develop-v2` had already turned this
-# line into an if/else to carry the _COMMIT warning below, and a competing one-line rewrite here
-# would collide with it on every sync. The appliance arm is dead code on `develop` and correct on
-# `develop-v2`, which is the point.
+# Both arms stay: the else-arm is what a checkout without `os/` reports (a branch cut before the
+# appliance tree existed), and it says so instead of printing a table that silently lacks two rows.
 if [ -f "$ROOT/os/rootfs/Dockerfile" ]; then
     # The rootfs COMPILES these two from source on a pinned Go toolchain rather than downloading a
     # release binary, so each carries a paired _COMMIT ARG and the VERSION alone decides nothing.
@@ -286,7 +284,7 @@ if [ -f "$ROOT/os/rootfs/Dockerfile" ]; then
     # to write that commit into the ARG. Saying which commit here saves them repeating the lookup.
     printf '%s\n' "\`RIGFORGE_REF\` pins a COMMIT, not a tag, so a moved tag cannot change the bake. The row above compares it against the commit its latest release points at; to bump it, write that commit — \`gh api repos/p2pool-starter-stack/rigforge/commits/<tag> --jq .sha\` — into \`ARG RIGFORGE_REF\`, release by release."
 else
-    printf '%s\n' "The appliance rootfs's own pins (its docker-compose, cosign and baked RigForge tree, all built from \`ARG\` values that no dependabot ecosystem can read) are NOT in this table. They are in the appliance report, which the same workflow run produces from an explicit \`develop-v2\` checkout (#1146)."
+    printf '%s\n' "The appliance rootfs's own pins (its docker-compose, cosign and baked RigForge tree, all built from \`ARG\` values that no dependabot ecosystem can read) are NOT in this table because this checkout has no \`os/rootfs/Dockerfile\`. A run on \`develop\`, which carries the appliance tree, lists them (#1146)."
 fi
 printf '%s\n' "Also NOT checked: whether each image pin's digest still corresponds to its tag. The digest is what actually runs, so a half-done bump is invisible to the table above."
 if [ "$failed" -gt 0 ]; then

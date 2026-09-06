@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Appliance reset domain (#1105 Phase 1, develop-v2 lane): the two-tier reset, and the boot-time
+# Appliance reset domain (#1105 Phase 1, appliance lane): the two-tier reset, and the boot-time
 # wipe that carries out its heavier half. config-reset clears the operator's configuration and the
 # rendered files that came from it while leaving the chain data alone, because re-running setup must
 # not cost a resync; factory-reset does not wipe anything itself but arms a marker the next boot

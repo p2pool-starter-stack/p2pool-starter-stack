@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# install.sh verification domain (#1105 Phase 1, develop-v2 lane): everything the installer does
+# install.sh verification domain (#1105 Phase 1, appliance lane): everything the installer does
 # before it will put a bundle on a box. The host gate that hard-fails on a platform the stack
 # cannot run on, before any download at all (#77 phase 1), and the download-verification path that
 # fails CLOSED — a bad sha, a bad signature, a missing key, an occupied target or a corrupt archive

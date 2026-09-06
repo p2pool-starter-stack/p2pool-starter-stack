@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# RAUC loop-partition wait domain (#1105 Phase 1, develop-v2 lane): the one section covering
+# RAUC loop-partition wait domain (#1105 Phase 1, appliance lane): the one section covering
 # os/rauc/loop-wait.sh's wait_loop_partitions. It proves the negative half of that contract, which
 # is all a non-root tier honestly can: partition nodes that never appear exhaust the poll and
 # return 1, and regular files sitting at the p1/p2 paths do NOT satisfy the wait — block devices

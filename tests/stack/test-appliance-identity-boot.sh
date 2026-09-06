@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Appliance identity and boot-provisioning domain (#1105 Phase 1, develop-v2 lane): the overlay
+# Appliance identity and boot-provisioning domain (#1105 Phase 1, appliance lane): the overlay
 # units that give a freshly imaged machine an identity of its own, and the boot-time work whose
 # success a later boot has to be able to prove. pithead-machine-id restores THROUGH
 # /etc/machine-id rather than unmounting it first, because on a read-only-root A/B slot the

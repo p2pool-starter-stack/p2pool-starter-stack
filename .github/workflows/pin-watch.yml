@@ -12,15 +12,10 @@ name: Upstream pin watch
 # rather than one table because the two trees have different pins and different owners; merging
 # them would mean one lane's rows silently vanishing whenever the other lane could not be read.
 #
-# This file lives on the DEFAULT branch on purpose. The previous pin-watch.yml lived on
-# `develop-v2`, where a `schedule:` can never fire, and so ran exactly zero times — the appliance
-# pins it watched were never checked once. That is the same defect class as #1048 and #1064.
+# This file lives on the DEFAULT branch on purpose: a `schedule:` fires from the default branch only,
+# and a watcher that lives elsewhere runs exactly zero times while looking fine (#1048, #1064, #1146).
+# One run reads every pin; the report carries the appliance block whenever the tree has `os/rootfs/Dockerfile`.
 #
-# Living on the default branch means only `develop`'s tree gets read, and `develop` has no `os/` —
-# so the appliance's own two pins were invisible in a run that looked complete (#1146). The `lane`
-# matrix below fixes that by checking out `develop-v2` explicitly for a second report. It is the
-# same defect as the paragraph above, one level in: the previous watcher never ran, this one ran
-# with a lane missing. Both look identical from the Actions tab.
 on:
   schedule:
     - cron: "30 6 * * 1" # Mondays 06:30 UTC, after the image sweeps
@@ -43,16 +38,10 @@ jobs:
       matrix:
         include:
           # `ref: ""` is checkout's own default: the ref that triggered the run. On the weekly
-          # schedule that is the default branch, which is what this lane has always read.
+          # schedule that is the default branch, which carries every pin the report covers.
           - lane: product
             ref: ""
             title: "Upstream pin currency (weekly report)"
-          # The appliance rootfs COMPILES docker-compose and cosign from `ARG` values, so nothing
-          # else can see them: dependabot's docker ecosystem reads `FROM` lines, and `cosign` is the
-          # verifier the whole signed-update chain rests on. They exist on this lane only.
-          - lane: appliance
-            ref: develop-v2
-            title: "Upstream pin currency — appliance rootfs (weekly report)"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

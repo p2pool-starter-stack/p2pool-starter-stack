@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Control-channel core domain (#1105 Phase 1, develop-v2 lane): the six black-box sections that
+# Control-channel core domain (#1105 Phase 1, appliance lane): the six black-box sections that
 # build the control sandbox and drive it. First `apply` — fail-closed when the
 # control channel is enabled without a dashboard password, the .env render of the control keys and
 # the spool dirs, --dry-run/--porcelain previews that touch no container and leave .env alone, the

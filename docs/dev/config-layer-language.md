@@ -4,7 +4,8 @@ The architecture decision record for #1480: whether to port the config parse/val
 layer out of bash after the #1105 split, and what each install path must guarantee as a result.
 Decision, ratified 2026-08-29: **no port — the layer stays bash, and validation gains a
 schema-driven gate over `jq` against `config.reference.json`** (option 2 of the issue). Figures
-below were measured against the source at `develop-v2` commit `32be481f`.
+below were measured against the source at commit `32be481f` (then on the `develop-v2` twin, since
+retired into `develop`).
 
 ## The question
 

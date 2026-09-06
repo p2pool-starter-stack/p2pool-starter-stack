@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Backup domain (#1105 Phase 1, develop-v2 lane): the archive/restore round-trip and the
+# Backup domain (#1105 Phase 1, appliance lane): the archive/restore round-trip and the
 # reset-dashboard verb — stack_backup's bounded retry on a tar race (#970), the
 # backup_require_items/backup_diagnose_items preflight that names a missing or dangling item
 # before anything is touched and diagnoses a tar failure by its real cwd/item state (#1244), an

@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Appliance rig-miner domain (#1105 Phase 1, develop-v2 lane): a machine that mines instead of
+# Appliance rig-miner domain (#1105 Phase 1, appliance lane): a machine that mines instead of
 # coordinating. The rig role's pre-fill dials for a Pithead on the host side and publishes what it
 # finds to the spool, failing open when it finds nothing (#797 R3); first boot consumes that
 # finding, dialing the pool before anything irreversible happens; the machine-role marker is

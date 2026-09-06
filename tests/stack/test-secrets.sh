@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Secrets domain (#1105 Phase 1, develop-v2 lane): apply's secret propagation and redaction, the
+# Secrets domain (#1105 Phase 1, appliance lane): apply's secret propagation and redaction, the
 # payout-wallet typed confirm, secret-file permissions, and rotate-secrets end to end — apply
 # propagating telegram/webhook/ntfy secrets into .env while never printing them in the change
 # preview (alongside the rest of apply's field-propagation regression, which this section also

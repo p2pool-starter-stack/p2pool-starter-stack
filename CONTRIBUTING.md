@@ -115,26 +115,22 @@ reaching the 400 target: Phase 2 split the remainder out completely, so the file
 and nothing in `docs/dev/file-budget.tsv` names it now. `monotonic_exempt()` in the script still carries the
 arm and the reasoning behind it.
 
-### The two lanes, and what that means for CI config
+### One integration branch, and what that means for CI config
 
-The stack ships two ways from one repo. `develop` is the integration branch for the Docker Compose
-product and is the repo's **default branch**. `develop-v2` is its twin: everything on `develop`,
-plus the appliance OS tree under `os/`. Appliance work targets `develop-v2`; everything else
-targets `develop`, and `develop` is merged into `develop-v2` to keep the twins level.
+`develop` is the integration branch for everything the repo ships — the Docker Compose product and
+the appliance OS tree under `os/` — and it is the repo's **default branch**. Until 2026-09-06 the
+appliance lived on a twin branch, `develop-v2`; that branch was fast-forwarded into `develop` and
+retired, so a reference to it anywhere in this tree is stale and should be fixed, not followed.
 
-**Automation that GitHub reads from a fixed location must live on `develop`, and must name the
-appliance branch explicitly when it needs the appliance tree.** GitHub fires a workflow's
-`schedule:` trigger from the default branch only, and Dependabot reads `.github/dependabot.yml`
-from the default branch only. A scheduled workflow or a Dependabot entry that lives on
-`develop-v2` never runs — and a job that never runs looks exactly like a job that ran and found
-nothing, which is why this went unnoticed three times (#1146, #1162, #1163). #1048 is its sibling
-and worth knowing next to it: there the schedule did fire, and the job skipped itself behind an
-unset repository variable, so `main` showed green for a gate that had never run.
-
-Living on `develop` is only half of it. A workflow on `develop` still checks out `develop`, which
-has no `os/`, so the appliance lane is reached by an explicit ref
-(`.github/workflows/os-rootfs.yml`) or by `target-branch:` (`.github/dependabot.yml`). Both files
-carry a comment saying why they are deliberately asymmetric; do not "tidy" either onto `develop-v2`.
+**Automation that GitHub reads from a fixed location must live on the default branch.** GitHub
+fires a workflow's `schedule:` trigger from the default branch only, and Dependabot reads
+`.github/dependabot.yml` from the default branch only. A scheduled workflow or a Dependabot entry
+that lives anywhere else never runs — and a job that never runs looks exactly like a job that ran
+and found nothing, which is why this went unnoticed three times while the twin existed (#1146,
+#1162, #1163). #1048 is its sibling and worth knowing next to it: there the schedule did fire, and
+the job skipped itself behind an unset repository variable, so `main` showed green for a gate that
+had never run. Nothing in the tree needs an explicit checkout `ref:` or a Dependabot
+`target-branch:` any more; if you find one, it is left over from the twin.
 
 Check this from run history, never from the file — the file always looks fine:
 

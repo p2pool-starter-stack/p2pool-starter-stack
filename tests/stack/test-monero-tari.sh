@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Monero+Tari domain (#1105 Phase 1, develop-v2 lane): the merge-mining stack's node-facing
+# Monero+Tari domain (#1105 Phase 1, appliance lane): the merge-mining stack's node-facing
 # behaviour on both chains, moved as one file because p2pool merge-mines them together — monero
 # flags + the p2pool entrypoint's word-splitting and Tor-loopback bridge for the Tari gRPC (#165/
 # #278), monero/tari address-type validation including the #829 checksum-vs-shape split (#250/

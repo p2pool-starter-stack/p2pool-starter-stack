@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Appliance os-update domain (#1105 Phase 1, develop-v2 lane): the host side of an A/B OS update —
+# Appliance os-update domain (#1105 Phase 1, appliance lane): the host side of an A/B OS update —
 # the consent gate that decides whether an install may proceed at all, and the reporting layer that
 # turns rauc's own output into something an operator can act on. Five sections. The variant gate
 # covers SSH-posture flips in EITHER direction, because both are dangerous for opposite reasons: a

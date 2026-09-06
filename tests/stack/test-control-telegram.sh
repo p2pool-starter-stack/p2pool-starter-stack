@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Control-channel Telegram lifecycle domain (#1105 Phase 1, develop-v2 lane): the bounded Telegram
+# Control-channel Telegram lifecycle domain (#1105 Phase 1, appliance lane): the bounded Telegram
 # control verbs (#338). The #33 runner dispatches each accepted verb to a FIXED pithead command and
 # audits it; an unknown verb is rejected, and no host command runs on the rejection path.
 # Sourced by tests/stack/run.sh.

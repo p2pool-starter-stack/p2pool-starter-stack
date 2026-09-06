@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Worker-config domain (#1105 Phase 1, develop-v2 lane): per-worker token masking and host-side
+# Worker-config domain (#1105 Phase 1, appliance lane): per-worker token masking and host-side
 # restore, across the two config shapes that carry rig credentials. A per-rig token lives in a
 # VARIABLE-LENGTH array, which puts it outside the fixed CONTROL_SECRET_PATHS walk that covers the
 # scalar secrets, so each shape needs its own proof that the property still holds — the masked

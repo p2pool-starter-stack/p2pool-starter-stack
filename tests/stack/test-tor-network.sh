@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 : "${STACK_SUITE:?is unset: this file is a tests/stack/run.sh fragment, not a script — run tests/stack/run.sh}"
-# Tor-network domain (#1105 Phase 1, develop-v2 lane): the Tor-only egress boundary and the
+# Tor-network domain (#1105 Phase 1, appliance lane): the Tor-only egress boundary and the
 # Tor<->clearnet transport switch — tor_egress_rules + render_tor_egress_nft (both the legacy
 # iptables/DOCKER-USER path and the v2 nftables/podman path, including the IPv6 backstop and its
 # refusal when the bridge can't be resolved, #855/#858), apply/remove_tor_egress_firewall end to
