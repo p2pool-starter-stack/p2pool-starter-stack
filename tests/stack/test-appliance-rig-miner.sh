@@ -418,11 +418,11 @@ EOF
 chmod +x "$RTSB/bin/getent"
 printf '{"pool":"coordinator.lan:3333","worker":"shed-3","stratum_password":"pw"}' >"$RTSB/rig.json"
 run_rt() { PITHEAD_RIGFORGE_DIR="$RTSB/rigforge" PATH="$RTSB/bin:$PATH" run_sourced "$RTSB" "$@"; }
-rt_tok=$(run_rt rig_access_token 2>/dev/null)
+rt_tok=$(run_rt eval 'chmod() { :; }; rig_access_token' 2>/dev/null) # chmod stubbed: the umask alone must do it (#1842)
 assert_rc "minting a token -> rc 0" "$?" "0"
 [[ "$rt_tok" =~ ^[0-9a-f]{32}$ ]] && ok "the token is 32 lowercase hex" || bad "the token is not 32 hex: '$rt_tok'"
 assert_eq "the token is kept in rig.json" "$(jq -r '.access_token' "$RTSB/rig.json")" "$rt_tok"
-assert_eq "rig.json stays owner-only after the rewrite" "$(stat -c '%a' "$RTSB/rig.json")" "600"
+assert_eq "rig.json is owner-only from its FIRST byte — the temp file's umask, not a chmod after (#1842)" "$(stat -c '%a' "$RTSB/rig.json")" "600"
 assert_eq "the answers beside it are untouched" "$(jq -r '.pool + " " + .worker + " " + .stratum_password' "$RTSB/rig.json")" "coordinator.lan:3333 shed-3 pw"
 assert_eq "a second call returns the SAME token (stable across the per-boot rebuild)" "$(run_rt rig_access_token 2>/dev/null)" "$rt_tok"
 assert_eq "no temp file left beside rig.json" "$(find "$RTSB" -maxdepth 1 -name '.rig.json*' | wc -l | tr -d ' ')" "0"
