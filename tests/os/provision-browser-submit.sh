@@ -79,7 +79,8 @@ _wsp_self_test() {
     calls=$(mktemp)
     sleep() { :; }
     curl() { # the body, a newline, the status — what -w '\n%{http_code}' prints; rc per shape
-        echo "${!#}" >>"$calls" # the URL — the last argument — so a case can assert the route
+        # the URL — the last argument — so a case can assert the route
+        echo "${!#}" >>"$calls"
         case "$shape" in
         timeout) printf '\n000' && return 28 ;;
         noconfig) printf '{"error":"x"}\n200' ;;
