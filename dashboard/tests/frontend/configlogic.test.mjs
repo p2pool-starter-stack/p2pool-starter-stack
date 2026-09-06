@@ -79,6 +79,47 @@ test("classifyGroup: distinct monero.* leaves resolve to their own group, not a 
   assert.equal(classifyGroup("monero.mode"), "Monero node");
 });
 
+// #1887: the four Tari node keys rendered under the group titled "Monero node", so an operator
+// looking for where their Tari node is configured read the group titles, found no Tari, and
+// concluded it could not be changed here. This sweeps the CLASS — every tari.* leaf the reference
+// config declares, not just the four the issue named — so a Tari key added later cannot land back
+// under Monero's title unnoticed.
+test("classifyGroup: no tari.* key renders under the Monero node group (#1887)", () => {
+  const reference = JSON.parse(
+    readFileSync(new URL("../../../config.reference.json", import.meta.url)),
+  );
+  const tariKeys = buildSections(reference)
+    .flatMap((s) => s.fields)
+    .map((f) => f.key)
+    .filter((k) => k.startsWith("tari."));
+  // 11, counted from the reference, not from the four the issue named: a floor of 4 would still be
+  // satisfied by a regression that stopped 7 of them rendering, and the class sweep below would
+  // narrow to a spot check while staying green. Adding a tari.* key is meant to fail here.
+  assert.equal(
+    tariKeys.length,
+    11,
+    `the reference's tari.* leaf count changed (got ${tariKeys.length}) — update this floor and check the new key's group`,
+  );
+  assert.deepEqual(
+    tariKeys.filter((k) => classifyGroup(k) === "Monero node"),
+    [],
+  );
+  assert.equal(classifyGroup("tari.mode"), "Tari node");
+  assert.equal(classifyGroup("tari.remote.host"), "Tari node");
+  // Narrowness: a fix that swept every tari.* into the new group would fail these two.
+  assert.equal(classifyGroup("tari.data_dir"), "System / advanced");
+  assert.equal(classifyGroup("tari.wallet_address"), "Wallets & payout");
+});
+
+test("LOGICAL_GROUPS: the Tari node section renders directly under Monero's (#1887)", () => {
+  const names = LOGICAL_GROUPS.map((g) => g.name);
+  // A deleted "Tari node" gives LHS -1, which would need indexOf("Monero node") === -2 — impossible.
+  // The other arm is not covered here: a deleted "Monero node" gives RHS 0, which passes if "Tari
+  // node" happens to sit first. `classifyGroup("monero.mode") === "Monero node"` above is what
+  // fails the moment the Monero group vanishes.
+  assert.equal(names.indexOf("Tari node"), names.indexOf("Monero node") + 1);
+});
+
 // classifyGroup is first-match (no group's prefix is "more specific" than another's, by design —
 // see the comment above LOGICAL_GROUPS). This test is what actually guarantees that design holds:
 // no two groups may claim overlapping prefixes, so a real config path always resolves the same way
