@@ -174,10 +174,11 @@ Two build variants, chosen by one flag:
   over SSH. Verify with `tests/os/verify-image.sh IMAGE --test`. A bench that takes an A/B
   update to a *release* bundle loses SSH — deliberate, and worth remembering before pressing
   install. Built with `PITHEAD_REGISTRY` set to a non-default namespace, a debug image also
-  pins that registry into its boot units and tells podman how to trust it — the CA file named
-  by `PITHEAD_REGISTRY_CA` for a TLS registry, or an insecure entry without one — so a bench box
-  can provision from a registry on the LAN (#1892); the release variant never carries any of
-  those files, and `verify-image.sh` checks both ways.
+  pins that registry into its boot units and into `/etc/environment` (so a `pithead` verb run
+  by hand over SSH pulls from the same place, #1931) and tells podman how to trust it — the CA
+  file named by `PITHEAD_REGISTRY_CA` for a TLS registry, or an insecure entry without one — so
+  a bench box can provision from a registry on the LAN (#1892); the release variant never
+  carries any of that, and `verify-image.sh` checks both ways.
 
 The updater defaults to RAUC; an image built without it cannot take another update, and the
 only way to get one now is to set `PITHEAD_UPDATER` to something else on purpose.
