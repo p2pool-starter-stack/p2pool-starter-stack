@@ -82,6 +82,7 @@ tests/stack/test-backup.sh	523
 tests/stack/test-cli.sh	410
 tests/stack/test_compose.sh	462
 tests/stack/test-config.sh	753
+tests/stack/test-control-add-only-ssrf.sh	448
 tests/stack/test-control-upgrade.sh	795
 tests/stack/test-dashboard-onion.sh	422
 tests/stack/test-dashboard.sh	592
