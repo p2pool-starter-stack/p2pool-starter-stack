@@ -145,8 +145,9 @@ would cause the exact exposure the panel exists to warn about, on every render. 
 counted as a leak either; the panel says it cannot tell rather than guessing in either direction.
 
 The two **ingress** hops draw as **Incoming**: mining traffic into xmrig-proxy and HTTPS into
-Caddy. This keeps client connections distinct from the in-process hops marked **Local** without
-claiming where a client is or which interface accepted it. The diagram is not a listener inventory:
+Caddy, with their sources grouped under **Clients**. This keeps client connections distinct from
+the in-process hops marked **Local** without claiming where a client is or which interface accepted
+it. The diagram is not a listener inventory:
 the stratum bind is configurable, and RPC, ZMQ, and gRPC listeners can also be exposed through
 their opt-in settings. Check the bind settings and host firewall for the actual exposure.
 

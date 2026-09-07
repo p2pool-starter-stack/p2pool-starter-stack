@@ -599,12 +599,12 @@
       {
         "id": "rigs",
         "label": "Mining rigs",
-        "zone": "lan"
+        "zone": "clients"
       },
       {
         "id": "browser",
         "label": "Browser",
-        "zone": "lan"
+        "zone": "clients"
       },
       {
         "id": "xmrig-proxy",

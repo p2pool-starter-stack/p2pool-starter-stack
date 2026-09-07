@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-    POS, ROUTE_COLOR, ROUTE_NAME, ROUTES, edgePath,
+    CLIENT_ZONE_NAME, POS, ROUTE_COLOR, ROUTE_NAME, ROUTES, edgePath,
 } from '../../mining_dashboard/web/static/topology.mjs';
 
 // Canonical node ids — MUST equal service/egress.py TOPOLOGY_NODES ids. The backend half of this
@@ -26,6 +26,7 @@ const NODE_IDS = [
 
 test('POS places every canonical node and nothing extra', () => {
     assert.deepEqual(new Set(Object.keys(POS)), new Set(NODE_IDS));
+    assert.equal(CLIENT_ZONE_NAME, 'Clients');
 });
 
 test('every POS box has finite, positive geometry', () => {

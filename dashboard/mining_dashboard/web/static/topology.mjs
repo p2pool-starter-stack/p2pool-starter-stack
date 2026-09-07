@@ -12,7 +12,8 @@ import { boxAnchor, loadPref, savePref } from "./logic.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 
 // Fixed layout — the stack is a known, fixed set of components, so positions are hand-placed
-// (left→right by trust: your LAN, the host bridge, the Tor hub, the internet) rather than solved.
+// (left→right: incoming clients, the host bridge, the Tor hub, the internet) rather than solved.
+export const CLIENT_ZONE_NAME = "Clients";
 export const POS = {
   rigs: { x: 12, y: 64, w: 88, h: 32 },
   browser: { x: 12, y: 150, w: 88, h: 32 },
@@ -127,7 +128,7 @@ export class StackTopology extends Component {
                 </marker>`,
             )}
           </defs>
-          <text x="56" y="20" class="topo-zone">LAN</text>
+          <text x="56" y="20" class="topo-zone">${CLIENT_ZONE_NAME}</text>
           <text x="243" y="20" class="topo-zone">host — mining_net bridge</text>
           <text x="440" y="20" class="topo-zone">Tor → internet</text>
           ${edges.map((e) => this._edge(e, byId)).filter(Boolean)}

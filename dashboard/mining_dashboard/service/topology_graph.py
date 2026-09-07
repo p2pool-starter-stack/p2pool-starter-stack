@@ -5,15 +5,15 @@ machine's own (#1040).
 Split out of ``egress.py`` because that module sits at its file-budget ceiling and this is the
 part of it that is data rather than logic. ``egress`` imports back from here; the dependency runs
 one way, and re-exporting ``TOPOLOGY_NODES`` keeps every existing importer working unchanged.
-The route constants live here for the same reason ``ZONE_LAN`` does — ``node_route`` needs them
-and ``egress`` has no room — and ``egress`` re-exports them, so every existing importer of
+The route constants live here because ``node_route`` needs them and ``egress`` has no room — and
+``egress`` re-exports them, so every existing importer of
 ``egress.LOCAL`` and friends keeps working unchanged.
 """
 
 import ipaddress
 
-# Zones, left-to-right by trust: your LAN, the host's container bridge, the Tor hub, the Internet.
-ZONE_LAN = "lan"
+# Zones, left-to-right: incoming clients, the host's container bridge, the Tor hub, the Internet.
+ZONE_CLIENTS = "clients"
 ZONE_HOST = "host"
 ZONE_TOR = "tor"
 ZONE_NET = "internet"
@@ -38,8 +38,8 @@ NODE_ROUTES = (LOCAL, LAN, CLEARNET, UNKNOWN)
 # Nodes bracket the host components with the external actors they actually talk to. ``internal``
 # nodes (the socket proxies) only appear when the operator expands the internal mesh.
 TOPOLOGY_NODES = [
-    {"id": "rigs", "label": "Mining rigs", "zone": ZONE_LAN},
-    {"id": "browser", "label": "Browser", "zone": ZONE_LAN},
+    {"id": "rigs", "label": "Mining rigs", "zone": ZONE_CLIENTS},
+    {"id": "browser", "label": "Browser", "zone": ZONE_CLIENTS},
     {"id": "xmrig-proxy", "label": "xmrig-proxy", "zone": ZONE_HOST},
     {"id": "caddy", "label": "caddy", "zone": ZONE_HOST},
     {"id": "dashboard", "label": "dashboard", "zone": ZONE_HOST},

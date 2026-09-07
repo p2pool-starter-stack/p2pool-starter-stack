@@ -218,10 +218,10 @@ def test_topology_safe_has_no_leaks_and_hub_nodes(_topo):
 
 
 def test_topology_incoming_edges_do_not_claim_a_source_network(_edge, _topo):
-    # Direction is known; the clients' source network and listener binds are not (#1856).
     topo = _topo()
     for e in (_edge(topo, "rigs", "xmrig-proxy"), _edge(topo, "browser", "caddy")):
         assert e["kind"] == "ingress" and e["route"] == "incoming", e
+        assert next(n for n in topo["nodes"] if n["id"] == e["from"])["zone"] == "clients"
 
 
 def test_topology_daemon_p2p_is_bidirectional_over_tor(_edge, _topo):
