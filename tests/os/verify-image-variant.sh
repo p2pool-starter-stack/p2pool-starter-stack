@@ -10,9 +10,11 @@ echo "==> test material"
 if [ "$MODE" = "--test" ]; then
     chk "test SSH key present (harness build)" '[ -s "$ROOT/root/.ssh/authorized_keys" ]'
     chk "variant stamp says debug" '[ "$(cat "$ROOT/etc/pithead-variant")" = "debug" ]'
-    # #1892: built against a non-default registry, the boot units must carry it AND podman must trust it — one without the other is a first boot that cannot find its wizard image, or a provision that refuses the pull.
+    # #1892/#1931: built against a non-default registry, every pithead service must carry it AND podman must trust it — one without the other is a first boot, dashboard action or provision that pulls from the wrong registry.
     if [ -n "${PITHEAD_REGISTRY:-}" ] && [ "$PITHEAD_REGISTRY" != ghcr.io/p2pool-starter-stack ]; then
-        chk "all three boot units pinned to the test registry" '[ "$(grep -lxF "Environment=PITHEAD_REGISTRY=$PITHEAD_REGISTRY" "$ROOT"/etc/systemd/system/{pithead-boot,pithead-firstboot,pithead-setup-again}.service.d/pithead-test-registry.conf 2>/dev/null | wc -l)" = 3 ]'
+        chk "boot, setup and dashboard-control units pinned to the test registry" '[ "$(grep -lxF "Environment=PITHEAD_REGISTRY=$PITHEAD_REGISTRY" "$ROOT"/etc/systemd/system/{pithead-boot,pithead-firstboot,pithead-setup-again,pithead-control}.service.d/pithead-test-registry.conf 2>/dev/null | wc -l)" = 4 ]'
+        # #1931: a PAM login (an SSH shell running ./pithead by hand) reads /etc/environment, not the drop-ins; the engine pin beside it proves the file was appended to, not replaced.
+        chk "/etc/environment pinned to the test registry, engine pin kept" 'grep -qxF "PITHEAD_REGISTRY=$PITHEAD_REGISTRY" "$ROOT/etc/environment" && grep -qxF "PITHEAD_ENGINE=podman" "$ROOT/etc/environment"'
         # The trust half is whichever the builder chose: the CA it was handed, byte for byte, or the insecure entry.
         if [ -n "${PITHEAD_REGISTRY_CA:-}" ]; then
             chk "podman trusts the test registry's CA, and no insecure entry" 'cmp -s "$PITHEAD_REGISTRY_CA" "$ROOT/etc/containers/certs.d/${PITHEAD_REGISTRY%%/*}/ca.crt" && [ ! -e "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf" ]'
@@ -23,7 +25,7 @@ if [ "$MODE" = "--test" ]; then
 else
     # The reason this script exists in versioned form: a leaked test key on a release image is a
     # backdoor, and ad-hoc eyeballing is how one ships.
-    chk "NO test marker, NO test registry pin or trust (#1892)" '[ ! -e "$ROOT/etc/pithead-test-marker" ] && [ ! -e "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf" ] && [ ! -e "$ROOT/etc/containers/certs.d" ] && ! ls "$ROOT"/etc/systemd/system/*/pithead-test-registry.conf >/dev/null 2>&1'
+    chk "NO test marker, NO test registry pin or trust (#1892)" '[ ! -e "$ROOT/etc/pithead-test-marker" ] && [ ! -e "$ROOT/etc/containers/registries.conf.d/pithead-test-registry.conf" ] && [ ! -e "$ROOT/etc/containers/certs.d" ] && ! ls "$ROOT"/etc/systemd/system/*/pithead-test-registry.conf >/dev/null 2>&1 && grep -qxF "PITHEAD_ENGINE=podman" "$ROOT/etc/environment" && ! grep -q "^PITHEAD_REGISTRY=" "$ROOT/etc/environment"'
     chk "NO SSH authorized_keys" '[ ! -s "$ROOT/root/.ssh/authorized_keys" ]'
     chk "ssh service disabled" '! ls "$ROOT"/etc/systemd/system/multi-user.target.wants/ssh.service'
     chk "variant stamp says release" '[ "$(cat "$ROOT/etc/pithead-variant")" = "release" ]'

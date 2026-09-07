@@ -69,8 +69,8 @@ fi
 # provision time for now — baking the full set is tracked with the appliance-size work.
 STACK_VERSION="v$(tr -d ' \t\r\n' <VERSION)"
 WIZARD_IMAGE="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION}"
-# A DEBUG build against a non-default registry pins that registry into the image's boot units
-# and tells podman how to trust it — a CA file (PITHEAD_REGISTRY_CA) for a TLS registry, else an
+# A DEBUG build against a non-default registry pins that registry into every unit that can run
+# pithead and tells podman how to trust it — a CA file (PITHEAD_REGISTRY_CA) for a TLS registry, else an
 # insecure (HTTP) entry (#1892). The wizard archive above is NAMED with the build-time
 # registry and first boot re-derives the same name at runtime, so the two must agree, and nothing
 # on the box sets the runtime half otherwise. Release builds never carry either file.
@@ -154,11 +154,21 @@ if [ -n "$TEST_REGISTRY" ]; then
     # then byte-identical to a build that never heard of a test registry. Leaf files only — a
     # directory entry would re-apply the staging dir's mode onto /etc on extraction.
     stage="$(mktemp -d)"
-    for u in pithead-boot pithead-firstboot pithead-setup-again; do
+    # pithead-control.service is created under /run after boot. Its baked /etc drop-in still applies
+    # when that runtime unit appears, so dashboard apply/backup/update actions keep this registry too.
+    for u in pithead-boot pithead-firstboot pithead-setup-again pithead-control; do
         mkdir -p "$stage/etc/systemd/system/$u.service.d"
         printf '[Service]\nEnvironment=PITHEAD_REGISTRY=%s\n' "$TEST_REGISTRY" \
             >"$stage/etc/systemd/system/$u.service.d/pithead-test-registry.conf"
     done
+    # An SSH shell running ./pithead by hand reads /etc/environment through PAM, never a unit's
+    # drop-in (#1931): the pin goes there too, appended to the file the rootfs already carries
+    # (PITHEAD_ENGINE, Dockerfile) so the later tar entry replaces it whole and loses nothing.
+    tar -xOf os/build/pithead-root.tar etc/environment >"$stage/etc/environment" || {
+        echo "build-image: the exported rootfs has no etc/environment to pin the registry into" >&2
+        exit 1
+    }
+    printf 'PITHEAD_REGISTRY=%s\n' "$TEST_REGISTRY" >>"$stage/etc/environment"
     # containers/image reads /etc/containers/certs.d/<host:port>/ca.crt for a TLS registry; the
     # insecure entry is the HTTP fallback. One or the other, never both.
     if [ -n "${PITHEAD_REGISTRY_CA:-}" ]; then
