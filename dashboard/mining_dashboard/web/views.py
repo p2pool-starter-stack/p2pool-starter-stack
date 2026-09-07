@@ -22,11 +22,9 @@ from mining_dashboard.config.config import (
     HOST_IP,
 )
 from mining_dashboard.helper.utils import (
-    detect_host_ipv4,
     format_duration,
     format_hashrate,
     format_time_abs,
-    is_ip_address,
 )
 from mining_dashboard.service.egress import egress_posture_from_config, topology_from_config
 from mining_dashboard.service.metrics import build_metrics
@@ -41,6 +39,10 @@ from mining_dashboard.web.charts import (
     canonical_window,  # noqa: F401 — re-export for server.py
     parse_window,  # noqa: F401 — re-export for server.py
 )
+
+# The header's address block lives in web/header.py (#1853): the hostname/IP line and the
+# .onion URL under it are ways IN to the machine, not readings off it.
+from mining_dashboard.web.header import dashboard_onion, host_display_addr
 
 # The host/rig/node status sections live in web/infra_views.py (#1105). views.py stays the
 # facade: build_state assembles these sections, build_pool_network uses the address elider, and
@@ -199,23 +201,6 @@ def _monero_db_size(monero_sync):
 # --------------------------------------------------------------------------------------
 
 
-def host_display_addr(host):
-    """The numeric IP to show *beside* the configured host in the header, or ``None`` (Issue #119).
-
-    The configured ``dashboard.host`` is often a hostname that won't resolve from another machine
-    on the LAN (flaky mDNS/``.local``, no DNS entry), so we surface the host's primary IP next to
-    it as a fallback way in. Returns ``None`` — meaning "show the host alone" — when there's
-    nothing useful to add: the host is already an IP, the address can't be determined, or it just
-    duplicates the host.
-    """
-    if is_ip_address(host):
-        return None
-    addr = detect_host_ipv4()
-    if not addr or addr == host:
-        return None
-    return addr
-
-
 def _egress_badge(summary):
     """Glanceable header badge for the egress posture (#170): green when Tor-only, red on a leak."""
     ok = summary["level"] == "ok"
@@ -341,6 +326,10 @@ def build_state(data, state_mgr, range_arg, window=None, avg_window=DEFAULT_HASH
         else "Pithead Dashboard",
         "host_ip": HOST_IP,
         "host_addr": host_display_addr(HOST_IP),
+        # {url, client_auth} | None — the dashboard's Tor way in (#1853), shown under the host
+        # line. None whenever the onion is off or not yet provisioned, so the header renders
+        # nothing rather than an empty row. Never carries client-auth key material.
+        "dashboard_onion": dashboard_onion(),
         # The operator-facing stratum port (#172) — feeds the "point your rigs at host:PORT" hint.
         "stratum_port": config.STRATUM_PORT,
         "version": resolve_version(),

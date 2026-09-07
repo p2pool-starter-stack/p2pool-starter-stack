@@ -731,6 +731,16 @@ services:
       # When off, the control routes are not registered at all (they 404); the spool mounts above
       # are inert because no host-side runner is installed.
       - DASHBOARD_CONTROL_ENABLED=${DASHBOARD_CONTROL_ENABLED:-false}
+      # Dashboard onion (#343, config.json: dashboard.onion.*), display-only here: the header
+      # shows the .onion URL so an operator can open the dashboard from a phone over Tor without
+      # first reaching a shell (#1853). These three are the Compose path only — the appliance's
+      # podman quadlet for the dashboard is written without them (#1896). The ADDRESS is
+      # "placeholder" until the service is provisioned, and the header treats that as "no onion".
+      # CLIENT_AUTH is a boolean the header explains; the client keys are NOT passed in, so a
+      # fully compromised container cannot hand out the credential that opens the onion.
+      - DASHBOARD_ONION_ENABLED=${DASHBOARD_ONION_ENABLED:-false}
+      - DASHBOARD_ONION_ADDRESS=${DASHBOARD_ONION_ADDRESS:-}
+      - DASHBOARD_ONION_CLIENT_AUTH=${DASHBOARD_ONION_CLIENT_AUTH:-false}
       # monerod is required: a monerod outage always rejects workers (Issue #31) and the miner
       # is always held until monerod syncs (Issue #35) — not configurable. Tari is optional:
       # TARI_REQUIRED (default true) decides whether a Tari outage rejects workers, whether the

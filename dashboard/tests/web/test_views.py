@@ -31,7 +31,6 @@ from mining_dashboard.web.views import (
     build_state,
     canonical_window,
     get_shell_html,
-    host_display_addr,
     visible_update,
 )
 from mining_dashboard.web.worker_detail import build_worker_detail
@@ -187,29 +186,6 @@ class TestPoolNetwork:
         data = {"pool": {"pool": {"last_block_ts": time.time() - 90}}}
         assert build_pool_network(data, _metrics())["pool"]["last_blk"] == "1m 30s ago"
         assert build_pool_network({}, _metrics())["pool"]["last_blk"] == "Never"
-
-
-# --- Host address beside the hostname (Issue #119) ------------------------------------
-
-
-class TestHostDisplayAddr:
-    def test_resolves_ip_for_a_hostname(self):
-        with patch.object(views, "detect_host_ipv4", return_value="192.168.1.42"):
-            assert host_display_addr("pithead.local") == "192.168.1.42"
-
-    def test_none_when_host_is_already_an_ip(self):
-        # Nothing to add beside a literal address — don't call detection at all.
-        with patch.object(views, "detect_host_ipv4") as detect:
-            assert host_display_addr("192.168.1.42") is None
-            detect.assert_not_called()
-
-    def test_none_when_ip_undetectable(self):
-        with patch.object(views, "detect_host_ipv4", return_value=None):
-            assert host_display_addr("pithead.local") is None
-
-    def test_none_when_detected_ip_equals_host(self):
-        with patch.object(views, "detect_host_ipv4", return_value="my-rig"):
-            assert host_display_addr("my-rig") is None
 
 
 # --- build_state integration ----------------------------------------------------------

@@ -13,20 +13,27 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import mining_dashboard.web.header as header
 import mining_dashboard.web.views as views
 
 # Pin everything machine- or time-dependent so the fixture regenerates identically on any box.
 # build_state stamps last_update via time.localtime(time.time()) and the chart x-axis is
 # now-relative, so freeze NOW (2025-01-01 00:00:00 UTC) + patch views.time.time and force UTC
 # for the localtime-based last_update string. host_addr is a live socket lookup
-# (detect_host_ipv4) and host_ip an env default — pin both too.
+# (detect_host_ipv4, now in web/header.py beside the onion reader) and host_ip an env default —
+# pin both too. Patch the lookup where it is LOOKED UP: `views.detect_host_ipv4 = ...` bound a
+# dead attribute once the function moved, and the fixture went machine-dependent without a word.
 os.environ["TZ"] = "UTC"
 time.tzset()
 NOW = 1735689600
 
 views.time.time = lambda: NOW  # build_state's last_update + history cutoff
 views.HOST_IP = "Unknown Host"
-views.detect_host_ipv4 = lambda: "100.68.38.126"
+header.detect_host_ipv4 = lambda: "100.68.38.126"
+# The dashboard onion (#1853) is read from the process environment at call time, so clear it:
+# otherwise this regenerates differently on a box that happens to have an onion provisioned.
+for _var in ("DASHBOARD_ONION_ENABLED", "DASHBOARD_ONION_ADDRESS", "DASHBOARD_ONION_CLIENT_AUTH"):
+    os.environ.pop(_var, None)
 
 HISTORY = [
     {"timestamp": NOW - 600, "v": 10200, "v_p2pool": 8000, "v_xvb": 2200, "t": "a"},
