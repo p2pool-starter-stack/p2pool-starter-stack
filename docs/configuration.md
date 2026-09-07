@@ -100,10 +100,10 @@ is on, the group the dashboard's [Configuration view](dashboard.md#configuration
 top of its form. Both read the exact same list, [`config.core-keys.json`](../config.core-keys.json)
 — there's only ever one shortlist to keep in sync with this table, not two.
 
-Below the core group, the Configuration view groups the rest of this table into **logical
-sections** an operator recognizes (Wallets & payout, Monero node, Mining, Workers, Dashboard &
-access, Notifications, Energy, Alerts & thresholds, System / advanced), each collapsed by default
-— not one section per top-level key like this table's own layout, so a key like `dashboard.energy`
+Below the core group, the Configuration view groups the rest of this table into **logical sections**
+an operator recognizes (Wallets & payout, Monero node, Tari node, Mining, Workers, Dashboard &
+access, Notifications, Energy, Alerts & thresholds, System / advanced), each collapsed by default —
+not one section per top-level key like this table's own layout, so a key like `dashboard.energy`
 lands in "Energy" and `dashboard.auth` lands in "Dashboard & access" rather than sharing a section
 just because they share a JSON prefix. It also greys out any key the dashboard's control channel
 can't actually commit — most of them, including every credential and every setting listed as

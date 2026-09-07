@@ -942,12 +942,12 @@ the config tab now behave identically.) The pieces:
   this view share, [`config.core-keys.json`](../config.core-keys.json), so the two can't drift
   apart. Below it, the rest of the schema is grouped into **logical sections**
   ([#611](https://github.com/p2pool-starter-stack/pithead/issues/611)) an operator recognizes —
-  Wallets & payout, Monero node, Mining, Workers, Dashboard & access, Notifications, Energy, Alerts
-  & thresholds, System / advanced — instead of one section per top-level `config.json` key, so a
-  grab-bag key like `dashboard` (auth, remote access, the energy calculator, alert thresholds, …)
-  splits across the sections its fields actually belong to. Each section is a collapsed `<details>`
-  as before; within **Notifications**, the 27 `telegram.events` toggles, the ntfy/webhook sinks,
-  and Healthchecks each nest one level deeper into their own collapsed sub-group
+  Wallets & payout, Monero node, Tari node, Mining, Workers, Dashboard & access, Notifications,
+  Energy, Alerts & thresholds, System / advanced — instead of one section per top-level `config.json`
+  key, so a grab-bag key like `dashboard` (auth, remote access, the energy calculator, alert
+  thresholds, …) splits across the sections its fields actually belong to. Each section is a
+  collapsed `<details>` as before; within **Notifications**, the 27 `telegram.events` toggles, the
+  ntfy/webhook sinks, and Healthchecks each nest one level deeper into their own collapsed sub-group
   ([#612](https://github.com/p2pool-starter-stack/pithead/issues/612)) instead of dominating the
   section's field list. Rows in a section whose fields span more than one top-level key carry their
   full dotted path (`monero.view_key`, `tari.view_key`) so two leaves with the same name read as two
