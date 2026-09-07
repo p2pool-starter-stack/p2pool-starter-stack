@@ -5,24 +5,26 @@ machine's own (#1040).
 Split out of ``egress.py`` because that module sits at its file-budget ceiling and this is the
 part of it that is data rather than logic. ``egress`` imports back from here; the dependency runs
 one way, and re-exporting ``TOPOLOGY_NODES`` keeps every existing importer working unchanged.
-The route constants live here for the same reason ``ZONE_LAN`` does — ``node_route`` needs them
-and ``egress`` has no room — and ``egress`` re-exports them, so every existing importer of
+The route constants live here because ``node_route`` needs them and ``egress`` has no room — and
+``egress`` re-exports them, so every existing importer of
 ``egress.LOCAL`` and friends keeps working unchanged.
 """
 
 import ipaddress
 
-# Zones, left-to-right by trust: your LAN, the host's container bridge, the Tor hub, the Internet.
-ZONE_LAN = "lan"
+# Zones, left-to-right: incoming clients, the host's container bridge, the Tor hub, the Internet.
+ZONE_CLIENTS = "clients"
 ZONE_HOST = "host"
 ZONE_TOR = "tor"
 ZONE_NET = "internet"
 
-# Routes a hop can take. LOCAL is this machine (loopback or the container bridge); LAN is a hop
-# that leaves the host but provably stays on the operator's own network; CLEARNET leaves it for
-# the internet; UNKNOWN is an address we cannot classify without resolving it, and we never do.
+# Routes a hop can take. INCOMING records direction without claiming where the client is; LOCAL is
+# this machine (loopback or the container bridge); LAN is a hop that leaves the host but provably
+# stays on the operator's own network; CLEARNET leaves it for the internet; UNKNOWN is an address
+# we cannot classify without resolving it, and we never do.
 TOR = "tor"
 CLEARNET = "clearnet"
+INCOMING = "incoming"
 LOCAL = "local"
 LAN = "lan"
 UNKNOWN = "unknown"
@@ -36,8 +38,8 @@ NODE_ROUTES = (LOCAL, LAN, CLEARNET, UNKNOWN)
 # Nodes bracket the host components with the external actors they actually talk to. ``internal``
 # nodes (the socket proxies) only appear when the operator expands the internal mesh.
 TOPOLOGY_NODES = [
-    {"id": "rigs", "label": "Mining rigs", "zone": ZONE_LAN},
-    {"id": "browser", "label": "Browser", "zone": ZONE_LAN},
+    {"id": "rigs", "label": "Mining rigs", "zone": ZONE_CLIENTS},
+    {"id": "browser", "label": "Browser", "zone": ZONE_CLIENTS},
     {"id": "xmrig-proxy", "label": "xmrig-proxy", "zone": ZONE_HOST},
     {"id": "caddy", "label": "caddy", "zone": ZONE_HOST},
     {"id": "dashboard", "label": "dashboard", "zone": ZONE_HOST},
@@ -48,6 +50,18 @@ TOPOLOGY_NODES = [
     {"id": "tor", "label": "tor", "zone": ZONE_TOR},
     {"id": "internet", "label": "Tor network", "zone": ZONE_NET},
 ]
+
+
+def edge(src, dst, route, label, kind):
+    """One hop in the diagram. Lives here, not in ``egress``, for the same reason the route
+    constants do: ``egress`` sits at its file-budget ceiling and this is graph vocabulary."""
+    return {"from": src, "to": dst, "route": route, "label": label, "kind": kind}
+
+
+def ext_node(route):
+    # Where a component's external link lands in the diagram: a Tor-routed link terminates at the
+    # `tor` hub; a clearnet link goes STRAIGHT to the internet node, so a leak visibly bypasses Tor.
+    return "internet" if route == CLEARNET else "tor"
 
 
 def node_route(address, *, is_local):

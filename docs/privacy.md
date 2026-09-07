@@ -116,6 +116,7 @@ What the running stack sends to the internet, connection by connection.
 | **Telegram** bot (#121) | `api.telegram.org` | nothing about you — Telegram sees a **Tor exit**, not your IP | ✅ **always** Tor (`socks5h`, #340) | **off** | opt-in; both the alert sends and the command poll ride Tor |
 | Dashboard **Healthchecks** ping (#79) | `hc-ping.com` (or self-hosted) | nothing about you — the endpoint sees a **Tor exit**, not your IP | ✅ **always** Tor (`socks5h`) | opt-in (set `healthchecks.ping_url`; off until set) | the ping URL must be Tor-reachable (hosted, public, or an onion self-hosted instance) — there is no clearnet mode |
 | Dashboard **price feed** (#520) | `api.coingecko.com` | nothing about you — CoinGecko sees a **Tor exit**, not your IP | ✅ **always** Tor (`socks5h`) | **off** | opt-in (`dashboard.energy.price_feed: true`); fetches the XMR + XTM spot prices every 15 min; fails silently, static config prices are the fallback |
+| Dashboard **Tor egress probe** (#424) | `www.google.com/generate_204` | nothing about you — the endpoint sees a **Tor exit**, not your IP, and a 204 carries no content | ✅ **always** Tor (`socks5h`) | **off** | opt-in (`tor.auto_heal: true`); a reachability check every 5 min that decides whether the Tor guard is stuck. Fifteen minutes of sustained failure restarts the tor container; the probe never falls back to clearnet, so a broken Tor means no probe, not an exposed one |
 | **Webhook / ntfy** alert sinks (#380) | your configured URLs | alert texts; the endpoint sees a **Tor exit**, not your IP | ✅ Tor (`socks5h`) by default | opt-in (set `notifications.webhooks` / `notifications.ntfy.url`; off until set) | `notifications.tor: false` is the LAN carve-out (Tor exits can't reach private addresses) — with it, a **clearnet** endpoint sees your host IP on every alert |
 
 `socks5h` (used for the XvB stats fetch) routes DNS resolution through Tor too, so the hostname isn't
@@ -142,6 +143,13 @@ counted. A node configured by **hostname** draws as **Unverified** — the diagr
 a name to classify it, because that lookup would itself be an egress, and on a Tor-routed stack it
 would cause the exact exposure the panel exists to warn about, on every render. Unverified is not
 counted as a leak either; the panel says it cannot tell rather than guessing in either direction.
+
+The two **ingress** hops draw as **Incoming**: mining traffic into xmrig-proxy and HTTPS into
+Caddy, with their sources grouped under **Clients**. This keeps client connections distinct from
+the in-process hops marked **Local** without claiming where a client is or which interface accepted
+it. The diagram is not a listener inventory:
+the stratum bind is configurable, and RPC, ZMQ, and gRPC listeners can also be exposed through
+their opt-in settings. Check the bind settings and host firewall for the actual exposure.
 
 **LAN is a statement about exposure, not about encryption.** A remote-node hop is a plaintext
 connection whichever way it draws, so the rows above still apply: anyone who can watch your local
