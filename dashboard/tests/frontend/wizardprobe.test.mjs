@@ -313,5 +313,7 @@ test("seam: the submit button stays live under a failed probe", async () => {
   // The gate is the host's. The operator's only way out is to correct the address and submit
   // again, so a failing report must not take the button away.
   const out = await setupScreen(report([failed("refused")]));
-  assert.match(out, /<button type="submit">/);
+  const submit = out.match(/<button type="submit"[^>]*>/)?.[0] || "";
+  assert.ok(submit);
+  assert.doesNotMatch(submit, /disabled/);
 });
