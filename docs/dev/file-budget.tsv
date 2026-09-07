@@ -32,7 +32,7 @@ dashboard/tests/frontend/components.test.mjs	1055
 dashboard/tests/frontend/configview.test.mjs	492
 dashboard/tests/frontend/logic.test.mjs	727
 dashboard/tests/frontend/wizard.test.mjs	765
-dashboard/tests/frontend/workerview.test.mjs	518
+dashboard/tests/frontend/workerview.test.mjs	494
 dashboard/tests/frontend/xvbview.test.mjs	431
 dashboard/tests/service/test_alert_service.py	1092
 dashboard/tests/service/test_algo_service.py	822
