@@ -743,11 +743,11 @@ services:
       - DASHBOARD_CONTROL_ENABLED=${DASHBOARD_CONTROL_ENABLED:-false}
       # Dashboard onion (#343, config.json: dashboard.onion.*), display-only here: the header
       # shows the .onion URL so an operator can open the dashboard from a phone over Tor without
-      # first reaching a shell (#1853). These three are the Compose path only — the appliance's
-      # podman quadlet for the dashboard is written without them (#1896). The ADDRESS is
-      # "placeholder" until the service is provisioned, and the header treats that as "no onion".
-      # CLIENT_AUTH is a boolean the header explains; the client keys are NOT passed in, so a
-      # fully compromised container cannot hand out the credential that opens the onion.
+      # first reaching a shell (#1853). The appliance's podman quadlet passes the same three
+      # settings (#1896). The ADDRESS is "placeholder" until the service is provisioned, and the
+      # header treats that as "no onion". CLIENT_AUTH is a boolean the header explains; neither
+      # path passes the client keys, so a compromised container cannot hand out the credential
+      # that opens the onion.
       - DASHBOARD_ONION_ENABLED=${DASHBOARD_ONION_ENABLED:-false}
       - DASHBOARD_ONION_ADDRESS=${DASHBOARD_ONION_ADDRESS:-}
       - DASHBOARD_ONION_CLIENT_AUTH=${DASHBOARD_ONION_CLIENT_AUTH:-false}

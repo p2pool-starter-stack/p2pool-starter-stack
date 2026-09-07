@@ -365,9 +365,9 @@ Because a published `.onion` puts a control panel at a stable address, pithead *
   "accept the risk" prompt — the same click you make for the LAN dashboard.
 
 After `apply`, the address is on the dashboard itself: it sits under the machine name in the header,
-in full, with a **Copy** button, whenever the onion is on. That is the Compose stack, which hands
-the address to the dashboard container. **The appliance does not show it yet** — its dashboard unit
-is written without the onion variables, so the header block does not render there at all (#1896).
+in full, with a **Copy** button, whenever the onion is on. Both the Compose service and the
+appliance's dashboard unit pass the onion settings to the dashboard container; neither passes the
+client keys.
 `./pithead status` and `./pithead doctor` print the address on a machine you can log in to. Treat
 the `.onion` as a secret: anyone who has it can _attempt_ the login (and, without client-auth, reach
 it), so the header shows it only to a browser that is already through the dashboard's own login.

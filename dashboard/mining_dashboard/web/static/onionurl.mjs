@@ -5,11 +5,9 @@
 // what it is handed and infers nothing — no onion means no block at all, not an empty row, which
 // is the difference between "Tor is off" and "Tor is broken".
 //
-// WHERE THIS RENDERS TODAY: the Compose stack, which passes DASHBOARD_ONION_ENABLED, _ADDRESS and
-// _CLIENT_AUTH into the dashboard container (docker-compose.yml). The appliance runs podman
-// quadlets, and its dashboard unit is written with none of the three
-// (lib/pithead/36-quadlet-units.sh), so there the server sends no onion and this block is absent.
-// That gap is #1896 — until it lands, no prose here promises an appliance operator this surface.
+// Both the Compose service and the appliance's podman quadlet pass DASHBOARD_ONION_ENABLED,
+// _ADDRESS and _CLIENT_AUTH into the dashboard container (docker-compose.yml and
+// lib/pithead/36-quadlet-units.sh). Neither path passes the client keys.
 //
 // The URL is never elided. A v3 onion address is 56 characters of base32 with no redundancy, so a
 // tidy-looking truncation produces a string that does not open — and the whole product here is
