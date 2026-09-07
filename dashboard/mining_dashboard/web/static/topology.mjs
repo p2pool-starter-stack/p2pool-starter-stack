@@ -1,9 +1,9 @@
 // Stack topology (#170, trust-boundary view). A data-driven SVG of the whole stack: every component
 // is a node, every connection an edge coloured by the route the server derived from live config
 // (service/egress.py · compute_topology). Tor = green; clearnet = red and lands on the `internet`
-// node so a leak visibly BYPASSES the Tor hub; LAN = blue; unverified = amber; local = grey. LAN
-// and unverified exist because a node reached at a private address is not a leak and a node named
-// by hostname cannot be judged without a DNS lookup we refuse to make (#1350). The P2P daemons get a double arrow
+// node so a leak visibly BYPASSES the Tor hub; incoming = purple; LAN = blue; unverified = amber;
+// local = grey. LAN and unverified exist because a node reached at a private address is not a leak
+// and a node named by hostname cannot be judged without a DNS lookup we refuse to make (#1350). The P2P daemons get a double arrow
 // (egress + onion ingress). The internal host-only mesh is hidden until expanded, so the default
 // view stays focused on what crosses the trust boundary. Geometry is pure (boxAnchor, logic.mjs);
 // this file is presentation only — it carries no routing logic of its own (the #61 principle).
@@ -12,7 +12,8 @@ import { boxAnchor, loadPref, savePref } from "./logic.mjs";
 import { Component, Fragment, html } from "./preact.mjs";
 
 // Fixed layout — the stack is a known, fixed set of components, so positions are hand-placed
-// (left→right by trust: your LAN, the host bridge, the Tor hub, the internet) rather than solved.
+// (left→right: incoming clients, the host bridge, the Tor hub, the internet) rather than solved.
+export const CLIENT_ZONE_NAME = "Clients";
 export const POS = {
   rigs: { x: 12, y: 64, w: 88, h: 32 },
   browser: { x: 12, y: 150, w: 88, h: 32 },
@@ -35,6 +36,7 @@ export const POS = {
 export const ROUTE_COLOR = {
   tor: "var(--ok)",
   clearnet: "var(--bad)",
+  incoming: "var(--purple)",
   lan: "var(--accent)",
   unknown: "var(--warn)",
   local: "var(--text-muted)",
@@ -43,6 +45,7 @@ export const ROUTE_COLOR = {
 export const ROUTE_NAME = {
   tor: "Tor",
   clearnet: "Clearnet",
+  incoming: "Incoming",
   // "Local" is this machine; "LAN" is a hop that leaves it but stays on your network. Before
   // #1350 the two were one state and this label said "Local/LAN" — it now has to tell them apart.
   lan: "LAN",
@@ -50,7 +53,7 @@ export const ROUTE_NAME = {
   local: "Local",
   inactive: "Inactive",
 };
-export const ROUTES = ["tor", "clearnet", "lan", "unknown", "local", "inactive"];
+export const ROUTES = ["tor", "clearnet", "incoming", "lan", "unknown", "local", "inactive"];
 
 const center = (n) => ({ x: n.x + n.w / 2, y: n.y + n.h / 2 });
 const nodeCls = (zone) =>
@@ -96,6 +99,8 @@ export class StackTopology extends Component {
         <div class="topo-controls">
           <span class="topo-legend"><i class="topo-sw" style="background:var(--ok)"></i>Tor</span>
           <span class="topo-legend"><i class="topo-sw" style="background:var(--bad)"></i>Clearnet</span>
+          <span class="topo-legend" title="Connection into this stack; source network not classified"><i
+            class="topo-sw" style="background:var(--purple)"></i>Incoming</span>
           <span class="topo-legend" title="Leaves this machine but stays on your own network"><i
             class="topo-sw" style="background:var(--accent)"></i>LAN</span>
           <span class="topo-legend" title="Configured as a name, so where it goes cannot be checked without a DNS lookup"><i
@@ -111,7 +116,7 @@ export class StackTopology extends Component {
           </button>
         </div>
         <svg viewBox="0 0 500 322" class="topo-svg" role="img"
-             aria-label="Stack network topology: each component and its connections, coloured green for Tor, red for clearnet, blue for your own LAN, and amber where the route could not be verified.">
+             aria-label="Stack network topology: each component and its connections, coloured green for Tor, red for clearnet, purple for incoming, blue for your own LAN, and amber where the route could not be verified.">
           <defs>
             ${ROUTES.map(
               (r) => html`
@@ -123,7 +128,7 @@ export class StackTopology extends Component {
                 </marker>`,
             )}
           </defs>
-          <text x="56" y="20" class="topo-zone">LAN</text>
+          <text x="56" y="20" class="topo-zone">${CLIENT_ZONE_NAME}</text>
           <text x="243" y="20" class="topo-zone">host — mining_net bridge</text>
           <text x="440" y="20" class="topo-zone">Tor → internet</text>
           ${edges.map((e) => this._edge(e, byId)).filter(Boolean)}
@@ -156,9 +161,9 @@ export class StackTopology extends Component {
     const key = e.leak ? "clearnet" : e.route;
     const color = ROUTE_COLOR[key] || ROUTE_COLOR.local;
     const dash = e.kind === "internal" ? "3 3" : e.blocked_by_firewall ? "2 3" : null;
-    // Marching ants (dashboard.css .topo-edge-ants) mark a route that leaves this machine — Tor,
-    // clearnet, LAN or unverified — so it reads as "active traffic" against the static grey
-    // local/inactive edges. Skipped whenever a dash pattern is already spoken for (internal mesh,
+    // Marching ants (dashboard.css .topo-edge-ants) mark active Tor, clearnet, incoming, LAN and
+    // unverified links against the static grey local/inactive edges. Skipped whenever a dash
+    // pattern is already spoken for (internal mesh,
     // firewall-blocked) so it can't collide.
     const ants = !dash && key !== "local" && key !== "inactive";
     const note = e.leak ? " — LEAK" : e.blocked_by_firewall ? " — firewall-blocked" : "";
