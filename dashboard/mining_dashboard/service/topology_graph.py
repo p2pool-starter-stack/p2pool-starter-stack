@@ -18,11 +18,13 @@ ZONE_HOST = "host"
 ZONE_TOR = "tor"
 ZONE_NET = "internet"
 
-# Routes a hop can take. LOCAL is this machine (loopback or the container bridge); LAN is a hop
-# that leaves the host but provably stays on the operator's own network; CLEARNET leaves it for
-# the internet; UNKNOWN is an address we cannot classify without resolving it, and we never do.
+# Routes a hop can take. INCOMING records direction without claiming where the client is; LOCAL is
+# this machine (loopback or the container bridge); LAN is a hop that leaves the host but provably
+# stays on the operator's own network; CLEARNET leaves it for the internet; UNKNOWN is an address
+# we cannot classify without resolving it, and we never do.
 TOR = "tor"
 CLEARNET = "clearnet"
+INCOMING = "incoming"
 LOCAL = "local"
 LAN = "lan"
 UNKNOWN = "unknown"

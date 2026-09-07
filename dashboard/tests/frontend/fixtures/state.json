@@ -437,14 +437,14 @@
         "from": "rigs",
         "kind": "ingress",
         "label": "stratum :3333",
-        "route": "lan",
+        "route": "incoming",
         "to": "xmrig-proxy"
       },
       {
         "from": "browser",
         "kind": "ingress",
         "label": "https :443",
-        "route": "lan",
+        "route": "incoming",
         "to": "caddy"
       },
       {

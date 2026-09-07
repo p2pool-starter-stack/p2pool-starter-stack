@@ -144,13 +144,11 @@ a name to classify it, because that lookup would itself be an egress, and on a T
 would cause the exact exposure the panel exists to warn about, on every render. Unverified is not
 counted as a leak either; the panel says it cannot tell rather than guessing in either direction.
 
-The same split decides the two **ingress** hops the diagram draws. Your mining rigs and the
-browser you open the dashboard in sit on your network, not on this machine, so the stratum
-connection into xmrig-proxy and the HTTPS connection into Caddy both draw as **LAN**. They drew as
-**Local** until #1856, which claimed a trust boundary the stack does not have: these two listeners
-are the only ones exposed to your network at all, and reading them as "this machine" is what makes
-that worth stating plainly. Neither is a leak — a LAN hop does not reach the internet — but the
-panel now says which side of the box they are on.
+The two **ingress** hops draw as **Incoming**: mining traffic into xmrig-proxy and HTTPS into
+Caddy. This keeps client connections distinct from the in-process hops marked **Local** without
+claiming where a client is or which interface accepted it. The diagram is not a listener inventory:
+the stratum bind is configurable, and RPC, ZMQ, and gRPC listeners can also be exposed through
+their opt-in settings. Check the bind settings and host firewall for the actual exposure.
 
 **LAN is a statement about exposure, not about encryption.** A remote-node hop is a plaintext
 connection whichever way it draws, so the rows above still apply: anyone who can watch your local

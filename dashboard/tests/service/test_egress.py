@@ -217,11 +217,11 @@ def test_topology_safe_has_no_leaks_and_hub_nodes(_topo):
     assert topo["summary"]["all_tor"] is True
 
 
-def test_topology_lan_ingress_edges(_edge, _topo):
-    # Both hops LEAVE this box, so the legend's own split makes them LAN, never Local (#1856).
+def test_topology_incoming_edges_do_not_claim_a_source_network(_edge, _topo):
+    # Direction is known; the clients' source network and listener binds are not (#1856).
     topo = _topo()
     for e in (_edge(topo, "rigs", "xmrig-proxy"), _edge(topo, "browser", "caddy")):
-        assert e["kind"] == "ingress" and e["route"] == "lan", e
+        assert e["kind"] == "ingress" and e["route"] == "incoming", e
 
 
 def test_topology_daemon_p2p_is_bidirectional_over_tor(_edge, _topo):
@@ -372,7 +372,7 @@ def test_every_edge_endpoint_is_a_placeable_node_for_all_configs():
 
 
 def test_every_edge_is_well_formed_for_all_configs():
-    routes = {TOR, INACTIVE, *NODE_ROUTES}
+    routes = {TOR, INACTIVE, "incoming", *NODE_ROUTES}
     kinds = {"ingress", "egress", "p2p", "internal"}
     for cfg in _all_configs():
         for e in compute_topology(**cfg)["edges"]:

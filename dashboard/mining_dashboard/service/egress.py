@@ -1,5 +1,5 @@
 """Egress posture (#170) — for each stack component, its outbound connections and their network
-route (Tor / clearnet / LAN / local / unknown / inactive), plus a privacy roll-up.
+route (Tor / clearnet / incoming / LAN / local / unknown / inactive), plus a privacy roll-up.
 
 Routes are *derived from the live config*, never hardcoded, so the panel can't drift from reality or
 lie after a regression — the #160 audit's lesson (``--onion-address`` *looked* like Tor but wasn't).
@@ -30,7 +30,7 @@ from mining_dashboard.config import config
 from mining_dashboard.service.topology_graph import (  # noqa: F401  (re-exported)
     CLEARNET,
     INACTIVE,
-    LAN,
+    INCOMING,
     LOCAL,
     TOPOLOGY_NODES,
     TOR,
@@ -292,7 +292,7 @@ def compute_topology(
 ):
     """Pure derivation of the stack topology. Returns ``{nodes, edges, summary}``.
 
-    ``kind`` is one of ``ingress`` (inbound from your LAN), ``egress`` (outbound), ``p2p``
+    ``kind`` is one of ``ingress`` (an incoming connection), ``egress`` (outbound), ``p2p``
     (bidirectional — egress *and* onion ingress for the P2P daemons), or ``internal`` (host-only
     plumbing, hidden until expanded). The summary is shared verbatim with the egress list.
     """
@@ -319,9 +319,9 @@ def compute_topology(
     sidechain = CLEARNET if p2pool_clearnet else TOR
 
     edges = [
-        # Ingress from your LAN — the only listeners actually exposed to the network (#1856).
-        edge("rigs", "xmrig-proxy", LAN, f"stratum :{config.STRATUM_PORT}", "ingress"),
-        edge("browser", "caddy", LAN, "https :443", "ingress"),
+        # Incoming clients. Their source network and the listener's bind are not classified here.
+        edge("rigs", "xmrig-proxy", INCOMING, f"stratum :{config.STRATUM_PORT}", "ingress"),
+        edge("browser", "caddy", INCOMING, "https :443", "ingress"),
         # Daemon P2P: bidirectional (outbound peers + inbound via Tor onion services).
         edge("p2pool", ext_node(sidechain), sidechain, "sidechain P2P", "p2p"),
         edge("monerod", "tor", TOR, "Monero P2P + tx", "p2p"),
