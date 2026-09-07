@@ -737,7 +737,7 @@ test('WorkersTable surfaces the per-rig api-unreadable and reject badges, and th
     // The single fixture pins both workers to pool=p2pool, api_ok=null, reject_flag=null, so these
     // three problem-rig signals — the whole point of the pool/api/rejected columns — never render.
     const s = clone();
-    s.workers[0].api_ok = false; // xmrig API unreadable -> "api ⚠"
+    Object.assign(s.workers[0], { api_ok: false, adopted: true }); // adopted rig, dead feed
     s.workers[0].reject_flag = { text: '90% rejected', title: 'high reject rate' };
     s.workers[0].pool = 'xvb'; // purple XvB badge
     s.workers[1].pool = 'somethingelse'; // unrecognised -> Unknown (bad) badge

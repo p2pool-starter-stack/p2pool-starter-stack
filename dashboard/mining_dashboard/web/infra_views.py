@@ -300,10 +300,10 @@ def build_workers(workers, rigforge_release=None):
                     "rejected_str": rejected_str,
                     "invalid": invalid,
                     "reject_flag": _reject_flag(accepted, rejected),
-                    # Worker-API probe verdict: False = configured probe failed (uptime/per-miner
-                    # hashrate unavailable; the client badges it), True = ok, None = not probed
-                    # (internal/invalid IP per the SSRF guard) — don't flag the unknown case.
+                    # Probe verdict + adoption (#1857): the client flags only api_ok False, and
+                    # adopted decides whether that reads "api ⚠" (config to fix) or "not adopted".
                     "api_ok": worker.get("api_ok"),
+                    "adopted": worker.get("adopted"),
                     # RigForge enriched feed (#235): version badge + health/power/tune/watchdog
                     # chips, or None for a plain-xmrig worker (renders nothing extra).
                     "rigforge": _rigforge_display(worker.get("rigforge")),
