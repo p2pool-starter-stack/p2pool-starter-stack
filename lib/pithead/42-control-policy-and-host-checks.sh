@@ -40,7 +40,7 @@
 # The env keys committable from the dashboard: operational tuning only, and only keys whose value
 # is derived from a validated enum, boolean, or number — never a free-form string that reaches a
 # command line, URL, or credential. Everything else — wallets, auth, onion exposure, the control
-# channel itself, Tor egress/clearnet toggles, binds and ports, node endpoints, the XvB pool URL
+# channel itself, Tor egress/clearnet toggles, binds, node RPC credentials, the XvB pool URL
 # and donor id, tokens and passwords, the #381 payout-confirmation secrets (MONERO_VIEW_KEY,
 # WALLET_RPC_PASSWORD) plus PAYOUT_CONFIRM_ENABLED, and their #462 Tari siblings (TARI_VIEW_KEY,
 # TARI_WALLET_PASSWORD, TARI_SPEND_PUBLIC_KEY) plus TARI_PAYOUT_CONFIRM_ENABLED /
@@ -95,9 +95,30 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
 # data-dir move, etc. still emit DEST and stay refused); this list is the static allowlist the
 # gate's default-deny pass consults and the UI mirrors (control_service.CONFIRM_ENV_KEY_PATHS,
 # drift-guarded like CONTROL_DASHBOARD_EDITABLE_KEYS).
+# The four node-endpoint keys (#1888) are the 2026-09 addition, on the operator's ruling, and they
+# are the reason to read this tier's boundary carefully rather than by analogy. They are NOT a
+# data-dir move: repointing monerod's or the Tari base node's address moves TRUST, not disk — the
+# stack believes the chain data, block templates and share heights whatever answers there. They are
+# not free-commit either, for exactly that reason. They sit here because the change is INSTANTLY
+# REVERSIBLE by the same route (type APPLY, put the old address back) and because it is the one
+# perimeter entry an appliance operator must be able to make: there is no host shell on an
+# appliance, so "edit config.json and run apply" is not a remedy, it is a dead end (#786/#1821).
+# The compensating control is not the typed token — that is friction, as this comment says above —
+# it is the host-side REACHABILITY PROBE the approval gate runs on the STAGED endpoint before it
+# accepts one (43-control-approval-and-preview.sh, #1889's preflight_remote_nodes): a dashboard
+# cannot silently park a chain on a node that is not there. The RPC LOGIN CREDENTIALS for a remote
+# node (MONERO_NODE_USERNAME / MONERO_NODE_PASSWORD) are deliberately NOT here — those are secrets,
+# not address identity, and they stay host-only DEST with the rest of the credentials above.
 CONTROL_DASHBOARD_CONFIRM_KEYS='MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR
     STRATUM_PORT MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC MONERO_PRUNE
-    MONERO_OUT_PEERS'
+    MONERO_OUT_PEERS
+    MONERO_NODE_HOST MONERO_RPC_PORT MONERO_ZMQ_PORT TARI_GRPC_ADDRESS'
+
+# The node-endpoint subset of the confirm set, named ONCE (#1888) so the approval gate's probe
+# trigger is not a fourth hand-kept copy of these key names. Every key here must also be in
+# CONTROL_DASHBOARD_CONFIRM_KEYS above — a key here but not there is unreachable; a node key there
+# but not here would be committable with NO reachability probe, which is the failure that matters.
+CONTROL_NODE_ENDPOINT_KEYS='MONERO_NODE_HOST MONERO_RPC_PORT MONERO_ZMQ_PORT TARI_GRPC_ADDRESS'
 
 # True if $1 is EXACTLY a canonical dotted-decimal IPv4 literal — four decimal octets 0-255, none
 # with a leading zero (a bare "0" is fine; "010"/"0177" are not). curl/glibc's numeric-address
