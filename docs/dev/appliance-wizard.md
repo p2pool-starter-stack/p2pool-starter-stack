@@ -30,6 +30,7 @@ renders what it is told. The client must never infer the stage.
 
 | Stage | True when | View |
 |---|---|---|
+| `failed` | the installation medium has `error.txt` | the failure reason and **Back to the settings** |
 | `handoff` | `handoff.json` exists and `handoff-ack` does not | credentials card |
 | `installing` | `installing` or `installed` exists | install progress, then the switch-off steps |
 | `done` | `applied` or `handoff-ack` exists — but `installing` when the machine is the installation medium | provisioning notice |
@@ -58,6 +59,19 @@ first — a fleet stick's spool survives between machines, and machine 2 must ne
 machine 1's answers. Pure convenience: any failure (no config, unreadable, ambiguous targets)
 opens the form blank and blocks nothing. On keep, none of it matters — the survivor config
 wins and no config crosses.
+
+Before a pre-fill reaches the form, the server moves the removed `xmrig_proxy.*` and
+`dashboard.workers[]` names to `xvb.*` and `workers.list[]`. It then drops keys absent from the
+current reference schema. The same preparation runs again on submit, so a hand-edited JSON pane
+cannot put an obsolete or unknown name back into the host's candidate. Known keys keep their
+values and types for the host parser to validate; the wizard never weakens that gate. The page
+lists changed key paths without rendering their values.
+
+An install error outranks a stale `installing` marker and survives a page refresh as `failed`.
+The authenticated return action clears only the error and stale progress marker. The settings
+come from the retained `last-attempt.json`; the disk and wipe choice return, but the typed disk
+confirmation does not. Retype it before another destructive attempt. Passwords and payout
+addresses stay in the config copy and are never included in the changed-path summary.
 
 **Why the server owns this.** Two defects came from the client deciding:
 
