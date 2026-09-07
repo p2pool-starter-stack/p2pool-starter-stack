@@ -57,6 +57,6 @@ export function rigCardNote(handoff) {
     "serves no page after this, so copy it now. Your Pithead's Workers → Adopt form " +
     adopt +
     " Until you adopt it the rig still mines and appears by this name in the Workers view, though " +
-    "its row reads as an API error."
+    "its row is badged not adopted."
   );
 }

@@ -91,6 +91,47 @@ The rig submission travels on its own spool channel (`rig-request.json`; the ser
 writes a `config.json` candidate for it), and the host dials the pool BEFORE anything
 irreversible — the same discipline `preflight_remote_nodes` gives remote nodes.
 
+### The remote-node probe report
+
+`preflight_remote_nodes` refuses to provision when a configured remote node does not answer, and
+it publishes what it found beside that refusal as `node-probe.json` (#1889). The wizard serves it
+as `node_probe` so the page can say WHICH endpoint failed and why, rather than showing one line of
+error text.
+
+| Field | Meaning |
+|---|---|
+| `ok` | the verdict, and the ONLY gate — true when every configured endpoint was probed and every probe passed |
+| `configured` | endpoints the config asked for: a remote Monero node contributes 2 (RPC and ZMQ), a remote Tari node 1 |
+| `probed` | rows actually produced; a skipped endpoint emits no row, so `probed < configured` is how the page names one |
+| `probes[]` | `{target, host, port, ok, checked, reason, detail, elapsed_ms}` per endpoint |
+
+`reason` is one of `ok`, `protocol`, `timeout`, `refused`, `auth`, `missing-tool` or `unknown`.
+Two of those do not mean the node is unreachable: `auth` is a node that ANSWERED and asked for
+credentials Pithead has nowhere to store, which is a dead end rather than something to retry, and
+`missing-tool` is this machine failing to run the check at all. A reason the page does not
+recognise reads as "the check did not complete" — never as "not reached", because inventing a
+reachability claim for an unrecognised value is the defect #1913 names.
+
+`checked` says what was proved: `rpc` and `zmq` are live protocol checks, while `connect` is a
+bare TCP connect and passes on ANY socket that accepts — so a Tari row that passed is reported as
+qualified, not as a verified node.
+
+An ABSENT report is not a failed one. A machine running its own nodes probes nothing and writes no
+file, so `node_probe` is `null` there and on any host older than the report; the wizard reads the
+verdict only when `ok` arrives as a real boolean, and a malformed file falls through to `null` the
+way every other spool reader fails open.
+
+`nodeprobe.mjs` renders it, and owns the operator's words for all seven reasons in one place: the
+setup screen shows the report today, and the Configuration view's preview will show the same one
+once the control channel carries a probe of its own, so a reason worded twice cannot come to mean
+two things. Three rules in it are load-bearing rather than stylistic. A reason the module does not
+recognise reads as "the check did not complete" and never as "not reached", because the probe's
+vocabulary is expected to grow and an invented reachability claim is the defect that growth would
+otherwise reintroduce. A `missing-tool` row drops the host's own `detail`, which is the generic
+reach sentence naming the operator's host, port and LAN switch — none of them at fault when the
+check could not run at all. And the module renders no control: the gate is the host's, so a failed
+probe leaves the form editable and the submit button live, which is the only way out of it.
+
 ### The machine-role contract
 
 What the boot path reads, written by the host at the moment a role is accepted:

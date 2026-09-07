@@ -69,6 +69,25 @@ fi
 # provision time for now — baking the full set is tracked with the appliance-size work.
 STACK_VERSION="v$(tr -d ' \t\r\n' <VERSION)"
 WIZARD_IMAGE="${PITHEAD_REGISTRY:-ghcr.io/p2pool-starter-stack}/pithead-dashboard:${STACK_VERSION}"
+# A DEBUG build against a non-default registry pins that registry into the image's boot units
+# and tells podman how to trust it — a CA file (PITHEAD_REGISTRY_CA) for a TLS registry, else an
+# insecure (HTTP) entry (#1892). The wizard archive above is NAMED with the build-time
+# registry and first boot re-derives the same name at runtime, so the two must agree, and nothing
+# on the box sets the runtime half otherwise. Release builds never carry either file.
+TEST_REGISTRY=""
+if [ -n "${PITHEAD_TEST_SSH_PUBKEY:-}" ] && [ -n "${PITHEAD_REGISTRY:-}" ] &&
+    [ "$PITHEAD_REGISTRY" != "ghcr.io/p2pool-starter-stack" ]; then
+    TEST_REGISTRY="$PITHEAD_REGISTRY"
+    if [ -n "${PITHEAD_REGISTRY_CA:-}" ]; then
+        [ -s "$PITHEAD_REGISTRY_CA" ] || {
+            echo "PITHEAD_REGISTRY_CA: $PITHEAD_REGISTRY_CA is not a readable file" >&2
+            exit 1
+        }
+        echo "==> debug build: the image will provision from $TEST_REGISTRY (TLS, CA $PITHEAD_REGISTRY_CA)"
+    else
+        echo "==> debug build: the image will provision from $TEST_REGISTRY (insecure for podman)"
+    fi
+fi
 mkdir -p os/rootfs/images
 echo "==> staging wizard image $WIZARD_IMAGE"
 if [ "${PITHEAD_WIZARD_FROM_REGISTRY:-0}" = "1" ]; then
@@ -130,4 +149,28 @@ cid=$(docker create "$ROOTFS_TAG")
 mkdir -p os/build
 docker export --output os/build/pithead-root.tar "$cid"
 docker rm "$cid" >/dev/null
+if [ -n "$TEST_REGISTRY" ]; then
+    # Appended to the exported rootfs rather than baked by the Dockerfile: the release rootfs is
+    # then byte-identical to a build that never heard of a test registry. Leaf files only — a
+    # directory entry would re-apply the staging dir's mode onto /etc on extraction.
+    stage="$(mktemp -d)"
+    for u in pithead-boot pithead-firstboot pithead-setup-again; do
+        mkdir -p "$stage/etc/systemd/system/$u.service.d"
+        printf '[Service]\nEnvironment=PITHEAD_REGISTRY=%s\n' "$TEST_REGISTRY" \
+            >"$stage/etc/systemd/system/$u.service.d/pithead-test-registry.conf"
+    done
+    # containers/image reads /etc/containers/certs.d/<host:port>/ca.crt for a TLS registry; the
+    # insecure entry is the HTTP fallback. One or the other, never both.
+    if [ -n "${PITHEAD_REGISTRY_CA:-}" ]; then
+        mkdir -p "$stage/etc/containers/certs.d/${TEST_REGISTRY%%/*}"
+        cp "$PITHEAD_REGISTRY_CA" "$stage/etc/containers/certs.d/${TEST_REGISTRY%%/*}/ca.crt"
+    else
+        mkdir -p "$stage/etc/containers/registries.conf.d"
+        printf '[[registry]]\nlocation = "%s"\ninsecure = true\n' "${TEST_REGISTRY%%/*}" \
+            >"$stage/etc/containers/registries.conf.d/pithead-test-registry.conf"
+    fi
+    (cd "$stage" && find etc -type f) |
+        tar --append -f os/build/pithead-root.tar --owner=0 --group=0 --mode=0644 -C "$stage" -T -
+    rm -r "$stage"
+fi
 echo "==> rootfs: os/build/pithead-root.tar ($(du -h os/build/pithead-root.tar | cut -f1))"

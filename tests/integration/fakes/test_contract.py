@@ -287,7 +287,7 @@ def test_worker_auth_name_sends_bearer_name():
     # A rig whose name doesn't match what the API expects is a 401, surfaced as api_ok False.
     with FakeWorkerApi(auth="name", name="someone-else") as fake:
         bad = _probe_worker(fake, auth="name", name="rig1")
-        assert bad == {"api_ok": False}
+        assert bad == {"api_ok": False, "adopted": False}
 
 
 def test_worker_per_worker_token_forces_token_auth():
@@ -298,7 +298,7 @@ def test_worker_per_worker_token_forces_token_auth():
     # Wrong token → real 401 → api_ok False (the documented misconfiguration failure mode).
     with FakeWorkerApi(auth="token", token="s3cr3t") as fake:
         bad = _probe_worker(fake, auth="none", token="wrong")
-        assert bad == {"api_ok": False}
+        assert bad == {"api_ok": False, "adopted": True}
 
 
 def test_worker_fleet_token_mode_sends_shared_token():

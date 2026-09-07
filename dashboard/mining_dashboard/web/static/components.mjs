@@ -848,6 +848,31 @@ const RigUpdateBadge = ({ up, name, onInspect }) => {
     : null;
 };
 
+// The worker's xmrig-API badge (#1857). One probe verdict answers two different questions and the
+// row has to tell them apart: an ADOPTED rig whose configured feed then failed is a real fault, and
+// the red badge's config advice is right for it; a rig the dashboard holds no control token for
+// gets the neutral `badge-outline` the version badge uses (#1836). That is NOT a claim it is
+// healthy: `workers.list` defaults to [], so a hand-configured miner with a real API fault lands
+// here too, and the tooltip names BOTH remedies rather than promising adoption fixes it.
+// The tooltip branches on `onInspect` for the same reason the name button does: with dashboard
+// control off there is no way into the rig from this table and no Adopt form (workerview.mjs), so
+// "open it and adopt" would be an impossible instruction. When control IS on it renders as a
+// button, like RigUpdateBadge, so the tooltip carrying the instruction is keyboard-reachable.
+const ApiBadge = ({ w, onInspect }) => {
+  if (w.api_ok !== false) return null;
+  if (w.adopted)
+    return html` <span class="badge badge-bad" title="The dashboard couldn't read this worker's xmrig API, so uptime and per-miner hashrate are unavailable (it still mines — figures come from the proxy). Check workers.api_auth / api_port, or the miner's xmrig http settings.">api ⚠</span>`;
+  const title =
+    "This rig mines through the proxy, but the dashboard could not read its stats, and it holds no control token for it. " +
+    (onInspect
+      ? "A rig set up by the setup wizard needs adopting: open it from its name in this table and choose Adopt this rig. "
+      : "A rig set up by the setup wizard needs adopting, which needs dashboard.control on and a dashboard password. ") +
+    "A miner you configured yourself needs its xmrig API checked: workers.api_auth / api_port, or the miner's xmrig http settings.";
+  return onInspect
+    ? html` <button type="button" class="badge badge-outline" onClick=${() => onInspect(w.name)} title=${title}>not adopted</button>`
+    : html` <span class="badge badge-outline" title=${title}>not adopted</span>`;
+};
+
 // Pool-wide proxy share totals (Issue #82) — a footer under the table. Hidden until the proxy
 // has reported any shares so it isn't an all-zero line on a fresh start.
 const ProxyTotals = ({ summary }) => {
@@ -911,11 +936,7 @@ function WorkersTable({ workers, summary, ui, onSort, hostIp, stratumPort, onIns
                                 ? html`<button type="button" class="worker-name-link" onClick=${() => onInspect(w.name)}
                                                 title="Inspect / edit this worker's config">${w.name}</button>`
                                 : w.name
-                            } <${PoolBadge} pool=${w.pool} />${
-                              w.api_ok === false
-                                ? html` <span class="badge badge-bad" title="The dashboard couldn't read this worker's xmrig API, so uptime and per-miner hashrate are unavailable (it still mines — figures come from the proxy). Check workers.api_auth / api_port, or the miner's xmrig http settings.">api ⚠</span>`
-                                : null
-                            }<${RigForgeChips} rf=${w.rigforge} /><${RigUpdateBadge} up=${w.rigforge_update} name=${w.name} onInspect=${onInspect} /></td>
+                            } <${PoolBadge} pool=${w.pool} /><${ApiBadge} w=${w} onInspect=${onInspect} /><${RigForgeChips} rf=${w.rigforge} /><${RigUpdateBadge} up=${w.rigforge_update} name=${w.name} onInspect=${onInspect} /></td>
                             <td>${w.ip}</td>
                             <td>${uptimeCell(w)}</td>
                             <td>${w.h60_str}</td>
@@ -1015,6 +1036,9 @@ function DashboardView({
 }) {
   const advanced = ui.view === "advanced";
   const configView = ui.view === "config";
+  // Backup is its own view, not a card below the config editor (#1854): an operator handed a
+  // working machine has to be able to find "take a backup" without reading the editor first.
+  const backupView = ui.view === "backup";
   // Layout by operator relevance (#159): the at-a-glance chart and the rigs themselves lead (this
   // stack may drive many machines), then this stack's own detail cards, then pool-wide and network
   // context as reference at the bottom — "mine" first, "the world" last.
@@ -1030,22 +1054,29 @@ function DashboardView({
     <div id="dashboard-view" class=${advanced ? "mode-advanced" : ""}>
         <div class="view-controls">
             <div class="toggle-group" role="group" aria-label="Dashboard view">
-                <button class=${"btn-toggle" + (!advanced && !configView ? " active" : "")} aria-pressed=${!advanced && !configView}
+                <button class=${"btn-toggle" + (!advanced && !configView && !backupView ? " active" : "")} aria-pressed=${!advanced && !configView && !backupView}
                     title="Chart, workers and the headline numbers" onClick=${() => onView("simple")}>Simple</button>
                 <button class=${"btn-toggle" + (advanced ? " active" : "")} aria-pressed=${advanced}
                     title="Every stats card, calculators and diagnostics" onClick=${() => onView("advanced")}>Advanced</button>
                 <button class=${"btn-toggle" + (configView ? " active" : "")} aria-pressed=${configView}
                     title="View or edit the stack configuration" onClick=${() => onView("config")}>Configuration</button>
+                <button class=${"btn-toggle" + (backupView ? " active" : "")} aria-pressed=${backupView}
+                    title="Export an encrypted copy of this machine's configuration and secrets" onClick=${() => onView("backup")}>Backup</button>
             </div>
         </div>
         <${AdvancedHint} ui=${ui} onView=${onView} onDismissHint=${onDismissHint} />
         ${
           configView
-            ? html`<div class="card-stack"><${ConfigView} appliance=${!!state.os_update} /><${BackupPanel} enabled=${state.control_enabled} /><${DiagnosticsPanel} enabled=${state.control_enabled} /><${SecurityPanel} /></div>`
+            ? html`<div class="card-stack"><${ConfigView} appliance=${!!state.os_update} /><${DiagnosticsPanel} enabled=${state.control_enabled} /><${SecurityPanel} /></div>`
             : null
         }
         ${
-          configView
+          backupView
+            ? html`<div class="card-stack"><${BackupPanel} enabled=${state.control_enabled} appliance=${!!state.os_update} /></div>`
+            : null
+        }
+        ${
+          configView || backupView
             ? null
             : html`
         <div class="grid">

@@ -156,6 +156,25 @@ def _saved_role() -> dict | None:
     return saved if isinstance(saved.get("role"), str) and saved["role"] else None
 
 
+def _node_probe() -> dict | None:
+    """The host's remote-node probe report (#1889), published beside the config it judged:
+    ``{ok, configured, probed, probes: [{target, host, port, ok, checked, reason, detail,
+    elapsed_ms}]}``.
+
+    None means NO REPORT, which is not the same as a failed one and must render as nothing at
+    all: an all-local machine probes nothing, and a host older than the report writes no file.
+    `ok` is missing from an absent file exactly as it is from a truncated one, so PRESENCE is
+    what separates them and the check is that `ok` arrived as a real bool — reading a falsy
+    default here would block every machine that runs its own nodes.
+
+    This is the report that says WHY, never a second opinion about whether to proceed: the gate
+    is the HOST's, in 12-firstboot-wizard.sh, which calls preflight_remote_nodes before
+    provisioning commits and refuses there.
+    """
+    report = _spool_json("node-probe.json")
+    return report if isinstance(report.get("ok"), bool) else None
+
+
 def wizard_stage() -> str:
     """Which step this machine is actually on, decided by the SPOOL — never by the client.
 
@@ -263,6 +282,8 @@ async def wizard_state(request: web.Request) -> web.Response:
             "handoff": json.loads(raw_handoff) if raw_handoff else None,
             # Always present, null when this is not a set-up-again boot (#1318).
             "saved_role": _saved_role(),
+            # Always present, null when no probe ran at all (#1889).
+            "node_probe": _node_probe(),
         }
     )
 

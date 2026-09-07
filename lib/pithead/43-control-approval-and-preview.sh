@@ -1,3 +1,13 @@
+# The remedy half of a control-channel refusal (#1888, the #1821 class): "edit config.json and run
+# apply" is a real remedy on a DIY host and a DEAD END on a shell-less appliance (#786).
+_control_host_remedy() {
+    if is_appliance; then
+        printf 'That setting is not changeable from the dashboard on an appliance; it is fixed when the machine is set up, so use "Set up again" if you need to change it.'
+    else
+        printf 'Edit config.json on the host and run `%s apply`.' "$0"
+    fi
+}
+
 control_approval_gate() { # <staged-file> [confirm-token]
     local staged="$1" confirm="${2:-}" porcelain
     # Fail closed if we cannot re-derive the change set (the staged config was validated at
@@ -33,7 +43,7 @@ control_approval_gate() { # <staged-file> [confirm-token]
         ((($live[0].workers.list // []) | length) as $n
              | (.workers.list // [])[0:$n] == ($live[0].workers.list // []))
         ' "$staged" >/dev/null 2>&1; then
-        printf 'this change alters an existing per-worker descriptor (workers.list[], a per-rig host/token) rather than only adding a new one, which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+        printf 'this change alters an existing per-worker descriptor (workers.list[], a per-rig host/token) rather than only adding a new one, which is not committable from the dashboard. %s' "$(_control_host_remedy)"
         return 1
     fi
     # SSRF floor on what an add-only append may point at (see _control_host_is_internal): every
@@ -78,7 +88,7 @@ control_approval_gate() { # <staged-file> [confirm-token]
         return 1
     fi
     if [ -n "$unknown" ]; then
-        printf 'this change adds config keys not in the schema (%s) — refusing to commit. Edit config.json on the host and run `%s apply`.' "$unknown" "$0"
+        printf 'this change adds config keys not in the schema (%s) — refusing to commit. %s' "$unknown" "$(_control_host_remedy)"
         return 1
     fi
     # Default-deny: refuse if any changed env key is NOT on the editable allowlist, whatever its
@@ -93,14 +103,14 @@ control_approval_gate() { # <staged-file> [confirm-token]
     bad=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -cvxE "$editable_re" || true)
     if [ "${bad:-0}" -gt 0 ]; then
         hit=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -m1 -vxE "$editable_re" || true)
-        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "${hit:-unparseable change row}" "$0"
+        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard. %s' "${hit:-unparseable change row}" "$(_control_host_remedy)"
         return 1
     fi
     # Perimeter: any DEST row is refused outright — the confirm-gate never covers a destructive
     # host-only change. A data-dir MOVE is CONFIRM (below); a prune DISABLE or a TOR data-dir move
     # still emits DEST and is caught here even though its key is on the confirm allowlist.
     if printf '%s\n' "$porcelain" | grep -qE $'^DEST\t'; then
-        printf 'this change is destructive and cannot be committed from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+        printf 'this change is destructive and cannot be committed from the dashboard. %s' "$(_control_host_remedy)"
         return 1
     fi
     # Data-dir destination allowlist (#728). #719 made the four *_DATA_DIR moves confirm-gated, so a
@@ -140,7 +150,7 @@ control_approval_gate() { # <staged-file> [confirm-token]
             case "$dest/" in "$root"/*) ok_root=1 && break ;; esac
         done
         if [ "$ok_root" -eq 0 ]; then
-            printf 'this move sends %s to %s, which is outside the stack data root(s) — a dashboard-confirmed data-dir move must stay under the stack data directory (%s) or a parent it already uses. Apply it from the host with `%s apply`.' "$ddpath" "$dest" "$PWD/data" "$0"
+            printf 'this move sends %s to %s, which is outside the stack data root(s) — a dashboard-confirmed data-dir move must stay under the stack data directory (%s) or a parent it already uses. %s' "$ddpath" "$dest" "$PWD/data" "$(_control_host_remedy)"
             return 1
         fi
     done
@@ -156,6 +166,20 @@ control_approval_gate() { # <staged-file> [confirm-token]
             return 1
         fi
         touch "${staged}.confirmed" 2>/dev/null || true
+    fi
+    # Reachability probe (#1888) — the compensating control the confirm tier rests on for these keys
+    # (42-): the typed token is friction, but a chain cannot be parked on a node that is not there.
+    # Host-side, on the STAGED config, through the same preflight the wizard uses; nothing is
+    # trusted from the container. Fires only when a node-endpoint key really changed (so an
+    # unrelated commit is never blocked by a node that is down) and only after the typed
+    # confirmation (so an unconfirmed attempt never pays the dial timeouts).
+    local probe_err endpoint_re
+    endpoint_re=$(printf '%s' "$CONTROL_NODE_ENDPOINT_KEYS" | tr -s ' \n' '|')
+    if printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -qxE "$endpoint_re"; then
+        if ! probe_err=$(preflight_remote_nodes "$staged" 2>/dev/null); then
+            printf 'this change points the stack at a node the host cannot use: %s' "$probe_err"
+            return 1
+        fi
     fi
     # Approved: echo the changed key NAMES so the commit's audit entry can record WHAT changed
     # (#349) without a third dry-run. Names only, never values. dashboard.energy (#504) is

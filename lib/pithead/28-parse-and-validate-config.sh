@@ -26,10 +26,19 @@ parse_and_validate_config() {
         esac
     fi
 
-    # Required fields
+    # tari.mode (#103/#1855): monero.mode's local/remote switch plus "off" — no merge-mining at all.
+    # Read BEFORE the required-fields gate below, which depends on it, and ahead of everything else
+    # so a bad value fails first. MISSING-KEY DEFAULT STAYS "local": 1.x never wrote it (#1855).
+    TARI_MODE=$(jq -r '.tari.mode // "local"' "$CONFIG_FILE")
+    case "$TARI_MODE" in
+    local | remote | off) ;;
+    *) error "tari.mode must be \"local\", \"remote\" or \"off\" (got \"$TARI_MODE\")." ;;
+    esac
+
+    # Required fields. "off" needs no Tari address: nothing merge-mines, so nothing is paid (#1855).
     MONERO_WALLET=$(jq -r '.monero.wallet_address // empty' "$CONFIG_FILE")
     TARI_WALLET=$(jq -r '.tari.wallet_address // empty' "$CONFIG_FILE")
-    if [ -z "$MONERO_WALLET" ] || [ -z "$TARI_WALLET" ]; then
+    if [ -z "$MONERO_WALLET" ] || { [ -z "$TARI_WALLET" ] && [ "$TARI_MODE" != "off" ]; }; then
         error "Missing required wallet addresses in $CONFIG_FILE."
     fi
     # tari.wallet_address gets no shape regex: Tari addresses come in base58 AND emoji forms,
@@ -56,12 +65,12 @@ parse_and_validate_config() {
     esac
 
     # The Tari sibling of the gate above (#845): full decode + DammSum verdict, both address
-    # forms. "unchecked" (no usable python3) passes — degraded to the pre-gate behaviour,
-    # never a false reject.
-    case "$(tari_address_type "$TARI_WALLET")" in
-    ok | unchecked) ;;
-    checksum) error "tari.wallet_address fails its checksum — at least one character is mistyped, and a mistyped address means Tari rewards are silently lost. Re-copy the address (base58 or emoji form) from your Tari wallet and try again." ;;
-    network) error "tari.wallet_address is for a different Tari network (a testnet). This stack mines MAINNET Tari — use your mainnet address." ;;
+    # forms. "unchecked" (no usable python3) passes — never a false reject. "off" merge-mines
+    # nothing, so an absent or stale payout address is inert and must not block apply (#1855).
+    case "$TARI_MODE:$(tari_address_type "$TARI_WALLET")" in
+    off:* | *:ok | *:unchecked) ;;
+    *:checksum) error "tari.wallet_address fails its checksum — at least one character is mistyped, and a mistyped address means Tari rewards are silently lost. Re-copy the address (base58 or emoji form) from your Tari wallet and try again." ;;
+    *:network) error "tari.wallet_address is for a different Tari network (a testnet). This stack mines MAINNET Tari — use your mainnet address." ;;
     *) error "tari.wallet_address (${#TARI_WALLET} chars) is not a valid Tari address in either the base58 or the emoji form. Copy it from your Tari wallet." ;;
     esac
 
@@ -69,15 +78,6 @@ parse_and_validate_config() {
     case "$MONERO_MODE" in
     local | remote) ;;
     *) error "monero.mode must be \"local\" or \"remote\" (got \"$MONERO_MODE\")." ;;
-    esac
-
-    # tari.mode (#103), the same explicit local/remote switch as monero.mode above. Read here (not
-    # only inside the view-key gate below) so an invalid value fails validation regardless of
-    # whether a view key is even set.
-    TARI_MODE=$(jq -r '.tari.mode // "local"' "$CONFIG_FILE")
-    case "$TARI_MODE" in
-    local | remote) ;;
-    *) error "tari.mode must be \"local\" or \"remote\" (got \"$TARI_MODE\")." ;;
     esac
 
     # On-chain payout confirmation (#381). The operator supplies the PRIVATE VIEW KEY for
@@ -122,7 +122,7 @@ parse_and_validate_config() {
     TARI_PAYOUT_CONFIRM_ENABLED=false
     if [ -n "$TARI_VIEW_KEY" ]; then
         if [ "$TARI_MODE" != "local" ]; then
-            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Payout confirmation needs the LOCAL Tari node — unsupported with tari.mode: remote, since scanning through a third-party node changes the trust story. Unset tari.view_key, or use a local Tari node."
+            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Payout confirmation scans the LOCAL Tari node, so it needs tari.mode: local — unset tari.view_key, or use a local Tari node."
         fi
         # Tari view / public-spend keys are 64 lowercase hex chars (32-byte Ristretto scalar / point).
         if ! printf '%s' "$TARI_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then

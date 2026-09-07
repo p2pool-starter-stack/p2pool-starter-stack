@@ -268,7 +268,7 @@ preflight_resources() {
     # goes remote. check_disk_grouped skips empty dirs.
     local pre_mono_dir="${MONERO_DIR:-}" pre_tari_dir="${TARI_DIR:-}"
     [ "$MONERO_MODE" == "remote" ] && pre_mono_dir=""
-    [ "$TARI_MODE" == "remote" ] && pre_tari_dir=""
+    [ "$TARI_MODE" != "local" ] && pre_tari_dir=""
     check_disk_grouped preflight "$prune" \
         "$pre_mono_dir" "$pre_tari_dir" "${P2POOL_DIR:-}" "${DASHBOARD_DIR:-}" "${TOR_DATA_DIR:-}"
 
