@@ -2942,8 +2942,7 @@ firstboot_wizard() {
                 # The rig's card: worker, pool, the control token (#1836 — minted once, shown ONCE: a rig serves
                 # no page after this) and this box's address for the adopt form. No login. The same ack still gates the erase.
                 jq -n --arg w "$rig_worker" --arg s "stratum+tcp://$rig_pool" --arg t "$rig_token" --arg a "$(hostname -I 2>/dev/null | awk '{print $1}')" \
-                    '{role: "rig", worker: $w, stratum: $s, token: $t, address: $a}' >"$spool/handoff.json"
-                chown 1000:1000 "$spool/handoff.json" 2>/dev/null || true
+                    '{role: "rig", worker: $w, stratum: $s, token: $t, address: $a}' | write_handoff_card "$spool"
                 local hwait=0
                 while [ ! -f "$spool/handoff-ack" ] && [ "$hwait" -lt 600 ]; do
                     sleep 2
@@ -3062,8 +3061,7 @@ firstboot_wizard() {
                 # credentials must not vanish with it.
                 jq -n --arg u "$dash_user" --arg p "$dash_pass" \
                     --arg d "https://$(hostname).local" --arg s "$stratum_addr" \
-                    '{username:$u,password:$p,dashboard:$d,stratum:$s}' >"$spool/handoff.json"
-                chown 1000:1000 "$spool/handoff.json" 2>/dev/null || true
+                    '{username:$u,password:$p,dashboard:$d,stratum:$s}' | write_handoff_card "$spool"
                 local hwait=0
                 while [ ! -f "$spool/handoff-ack" ] && [ "$hwait" -lt 600 ]; do
                     sleep 2
@@ -3235,6 +3233,21 @@ publish_saved_role() { # <spool-dir>
     fi
     chown 1000:1000 "$tmp" "$spool/rig-defaults.json" "$spool/last-attempt.json" 2>/dev/null || true
     mv -f "$tmp" "$spool/saved-role.json"
+}
+
+# The wizard's credentials card, both roles: the coordinator's login, or (since #1836) the rig's
+# control token. It is owner-only from its FIRST byte (#1842): a chmod after the write leaves a
+# world-readable window under the default umask, and a redirect into a card left by an earlier
+# attempt keeps THAT card's mode — so the JSON lands in an owner-only temp file and replaces the
+# card whole. Owned by the page's user; the ack that gates the erase is unchanged.
+write_handoff_card() { # <spool-dir>; the card's JSON on stdin
+    local tmp="$1/.handoff.json.$$"
+    (umask 077 && cat >"$tmp") || {
+        rm -f "$tmp"
+        return 1
+    }
+    chown 1000:1000 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$1/handoff.json"
 }
 
 # "Keep it": the page wrote keep-role. Nothing on /data was touched — the marker, rig.json and
@@ -3609,7 +3622,7 @@ rig_access_token() {
     if ! [[ "$tok" =~ ^[0-9a-f]{32}$ ]]; then
         tok=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
         [[ "$tok" =~ ^[0-9a-f]{32}$ ]] || return 1
-        if ! { jq --arg t "$tok" '. + {access_token: $t}' "$PWD/rig.json" >"$tmp" 2>/dev/null &&
+        if ! { (umask 077 && jq --arg t "$tok" '. + {access_token: $t}' "$PWD/rig.json" >"$tmp" 2>/dev/null) &&
             chmod 600 "$tmp" && mv -f "$tmp" "$PWD/rig.json"; }; then
             rm -f "$tmp"
             return 1

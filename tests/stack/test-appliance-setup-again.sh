@@ -112,4 +112,26 @@ assert_rc "switch: config.json does not short-circuit — the page path is reach
 assert_not_contains "...and setup did not run" "$out" "setup-ran"
 unset PITHEAD_PRESEED_DIR PITHEAD_RIGFORGE_DIR RF_LOG SAW_STUBS
 rm -rf "$SAWB" "$SAESP"
+echo "== unit: write_handoff_card — the credentials card is owner-only from its first byte (#1842) =="
+# The card carries the login or the rig's control token. Both controls remove what a lazy fix would
+# lean on: the caller's umask is permissive and chmod is a no-op, so only the helper's own umask can
+# produce 600; and a 644 card from an earlier attempt must be REPLACED, since a redirect keeps its mode.
+mk_tmpdir HCSB
+mkdir -p "$HCSB/spool"
+printf '{"role":"rig","token":"tok-1"}' | run_sourced "$HCSB" eval 'umask 022; chmod() { :; }; write_handoff_card "$HCSB/spool"'
+assert_rc "writing the card -> rc 0" "$?" "0"
+assert_eq "the card is 600 under a permissive umask with chmod a no-op" "$(stat -c '%a' "$HCSB/spool/handoff.json")" "600"
+assert_eq "the card is the JSON handed in" "$(jq -r '.token' "$HCSB/spool/handoff.json")" "tok-1"
+assert_eq "no temp file beside the card" "$(find "$HCSB/spool" -name '.handoff*' | wc -l | tr -d ' ')" "0"
+chmod 644 "$HCSB/spool/handoff.json"
+printf '{"username":"admin","password":"p"}' | run_sourced "$HCSB" eval 'umask 022; chmod() { :; }; write_handoff_card "$HCSB/spool"'
+assert_eq "a 644 card left by an earlier attempt is replaced, not truncated in place" "$(stat -c '%a' "$HCSB/spool/handoff.json")" "600"
+assert_eq "...and carries the new card" "$(jq -r '.username' "$HCSB/spool/handoff.json")" "admin"
+# The two wizard writers (rig card, coordinator card) go through the helper: no direct redirect
+# into handoff.json survives in the slices, and exactly two call sites do. A text guard, said so.
+assert_eq "no wizard slice redirects into handoff.json directly (text guard)" "$(grep -c '>"\$spool/handoff.json"' "$ROOT"/lib/pithead/*.sh | awk -F: '{n+=$2} END{print n+0}')" "0"
+assert_eq "...and both card writers call write_handoff_card (the guard's positive control)" "$(grep -c '| write_handoff_card "\$spool"' "$ROOT/lib/pithead/12-firstboot-wizard.sh")" "2"
+rm -rf "$HCSB"
+unset HCSB
+
 unset SAWB SAESP out

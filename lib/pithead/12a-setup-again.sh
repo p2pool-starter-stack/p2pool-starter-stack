@@ -32,6 +32,21 @@ publish_saved_role() { # <spool-dir>
     mv -f "$tmp" "$spool/saved-role.json"
 }
 
+# The wizard's credentials card, both roles: the coordinator's login, or (since #1836) the rig's
+# control token. It is owner-only from its FIRST byte (#1842): a chmod after the write leaves a
+# world-readable window under the default umask, and a redirect into a card left by an earlier
+# attempt keeps THAT card's mode — so the JSON lands in an owner-only temp file and replaces the
+# card whole. Owned by the page's user; the ack that gates the erase is unchanged.
+write_handoff_card() { # <spool-dir>; the card's JSON on stdin
+    local tmp="$1/.handoff.json.$$"
+    (umask 077 && cat >"$tmp") || {
+        rm -f "$tmp"
+        return 1
+    }
+    chown 1000:1000 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$1/handoff.json"
+}
+
 # "Keep it": the page wrote keep-role. Nothing on /data was touched — the marker, rig.json and
 # config.json are exactly as this boot found them — so firstboot_wizard returns, the unit ends,
 # and pithead-boot runs the boot the machine would have taken from the default entry.

@@ -294,8 +294,7 @@ firstboot_wizard() {
                 # The rig's card: worker, pool, the control token (#1836 — minted once, shown ONCE: a rig serves
                 # no page after this) and this box's address for the adopt form. No login. The same ack still gates the erase.
                 jq -n --arg w "$rig_worker" --arg s "stratum+tcp://$rig_pool" --arg t "$rig_token" --arg a "$(hostname -I 2>/dev/null | awk '{print $1}')" \
-                    '{role: "rig", worker: $w, stratum: $s, token: $t, address: $a}' >"$spool/handoff.json"
-                chown 1000:1000 "$spool/handoff.json" 2>/dev/null || true
+                    '{role: "rig", worker: $w, stratum: $s, token: $t, address: $a}' | write_handoff_card "$spool"
                 local hwait=0
                 while [ ! -f "$spool/handoff-ack" ] && [ "$hwait" -lt 600 ]; do
                     sleep 2
@@ -414,8 +413,7 @@ firstboot_wizard() {
                 # credentials must not vanish with it.
                 jq -n --arg u "$dash_user" --arg p "$dash_pass" \
                     --arg d "https://$(hostname).local" --arg s "$stratum_addr" \
-                    '{username:$u,password:$p,dashboard:$d,stratum:$s}' >"$spool/handoff.json"
-                chown 1000:1000 "$spool/handoff.json" 2>/dev/null || true
+                    '{username:$u,password:$p,dashboard:$d,stratum:$s}' | write_handoff_card "$spool"
                 local hwait=0
                 while [ ! -f "$spool/handoff-ack" ] && [ "$hwait" -lt 600 ]; do
                     sleep 2

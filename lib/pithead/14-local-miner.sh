@@ -295,7 +295,7 @@ rig_access_token() {
     if ! [[ "$tok" =~ ^[0-9a-f]{32}$ ]]; then
         tok=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
         [[ "$tok" =~ ^[0-9a-f]{32}$ ]] || return 1
-        if ! { jq --arg t "$tok" '. + {access_token: $t}' "$PWD/rig.json" >"$tmp" 2>/dev/null &&
+        if ! { (umask 077 && jq --arg t "$tok" '. + {access_token: $t}' "$PWD/rig.json" >"$tmp" 2>/dev/null) &&
             chmod 600 "$tmp" && mv -f "$tmp" "$PWD/rig.json"; }; then
             rm -f "$tmp"
             return 1
