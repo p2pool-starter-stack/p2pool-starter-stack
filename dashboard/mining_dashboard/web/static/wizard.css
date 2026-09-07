@@ -14,6 +14,26 @@
   font-size: 0.82rem;
 }
 
+/* A stratum URL and the rig's 32-character control token carry no break opportunity of their own,
+ * and .config-field's value column takes its minimum width from the string, so on a phone the row
+ * pushed the card past the viewport and the token's last characters sat outside the border with no
+ * cue that there was more (#1879). Two levers, because the track is `2fr` = minmax(auto, 2fr) and a
+ * grid item's `min-width: auto` resolves to its content-based minimum: `overflow-wrap: anywhere`
+ * lowers that minimum (unlike `break-word`, its break opportunities COUNT toward min-content), and
+ * `min-width: 0` removes the floor outright. `.config-field input, select` already carries the
+ * second at dashboard.css:1435; the <code> value had neither. Both together are what #83 (9330cce6)
+ * verified in a browser for this same class — `.config-field-name` is NOT the precedent it looks
+ * like, since it sits in minmax(140px, 1fr) and only ever wraps inside a fixed width.
+ *
+ * Scoped to <code>, not to .wizard-mono: that class is also on three inputs and on the JSON
+ * textarea, where breaking mid-token would change a surface nobody reported. Descending from
+ * .wizard-shell covers every value the wizard renders, including the discovered pool address that
+ * appears in prose rather than in a card row. */
+.wizard-shell code {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
 .wizard-json {
   width: 100%;
   min-height: 22rem;
