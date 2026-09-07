@@ -71,7 +71,7 @@ export function initDashboard({
     avg: normalizeAvgWindow(storage.getItem("dashboardAvgWindow")),
     // Workers-table sort (#658); persisted like the other view preferences.
     ...normalizeSort(storage.getItem("dashboardSort"), WORKER_COLUMNS.length),
-    view: ["advanced", "config"].includes(storage.getItem("dashboardView"))
+    view: ["advanced", "config", "backup"].includes(storage.getItem("dashboardView"))
       ? storage.getItem("dashboardView")
       : "simple",
     // Theme is persisted in localStorage so it survives reloads and stack restarts (Issue #43).
