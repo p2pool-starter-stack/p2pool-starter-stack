@@ -581,7 +581,7 @@ export class UpgradeControl extends Component {
           </div>
       </div>`;
     }
-    return html`<button class="badge badge-accent version-badge upgrade-btn ml-2"
+    return html`<button class="badge badge-accent version-badge ml-2"
             title=${"Upgrade the stack to " + version + " from the dashboard"}
             onClick=${() => this.setState({ phase: "confirm", confirmText: "" })}>
             Upgrade to ${version}

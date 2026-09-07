@@ -60,7 +60,7 @@ phase_install_prefill_submit_leg() { # <target-disk>
     }
     # Fixture-works control: the page must be OFFERING the previous install's answers, or the
     # candidate below is a blank form and the row cannot reach the #1846 path.
-    served=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/state" 2>/dev/null | jq -r '.config.monero.wallet_address // ""' 2>/dev/null)
+    served=$(curl -sSk -b "$jar" -m 5 "https://$ip/api/wizard-state" 2>/dev/null | jq -r '.config.monero.wallet_address // ""' 2>/dev/null)
     case "$served" in
     "${HARNESS_WALLET:0:8}"*) ok "pre-fill submit leg: the page offers the previous install's answers (pre-fill armed)" ;;
     *)

@@ -20,16 +20,15 @@ render_env() {
         profiles="" # Empty profile disables local monerod
     fi
 
-    # Tari mode → gRPC address / compose profile (#103), mirroring Monero above. local -> the
-    # bundled Tari node at its fixed bridge IP, plus the local_tari profile so compose starts it.
-    # remote -> a third-party (or fleet-shared) node's host:port; local_tari stays out of $profiles
-    # so the bundled node never starts (parse_and_validate_config already required
-    # tari.remote.host to be set).
-    local tari_grpc_addr
+    # Tari mode → gRPC address / compose profile (#103/#1855), mirroring Monero above. local -> the
+    # bundled node at its bridge IP plus the local_tari profile. remote -> a third-party node's
+    # host:port. off -> neither profile nor merge-mining, so the address stays the stock local
+    # default as an INERT placeholder: the profiled-off tari service still interpolates it, and
+    # p2pool's entrypoint is to drop the --merge-mine triple from argv on TARI_MODE=off (#1903).
+    local tari_grpc_addr="${NETWORK_PREFIX}.27:18142"
     if [ "$TARI_MODE" == "local" ]; then
-        tari_grpc_addr="${NETWORK_PREFIX}.27:18142"
         profiles="${profiles:+$profiles,}local_tari"
-    else
+    elif [ "$TARI_MODE" == "remote" ]; then
         # Reuse the parse-time validated globals (see Monero above) — single source of truth.
         tari_grpc_addr="${TARI_REMOTE_HOST}:${TARI_REMOTE_GRPC_PORT}"
     fi
@@ -149,13 +148,13 @@ render_env() {
     [ -z "$xvb_donation_level" ] && xvb_donation_level="auto"
 
     # How much Tari blocks the stack (#31/#35/#51/#897). monerod is required and not
-    # configurable (a monerod outage always rejects workers; the miner always waits for
-    # monerod's sync). A Tari outage never rejects workers, regardless of this flag — p2pool
-    # keeps mining Monero through it. tari_required (default true) still decides the rest:
-    # the miner waits for Tari's sync too, and a Tari-only sync drives full Sync Mode. false =
-    # non-blocking Tari for those two.
+    # configurable. A Tari outage never rejects workers regardless of this flag — p2pool keeps
+    # mining Monero through it — but tari_required (default true) makes the miner wait for Tari's
+    # sync, and the dashboard's sync gate STOPS p2pool and xmrig-proxy while it waits. TARI_MODE
+    # off therefore decides this outright (#1855): there is no Tari node to wait for, and a
+    # machine that declined merge-mining must still mine Monero. local/remote keep the override.
     local tari_required
-    tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
+    tari_required=$(jq -r --arg m "$TARI_MODE" 'if $m == "off" then "false" elif .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
     # Opt-in fail-closed miner hold on an unrecoverable dashboard health failure (#490), default
     # false. The dashboard is an observability layer, not the mining datapath, so the default is
@@ -293,8 +292,8 @@ render_env() {
     # Net: with HugePages on, ~7.5 GB on a 16 GB host, ~19 GB on 32 GB; with HugePages off
     # (--skip-optimize) it's ~75% of RAM. Override with tari.mem_limit (any Docker value, e.g. "8g").
     local tari_mem_limit ram_mb huge_mb avail_mb reserve_mb monero_mem_limit
-    if [ "$TARI_MODE" == "remote" ]; then
-        # No local Tari container to cap in remote mode (#103) — the RAM-sniffing auto-calc below is
+    if [ "$TARI_MODE" != "local" ]; then
+        # No local Tari container to cap in remote or off mode (#103/#1855) — the auto-calc below is
         # about THIS host's memory, irrelevant to a third-party node, so skip it entirely. Render a
         # fixed placeholder so the (profiled-off) tari service's compose interpolation still
         # resolves; it is never applied to a running container.
@@ -371,7 +370,7 @@ PAYOUT_CONFIRM_ENABLED=$PAYOUT_CONFIRM_ENABLED
 WALLET_RPC_USERNAME=wallet
 WALLET_RPC_PASSWORD=$WALLET_RPC_PASSWORD
 MONERO_WALLET_RPC_URL=http://127.0.0.1:18082/json_rpc
-TARI_WALLET_ADDRESS=$TARI_WALLET
+TARI_WALLET_ADDRESS=${TARI_WALLET:-your_tari_wallet_address}
 TARI_VIEW_KEY=$TARI_VIEW_KEY
 TARI_SPEND_PUBLIC_KEY=$TARI_SPEND_PUBLIC_KEY
 TARI_WALLET_PASSWORD=$TARI_WALLET_PASSWORD
@@ -468,6 +467,7 @@ MONERO_ZMQ_BIND=$zmq_bind
 MONERO_NODE_HOST=$mono_host
 MONERO_RPC_PORT=$rpc_port
 MONERO_ZMQ_PORT=$zmq_port
+TARI_MODE=$TARI_MODE
 TARI_GRPC_ADDRESS=$tari_grpc_addr
 TARI_GRPC_BIND=$tari_grpc_bind
 COMPOSE_PROFILES=$profiles

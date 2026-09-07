@@ -32,7 +32,7 @@ dashboard/tests/frontend/components.test.mjs	1055
 dashboard/tests/frontend/configview.test.mjs	492
 dashboard/tests/frontend/logic.test.mjs	727
 dashboard/tests/frontend/wizard.test.mjs	765
-dashboard/tests/frontend/workerview.test.mjs	518
+dashboard/tests/frontend/workerview.test.mjs	494
 dashboard/tests/frontend/xvbview.test.mjs	431
 dashboard/tests/service/test_alert_service.py	1092
 dashboard/tests/service/test_algo_service.py	822
@@ -82,6 +82,7 @@ tests/stack/test-backup.sh	523
 tests/stack/test-cli.sh	410
 tests/stack/test_compose.sh	462
 tests/stack/test-config.sh	753
+tests/stack/test-control-add-only-ssrf.sh	448
 tests/stack/test-control-upgrade.sh	795
 tests/stack/test-dashboard-onion.sh	422
 tests/stack/test-dashboard.sh	592

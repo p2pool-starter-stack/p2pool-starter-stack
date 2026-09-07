@@ -14,6 +14,26 @@
   font-size: 0.82rem;
 }
 
+/* A stratum URL and the rig's 32-character control token carry no break opportunity of their own,
+ * and .config-field's value column takes its minimum width from the string, so on a phone the row
+ * pushed the card past the viewport and the token's last characters sat outside the border with no
+ * cue that there was more (#1879). Two levers, because the track is `2fr` = minmax(auto, 2fr) and a
+ * grid item's `min-width: auto` resolves to its content-based minimum: `overflow-wrap: anywhere`
+ * lowers that minimum (unlike `break-word`, its break opportunities COUNT toward min-content), and
+ * `min-width: 0` removes the floor outright. `.config-field input, select` already carries the
+ * second at dashboard.css:1435; the <code> value had neither. Both together are what #83 (9330cce6)
+ * verified in a browser for this same class — `.config-field-name` is NOT the precedent it looks
+ * like, since it sits in minmax(140px, 1fr) and only ever wraps inside a fixed width.
+ *
+ * Scoped to <code>, not to .wizard-mono: that class is also on three inputs and on the JSON
+ * textarea, where breaking mid-token would change a surface nobody reported. Descending from
+ * .wizard-shell covers every value the wizard renders, including the discovered pool address that
+ * appears in prose rather than in a card row. */
+.wizard-shell code {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
 .wizard-json {
   width: 100%;
   min-height: 22rem;
@@ -41,4 +61,34 @@
   color: var(--accent);
   text-decoration: underline;
   cursor: pointer;
+}
+
+/* The wizard's buttons take the dashboard's own skin (.btn-toggle / .btn-toggle.active) so the
+ * first page anyone sees matches the app it hands over to. That class is built for a segmented
+ * control — no border of its own, radius from its parent — so a standalone button needs the same
+ * adaptation the config modal already makes at `.config-modal-actions .btn-toggle`. Without any of
+ * it these fell through to the user-agent style, and Apply failed WCAG 2.5.8 target size at under
+ * 24px tall (#1868). min-height states that bar directly rather than leaving it to font metrics.
+ * `.wizard-link` is a button deliberately styled as text and keeps its own look. */
+.wizard-shell button:not(.wizard-link) {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-height: 32px;
+}
+
+.wizard-shell button:not(.wizard-link):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* A section heading sat hard against the field above it and read as that field's label: h3 carries
+ * `margin: 0 0 15px` from dashboard.css, so the space above it was whatever the preceding help
+ * paragraph happened to leave — headings after a bare select got none. A heading that opens its
+ * own card still needs zero, which is what the :first-child reset is for (#1868). */
+.wizard-shell h3 {
+  margin-top: 22px;
+}
+
+.wizard-shell h3:first-child {
+  margin-top: 0;
 }

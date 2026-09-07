@@ -1,7 +1,7 @@
 # --- Backup / Restore ---
-# Protect the irreplaceable bits: config.json, .env (secrets), the Caddyfile, and the Tor
-# data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
-# by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
+# Protect the irreplaceable bits: config.json, .env (secrets), the Caddyfile, the Tor data dir
+# (onion service keys), and the dashboard data dir (its DB never re-syncs). The blockchains do
+# re-sync, so they're excluded by default; pass --with-chains to fold in Monero/Tari/P2Pool data.
 #
 # The two files a backup archive cannot be worth taking without (#1059/#1244): config.json and
 # .env carry the node credentials and secrets, unlike every optional item stack_backup adds
