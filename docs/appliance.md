@@ -261,8 +261,13 @@ wins. Paste a whole `config.json` in there if you have one.
 ### Press "Validate, then install"
 
 The machine checks your answers first — including dialing any remote node you named, so a
-wrong host fails here with the reason and your answers kept, not after the disk is gone. Only
-when everything passes does it show you, on this page, the things you must save:
+wrong host fails here with the reason and your answers kept, not after the disk is gone. The
+page lists every endpoint it tried and the address it used: a Monero node is checked twice, on
+its RPC port and its ZMQ port, and each of those is answered by a live check of the protocol
+itself. A Tari node's gRPC port is only dialed, so a pass there says the port accepted a
+connection and nothing about what is listening behind it — there is no Tari client on the
+machine to ask. Only when everything passes does it show you, on this page, the things you
+must save:
 
 - the **dashboard login** (generated, or the one you chose)
 - the **dashboard address** (`https://pithead.local`)

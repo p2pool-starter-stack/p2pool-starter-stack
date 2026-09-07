@@ -16,6 +16,7 @@ import {
   pathSet,
   telegramPairReady,
 } from "./configsync.mjs";
+import { NodeProbeReport } from "./nodeprobe.mjs";
 import { Component, html, render } from "./preact.mjs";
 import { rigCardFields, rigCardNote } from "./rigcardlogic.mjs";
 import { savedRoleOrSetup } from "./savedrole.mjs";
@@ -296,6 +297,7 @@ export class WizardApp extends Component {
       dataWiped: s.data_wiped || {},
       handoff: s.handoff || null,
       savedRole: s.saved_role || null,
+      nodeProbe: s.node_probe || null,
     };
     // The host's discovery pre-fills the rig fields, but only while they are untouched — the
     // form polls, and a half-typed pool address must survive it (same rule as cfg below).
@@ -636,6 +638,8 @@ export class WizardApp extends Component {
             onClick=${() => this.setState({ restoreMode: true, error: "" })}>
             Restoring an existing Pithead? Upload its backup instead.</button></p>
         <${Err}>${error}<//>
+        <${NodeProbeReport} report=${this.state.nodeProbe}>Setup does not continue while a
+        check is failing. Correct the address below and submit again.<//>
         <form onSubmit=${this.submit}>
             <${Field} label="What is this machine?">
                 <select value=${role} onChange=${this.setRole}>
