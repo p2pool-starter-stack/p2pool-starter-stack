@@ -53,6 +53,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$SCRIPT_DIR/restore-live-state-verdict.sh"
 # shellcheck source=tests/os/reinstall-prefill-verdict.sh
 . "$SCRIPT_DIR/reinstall-prefill-verdict.sh"
+# shellcheck source=tests/os/provisioning-settled.sh
+. "$SCRIPT_DIR/provisioning-settled.sh"
 # shellcheck source=tests/os/data-floor-fallback-leg.sh
 . "$SCRIPT_DIR/data-floor-fallback-leg.sh"
 # shellcheck source=tests/os/aged-version.sh
@@ -1710,18 +1712,16 @@ phase_install() {
     case "$rnames" in
     *dashboard*caddy* | *caddy*dashboard*)
         ok "restore leg: keep-reinstalled machine provisioned — a live stack to back up ($rnames)"
-        # Settle before backing up: `pithead backup` stops the RUNNING containers, but ones
-        # still being created slip past that stop and start mid-tar — "file changed as we read
-        # it" killed the pipeline once. Two identical readings 10s apart means startup is over.
-        local rprev=""
-        rtries=0
-        while [ "$rtries" -lt 30 ]; do
-            [ -n "$rnames" ] && [ "$rnames" = "$rprev" ] && break
-            rprev="$rnames"
-            sleep 10
-            rnames=$(_ssh "podman ps --format '{{.Names}}'" 2>/dev/null | tr '\n' ' ')
-            rtries=$((rtries + 1))
-        done
+        # Settle on the provisioning UNITS, not on `podman ps` (#1945): the wizard's `up` holds the
+        # mutation lock through its tor-health wait for minutes after the stack looks live, and a
+        # backup taken then waits it out or, when that `up` dies, archives the wreck. 900 s covers tor.
+        if ! provisioning_settled 900; then
+            bad "restore leg: provisioning never finished on the machine ($(provisioning_state))"
+            backup_failure_evidence
+            rm -f "$target_disk"
+            return
+        fi
+        ok "restore leg: provisioning finished ($(provisioning_state))"
         ;;
     *)
         bad "restore leg: stack never came up after provisioning (running: '${rnames:-none}')"

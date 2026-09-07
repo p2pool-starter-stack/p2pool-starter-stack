@@ -10,7 +10,9 @@
 # (`gate_remint_cert`, Caddy restarted only when the certificate changed), and the verdict's
 # `blocking` list that fail_boot writes into the in-flight flag for os_update_rollback_verdict
 # to name on the fallback boot. The loop's wiring is asserted by ORDER in the script, since the
-# loop itself is below the sourcing boundary. Sourced by tests/stack/run.sh.
+# loop itself is below the sourcing boundary. A fourth unit from the same harness, at the end:
+# `provisioning_settled` (#1945), the restore leg's wait on the provisioning units before it backs
+# up. Sourced by tests/stack/run.sh.
 
 echo "== unit: gate_blocked_only_by_cert — the re-mint triggers on coverage alone, never on anything else (#1265) =="
 # Any other failing check is a slot-health question the gate must not paper over, so the trigger
@@ -187,3 +189,51 @@ assert_contains "…the verdict carries an empty list and is still rolled_back" 
 assert_not_contains "…and the console line is the plain one" "$fv_none" "held by"
 unset -f dj bc_run bl_line fv_run
 unset BR RM FV COVER rm_out BOOTSCRIPT l_loop l_reset l_ready l_elif l_remint l_sleep l_fail l_gr l_set l_doc fv_one fv_two fv_none
+
+echo "== unit: provisioning_settled — the restore leg waits on the provisioning UNITS, not on podman ps (#1945) =="
+# The wizard's `up` holds the mutation lock through its tor-health wait for minutes after `podman ps`
+# shows a live stack; the helper settles only when neither pithead-firstboot nor pithead-boot is
+# `activating`. Driven with a stubbed `_ssh` answering the two probes the helper makes; PS_FLIP=1
+# turns the first `activating` reading into `inactive` on the next, so the poll itself is exercised.
+PS="$SANDBOX/ps1945"
+mkdir -p "$PS"
+ps_run() { # $1 is-active output (printf %b), $2 seconds, $3 settled|state
+    rm -f "$PS/seen"
+    (
+        PS_ACT="$1" PROVISIONING_POLL_S=0
+        _ssh() {
+            case "$*" in
+            *is-active*)
+                if [ "${PS_FLIP:-0}" = 1 ] && [ -f "$PS/seen" ]; then printf 'inactive\ninactive\n'; else
+                    touch "$PS/seen"
+                    printf '%b' "$PS_ACT"
+                fi
+                ;;
+            *error.txt*) printf '%s' "${PS_ERR:-}" ;;
+            esac
+        }
+        source "$ROOT/tests/os/provisioning-settled.sh"
+        case "$3" in settled) provisioning_settled "$2" ;; state) provisioning_state ;; esac
+    )
+}
+ps_run 'inactive\ninactive\n' 5 settled
+assert_rc "both units done: settled at once" "$?" "0"
+ps_run 'activating\ninactive\n' 1 settled
+assert_rc "the wizard still activating at the deadline: not settled" "$?" "1"
+ps_run 'inactive\nactivating\n' 1 settled
+assert_rc "pithead-boot's up still activating at the deadline: not settled" "$?" "1"
+ps_run 'deactivating\ninactive\n' 5 settled
+assert_rc "deactivating is a unit on its way OUT, not in: settled (the match is word-anchored)" "$?" "0"
+ps_run 'failed\ninactive\n' 5 settled
+assert_rc "a failed wizard unit has let go of the lock: settled" "$?" "0"
+ps_run '' 1 settled
+assert_rc "an unanswered probe is not a settled machine" "$?" "1"
+PS_FLIP=1 ps_run 'activating\ninactive\n' 5 settled
+assert_rc "activating on the first read, inactive on the next: settled after one poll" "$?" "0"
+ps_out=$(PS_ERR='[ERROR] Stack failed to start — see the error above.' ps_run 'activating\ninactive\n' 0 state)
+assert_contains "the verdict names both units" "$ps_out" "units: activating inactive"
+assert_contains "…and the wizard's spooled error when there is one" "$ps_out" "setup error: [ERROR] Stack failed to start"
+ps_out=$(ps_run 'inactive\ninactive\n' 0 state)
+assert_not_contains "an empty spool: no error claimed" "$ps_out" "setup error"
+unset -f ps_run
+unset PS ps_out
