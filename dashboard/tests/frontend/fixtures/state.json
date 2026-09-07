@@ -213,6 +213,10 @@
           {
             "route": "inactive",
             "to": "XvB standby pull (backup \u2190 primary)"
+          },
+          {
+            "route": "inactive",
+            "to": "Tor egress probe"
           }
         ],
         "firewalled": false,
@@ -374,7 +378,7 @@
       "current": 3000000,
       "db_size": "\u2014",
       "local": true,
-    "mode": "Pruned",
+      "mode": "Pruned",
       "percent": 100,
       "remaining": 0,
       "state": "done",
@@ -382,8 +386,8 @@
     },
     "tari": {
       "current": 50000,
-      "local": true,
-    "percent": 100,
+      "local": false,
+      "percent": 100,
       "remaining": 0,
       "state": "done",
       "target": 50000
@@ -433,14 +437,14 @@
         "from": "rigs",
         "kind": "ingress",
         "label": "stratum :3333",
-        "route": "local",
+        "route": "lan",
         "to": "xmrig-proxy"
       },
       {
         "from": "browser",
         "kind": "ingress",
         "label": "https :443",
-        "route": "local",
+        "route": "lan",
         "to": "caddy"
       },
       {
@@ -483,6 +487,13 @@
         "kind": "egress",
         "label": "XvB stats",
         "route": "tor",
+        "to": "tor"
+      },
+      {
+        "from": "dashboard",
+        "kind": "egress",
+        "label": "Tor egress probe",
+        "route": "inactive",
         "to": "tor"
       },
       {
@@ -545,7 +556,7 @@
         "from": "p2pool",
         "kind": "internal",
         "label": "gRPC merge-mine",
-        "route": "local",
+        "route": "lan",
         "to": "tari"
       },
       {
@@ -573,7 +584,7 @@
         "from": "dashboard",
         "kind": "internal",
         "label": "gRPC",
-        "route": "local",
+        "route": "lan",
         "to": "tari"
       },
       {
@@ -619,13 +630,13 @@
         "id": "monerod",
         "label": "monerod",
         "remote": false,
-          "zone": "host"
+        "zone": "host"
       },
       {
         "id": "tari",
         "label": "tari",
-        "remote": false,
-          "zone": "host"
+        "remote": true,
+        "zone": "host"
       },
       {
         "id": "docker",

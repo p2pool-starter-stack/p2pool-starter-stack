@@ -50,6 +50,18 @@ TOPOLOGY_NODES = [
 ]
 
 
+def edge(src, dst, route, label, kind):
+    """One hop in the diagram. Lives here, not in ``egress``, for the same reason the route
+    constants do: ``egress`` sits at its file-budget ceiling and this is graph vocabulary."""
+    return {"from": src, "to": dst, "route": route, "label": label, "kind": kind}
+
+
+def ext_node(route):
+    # Where a component's external link lands in the diagram: a Tor-routed link terminates at the
+    # `tor` hub; a clearnet link goes STRAIGHT to the internet node, so a leak visibly bypasses Tor.
+    return "internet" if route == CLEARNET else "tor"
+
+
 def node_route(address, *, is_local):
     """Route of a hop to a relocatable node, from its configured address SHAPE alone (#1350).
 
