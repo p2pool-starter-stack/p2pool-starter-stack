@@ -35,6 +35,17 @@ for f in mining.network proxy.network tor.container p2pool.container xmrig-proxy
     assert_eq "quadlet parity: $f" "$(diff -u "$ROOT/os/quadlet/$f" "$QOUT/$f" 2>&1 | head -c 300)" ""
 done
 assert_eq "remote render emits no node units" "$(find "$QOUT" -name 'monerod.container' -o -name 'tari.container' | wc -l | tr -d ' ')" "0"
+# The two render targets share one dashboard, and a variable added to the compose service can be
+# left off the quadlet unit with nothing red (#1896: the three DASHBOARD_ONION_* values the header
+# reads reached compose in #1880 and the unit not at all). Pin the DASHBOARD_* cluster, the keys
+# the two paths are meant to share, as compose ⊆ quadlet, read off the compose file itself (no
+# docker) and the rendered unit. Not the whole set: compose also carries the DIY channel's
+# notification and XVB surface the appliance does not, so equality would be red by design. The
+# first row is the parse's own control: a broken awk yields an empty set and a vacuous pass.
+compose_dash_keys=$(awk '/^  dashboard:/{f=1;next} f&&/^  [a-z]/{f=0} f' "$ROOT/docker-compose.yml" | sed -nE 's/^ +- ([A-Z_]+)=.*/\1/p' | grep '^DASHBOARD_' | sort -u)
+quadlet_dash_keys=$(sed -n 's/^Environment=//p' "$QOUT/dashboard.container" | tr ' ' '\n' | sed -E 's/=.*//' | grep '^DASHBOARD_' | sort -u)
+assert_eq "compose parse sees the dashboard service's own keys (control)" "$(printf '%s\n' "$compose_dash_keys" | grep -c '^DASHBOARD_CONTROL_ENABLED$')" "1"
+assert_eq "every DASHBOARD_* key compose gives the dashboard is on the quadlet unit (#1896)" "$(comm -23 <(printf '%s\n' "$compose_dash_keys") <(printf '%s\n' "$quadlet_dash_keys") | tr '\n' ' ')" ""
 # The local-node variant (bench-proven 2026-07-24): profiles on, 11 files, node units included.
 QLOCAL="$SANDBOX/quadlet-local-out"
 run_sourced "$SANDBOX" render_quadlet_units "$ROOT/os/quadlet/local/fixture.env" "$QLOCAL" >/dev/null
