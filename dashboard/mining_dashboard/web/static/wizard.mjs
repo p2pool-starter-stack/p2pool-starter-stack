@@ -20,6 +20,7 @@ import { NodeProbeReport } from "./nodeprobe.mjs";
 import { Component, html, render } from "./preact.mjs";
 import { rigCardFields, rigCardNote } from "./rigcardlogic.mjs";
 import { savedRoleOrSetup } from "./savedrole.mjs";
+import * as failure from "./wizardfailure.mjs";
 import { Err, Field, Note } from "./wizardparts.mjs";
 
 // The simple questions, each bound to its config path. Conditional blocks name the field that
@@ -286,10 +287,7 @@ export class WizardApp extends Component {
     const next = {
       // The installation medium gets the SAME setup form with an install section folded in —
       // one page, one submission (config + disk + wipe), one credentials card, then the erase.
-      stage:
-        { installer: "setup", installing: "installing", handoff: "done", done: "done" }[s.stage] ||
-        "setup",
-      installer: s.stage === "installer",
+      ...failure.restoredState(s, this.state),
       reference: s.reference,
       disks: s.disks,
       error: s.error || "",
@@ -640,6 +638,7 @@ export class WizardApp extends Component {
         <${Err}>${error}<//>
         <${NodeProbeReport} report=${this.state.nodeProbe}>Setup does not continue while a
         check is failing. Correct the address below and submit again.<//>
+        <${failure.ConfigChanges} changes=${this.state.configChanges} />
         <form onSubmit=${this.submit}>
             <${Field} label="What is this machine?">
                 <select value=${role} onChange=${this.setRole}>
@@ -871,6 +870,7 @@ export class WizardApp extends Component {
     const { stage, error, status } = this.state;
     let view;
     if (stage === "gate") view = html`<${Gate} error=${error} onSubmit=${this.auth} />`;
+    else if (stage === "failed") view = failure.failedView(this);
     else if (stage === "installing") view = html`<${Installing} status=${status} />`;
     else if (stage === "done")
       view = html`<${Done} status=${status} handoff=${this.state.handoff}

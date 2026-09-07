@@ -32,7 +32,9 @@ import tempfile
 
 from aiohttp import web
 
+from mining_dashboard.wizard_config import prepare_config
 from mining_dashboard.wizard_form import build_config
+from mining_dashboard.wizard_recovery import recovery_state, remember_changes, retry_handler
 
 MAX_FAILURES = 5
 EXIT_TOKEN_LOCKOUT = 3
@@ -181,11 +183,14 @@ def wizard_stage() -> str:
     A page refresh must not walk back into an editable form after a config was accepted, and the
     client cannot know that alone: a bench session refreshed mid-provision got the setup form back.
 
+    failed     the host ended an installer attempt with an error
     handoff    credentials published, waiting for the operator to save them
     done       provisioning under way (or finished) — nothing left to edit
     installer  running from the installation medium
     setup      no config accepted yet
     """
+    if installer_mode() and _spool_read("error.txt") is not None:
+        return "failed"
     if _spool_read("handoff.json") is not None and _spool_read("handoff-ack") is None:
         return "handoff"
     if _spool_read("installed") is not None or _spool_read("installing") is not None:
@@ -267,13 +272,17 @@ async def wizard_state(request: web.Request) -> web.Response:
         return web.json_response({"error": "unauthenticated"}, status=401)
     ref = _reference()
     stage = wizard_stage()
+    attempt, changes = prepare_config(_last_attempt(), ref)
+    remembered, install_attempt, auth_mode = recovery_state(_spool_json, _spool_read, _disks())
+    if changes:
+        remember_changes(spool_dir(), changes, _spool_json, _spool_write_text)
     raw_handoff = _spool_read("handoff.json") if stage == "handoff" else None
     return web.json_response(
         {
             "stage": stage,
             # Kept for the field's original meaning; `stage` is what the client renders from.
             "mode": "installer" if installer_mode() else "setup",
-            "config": _deep_merge(ref, _last_attempt() or {"local_miner": {"enabled": True}}),
+            "config": _deep_merge(ref, attempt or {"local_miner": {"enabled": True}}),
             "reference": ref,
             "error": _spool_read("error.txt"),
             "disks": _disks(),
@@ -284,6 +293,9 @@ async def wizard_state(request: web.Request) -> web.Response:
             "saved_role": _saved_role(),
             # Always present, null when no probe ran at all (#1889).
             "node_probe": _node_probe(),
+            "config_changes": list(dict.fromkeys([*changes, *remembered])),
+            "install_attempt": install_attempt,
+            "auth_mode": auth_mode,
         }
     )
 
@@ -332,6 +344,7 @@ def _gate_install_request(form: dict) -> str | None:
     if wipe != "keep" and by_name[disk]["state"] != "pithead-with-data":
         wipe = "keep"  # nothing on the disk to keep or wipe — normalize silently
     _spool_write_text("install-request", f"{disk}\t{wipe}")
+    _spool_write_text("install-attempt.json", json.dumps({"disk": disk, "wipe": wipe}))
     return None
 
 
@@ -394,6 +407,7 @@ async def submit(request: web.Request) -> web.Response:
                 return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
             _spool_clear_error()
             _spool_write_text("install-request", f"{disk}\tkeep")
+            _spool_write_text("install-attempt.json", json.dumps({"disk": disk, "wipe": "keep"}))
             return web.json_response({"status": "accepted"})
         # A blank disk with wipe=keep (the client's default) is just a fresh install — fall
         # through unconditionally. The no-JS path submits individual form FIELDS, not a config
@@ -411,6 +425,10 @@ async def submit(request: web.Request) -> web.Response:
             raise ValueError("the top level must be a JSON object")
     except (ValueError, TypeError) as exc:
         return web.json_response({"error": f"Not valid JSON: {exc}"}, status=400)
+    try:
+        cfg, changes = prepare_config(cfg, ref, reject_legacy_conflicts=True)
+    except ValueError as exc:
+        return web.json_response({"error": f"Invalid configuration: {exc}"}, status=400)
     # The dashboard-login choice travels BESIDE the config: "no login" is an empty password,
     # which is also what "not chosen yet" looks like, so the config alone cannot express intent.
     # The host reads this to decide whether to generate one.
@@ -424,9 +442,10 @@ async def submit(request: web.Request) -> web.Response:
         if err:
             return web.json_response({"error": err}, status=400)
     # Keep the full attempt for a retry, write only what differs from the defaults.
+    remember_changes(spool_dir(), changes, _spool_json, _spool_write_text)
     _spool_write_text("last-attempt.json", json.dumps(cfg))
     _spool_write_config(strip_defaults(cfg, ref) if ref else cfg)
-    return web.json_response({"status": "accepted"})
+    return web.json_response({"status": "accepted", "config_changes": changes})
 
 
 async def submit_restore(request: web.Request) -> web.Response:
@@ -550,6 +569,7 @@ def make_app(exit_fn=sys.exit) -> web.Application:
             web.get("/api/handoff", handoff),
             web.post("/handoff-ack", handoff_ack),
             web.post("/keep-role", keep_role),
+            web.post("/retry", retry_handler(_authed, wizard_stage, spool_dir)),
             web.get("/status", status),
         ]
     )
