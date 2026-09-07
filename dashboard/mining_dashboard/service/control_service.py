@@ -228,12 +228,22 @@ CONFIRM_ENV_KEY_PATHS = {
     # bypasses the Tor socks5 per docs/privacy.md; a future-dated restore point silently defeats
     # payout-confirmation tamper evidence).
     "MONERO_OUT_PEERS": ("monero.out_peers",),
+    # Node endpoints (#1888): confirm-gated, not free-commit, and paired with the approval gate's
+    # host-side reachability probe. 42-control-policy-and-host-checks.sh carries the reasoning.
+    "MONERO_NODE_HOST": ("monero.remote.host",),
+    "MONERO_RPC_PORT": ("monero.remote.rpc_port",),
+    "MONERO_ZMQ_PORT": ("monero.remote.zmq_port",),
+    "TARI_GRPC_ADDRESS": ("tari.remote.host", "tari.remote.grpc_port"),
 }
 
 
-def _confirm_paths():
-    """Every config path the control gate will commit behind a type-to-confirm (#719)."""
-    return sorted({p for target in CONFIRM_ENV_KEY_PATHS.values() for p in target})
+def _confirm_paths(cfg=None):
+    """Every config path the control gate commits behind a type-to-confirm (#719), minus a chain's
+    node endpoint (#1888) while that chain is not on a REMOTE node: a local (or, after #1855, an
+    "off") chain derives its endpoint from the stack, so offering the field would edit nothing."""
+    live = {c for c in ("monero", "tari") if (cfg or {}).get(c, {}).get("mode") == "remote"}
+    paths = {p for target in CONFIRM_ENV_KEY_PATHS.values() for p in target}
+    return sorted(p for p in paths if ".remote." not in p or p.split(".")[0] in live)
 
 
 def env_key_config_paths(env_key):
@@ -288,7 +298,7 @@ def read_config():
     mask_secrets(cfg)
     cfg["_core_keys"] = _load_core_keys()
     cfg["_editable_keys"] = _editable_paths()
-    cfg["_confirm_keys"] = _confirm_paths()
+    cfg["_confirm_keys"] = _confirm_paths(cfg)
     return cfg
 
 

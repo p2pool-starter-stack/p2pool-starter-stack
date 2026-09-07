@@ -362,3 +362,13 @@ test('onInspect/onCloseInspect: transient worker-panel state — no fetch, nothi
     assert.equal(t.fetches.length, polls);
     assert.deepEqual(Object.keys(t.stored), []); // transient: nothing written to storage
 });
+
+test('a persisted Backup view is restored, not quietly dropped to Simple (#1854)', async () => {
+    const t = makeEnv({ stored: { dashboardView: 'backup' }, responses: [ok({})] });
+    initDashboard(t.env);
+    assert.equal(t.paints[0].ui.view, 'backup');
+    // The control: the whitelist really does reject a view it does not know.
+    const u = makeEnv({ stored: { dashboardView: 'nonsense' }, responses: [ok({})] });
+    initDashboard(u.env);
+    assert.equal(u.paints[0].ui.view, 'simple');
+});

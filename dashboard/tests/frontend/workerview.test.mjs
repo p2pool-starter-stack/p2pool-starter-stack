@@ -4,10 +4,16 @@
 // walker (helpers/render.mjs); apply()/onJsonInput/onFilePick are called directly against a
 // WorkerInspect instance — no DOM, no npm deps. Run with: node --test dashboard/tests/frontend/
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { StatsTable, WorkerInspect } from "../../mining_dashboard/web/static/workerview.mjs";
+import {
+  contrastRatio,
+  DARK_BLOCK,
+  DASHBOARD_CSS,
+  LIGHT_BLOCK,
+  themeToken,
+} from "./helpers/contrast.mjs";
 import { renderToString } from "./helpers/render.mjs";
 
 const SENTINEL = { __secret__: true };
@@ -449,36 +455,6 @@ test("StatsTable: a warn-variant value keeps its status colour alongside stat-va
   assert.match(valueCell[1], /\bstatus-warn\b/);
 });
 
-// WCAG contrast ratio (relative-luminance formula) computed directly from the theme tokens the CSS declares — not a rendered/measured colour, since these tests run with no DOM. AA is 4.5:1.
-function srgbToLinear(c) {
-  const v = c / 255;
-  return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-}
-function relativeLuminance(hex) {
-  const n = Number.parseInt(hex.replace("#", ""), 16);
-  const r = srgbToLinear((n >> 16) & 0xff);
-  const g = srgbToLinear((n >> 8) & 0xff);
-  const b = srgbToLinear(n & 0xff);
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-function contrastRatio(hexA, hexB) {
-  const [l1, l2] = [relativeLuminance(hexA), relativeLuminance(hexB)].sort((a, b) => b - a);
-  return (l1 + 0.05) / (l2 + 0.05);
-}
-
-const DASHBOARD_CSS = readFileSync(
-  new URL("../../mining_dashboard/web/static/dashboard.css", import.meta.url),
-  "utf8",
-);
-
-function themeToken(css, themeBlockRe, varName) {
-  const block = css.match(themeBlockRe);
-  assert.ok(block, `expected to find the ${varName} theme block in dashboard.css`);
-  const tok = block[0].match(new RegExp(`${varName}:\\s*(#[0-9a-fA-F]{6})`));
-  assert.ok(tok, `expected ${varName} inside the matched theme block`);
-  return tok[1];
-}
-
 test("dashboard.css: .stat-value declares an explicit --text colour, not an empty/inherited one (#1232)", () => {
   const rule = DASHBOARD_CSS.match(/\.stat-value\s*\{([^}]*)\}/);
   assert.ok(rule, "expected a .stat-value rule in dashboard.css");
@@ -488,10 +464,10 @@ test("dashboard.css: .stat-value declares an explicit --text colour, not an empt
 
 test("dashboard.css: .stat-value's --text on --card meets WCAG AA (>= 4.5:1) in dark AND light (#1232)", () => {
   // Dark is the base palette; light is the explicit override block — pull each theme's pair independently.
-  const darkText = themeToken(DASHBOARD_CSS, /:root,\s*:root\[data-theme="dark"\]\s*\{[^}]*\}/, "--text");
-  const darkCard = themeToken(DASHBOARD_CSS, /:root,\s*:root\[data-theme="dark"\]\s*\{[^}]*\}/, "--card");
-  const lightText = themeToken(DASHBOARD_CSS, /:root\[data-theme="light"\]\s*\{[^}]*\}/, "--text");
-  const lightCard = themeToken(DASHBOARD_CSS, /:root\[data-theme="light"\]\s*\{[^}]*\}/, "--card");
+  const darkText = themeToken(DASHBOARD_CSS, DARK_BLOCK, "--text");
+  const darkCard = themeToken(DASHBOARD_CSS, DARK_BLOCK, "--card");
+  const lightText = themeToken(DASHBOARD_CSS, LIGHT_BLOCK, "--text");
+  const lightCard = themeToken(DASHBOARD_CSS, LIGHT_BLOCK, "--card");
 
   const darkRatio = contrastRatio(darkText, darkCard);
   const lightRatio = contrastRatio(lightText, lightCard);

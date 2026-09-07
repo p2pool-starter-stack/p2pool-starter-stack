@@ -15,7 +15,7 @@ directly instead.
 |---|---|---|
 | 1 | **Monerod** | The Monero daemon (full node). Configured for restricted RPC and Tor transaction broadcasting. Runs only with `monero.mode: local` (compose profile `local_node`); in `remote` mode no container starts and P2Pool dials your external node's RPC/ZMQ instead. |
 | 2 | **P2Pool** | The mining sidechain. Supports Main, Mini, and Nano pools. |
-| 3 | **Tari Base Node** | The Minotari node, merge-mined alongside Monero. Runs only with `tari.mode: local` (compose profile `local_tari`); in `remote` mode no container starts, no Tari data dir is used, and P2Pool merge-mines against your external node's gRPC. See [Hardware › Running a node elsewhere](hardware.md#running-a-node-elsewhere). |
+| 3 | **Tari Base Node** | The Minotari node, merge-mined alongside Monero. Runs only with `tari.mode: local` (compose profile `local_tari`); in `remote` mode no container starts, no Tari data dir is used, and P2Pool merge-mines against your external node's gRPC; with `off` no Tari container starts at all. P2Pool is still passed its merge-mine arguments until #1903 lands, so on an `off` machine today it points at a node that is not running. See [Hardware › Running a node elsewhere](hardware.md#running-a-node-elsewhere). |
 | 4 | **XMRig Proxy** | The single stratum endpoint (`:3333`) all mining hardware connects to; the switching engine reconfigures it at runtime. |
 | 5 | **Tor** | Provides SOCKS5 proxies and hidden services (onion addresses) for the other containers. |
 | 6 | **Dashboard** | The web monitoring UI and the algorithmic switching engine. |

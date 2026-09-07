@@ -107,8 +107,6 @@ export const LOGICAL_GROUPS = [
     ],
   },
   {
-    // Node-level knobs for BOTH merge-mined chains — Tari gets only two of these (mode,
-    // clearnet_initial_sync), not a whole second section for two fields.
     name: "Monero node",
     prefixes: [
       "monero.mode",
@@ -119,11 +117,16 @@ export const LOGICAL_GROUPS = [
       "monero.rpc_lan_access",
       "monero.zmq_lan_access",
       "monero.clearnet_initial_sync",
-      "tari.mode",
-      "tari.remote",
-      "tari.grpc_lan_access",
-      "tari.clearnet_initial_sync",
     ],
+  },
+  {
+    // The Tari node's own section (#1887), directly under Monero's. These four lived in "Monero
+    // node" on the reasoning that two chains share one node section; an operator looking for where
+    // their Tari node is configured read the group titles, found no Tari, and concluded it could
+    // not be changed here. Its resource knobs (tari.mem_limit, tari.data_dir) stay in "System /
+    // advanced" beside monero's — the split follows what a field IS, not which chain it names.
+    name: "Tari node",
+    prefixes: ["tari.mode", "tari.remote", "tari.grpc_lan_access", "tari.clearnet_initial_sync"],
   },
   {
     name: "Mining",

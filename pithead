@@ -4198,9 +4198,9 @@ factory_reset() {
 }
 
 # --- Backup / Restore ---
-# Protect the irreplaceable bits: config.json, .env (secrets), the Caddyfile, and the Tor
-# data dir (onion service keys). The blockchains and dashboard DB re-sync, so they're excluded
-# by default; pass --with-chains to also fold in the Monero/Tari/P2Pool data dirs.
+# Protect the irreplaceable bits: config.json, .env (secrets), the Caddyfile, the Tor data dir
+# (onion service keys), and the dashboard data dir (its DB never re-syncs). The blockchains do
+# re-sync, so they're excluded by default; pass --with-chains to fold in Monero/Tari/P2Pool data.
 #
 # The two files a backup archive cannot be worth taking without (#1059/#1244): config.json and
 # .env carry the node credentials and secrets, unlike every optional item stack_backup adds
@@ -6830,10 +6830,19 @@ parse_and_validate_config() {
         esac
     fi
 
-    # Required fields
+    # tari.mode (#103/#1855): monero.mode's local/remote switch plus "off" — no merge-mining at all.
+    # Read BEFORE the required-fields gate below, which depends on it, and ahead of everything else
+    # so a bad value fails first. MISSING-KEY DEFAULT STAYS "local": 1.x never wrote it (#1855).
+    TARI_MODE=$(jq -r '.tari.mode // "local"' "$CONFIG_FILE")
+    case "$TARI_MODE" in
+    local | remote | off) ;;
+    *) error "tari.mode must be \"local\", \"remote\" or \"off\" (got \"$TARI_MODE\")." ;;
+    esac
+
+    # Required fields. "off" needs no Tari address: nothing merge-mines, so nothing is paid (#1855).
     MONERO_WALLET=$(jq -r '.monero.wallet_address // empty' "$CONFIG_FILE")
     TARI_WALLET=$(jq -r '.tari.wallet_address // empty' "$CONFIG_FILE")
-    if [ -z "$MONERO_WALLET" ] || [ -z "$TARI_WALLET" ]; then
+    if [ -z "$MONERO_WALLET" ] || { [ -z "$TARI_WALLET" ] && [ "$TARI_MODE" != "off" ]; }; then
         error "Missing required wallet addresses in $CONFIG_FILE."
     fi
     # tari.wallet_address gets no shape regex: Tari addresses come in base58 AND emoji forms,
@@ -6860,12 +6869,12 @@ parse_and_validate_config() {
     esac
 
     # The Tari sibling of the gate above (#845): full decode + DammSum verdict, both address
-    # forms. "unchecked" (no usable python3) passes — degraded to the pre-gate behaviour,
-    # never a false reject.
-    case "$(tari_address_type "$TARI_WALLET")" in
-    ok | unchecked) ;;
-    checksum) error "tari.wallet_address fails its checksum — at least one character is mistyped, and a mistyped address means Tari rewards are silently lost. Re-copy the address (base58 or emoji form) from your Tari wallet and try again." ;;
-    network) error "tari.wallet_address is for a different Tari network (a testnet). This stack mines MAINNET Tari — use your mainnet address." ;;
+    # forms. "unchecked" (no usable python3) passes — never a false reject. "off" merge-mines
+    # nothing, so an absent or stale payout address is inert and must not block apply (#1855).
+    case "$TARI_MODE:$(tari_address_type "$TARI_WALLET")" in
+    off:* | *:ok | *:unchecked) ;;
+    *:checksum) error "tari.wallet_address fails its checksum — at least one character is mistyped, and a mistyped address means Tari rewards are silently lost. Re-copy the address (base58 or emoji form) from your Tari wallet and try again." ;;
+    *:network) error "tari.wallet_address is for a different Tari network (a testnet). This stack mines MAINNET Tari — use your mainnet address." ;;
     *) error "tari.wallet_address (${#TARI_WALLET} chars) is not a valid Tari address in either the base58 or the emoji form. Copy it from your Tari wallet." ;;
     esac
 
@@ -6873,15 +6882,6 @@ parse_and_validate_config() {
     case "$MONERO_MODE" in
     local | remote) ;;
     *) error "monero.mode must be \"local\" or \"remote\" (got \"$MONERO_MODE\")." ;;
-    esac
-
-    # tari.mode (#103), the same explicit local/remote switch as monero.mode above. Read here (not
-    # only inside the view-key gate below) so an invalid value fails validation regardless of
-    # whether a view key is even set.
-    TARI_MODE=$(jq -r '.tari.mode // "local"' "$CONFIG_FILE")
-    case "$TARI_MODE" in
-    local | remote) ;;
-    *) error "tari.mode must be \"local\" or \"remote\" (got \"$TARI_MODE\")." ;;
     esac
 
     # On-chain payout confirmation (#381). The operator supplies the PRIVATE VIEW KEY for
@@ -6926,7 +6926,7 @@ parse_and_validate_config() {
     TARI_PAYOUT_CONFIRM_ENABLED=false
     if [ -n "$TARI_VIEW_KEY" ]; then
         if [ "$TARI_MODE" != "local" ]; then
-            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Payout confirmation needs the LOCAL Tari node — unsupported with tari.mode: remote, since scanning through a third-party node changes the trust story. Unset tari.view_key, or use a local Tari node."
+            error "tari.view_key is set but tari.mode is \"$TARI_MODE\". Payout confirmation scans the LOCAL Tari node, so it needs tari.mode: local — unset tari.view_key, or use a local Tari node."
         fi
         # Tari view / public-spend keys are 64 lowercase hex chars (32-byte Ristretto scalar / point).
         if ! printf '%s' "$TARI_VIEW_KEY" | grep -qE '^[0-9a-f]{64}$'; then
@@ -8069,16 +8069,15 @@ render_env() {
         profiles="" # Empty profile disables local monerod
     fi
 
-    # Tari mode → gRPC address / compose profile (#103), mirroring Monero above. local -> the
-    # bundled Tari node at its fixed bridge IP, plus the local_tari profile so compose starts it.
-    # remote -> a third-party (or fleet-shared) node's host:port; local_tari stays out of $profiles
-    # so the bundled node never starts (parse_and_validate_config already required
-    # tari.remote.host to be set).
-    local tari_grpc_addr
+    # Tari mode → gRPC address / compose profile (#103/#1855), mirroring Monero above. local -> the
+    # bundled node at its bridge IP plus the local_tari profile. remote -> a third-party node's
+    # host:port. off -> neither profile nor merge-mining, so the address stays the stock local
+    # default as an INERT placeholder: the profiled-off tari service still interpolates it, and
+    # p2pool's entrypoint is to drop the --merge-mine triple from argv on TARI_MODE=off (#1903).
+    local tari_grpc_addr="${NETWORK_PREFIX}.27:18142"
     if [ "$TARI_MODE" == "local" ]; then
-        tari_grpc_addr="${NETWORK_PREFIX}.27:18142"
         profiles="${profiles:+$profiles,}local_tari"
-    else
+    elif [ "$TARI_MODE" == "remote" ]; then
         # Reuse the parse-time validated globals (see Monero above) — single source of truth.
         tari_grpc_addr="${TARI_REMOTE_HOST}:${TARI_REMOTE_GRPC_PORT}"
     fi
@@ -8198,13 +8197,13 @@ render_env() {
     [ -z "$xvb_donation_level" ] && xvb_donation_level="auto"
 
     # How much Tari blocks the stack (#31/#35/#51/#897). monerod is required and not
-    # configurable (a monerod outage always rejects workers; the miner always waits for
-    # monerod's sync). A Tari outage never rejects workers, regardless of this flag — p2pool
-    # keeps mining Monero through it. tari_required (default true) still decides the rest:
-    # the miner waits for Tari's sync too, and a Tari-only sync drives full Sync Mode. false =
-    # non-blocking Tari for those two.
+    # configurable. A Tari outage never rejects workers regardless of this flag — p2pool keeps
+    # mining Monero through it — but tari_required (default true) makes the miner wait for Tari's
+    # sync, and the dashboard's sync gate STOPS p2pool and xmrig-proxy while it waits. TARI_MODE
+    # off therefore decides this outright (#1855): there is no Tari node to wait for, and a
+    # machine that declined merge-mining must still mine Monero. local/remote keep the override.
     local tari_required
-    tari_required=$(jq -r 'if .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
+    tari_required=$(jq -r --arg m "$TARI_MODE" 'if $m == "off" then "false" elif .dashboard.tari_required != null then .dashboard.tari_required | tostring else "true" end' "$CONFIG_FILE")
 
     # Opt-in fail-closed miner hold on an unrecoverable dashboard health failure (#490), default
     # false. The dashboard is an observability layer, not the mining datapath, so the default is
@@ -8342,8 +8341,8 @@ render_env() {
     # Net: with HugePages on, ~7.5 GB on a 16 GB host, ~19 GB on 32 GB; with HugePages off
     # (--skip-optimize) it's ~75% of RAM. Override with tari.mem_limit (any Docker value, e.g. "8g").
     local tari_mem_limit ram_mb huge_mb avail_mb reserve_mb monero_mem_limit
-    if [ "$TARI_MODE" == "remote" ]; then
-        # No local Tari container to cap in remote mode (#103) — the RAM-sniffing auto-calc below is
+    if [ "$TARI_MODE" != "local" ]; then
+        # No local Tari container to cap in remote or off mode (#103/#1855) — the auto-calc below is
         # about THIS host's memory, irrelevant to a third-party node, so skip it entirely. Render a
         # fixed placeholder so the (profiled-off) tari service's compose interpolation still
         # resolves; it is never applied to a running container.
@@ -8420,7 +8419,7 @@ PAYOUT_CONFIRM_ENABLED=$PAYOUT_CONFIRM_ENABLED
 WALLET_RPC_USERNAME=wallet
 WALLET_RPC_PASSWORD=$WALLET_RPC_PASSWORD
 MONERO_WALLET_RPC_URL=http://127.0.0.1:18082/json_rpc
-TARI_WALLET_ADDRESS=$TARI_WALLET
+TARI_WALLET_ADDRESS=${TARI_WALLET:-your_tari_wallet_address}
 TARI_VIEW_KEY=$TARI_VIEW_KEY
 TARI_SPEND_PUBLIC_KEY=$TARI_SPEND_PUBLIC_KEY
 TARI_WALLET_PASSWORD=$TARI_WALLET_PASSWORD
@@ -8517,6 +8516,7 @@ MONERO_ZMQ_BIND=$zmq_bind
 MONERO_NODE_HOST=$mono_host
 MONERO_RPC_PORT=$rpc_port
 MONERO_ZMQ_PORT=$zmq_port
+TARI_MODE=$TARI_MODE
 TARI_GRPC_ADDRESS=$tari_grpc_addr
 TARI_GRPC_BIND=$tari_grpc_bind
 COMPOSE_PROFILES=$profiles
@@ -9551,7 +9551,7 @@ preflight_resources() {
     # goes remote. check_disk_grouped skips empty dirs.
     local pre_mono_dir="${MONERO_DIR:-}" pre_tari_dir="${TARI_DIR:-}"
     [ "$MONERO_MODE" == "remote" ] && pre_mono_dir=""
-    [ "$TARI_MODE" == "remote" ] && pre_tari_dir=""
+    [ "$TARI_MODE" != "local" ] && pre_tari_dir=""
     check_disk_grouped preflight "$prune" \
         "$pre_mono_dir" "$pre_tari_dir" "${P2POOL_DIR:-}" "${DASHBOARD_DIR:-}" "${TOR_DATA_DIR:-}"
 
@@ -9789,8 +9789,8 @@ describe_change() {
     P2POOL_FLAGS | P2POOL_PORT)
         msg="P2Pool sidechain changing ($key: '$old' → '$new') — p2pool re-syncs the new sidechain and your PPLNS window resets."
         ;;
-    MONERO_NODE_HOST | MONERO_RPC_PORT | MONERO_ZMQ_PORT)
-        msg="Monero node endpoint ($key): $old → $new."
+    MONERO_NODE_HOST | MONERO_RPC_PORT | MONERO_ZMQ_PORT | TARI_GRPC_ADDRESS)
+        flag=CONFIRM msg="${key%%_*} node endpoint ($key): ${old:-unset} → $new — the stack points its RPC client THERE and trusts the chain data, block templates and share heights that address returns. Confirm-gated, not free-commit, because it moves TRUST rather than disk; the host probes the new endpoint before accepting it, and putting the old address back reverses it."
         ;;
     MONERO_NODE_USERNAME | MONERO_NODE_PASSWORD)
         msg="Monero node RPC credential updated ($key)."
@@ -10486,7 +10486,7 @@ run_chain() {
 # The env keys committable from the dashboard: operational tuning only, and only keys whose value
 # is derived from a validated enum, boolean, or number — never a free-form string that reaches a
 # command line, URL, or credential. Everything else — wallets, auth, onion exposure, the control
-# channel itself, Tor egress/clearnet toggles, binds and ports, node endpoints, the XvB pool URL
+# channel itself, Tor egress/clearnet toggles, binds, node RPC credentials, the XvB pool URL
 # and donor id, tokens and passwords, the #381 payout-confirmation secrets (MONERO_VIEW_KEY,
 # WALLET_RPC_PASSWORD) plus PAYOUT_CONFIRM_ENABLED, and their #462 Tari siblings (TARI_VIEW_KEY,
 # TARI_WALLET_PASSWORD, TARI_SPEND_PUBLIC_KEY) plus TARI_PAYOUT_CONFIRM_ENABLED /
@@ -10541,9 +10541,30 @@ CONTROL_DASHBOARD_EDITABLE_KEYS='P2POOL_FLAGS P2POOL_PORT
 # data-dir move, etc. still emit DEST and stay refused); this list is the static allowlist the
 # gate's default-deny pass consults and the UI mirrors (control_service.CONFIRM_ENV_KEY_PATHS,
 # drift-guarded like CONTROL_DASHBOARD_EDITABLE_KEYS).
+# The four node-endpoint keys (#1888) are the 2026-09 addition, on the operator's ruling, and they
+# are the reason to read this tier's boundary carefully rather than by analogy. They are NOT a
+# data-dir move: repointing monerod's or the Tari base node's address moves TRUST, not disk — the
+# stack believes the chain data, block templates and share heights whatever answers there. They are
+# not free-commit either, for exactly that reason. They sit here because the change is INSTANTLY
+# REVERSIBLE by the same route (type APPLY, put the old address back) and because it is the one
+# perimeter entry an appliance operator must be able to make: there is no host shell on an
+# appliance, so "edit config.json and run apply" is not a remedy, it is a dead end (#786/#1821).
+# The compensating control is not the typed token — that is friction, as this comment says above —
+# it is the host-side REACHABILITY PROBE the approval gate runs on the STAGED endpoint before it
+# accepts one (43-control-approval-and-preview.sh, #1889's preflight_remote_nodes): a dashboard
+# cannot silently park a chain on a node that is not there. The RPC LOGIN CREDENTIALS for a remote
+# node (MONERO_NODE_USERNAME / MONERO_NODE_PASSWORD) are deliberately NOT here — those are secrets,
+# not address identity, and they stay host-only DEST with the rest of the credentials above.
 CONTROL_DASHBOARD_CONFIRM_KEYS='MONERO_DATA_DIR TARI_DATA_DIR P2POOL_DATA_DIR DASHBOARD_DATA_DIR
     STRATUM_PORT MONERO_CLEARNET_SYNC TARI_CLEARNET_SYNC MONERO_PRUNE
-    MONERO_OUT_PEERS'
+    MONERO_OUT_PEERS
+    MONERO_NODE_HOST MONERO_RPC_PORT MONERO_ZMQ_PORT TARI_GRPC_ADDRESS'
+
+# The node-endpoint subset of the confirm set, named ONCE (#1888) so the approval gate's probe
+# trigger is not a fourth hand-kept copy of these key names. Every key here must also be in
+# CONTROL_DASHBOARD_CONFIRM_KEYS above — a key here but not there is unreachable; a node key there
+# but not here would be committable with NO reachability probe, which is the failure that matters.
+CONTROL_NODE_ENDPOINT_KEYS='MONERO_NODE_HOST MONERO_RPC_PORT MONERO_ZMQ_PORT TARI_GRPC_ADDRESS'
 
 # True if $1 is EXACTLY a canonical dotted-decimal IPv4 literal — four decimal octets 0-255, none
 # with a leading zero (a bare "0" is fine; "010"/"0177" are not). curl/glibc's numeric-address
@@ -10698,6 +10719,16 @@ _control_host_is_internal() {
     return 1
 }
 
+# The remedy half of a control-channel refusal (#1888, the #1821 class): "edit config.json and run
+# apply" is a real remedy on a DIY host and a DEAD END on a shell-less appliance (#786).
+_control_host_remedy() {
+    if is_appliance; then
+        printf 'That setting is not changeable from the dashboard on an appliance; it is fixed when the machine is set up, so use "Set up again" if you need to change it.'
+    else
+        printf 'Edit config.json on the host and run `%s apply`.' "$0"
+    fi
+}
+
 control_approval_gate() { # <staged-file> [confirm-token]
     local staged="$1" confirm="${2:-}" porcelain
     # Fail closed if we cannot re-derive the change set (the staged config was validated at
@@ -10733,7 +10764,7 @@ control_approval_gate() { # <staged-file> [confirm-token]
         ((($live[0].workers.list // []) | length) as $n
              | (.workers.list // [])[0:$n] == ($live[0].workers.list // []))
         ' "$staged" >/dev/null 2>&1; then
-        printf 'this change alters an existing per-worker descriptor (workers.list[], a per-rig host/token) rather than only adding a new one, which is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+        printf 'this change alters an existing per-worker descriptor (workers.list[], a per-rig host/token) rather than only adding a new one, which is not committable from the dashboard. %s' "$(_control_host_remedy)"
         return 1
     fi
     # SSRF floor on what an add-only append may point at (see _control_host_is_internal): every
@@ -10778,7 +10809,7 @@ control_approval_gate() { # <staged-file> [confirm-token]
         return 1
     fi
     if [ -n "$unknown" ]; then
-        printf 'this change adds config keys not in the schema (%s) — refusing to commit. Edit config.json on the host and run `%s apply`.' "$unknown" "$0"
+        printf 'this change adds config keys not in the schema (%s) — refusing to commit. %s' "$unknown" "$(_control_host_remedy)"
         return 1
     fi
     # Default-deny: refuse if any changed env key is NOT on the editable allowlist, whatever its
@@ -10793,14 +10824,14 @@ control_approval_gate() { # <staged-file> [confirm-token]
     bad=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -cvxE "$editable_re" || true)
     if [ "${bad:-0}" -gt 0 ]; then
         hit=$(printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -m1 -vxE "$editable_re" || true)
-        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard. Edit config.json on the host and run `%s apply`.' "${hit:-unparseable change row}" "$0"
+        printf 'this change alters a security-sensitive setting (%s) that is not committable from the dashboard. %s' "${hit:-unparseable change row}" "$(_control_host_remedy)"
         return 1
     fi
     # Perimeter: any DEST row is refused outright — the confirm-gate never covers a destructive
     # host-only change. A data-dir MOVE is CONFIRM (below); a prune DISABLE or a TOR data-dir move
     # still emits DEST and is caught here even though its key is on the confirm allowlist.
     if printf '%s\n' "$porcelain" | grep -qE $'^DEST\t'; then
-        printf 'this change is destructive and cannot be committed from the dashboard. Edit config.json on the host and run `%s apply`.' "$0"
+        printf 'this change is destructive and cannot be committed from the dashboard. %s' "$(_control_host_remedy)"
         return 1
     fi
     # Data-dir destination allowlist (#728). #719 made the four *_DATA_DIR moves confirm-gated, so a
@@ -10840,7 +10871,7 @@ control_approval_gate() { # <staged-file> [confirm-token]
             case "$dest/" in "$root"/*) ok_root=1 && break ;; esac
         done
         if [ "$ok_root" -eq 0 ]; then
-            printf 'this move sends %s to %s, which is outside the stack data root(s) — a dashboard-confirmed data-dir move must stay under the stack data directory (%s) or a parent it already uses. Apply it from the host with `%s apply`.' "$ddpath" "$dest" "$PWD/data" "$0"
+            printf 'this move sends %s to %s, which is outside the stack data root(s) — a dashboard-confirmed data-dir move must stay under the stack data directory (%s) or a parent it already uses. %s' "$ddpath" "$dest" "$PWD/data" "$(_control_host_remedy)"
             return 1
         fi
     done
@@ -10856,6 +10887,20 @@ control_approval_gate() { # <staged-file> [confirm-token]
             return 1
         fi
         touch "${staged}.confirmed" 2>/dev/null || true
+    fi
+    # Reachability probe (#1888) — the compensating control the confirm tier rests on for these keys
+    # (42-): the typed token is friction, but a chain cannot be parked on a node that is not there.
+    # Host-side, on the STAGED config, through the same preflight the wizard uses; nothing is
+    # trusted from the container. Fires only when a node-endpoint key really changed (so an
+    # unrelated commit is never blocked by a node that is down) and only after the typed
+    # confirmation (so an unconfirmed attempt never pays the dial timeouts).
+    local probe_err endpoint_re
+    endpoint_re=$(printf '%s' "$CONTROL_NODE_ENDPOINT_KEYS" | tr -s ' \n' '|')
+    if printf '%s' "$porcelain" | awk -F'\t' 'NF' | cut -f2 | grep -qxE "$endpoint_re"; then
+        if ! probe_err=$(preflight_remote_nodes "$staged" 2>/dev/null); then
+            printf 'this change points the stack at a node the host cannot use: %s' "$probe_err"
+            return 1
+        fi
     fi
     # Approved: echo the changed key NAMES so the commit's audit entry can record WHAT changed
     # (#349) without a third dry-run. Names only, never values. dashboard.energy (#504) is

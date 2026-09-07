@@ -64,9 +64,7 @@ case "$stratum_pw_appliance" in
 *"./pithead"* | *".env"*) bad "appliance stratum pw enable names no CLI verb or .env" "still says: $stratum_pw_appliance" ;;
 *) ok "appliance stratum pw enable names no CLI verb or .env" ;;
 esac
-assert_contains "DIY stratum pw enable advice is unchanged" \
-    "$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" \
-    "find it in .env / './pithead status'"
+assert_contains "DIY stratum pw enable advice is unchanged" "$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD '' s3cr3t)" "find it in .env / './pithead status'"
 case "$(run_sourced "$SANDBOX" describe_change PROXY_STRATUM_PASSWORD oldpw newpw)" in
 *oldpw* | *newpw*) bad "stratum pw change hides the secret" "value leaked into the change preview" ;;
 *DEST*) ok "stratum pw change hides the secret (DEST, no value shown)" ;;
@@ -79,19 +77,14 @@ assert_contains "tor auto-heal disable names the manual fix" "$(run_sourced "$SA
 # Appliance (#1139): 'doctor' and a scoped tor restart are both CLI-only, and no dashboard control
 # restarts tor alone — the appliance-lane message states the fact instead of naming a remedy that
 # does not exist on that lane.
-#
-# MUTATION PROOF: drop the is_appliance branch (always emit the DIY message) and the "names no CLI
-# verb" assertion below goes red; force the appliance branch unconditionally and the unchanged-DIY
-# assertion right above (checked again explicitly below) goes red — neither direction passes both.
+# MUTATION PROOF: the same pair as the stratum-password block above, same mechanism — neither forced branch passes both assertions.
 tor_heal_appliance="$(PITHEAD_APPLIANCE=1 run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)"
 assert_contains "appliance tor auto-heal disable is still INFO" "$tor_heal_appliance" "INFO"
 case "$tor_heal_appliance" in
 *"./pithead"*) bad "appliance tor auto-heal disable names no CLI verb" "still says: $tor_heal_appliance" ;;
 *) ok "appliance tor auto-heal disable names no CLI verb" ;;
 esac
-assert_contains "DIY tor auto-heal disable advice is unchanged" \
-    "$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)" \
-    "'./pithead doctor', fix with './pithead restart tor'"
+assert_contains "DIY tor auto-heal disable advice is unchanged" "$(PITHEAD_APPLIANCE=0 run_sourced "$SANDBOX" describe_change TOR_AUTO_HEAL true false)" "'./pithead doctor', fix with './pithead restart tor'"
 # Fail-closed miner hold (#490): INFO either way (like TARI_REQUIRED) — it's on the dashboard
 # control-channel allowlist, so a DEST flag here would make control_approval_gate refuse every
 # commit that touches it, defeating the allowlisting.
@@ -179,6 +172,13 @@ assert_contains "tari clearnet enable warns exposure" "$(run_sourced "$SANDBOX" 
 # restore points and proxy.donate_level host-only — a future-dated restore point silently defeats
 # payout-confirmation tamper evidence, and donate traffic bypasses the Tor socks5.
 assert_contains "monero outbound-peer change is CONFIRM" "$(run_sourced "$SANDBOX" describe_change MONERO_OUT_PEERS 12 64)" "CONFIRM"
+# 2026-09 operator ruling (#1888): the remote node endpoints joined that tier — they move TRUST, not
+# disk — while the RPC LOGIN CREDENTIALS for the same node did NOT. That row is the control: it is what makes this set able to say NO.
+node_ep="$(run_sourced "$SANDBOX" describe_change MONERO_NODE_HOST 10.0.0.9 10.0.0.11)"
+assert_contains "monero node endpoint is CONFIRM (#1888)" "$node_ep" "CONFIRM"
+assert_contains "monero node endpoint preview names old -> new" "$node_ep" "10.0.0.9 → 10.0.0.11"
+assert_contains "tari node endpoint is CONFIRM (#1888)" "$(run_sourced "$SANDBOX" describe_change TARI_GRPC_ADDRESS a.lan:18142 b.lan:18142)" "CONFIRM"
+assert_not_contains "a remote node's RPC password is NOT confirm-gated" "$(run_sourced "$SANDBOX" describe_change MONERO_NODE_PASSWORD old new)" "CONFIRM"
 
 echo "== unit: explain_subnet_collision (#180) =="
 ov="$(run_sourced "$SANDBOX" explain_subnet_collision "invalid pool request: Pool overlaps with other one on this address space" 2>&1)"

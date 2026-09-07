@@ -746,6 +746,8 @@ tr:last-child td {
   font-weight: 600;
   vertical-align: middle;
   display: inline-block;
+  background: transparent; /* a <button> badge alone takes the UA fill: 2.67:1 in dark (#1858) */
+  border: none; /* ...and an outset border. Both sit above the variants, which still win. */
 }
 .badge-outline {
   border: 1px solid var(--border);
@@ -788,10 +790,8 @@ tr:last-child td {
 .version-badge.version-dev {
   border-style: dashed;
 }
-/* One-click upgrade button (#59): a badge-shaped <button>, so reset the UA button chrome. */
-button.upgrade-btn {
-  border: none;
-  cursor: pointer;
+button.badge {
+  cursor: pointer; /* the one UA reset that must not reach a <span>/<a> badge (#59) */
 }
 
 .wallet-text {
