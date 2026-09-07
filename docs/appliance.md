@@ -260,8 +260,12 @@ wins. Paste a whole `config.json` in there if you have one.
 
 ### Press "Validate, then install"
 
-The machine checks your answers first — including dialing any remote node you named, so a
-wrong host fails here with the reason and your answers kept, not after the disk is gone. Only
+The machine checks your answers first — including reaching any remote node you named, so a
+wrong host fails here with the reason and your answers kept, not after the disk is gone. For a
+Monero node it asks the node itself rather than only opening the port, so a different service
+answering on that port is caught here too. For a Tari node it can open the gRPC port but cannot
+speak gRPC, so it reports that the port answered and that nothing confirmed a Tari node behind
+it — that is the honest result, not a warning about your node. Only
 when everything passes does it show you, on this page, the things you must save:
 
 - the **dashboard login** (generated, or the one you chose)

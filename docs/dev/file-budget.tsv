@@ -51,6 +51,7 @@ dashboard/tests/web/test_wizard.py	974
 dashboard/tests/web/test_worker_detail_meta.py	425
 dashboard/tests/web/test_xvb_views.py	1243
 .github/workflows/ci.yml	513
+lib/pithead/10-installer-preseed.sh	450
 lib/pithead/12-firstboot-wizard.sh	556
 lib/pithead/14-local-miner.sh	414
 lib/pithead/28-parse-and-validate-config.sh	485

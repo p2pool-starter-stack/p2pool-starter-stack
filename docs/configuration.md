@@ -468,6 +468,19 @@ To connect to an external Monero node instead of running one locally, set `moner
 }
 ```
 
+- Before a change to these values is accepted, the stack reaches the node and asks it for
+  `get_info`, and requires a well-formed reply. Opening the port is not enough: a different
+  service listening on `18081` answers a connection exactly as a node does. The ZMQ port is
+  checked the same way, by exchanging a ZMQ greeting.
+- A failure says which failure it was. A port that refused the connection is reported as out of
+  reach, and points you at the host, the port and the LAN-access switches; a port that answered
+  without speaking the expected protocol is reported as the wrong service behind an open port.
+  Merging the two would send you to check a network path that is fine.
+- The check is unauthenticated. A node that requires RPC credentials answers it with an
+  authentication failure and is refused rather than accepted unchecked, because `monero.remote`
+  has nowhere to put those credentials. Point the stack at a node that answers `get_info` from
+  the LAN without them.
+
 - The bundled `monerod` container is not started in remote mode, and Tor stops publishing the
   Monero inbound onion with it — a node running elsewhere accepts its own peers. Switch back to
   `local` and the next `apply` publishes it again, at the same address (the key stays in
@@ -513,6 +526,10 @@ To merge-mine against a Tari base node running elsewhere instead of the bundled 
   (payout confirmation is unsupported in remote mode — see below).
 - `tari.remote.host` is required; `grpc_port` defaults to `18142`, the base node's standard gRPC
   port.
+- Before a change to these values is accepted, the stack opens the gRPC port. It does not speak
+  gRPC, so it confirms the port answers and reports that the protocol behind it was not checked.
+  An unreachable port is refused; a port that answers is accepted with that limit stated. Read it
+  as a description of what was established, not as a fault in your node.
 - The remote node must rebind its gRPC listener off the stock `grpc_address` (`127.0.0.1`), so it
   accepts connections from off-box, and enable the mining allowlist preset upstream ships for
   exactly this

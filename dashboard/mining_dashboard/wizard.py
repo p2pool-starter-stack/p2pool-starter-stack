@@ -54,10 +54,20 @@ def _shell_html() -> str:
         return f.read()
 
 
-def _spool_clear_error() -> None:
-    err_file = os.path.join(spool_dir(), "error.txt")
-    if os.path.exists(err_file):
-        os.unlink(err_file)
+# Everything the HOST wrote about the LAST attempt: the reason it refused, and the node-probe
+# report naming which remote node did not answer (#1889). Both judge a CONFIG, not the machine,
+# so neither may outlive the config that produced it. The report is the worse half of the two,
+# because it is written on the PASS path as well: left standing over a fresh submission it tells
+# the operator the nodes were reached when nothing has dialled them yet.
+_HOST_VERDICT_FILES = ("error.txt", "node-probe.json")
+
+
+def _spool_clear_host_verdict() -> None:
+    sd = spool_dir()
+    for name in _HOST_VERDICT_FILES:
+        path = os.path.join(sd, name)
+        if os.path.exists(path):
+            os.unlink(path)
 
 
 def _canon_token(t: str) -> str:
@@ -288,7 +298,7 @@ def _spool_write_bytes(name: str, data: bytes) -> None:
 
 
 def _spool_write_config(cfg: dict) -> None:
-    _spool_clear_error()
+    _spool_clear_host_verdict()
     _spool_write_text("config.json", json.dumps(cfg, indent=2))
 
 
@@ -338,7 +348,7 @@ def _submit_rig(form: dict) -> web.Response:
     password = str(form.get("rig_password", "")).strip()
     if password:
         rig["stratum_password"] = password
-    _spool_clear_error()
+    _spool_clear_host_verdict()
     # The role rides beside the request so /status can narrate honestly after it is consumed.
     _spool_write_text("role", "rig")
     _spool_write_text("rig-request.json", json.dumps(rig))
@@ -371,7 +381,7 @@ async def submit(request: web.Request) -> web.Response:
             # password is generated, no card appears, whatever a crafted submit carried.
             if confirm != disk:
                 return web.json_response({"error": f"type {disk} exactly to confirm"}, status=400)
-            _spool_clear_error()
+            _spool_clear_host_verdict()
             _spool_write_text("install-request", f"{disk}\tkeep")
             return web.json_response({"status": "accepted"})
         # A blank disk with wipe=keep (the client's default) is just a fresh install — fall
@@ -439,7 +449,7 @@ async def submit_restore(request: web.Request) -> web.Response:
         err = _gate_install_request(dict(form))
         if err:
             return web.json_response({"error": err}, status=400)
-    _spool_clear_error()
+    _spool_clear_host_verdict()
     _spool_write_bytes("restore-archive", data)
     _spool_write_text("restore-passphrase", str(form.get("passphrase", "")))
     return web.json_response({"status": "accepted"})
