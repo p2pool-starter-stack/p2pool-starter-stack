@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pithead recovery configuration builder</title>
+<style>
+:root { color-scheme: light dark; --fg:#1b1b1b; --bg:#fbfbfa; --mut:#5c5c5c; --line:#d8d6d1;
+        --card:#fff; --err:#a3211a; --warn:#8a5a00; --ok:#1f6b3a; --code:#f2f1ee; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e8e6e3; --bg:#191918; --mut:#a2a09b; --line:#3a3936; --card:#212120;
+          --err:#f08a80; --warn:#e0b25c; --ok:#7fc79b; --code:#2a2928; } }
+* { box-sizing: border-box; }
+body { margin:0; padding:2rem 1rem 4rem; background:var(--bg); color:var(--fg);
+       font:16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+main { max-width: 46rem; margin: 0 auto; }
+h1 { font-size: 1.5rem; margin: 0 0 .3rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+p, li { color: var(--fg); }
+.lede { color: var(--mut); margin: 0 0 1.5rem; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+        padding: 1rem 1.1rem; margin: 0 0 1rem; }
+.card > h3 { font-size: .95rem; margin: 0 0 .1rem; display: flex; gap: .5rem; align-items: baseline; }
+.card > p.hint { color: var(--mut); font-size: .85rem; margin: .15rem 0 .7rem; }
+.card[data-on="0"] .body { display: none; }
+label.inc { font-weight: 600; cursor: pointer; }
+label.sub { display: block; font-size: .85rem; color: var(--mut); margin: .6rem 0 .2rem; }
+input[type=text], input[type=password], textarea {
+  width: 100%; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--bg); color: var(--fg); font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+textarea { resize: vertical; }
+.msg { font-size: .85rem; margin: .4rem 0 0; }
+.msg.err { color: var(--err); }
+.msg.warn { color: var(--warn); }
+.msg.ok { color: var(--ok); }
+pre#preview { background: var(--code); border: 1px solid var(--line); border-radius: 6px;
+  padding: .8rem; overflow-x: auto; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin: 0 0 .8rem; }
+button { font: inherit; padding: .5rem 1rem; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--card); color: var(--fg); cursor: pointer; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+code { background: var(--code); padding: .1em .35em; border-radius: 3px; font-size: .9em; }
+.warnbox { border-left: 3px solid var(--warn); padding-left: .9rem; margin: 1.2rem 0; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Pithead recovery configuration builder</h1>
+<p class="lede">Writes a <code>pithead-config.json</code> for the USB stick, offline, in this page.
+Nothing is uploaded and nothing leaves this browser &mdash; save the file and copy it to the stick.</p>
+
+<div class="warnbox">
+<p><strong>How the machine reads this file.</strong> The stick&rsquo;s file is merged over the machine&rsquo;s
+running configuration: it changes only the settings it names, and everything else keeps its current
+value. So tick only the settings you actually want to change. The machine validates the result at
+boot, prints every change on its console, and applies it after a 60-second countdown &mdash; pull the
+stick during the countdown to cancel.</p>
+<p>The file holds a password and your payout addresses in plain text. Delete it from the stick once
+the machine has applied it.</p>
+</div>
+
+<h2>Settings to change</h2>
+
+<div class="card" id="c-auth" data-on="0">
+  <h3><label class="inc"><input type="checkbox" id="on-auth"> Dashboard login</label></h3>
+  <p class="hint">The recovery path for a forgotten dashboard password.</p>
+  <div class="body">
+    <label class="sub" for="f-user">Username &mdash; leave blank to keep the current one</label>
+    <input type="text" id="f-user" autocomplete="off" spellcheck="false" placeholder="admin">
+    <label class="sub" for="f-pass">New password</label>
+    <input type="text" id="f-pass" autocomplete="off" spellcheck="false">
+    <label class="sub"><input type="checkbox" id="f-onion"> This machine publishes the dashboard as a Tor onion</label>
+    <div class="msg" id="m-auth"></div>
+  </div>
+</div>
+
+<div class="card" id="c-xmr" data-on="0">
+  <h3><label class="inc"><input type="checkbox" id="on-xmr"> Monero payout address</label></h3>
+  <p class="hint">Your primary address &mdash; 95 characters, starting with 4.</p>
+  <div class="body">
+    <textarea id="f-xmr" rows="3" autocomplete="off" spellcheck="false"></textarea>
+    <div class="msg" id="m-xmr"></div>
+  </div>
+</div>
+
+<div class="card" id="c-tari" data-on="0">
+  <h3><label class="inc"><input type="checkbox" id="on-tari"> Tari payout address</label></h3>
+  <p class="hint">Base58 or emoji form, as your Tari wallet shows it.</p>
+  <div class="body">
+    <textarea id="f-tari" rows="3" autocomplete="off" spellcheck="false"></textarea>
+    <div class="msg" id="m-tari"></div>
+  </div>
+</div>
+
+<div class="card" id="c-ssh" data-on="0">
+  <h3><label class="inc"><input type="checkbox" id="on-ssh"> SSH access</label></h3>
+  <p class="hint">Key only &mdash; password login never turns on.</p>
+  <div class="body">
+    <label class="sub"><input type="checkbox" id="f-ssh-en"> Turn SSH on</label>
+    <label class="sub" for="f-ssh-key">Public key &mdash; the <code>.pub</code> file, not the private key</label>
+    <textarea id="f-ssh-key" rows="3" autocomplete="off" spellcheck="false" placeholder="ssh-ed25519 AAAA..."></textarea>
+    <div class="msg" id="m-ssh"></div>
+  </div>
+</div>
+
+<h2>The file</h2>
+<pre id="preview">Tick a setting above to start.</pre>
+<div class="row">
+  <button class="primary" id="btn-dl" disabled>Download pithead-config.json</button>
+  <button id="btn-copy" disabled>Copy</button>
+  <span class="msg" id="m-out"></span>
+</div>
+
+<h2>What this page checks, and what it does not</h2>
+<p>Addresses are checked here the same way the machine checks them: the character set, the length,
+and the checksum every Monero and Tari address carries &mdash; so a single mistyped character is
+caught at this laptop instead of at the machine. The password is checked for length and for
+characters the machine refuses.</p>
+<p>The machine is still the authority. It re-checks everything at boot and refuses a file it does
+not accept, printing the reason on its console. This page never blocks the download: if a check
+here disagrees with you, you can still save the file and let the machine decide.</p>
+<p>A box you leave blank is left out of the file altogether, so it can never clear the setting on the
+machine &mdash; an empty password would otherwise merge in as &ldquo;no password&rdquo; and take the dashboard
+login away. It also means the machine says nothing about a blank box: that setting is not in the file to object to.</p>
+<p>It cannot check what it cannot see &mdash; whether a wallet is yours, or what the machine&rsquo;s
+current settings are. Read the change list the console prints before the countdown runs out.</p>
+
+</main>
+<script>
+"use strict";
+/* Ports of the two address gates in lib/pithead/25-address-types.sh. Kept faithful to that file
+   line for line: the same alphabets, the same decode, the same check order and the same verdict
+   strings, so this page and the machine agree or the difference is a bug in one of them. */
+var B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+var EMOJI = Array.from("🐢📟🌈🌊🎯🐋🌙🤔🌕⭐🎋🌰🌴🌵🌲🌸🌹🌻🌽🍀🍁🍄🥑🍆🍇🍈🍉🍊🍋🍌🍍🍎🍐🍑🍒🍓🍔🍕🍗🍚🍞🍟🥝🍣🍦🍩🍪🍫🍬🍭🍯🥐🍳🥄🍵🍶🍷🍸🍾🍺🍼🎀🎁🎂🎃🤖🎈🎉🎒🎓🎠🎡🎢🎣🎤🎥🎧🎨🎩🎪🎬🎭🎮🎰🎱🎲🎳🎵🎷🎸🎹🎺🎻🎼🎽🎾🎿🏀🏁🏆🏈⚽🏠🏥🏦🏭🏰🐀🐉🐊🐌🐍🦁🐐🐑🐔🙈🐗🐘🐙🐚🐛🐜🐝🐞🦋🐣🐨🦀🐪🐬🐭🐮🐯🐰🦆🦂🐴🐵🐶🐷🐸🐺🐻🐼🐽🐾👀👅👑👒🧢💅👕👖👗👘👙💃👛👞👟👠🥊👢👣🤡👻👽👾🤠👃💄💈💉💊💋👂💍💎💐💔🔒🧩💡💣💤💦💨💩➕💯💰💳💵💺💻💼📈📜📌📎📖📿📡⏰📱📷🔋🔌🚰🔑🔔🔥🔦🔧🔨🔩🔪🔫🔬🔭🔮🔱🗽😂😇😈🤑😍😎😱😷🤢👍👶🚀🚁🚂🚚🚑🚒🚓🛵🚗🚜🚢🚦🚧🚨🚪🚫🚲🚽🚿🧲");
+
+/* ---- legacy Keccak-256 (pad byte 0x01), NOT NIST SHA3-256 -------------------------------- */
+var RC = ["0x0000000000000001","0x0000000000008082","0x800000000000808A","0x8000000080008000",
+"0x000000000000808B","0x0000000080000001","0x8000000080008081","0x8000000000008009",
+"0x000000000000008A","0x0000000000000088","0x0000000080008009","0x000000008000000A",
+"0x000000008000808B","0x800000000000008B","0x8000000000008089","0x8000000000008003",
+"0x8000000000008002","0x8000000000000080","0x000000000000800A","0x800000008000000A",
+"0x8000000080008081","0x8000000000008080","0x0000000080000001","0x8000000080008008"].map(BigInt);
+var ROT = [[0,36,3,41,18],[1,44,10,45,2],[62,6,43,15,61],[28,55,25,21,56],[27,20,39,8,14]];
+var MASK = (1n << 64n) - 1n;
+
+function rol(v, r) { return r ? (((v << BigInt(r)) | (v >> BigInt(64 - r))) & MASK) : v; }
+
+function keccakF(st) {
+  for (var i = 0; i < RC.length; i++) {
+    var c = [], x, y;
+    for (x = 0; x < 5; x++) c.push(st[x][0] ^ st[x][1] ^ st[x][2] ^ st[x][3] ^ st[x][4]);
+    var d = [];
+    for (x = 0; x < 5; x++) d.push(c[(x + 4) % 5] ^ rol(c[(x + 1) % 5], 1));
+    for (x = 0; x < 5; x++) for (y = 0; y < 5; y++) st[x][y] ^= d[x];
+    var b = [[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n],[0n,0n,0n,0n,0n]];
+    for (x = 0; x < 5; x++) for (y = 0; y < 5; y++) b[y][(2 * x + 3 * y) % 5] = rol(st[x][y], ROT[x][y]);
+    for (x = 0; x < 5; x++) for (y = 0; y < 5; y++)
+      st[x][y] = b[x][y] ^ ((~b[(x + 1) % 5][y]) & b[(x + 2) % 5][y]);
+    st[0][0] ^= RC[i];
+  }
+  return st;
+}
+
+function keccak256(data) {
+  var rate = 136, st = [], x, y, i, off;
+  for (x = 0; x < 5; x++) { st.push([0n,0n,0n,0n,0n]); }
+  var pad = Array.prototype.slice.call(data);
+  pad.push(0x01);
+  while (pad.length % rate) pad.push(0);
+  pad[pad.length - 1] |= 0x80;
+  for (off = 0; off < pad.length; off += rate) {
+    for (i = 0; i < rate / 8; i++) {
+      var lane = 0n;
+      for (var k = 7; k >= 0; k--) lane = (lane << 8n) | BigInt(pad[off + 8 * i + k]);
+      st[i % 5][Math.floor(i / 5)] ^= lane;
+    }
+    st = keccakF(st);
+  }
+  var out = [];
+  for (i = 0; i < 4; i++) {
+    var v = st[i % 5][Math.floor(i / 5)];
+    for (var j = 0; j < 8; j++) { out.push(Number(v & 0xffn)); v >>= 8n; }
+  }
+  return out;
+}
+
+/* ---- Monero: block-wise base58, 8-byte blocks encoded independently ----------------------- */
+var MBLOCK = {11:8, 10:7, 9:6, 7:5, 6:4, 5:3, 3:2, 2:1};
+
+function moneroB58Decode(s) {
+  var out = [];
+  for (var i = 0; i < s.length; i += 11) {
+    var blk = s.slice(i, i + 11), size = MBLOCK[blk.length];
+    if (size === undefined) return null;
+    var n = 0n;
+    for (var j = 0; j < blk.length; j++) {
+      var d = B58.indexOf(blk[j]);
+      if (d < 0) return null;
+      n = n * 58n + BigInt(d);
+    }
+    if (n >= (1n << BigInt(8 * size))) return null;   /* python's OverflowError */
+    for (var k = size - 1; k >= 0; k--) out.push(Number((n >> BigInt(8 * k)) & 0xffn));
+  }
+  return out;
+}
+
+/* primary | integrated | subaddress | checksum | invalid */
+function moneroAddressType(a) {
+  var shape = "invalid";
+  if (a[0] === "4") shape = a.length === 95 ? "primary" : (a.length === 106 ? "integrated" : "invalid");
+  else if (a[0] === "8") shape = a.length === 95 ? "subaddress" : "invalid";
+  if (shape === "invalid") return "invalid";
+  var raw = moneroB58Decode(a);
+  if (raw === null || raw.length < 5) return "invalid";
+  var body = raw.slice(0, -4), want = raw.slice(-4), got = keccak256(body).slice(0, 4);
+  for (var i = 0; i < 4; i++) if (got[i] !== want[i]) return "checksum";
+  var kind = {18: ["primary", 65], 19: ["integrated", 73], 42: ["subaddress", 65]}[body[0]];
+  if (!kind || body.length !== kind[1]) return "invalid";
+  return kind[0];
+}
+
+/* ---- Tari: bitcoin-style base58 or the 256-emoji alphabet, DammSum checksum --------------- */
+function tariB58Decode(s) {
+  var n = 0n, i;
+  for (i = 0; i < s.length; i++) {
+    var d = B58.indexOf(s[i]);
+    if (d < 0) return null;
+    n = n * 58n + BigInt(d);
+  }
+  var body = [];
+  while (n > 0n) { body.unshift(Number(n & 0xffn)); n >>= 8n; }
+  var lead = 0;
+  while (lead < s.length && s[lead] === "1") lead++;
+  var zeros = [];
+  for (i = 0; i < lead; i++) zeros.push(0);
+  return zeros.concat(body);
+}
+
+function dammsum(data) {
+  var r = 0;
+  for (var i = 0; i < data.length; i++) {
+    r ^= data[i];
+    var overflow = r & 0x80;
+    r = (r << 1) & 0xff;
+    if (overflow) r ^= 27;
+  }
+  return r;
+}
+
+/* ok | checksum | network | invalid */
+function tariAddressType(s) {
+  var chars = Array.from(s), raw = null, i;
+  var ascii = chars.every(function (c) { return c.codePointAt(0) < 128; });
+  if (ascii) {
+    if (chars.length < 45) return "invalid";
+    var p0 = tariB58Decode(s.slice(0, 1)), p1 = tariB58Decode(s.slice(1, 2)), p2 = tariB58Decode(s.slice(2));
+    if (p0 !== null && p1 !== null && p2 !== null) raw = p0.concat(p1, p2);
+  } else {
+    raw = [];
+    for (i = 0; i < chars.length; i++) {
+      var idx = EMOJI.indexOf(chars[i]);
+      if (idx < 0) { raw = null; break; }
+      raw.push(idx);
+    }
+  }
+  if (raw === null || !(raw.length === 35 || (raw.length >= 67 && raw.length <= 67 + 256))) return "invalid";
+  if (dammsum(raw) !== 0) return "checksum";
+  if (raw[0] !== 0x00) return [0x01, 0x02, 0x10, 0x24, 0x26].indexOf(raw[0]) >= 0 ? "network" : "invalid";
+  if (raw[1] & ~0b111) return "invalid";
+  return "ok";
+}
+
+/* ---- field rules, from lib/pithead/28-parse-and-validate-config.sh ------------------------ */
+var WEAK = ["passwordpassword", "0123456789", "qwertyuiop", "changeme", "letmein"];
+
+function checkAuth(user, pass, onion) {
+  if (user !== "" && !/^[A-Za-z0-9._@-]{1,64}$/.test(user))
+    return ["err", "The username must be 1–64 characters of letters, digits, and . _ @ -"];
+  if (pass === "") return ["err", "Enter the new password. Without one the file leaves this whole setting out, so the machine keeps the login it has."];
+  if (Array.from(pass).some(function (c) { var n = c.codePointAt(0); return n < 32 || n > 126; }))
+    return ["err", "The password must be plain printable characters — the machine refuses anything else."];
+  if (pass.indexOf('"') >= 0) return ["err", "The password cannot contain a double-quote."];
+  if (pass.length < 8 || pass.length > 128)
+    return ["err", "The password must be 8–128 characters (this one is " + pass.length + ")."];
+  if (onion) {
+    if (pass.length < 16)
+      return ["err", "This machine publishes the dashboard as an onion, so the password must be at least 16 characters. Use a passphrase."];
+    if (new Set(Array.from(pass)).size === 1)
+      return ["err", "That is a single repeated character — choose a real passphrase."];
+    var low = pass.toLowerCase();
+    for (var i = 0; i < WEAK.length; i++)
+      if (low.indexOf(WEAK[i]) >= 0)
+        return ["err", "That contains a well-known weak pattern — choose a real passphrase."];
+  } else if (pass.length < 16) {
+    return ["warn", "Accepted. If this machine publishes the dashboard as an onion, tick the box above — the machine then requires 16 characters or more."];
+  }
+  return ["ok", "Looks good."];
+}
+
+function checkXmr(a) {
+  if (a === "") return ["err", "Paste your Monero address. While this is blank the file leaves it out, so the machine keeps the payout address it has."];
+  if (/\s/.test(a)) return ["err", "That contains a space or a line break — an address has none."];
+  switch (moneroAddressType(a)) {
+    case "primary": return ["ok", "Valid primary address, checksum verified."];
+    case "subaddress": return ["err", "That is a SUBADDRESS (it starts with 8). p2pool cannot pay a subaddress — use your primary address, which starts with 4."];
+    case "integrated": return ["err", "That is an INTEGRATED address. p2pool needs your plain primary address: 95 characters, starting with 4."];
+    case "checksum": return ["err", "That fails its checksum — at least one character is wrong. Copy it from your wallet again rather than retyping it."];
+    default: return ["err", "That is not a Monero primary address (expected 95 characters starting with 4; this is " + a.length + ")."];
+  }
+}
+
+function checkTari(a) {
+  if (a === "") return ["err", "Paste your Tari address. While this is blank the file leaves it out, so the machine keeps the payout address it has."];
+  if (/\s/.test(a)) return ["err", "That contains a space or a line break — an address has none."];
+  switch (tariAddressType(a)) {
+    case "ok": return ["ok", "Valid mainnet address, checksum verified."];
+    case "checksum": return ["err", "That fails its checksum — at least one character is wrong. A mistyped address loses your Tari rewards silently, so copy it from your wallet again."];
+    case "network": return ["err", "That address is for a different Tari network. This machine mines mainnet."];
+    default: return ["err", "That is not a Tari address in either the base58 or the emoji form. Copy it from your Tari wallet."];
+  }
+}
+
+function checkSsh(enabled, key) {
+  if (!enabled) return ["ok", "SSH will be turned off. The key box is ignored."];
+  if (key === "")
+    return ["warn", "No key here, so the file leaves the machine's existing key alone and only turns SSH on. If the machine has no key, it will refuse the file and say so."];
+  if (/^(ssh-|ecdsa-|sk-)/.test(key)) return ["ok", "Looks like a public key."];
+  return ["err", "Turning SSH on needs a PUBLIC key — one starting with ssh-, ecdsa- or sk-. Paste the contents of a .pub file, never a private key."];
+}
+
+/* ---- wiring ------------------------------------------------------------------------------ */
+function $(id) { return document.getElementById(id); }
+
+function setMsg(el, verdict) {
+  el.className = "msg " + verdict[0];
+  el.textContent = verdict[1];
+}
+
+function build() {
+  var cfg = {}, blocking = 0, omitted = 0;
+
+  var on = function (name) {
+    var c = $("on-" + name).checked;
+    $("c-" + name).setAttribute("data-on", c ? "1" : "0");
+    return c;
+  };
+
+  if (on("auth")) {
+    var user = $("f-user").value.trim(), pass = $("f-pass").value;
+    var v = checkAuth(user, pass, $("f-onion").checked);
+    setMsg($("m-auth"), v);
+    // The stick is DEEP-MERGED over the running config (os/overlay/pithead-media-config, `jq '.[0] * .[1]'`),
+    // which is what makes "left out" mean "keeps its running value" rather than "unset". So a username with
+    // no password promises no refusal: it merges onto the running password and RENAMES the login, keeping the
+    // password the operator came to replace. Emitting it alone buys nothing either — 28-parse-and-validate-
+    // config.sh gates the whole auth block, username regex included, behind a non-empty password.
+    if (pass === "") omitted++;
+    else { if (v[0] === "err") blocking++; cfg.dashboard = { auth: user !== "" ? { username: user, password: pass } : { password: pass } }; }
+  }
+
+  if (on("xmr")) {
+    var xmr = $("f-xmr").value.trim();
+    var vx = checkXmr(xmr);
+    setMsg($("m-xmr"), vx);
+    if (xmr === "") omitted++;
+    else { if (vx[0] === "err") blocking++; cfg.monero = { wallet_address: xmr }; }
+  }
+
+  if (on("tari")) {
+    var tari = $("f-tari").value.trim();
+    var vt = checkTari(tari);
+    setMsg($("m-tari"), vt);
+    if (tari === "") omitted++;
+    else { if (vt[0] === "err") blocking++; cfg.tari = { wallet_address: tari }; }
+  }
+
+  if (on("ssh")) {
+    var en = $("f-ssh-en").checked, key = $("f-ssh-key").value.trim();
+    var vs = checkSsh(en, key);
+    setMsg($("m-ssh"), vs);
+    if (vs[0] === "err") blocking++;
+    cfg.ssh = { enabled: en };
+    if (en && key !== "") cfg.ssh.authorized_key = key;
+  }
+
+  var any = Object.keys(cfg).length > 0;
+  var json = any ? JSON.stringify(cfg, null, 2) + "\n" : "";
+  $("preview").textContent = any ? json : "Tick a setting above to start.";
+  $("btn-dl").disabled = !any;
+  $("btn-copy").disabled = !any;
+
+  var out = $("m-out"), say = [];
+  // Two failures, said separately: a BLOCKING field is IN the file and the machine really will refuse
+  // it; an OMITTED one never reaches the machine, so nothing is refused and that setting stays as it is.
+  if (blocking) say.push((blocking === 1 ? "One setting above has a problem" : blocking + " settings above have problems") + " the machine will catch. You can still save the file — the machine will refuse it and say why.");
+  if (omitted) say.push((omitted === 1 ? "One setting above is unfinished, so the file leaves it out" : omitted + " settings above are unfinished, so the file leaves them out") + " and the machine keeps what it has. There is nothing in the file for it to object to.");
+  if (say.length) { out.className = "msg warn"; out.textContent = say.join(" "); }
+  else if (!any) { out.className = "msg"; out.textContent = ""; }
+  else { out.className = "msg ok"; out.textContent = "Ready."; }
+  return json;
+}
+
+$("btn-dl").addEventListener("click", function () {
+  var blob = new Blob([build()], { type: "application/json" });
+  var url = URL.createObjectURL(blob), a = document.createElement("a");
+  a.href = url;
+  a.download = "pithead-config.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+});
+
+$("btn-copy").addEventListener("click", function () {
+  var text = build(), note = $("m-out");
+  var done = function () { note.className = "msg ok"; note.textContent = "Copied."; };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, function () { fallback(text, note); });
+  } else { fallback(text, note); }
+});
+
+function fallback(text, note) {
+  var ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  var ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  document.body.removeChild(ta);
+  note.className = ok ? "msg ok" : "msg warn";
+  note.textContent = ok ? "Copied." : "Could not copy — select the text above and copy it by hand.";
+}
+
+document.addEventListener("input", build);
+document.addEventListener("change", build);
+build();
+
+/* Exposed for tests/stack/test-recovery-address-gates.sh: it holds the two gates against
+   lib/pithead/25-address-types.sh, and build()'s output against what the out message promises. */
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { moneroAddressType: moneroAddressType, tariAddressType: tariAddressType,
+    checkAuth: checkAuth, checkXmr: checkXmr, checkTari: checkTari, checkSsh: checkSsh, build: build };
+}
+</script>
+</body>
+</html>

@@ -93,6 +93,9 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-control-status-vocabulary.sh" && doma
 # shellcheck source=tests/stack/test-monero-tari.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-monero-tari.sh" && domain_ran test-monero-tari.sh "$_d0" "$?" || domain_ran test-monero-tari.sh "$_d0" "$?"
 
+# shellcheck source=tests/stack/test-recovery-address-gates.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-recovery-address-gates.sh" && domain_ran test-recovery-address-gates.sh "$_d0" "$?" || domain_ran test-recovery-address-gates.sh "$_d0" "$?"
+
 # xmrig-proxy wrapper entrypoint: optional stratum access-password (#152). The flag moved out of the
 # compose command (a `${VAR:+--flag}` list element rendered a stray '' positional arg when the password
 # was unset — xmrig-proxy warns `unsupported non-option argument ''`) into this wrapper, which appends

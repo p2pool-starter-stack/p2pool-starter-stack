@@ -106,8 +106,9 @@ Windows, macOS or Linux machine, so plug it into your laptop and drop a file on 
   The machine uses that instead of printing its own, so you can open the setup page without
   ever seeing its console.
 - **`pithead-config.json`** — a complete configuration. First boot applies it and provisions
-  itself; no setup page at all. Copy `config.json` from a machine you already set up, or see
-  [configuration](configuration.md).
+  itself; no setup page at all. Copy `config.json` from a machine you already set up, see
+  [configuration](configuration.md), or build one in
+  [the configuration builder](tools/recovery-config-builder.html).
 
 A rejected file never blocks you: the machine says so on its console and opens the normal
 setup page instead.
@@ -537,7 +538,10 @@ is lost.
 
 Prepare the stick with a normal FAT32 partition and a `pithead-config.json` at its root — copy
 `config.json` from a machine you already set up, or write just the settings you want to change
-(see [configuration](configuration.md)). Settings the file does not name keep their current
+(see [configuration](configuration.md)). With no second machine to copy from, open
+[`docs/tools/recovery-config-builder.html`](tools/recovery-config-builder.html) in any browser: it
+writes the file for you, offline, and checks the password and the payout addresses the same way
+this machine checks them at boot. Settings the file does not name keep their current
 values: `{"p2pool": {"pool": "nano"}}` changes the pool tier and nothing else — the dashboard
 login, the generated node credentials, and every other setting stay as they are. To clear a
 setting instead of keeping it, name it with a value of `null`. At boot:
