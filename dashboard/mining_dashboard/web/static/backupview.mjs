@@ -128,6 +128,20 @@ export class BackupPanel extends Component {
 
   render() {
     if (!this.props.enabled) {
+      // The appliance has no shell, so the host-CLI remedy below is advice its operator cannot
+      // act on (#1854) — but "wait for the channel" was the WRONG replacement. `enabled` is
+      // DASHBOARD_CONTROL_ENABLED, a config constant with no liveness in it, and an appliance
+      // reaches this branch only in the "No login" case: apply_appliance_defaults turns the
+      // channel on when the key is null AND the dashboard password is non-empty, so an empty
+      // password leaves it off DELIBERATELY and permanently. Nothing returns. Name the login.
+      if (this.props.appliance) {
+        return html`<div class="card">
+            <h3>Backup</h3>
+            <p>Backup is off because this machine was set up without a dashboard login. The
+            control channel it exports through sits behind that login, so it stays off until
+            this machine has one — set a password under Set up again in the boot menu.</p>
+        </div>`;
+      }
       return html`<div class="card">
           <h3>Backup</h3>
           <p>Backup export is off with the rest of the control channel. To enable it, set
@@ -146,6 +160,9 @@ export class BackupPanel extends Component {
         <p>Export an encrypted archive of config.json, .env, the Tor onion-service keys, and the
         dashboard database — the state a dead box takes with it. Blockchains are excluded; they
         re-sync.</p>
+        <p class="text-muted text-xs">Keep both halves: the archive, and the kit that carries the
+        passphrase opening it. Neither is any use without the other, and setting a machine up
+        later asks for this same pair.</p>
         <button class="btn-toggle active" disabled=${phase !== "idle"}
                 onClick=${() => this.setState({ phase: "confirm" })}>Back up now</button>
     </div>${modal}`;
