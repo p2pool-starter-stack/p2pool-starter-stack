@@ -434,6 +434,11 @@ services:
     # word-splitting), which mangles a multi-flag value. The entrypoint word-splits this env var.
     environment:
       - P2POOL_FLAGS=${P2POOL_FLAGS:-}
+      # Merge-mining opt-in (#1855). The variable is delivered here; the entrypoint does NOT read
+      # it yet, so "off" still passes --merge-mine at a Tari node that is not running (#1903 drops
+      # the triple from argv). The default matches the parser's default for a MISSING tari.mode
+      # key, so an install that predates this variable merge-mines exactly as it did before.
+      - TARI_MODE=${TARI_MODE:-local}
     networks:
       mining_net:
         ipv4_address: ${NETWORK_PREFIX:-172.28.0}.28
@@ -717,6 +722,11 @@ services:
       # Tari base-node gRPC endpoint (#103): local or remote, driven by pithead's rendered
       # TARI_GRPC_ADDRESS (the fallback is the stock local default).
       - TARI_GRPC_ADDRESS=${TARI_GRPC_ADDRESS:-172.28.0.27:18142}
+      # Merge-mining opt-in (#1855): "off" means this machine does not merge-mine. The dashboard
+      # does NOT read this variable yet — hiding its Tari surface is still to come — so today "off"
+      # decides the compose profile, the rendered placeholders and TARI_REQUIRED, nothing more.
+      # Same default as p2pool's above and as the parser's for a missing tari.mode key.
+      - TARI_MODE=${TARI_MODE:-local}
       # Local monerod bridge IP (local-vs-remote detection), the internal SSRF-guard CIDR, and the
       # Tor SOCKS endpoint all track the configured subnet prefix (#180).
       - LOCAL_MONERO_HOST=${NETWORK_PREFIX:-172.28.0}.26
