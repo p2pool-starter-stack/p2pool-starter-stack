@@ -29,7 +29,8 @@ mining, and the **Compose stack** you run on a host you manage.
 ## What it does
 
 - ⛏️ **P2Pool payouts, Tari merge-mined.** Mines Monero on [P2Pool](https://p2pool.io/): no pool
-  operator, no fee, rewards paid to your own wallet. Every hash merge-mines Tari on the same work.
+  operator, no fee, rewards paid to your own wallet. Every hash can merge-mine Tari on the same
+  work — the appliance's setup wizard asks, and a machine that declines mines Monero alone.
 - 🧠 **XvB switching engine.** Watches the XMRvsBeast raffle and shifts hashrate to hold your tier,
   donating the minimum needed and routing the rest to your P2Pool payouts.
 - 🧅 **Tor-first networking.** A built-in Tor daemon gives P2Pool an onion address, and the Monero

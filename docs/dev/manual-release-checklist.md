@@ -76,7 +76,8 @@ health-gated commit, the migration hold). They have never been proven on real ha
   (this is M5, and it is where the corrupt-container-store blocker was found: a partially written
   image store left every `podman run` failing, so the wizard never served).
 - Reaching the wizard **by mDNS name** and **by IP**, since the appliance serves both.
-- Configuring **by paste** for both addresses (M6): a wallet address typed by hand is a support
+- Configuring **by paste** for both addresses (M6, which now needs a yes to merge-mining first —
+  a new machine is asked for the Monero address only): a wallet address typed by hand is a support
   ticket waiting to happen.
 
 ---

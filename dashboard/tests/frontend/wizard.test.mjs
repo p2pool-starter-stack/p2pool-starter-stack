@@ -306,7 +306,7 @@ async function appWithPick(chosen, wipe) {
 
 test("keep everything: the whole config half disappears — the survivor config wins", async () => {
   const out = await appWithPick("sda", "keep");
-  assert.doesNotMatch(out, /Payout addresses/);
+  assert.doesNotMatch(out, /Payout address/);
   assert.doesNotMatch(out, /Dashboard login/);
   assert.doesNotMatch(out, /Advanced/);
   assert.match(out, /keeps everything/);
@@ -318,9 +318,9 @@ test("keep the blockchains still asks the node questions — kept chains only an
   // sections forced Tari local and re-downloaded the very chain remote mode avoids (bench).
   const out = await appWithPick("sda", "data");
   assert.match(out, /Where does Monero data come from/);
-  assert.match(out, /Where does Tari data come from/);
+  assert.match(out, /Merge-mine Tari\?/);
   assert.match(out, /First sync/);
-  assert.match(out, /Payout addresses/);
+  assert.match(out, /Payout address/);
   assert.match(out, /Dashboard login/);
 });
 
@@ -329,7 +329,7 @@ test("wipe everything (or an empty disk): the full form asks everything", async 
   assert.match(all, /Where does Monero data come from/);
   assert.match(all, /First sync/);
   const empty = await appWithPick("sdb", "keep");
-  assert.match(empty, /Payout addresses/);
+  assert.match(empty, /Payout address/);
 });
 
 test("chain size, healthchecks and time zone sit under Advanced, not the first-run form", async () => {
@@ -344,7 +344,7 @@ test("chain size, healthchecks and time zone sit under Advanced, not the first-r
     assert.ok(at > advancedAt, `${label} should render inside the Advanced pane, not the main form`);
   }
   // The primary form's own headings stay above Advanced, unmoved.
-  for (const label of ["Payout addresses", "Dashboard login", "Alerts"]) {
+  for (const label of ["Payout address", "Dashboard login", "Alerts"]) {
     assert.ok(all.indexOf(label) < advancedAt, `${label} should stay in the primary form`);
   }
 });
@@ -438,7 +438,7 @@ test("role Pithead + RigForge presets the local-miner switch and keeps the full 
   inst.setRole({ target: { value: "both" } });
   assert.equal(inst.state.cfg.local_miner.enabled, true);
   const out = renderToString(inst.render());
-  assert.match(out, /Payout addresses/); // still Pithead's form — no new UI beyond the select
+  assert.match(out, /Payout address/); // still Pithead's form — no new UI beyond the select
   assert.match(out, /Nothing to install/); // the preset shows as the live switch's Yes note
   // Back to plain Pithead: the documented default returns — today's config, byte for byte.
   inst.setRole({ target: { value: "pithead" } });
@@ -453,7 +453,7 @@ test("role RigForge collapses the form to pool, worker, password — none of the
   assert.match(out, /Pool address/);
   assert.match(out, /Worker name/);
   assert.match(out, /Stratum password/);
-  assert.doesNotMatch(out, /Payout addresses/);
+  assert.doesNotMatch(out, /Payout address/);
   assert.doesNotMatch(out, /Dashboard login/);
   assert.doesNotMatch(out, /Advanced/);
   assert.doesNotMatch(out, /First sync/);
@@ -579,13 +579,13 @@ test("before a disk is chosen, the page asks ONLY that", async () => {
   const out = renderToString(inst.render());
   assert.match(out, /Choose the disk to install onto/);
   assert.match(out, /Target disk/);
-  assert.doesNotMatch(out, /Payout addresses/);
+  assert.doesNotMatch(out, /Payout address/);
   assert.doesNotMatch(out, /Type the disk name to confirm/);
   assert.doesNotMatch(out, /<button type="submit"/);
   // Picking the disk reveals the rest.
   inst.setState({ chosen: "sda", wipe: "all" });
   const after = renderToString(inst.render());
-  assert.match(after, /Payout addresses/);
+  assert.match(after, /Payout address/);
   assert.match(after, /Type the disk name to confirm/);
   restore();
 });
@@ -613,7 +613,7 @@ test("the setup form offers a toggle into restore mode, and back again", async (
   inst.setState({ restoreMode: true });
   const during = renderToString(inst.render());
   assert.match(during, /Restore from a backup/);
-  assert.doesNotMatch(during, /Payout addresses/); // the normal form is gone, not just hidden
+  assert.doesNotMatch(during, /Payout address/); // the normal form is gone, not just hidden
   assert.match(during, /Back to the setup form/);
   restore();
 });

@@ -68,11 +68,12 @@ def test_remote_tari_takes_the_port_it_is_given():
     assert cfg["tari"]["remote"]["grpc_port"] == 9999
 
 
-def test_a_local_tari_node_is_left_at_its_default_shape():
-    # The sibling that keeps the two above narrow: the same reader, given no mode, writes
-    # neither key rather than writing "local" and a remote block.
+def test_no_answer_writes_no_remote_block():
+    # The sibling that keeps the two above narrow: the same reader, given no mode, writes no
+    # remote block. It asserted "mode" not in cfg["tari"] until #1855 — the mode key is now
+    # always written, and which value it takes is pinned by the every-answer test below, so
+    # this one stays narrowly about the remote block it was written to guard.
     cfg = build_config(BASE)
-    assert "mode" not in cfg["tari"]
     assert "remote" not in cfg["tari"]
 
 
@@ -108,3 +109,58 @@ def test_the_clearnet_first_sync_applies_to_both_chains_or_neither():
     plain = build_config({**BASE, "clearnet_sync": "false"})
     assert "clearnet_initial_sync" not in plain["monero"]
     assert "clearnet_initial_sync" not in plain["tari"]
+
+
+def test_the_mode_key_is_written_for_every_answer_including_the_default():
+    # The migration trap in #1855, as an assertion. A config that omits tari.mode parses as
+    # "local", so the ONE thing this form must never do is leave the key out — an operator who
+    # answered No would get a merge-mining machine. Every answer, the unanswered one included.
+    for form, expected in (
+        ({}, "off"),
+        ({"tari_mode": ""}, "off"),
+        ({"tari_mode": "off"}, "off"),
+        ({"tari_mode": "local"}, "local"),
+        ({"tari_mode": "remote"}, "remote"),
+    ):
+        cfg = build_config({**BASE, **form})
+        assert cfg["tari"]["mode"] == expected, form
+
+
+def test_declining_tari_asks_for_no_payout_address():
+    # Nowhere to be paid, so no key at all. An empty string is a value and would override the
+    # documented default; the operator is not being asked to supply one.
+    cfg = build_config({**BASE, "tari_mode": "off"})
+    assert "wallet_address" not in cfg["tari"]
+    assert "remote" not in cfg["tari"]
+
+
+def test_merge_mining_locally_still_carries_the_payout_address():
+    # The other direction of the test above: turning it on puts the address back.
+    cfg = build_config({**BASE, "tari_mode": "local"})
+    assert cfg["tari"] == {"mode": "local", "wallet_address": "t"}
+
+
+def test_an_empty_address_on_a_machine_that_merge_mines_reaches_the_host():
+    # The host is the validator (see the module docstring). When Tari is ON, an empty address
+    # must flow through rather than be omitted, or the host has nothing to reject and the
+    # machine comes up merge-mining to nowhere.
+    cfg = build_config({**BASE, "tari_wallet": "", "tari_mode": "local"})
+    assert cfg["tari"]["wallet_address"] == ""
+
+
+def test_a_remote_tari_node_carries_its_endpoint_and_the_address():
+    cfg = build_config(
+        {**BASE, "tari_mode": "remote", "tari_remote_host": "10.0.0.9", "tari_remote_grpc": "1"}
+    )
+    assert cfg["tari"]["mode"] == "remote"
+    assert cfg["tari"]["remote"] == {"host": "10.0.0.9", "grpc_port": 1}
+    assert cfg["tari"]["wallet_address"] == "t"
+
+
+def test_leaving_the_raffle_writes_the_key_and_staying_in_writes_nothing():
+    # xvb.enabled is true in config.reference.json, so only the OFF answer is worth writing:
+    # writing True would pin a default the operator never chose to pin. Both directions, and
+    # the unanswered form, because that is what every existing caller submits.
+    assert build_config({**BASE, "xvb": "false"})["xvb"] == {"enabled": False}
+    assert "xvb" not in build_config({**BASE, "xvb": "true"})
+    assert "xvb" not in build_config(BASE)
