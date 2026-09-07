@@ -87,9 +87,10 @@ _d0=$((PASS + FAIL)) && source "$HERE/test-rig-worker.sh" && domain_ran test-rig
 
 # shellcheck source=tests/stack/test-control-status-vocabulary.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-control-status-vocabulary.sh" && domain_ran test-control-status-vocabulary.sh "$_d0" "$?" || domain_ran test-control-status-vocabulary.sh "$_d0" "$?"
-
 # shellcheck source=tests/stack/test-monero-tari.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-monero-tari.sh" && domain_ran test-monero-tari.sh "$_d0" "$?" || domain_ran test-monero-tari.sh "$_d0" "$?"
+# shellcheck source=tests/stack/test-p2pool-tari-off.sh disable=SC2015
+_d0=$((PASS + FAIL)) && source "$HERE/test-p2pool-tari-off.sh" && domain_ran test-p2pool-tari-off.sh "$_d0" "$?" || domain_ran test-p2pool-tari-off.sh "$_d0" "$?"
 # shellcheck source=tests/stack/test-tari-mode-off.sh disable=SC2015
 _d0=$((PASS + FAIL)) && source "$HERE/test-tari-mode-off.sh" && domain_ran test-tari-mode-off.sh "$_d0" "$?" || domain_ran test-tari-mode-off.sh "$_d0" "$?"
 

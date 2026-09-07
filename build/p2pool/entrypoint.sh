@@ -1,6 +1,38 @@
 #!/bin/bash
 set -euo pipefail
 
+# tari.mode "off" (#1855, #1903): the host half (#1905) renders TARI_MODE=off and starts no Tari
+# node, but this argv still carried `--merge-mine <url> <address>`, so P2Pool merge-mined against a
+# node that was not there. Drop the triple, in either spelling (`--merge-mine URL ADDR`,
+# `--merge-mine=URL ADDR`), BEFORE the Tor block below reads argv, so its merge-mine bridge cannot
+# fire on it either. Only the literal "off" strips: unset (a 1.x .env that predates the key) or any
+# other value leaves argv exactly as it arrived. A token starting with `-` in a value position is
+# kept, the same rule _redact_argv applies: a malformed argv must not swallow the next flag NAME.
+# Until #1905 lands nothing renders TARI_MODE, so at that tip this block strips nothing.
+if [ "${TARI_MODE:-}" = off ]; then
+    _args=() _drop=0 _dropped=0
+    for _a in "$@"; do
+        if [ "$_drop" -gt 0 ]; then
+            case "$_a" in
+            -*) _drop=0 ;;
+            *)
+                _drop=$((_drop - 1))
+                continue
+                ;;
+            esac
+        fi
+        case "$_a" in
+        --merge-mine) _drop=2 _dropped=1 ;;
+        --merge-mine=*) _drop=1 _dropped=1 ;;
+        *) _args+=("$_a") ;;
+        esac
+    done
+    set -- "${_args[@]}"
+    # Said only when something was removed: once the host also stops rendering the triple, an
+    # unconditional line would claim a drop on every launch for the life of the container.
+    [ "$_dropped" -eq 0 ] || echo "[p2pool-entrypoint] tari.mode off (#1903): not merge-mining, --merge-mine dropped from the launch."
+fi
+
 # P2Pool launcher. (mDNS/.local resolution was removed — point p2pool at an IP or a
 # DNS-resolvable hostname; on a home LAN, use a DHCP reservation or static IP.)
 #
