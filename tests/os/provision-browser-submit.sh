@@ -94,7 +94,7 @@ _wsp_self_test() {
     shape=timeout
     : >"$calls"
     wizard_state_poll h j '.config // empty' && f=$((f + 1))
-    _wsp_case timeout "$WIZ_STATE|$WIZ_STATE_WHY|$(wc -l <"$calls")" "|http=000 curl=28 after 6x5s body=|6" || f=$((f + 1))
+    _wsp_case timeout "$WIZ_STATE|$WIZ_STATE_WHY|$(wc -l <"$calls" | tr -d ' ')" "|http=000 curl=28 after 6x5s body=|6" || f=$((f + 1))
     shape=noconfig
     : >"$calls"
     wizard_state_poll h j '.config // empty' && f=$((f + 1))
@@ -105,7 +105,7 @@ _wsp_self_test() {
     shape=late
     : >"$calls"
     wizard_state_poll h j '.config // empty' || f=$((f + 1))
-    _wsp_case late "$WIZ_STATE|$WIZ_STATE_WHY|$(wc -l <"$calls")" '{"monero":{"wallet_address":"4ABCDEFGHIJ"}}||3' || f=$((f + 1))
+    _wsp_case late "$WIZ_STATE|$WIZ_STATE_WHY|$(wc -l <"$calls" | tr -d ' ')" '{"monero":{"wallet_address":"4ABCDEFGHIJ"}}||3' || f=$((f + 1))
     shape=late
     : >"$calls"
     wizard_state_poll h j '.config.monero.wallet_address // empty' || f=$((f + 1))
