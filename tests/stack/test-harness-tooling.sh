@@ -103,6 +103,16 @@ echo "== unit: #1676 version-aging helper self-test =="
 bash "$ROOT/tests/os/aged-version.sh" --self-test >/dev/null 2>&1
 assert_rc "#1676 aged-version self-test passes" "$?" "0"
 
+echo "== unit: #1936 wizard-state-poll self-test =="
+# The RC1 battery reddened twice on one word — `no-served-config`, `served wallet: none` — where a
+# timeout, a refusal and a non-JSON page all print alike (#1932, #1936). The shared /api/state
+# poll now names the status, curl's rc, the read count and the body head; its --self-test drives
+# the four shapes under a curl shim and asserts each reason on the exact string the log will
+# carry. Lives in tests/os/ (appliance lane); driven here because tier 1 is the lowest tier that
+# proves it and it needs no KVM.
+bash "$ROOT/tests/os/provision-browser-submit.sh" --self-test >/dev/null 2>&1
+assert_rc "#1936 wizard-state-poll self-test passes" "$?" "0"
+
 echo "== unit: tor healthcheck command-dependency self-test (#1372) =="
 # The #1098 pair above asks whether a healthcheck script EXISTS where its Dockerfile promises. This
 # asks the other half of the same contract: whether build/tor/healthcheck.sh can still RUN on
